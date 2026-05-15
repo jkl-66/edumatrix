@@ -116,6 +116,8 @@ class DeterministicEducationLLM:
     """
 
     def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        if "画像抽取器" in role:
+            return _profile_json(user_prompt)
         topic = _guess_topic(user_prompt)
         if "理论教授" in role:
             return _lecture(topic, user_prompt)
@@ -133,13 +135,118 @@ class DeterministicEducationLLM:
 
 
 def _guess_topic(text: str) -> str:
-    for word in ("池化层", "最大池化", "平均池化", "卷积核", "反向传播", "链式法则", "梯度下降"):
+    for word in (
+        "过拟合",
+        "正则化",
+        "逻辑回归",
+        "线性回归",
+        "模型评估",
+        "混淆矩阵",
+        "监督学习",
+        "机器学习",
+        "池化层",
+        "最大池化",
+        "平均池化",
+        "卷积核",
+        "反向传播",
+        "链式法则",
+        "梯度下降",
+    ):
         if word in text:
             return word
     return "目标知识点"
 
 
+def _profile_json(prompt: str) -> str:
+    causes = []
+    if any(word in prompt for word in ("看不懂", "不会", "不理解", "不知道", "基础", "概念")):
+        causes.append("prerequisite_gap")
+    if any(word in prompt for word in ("混", "分不清", "误区", "老是错", "错题")):
+        causes.append("misconception")
+    if any(word in prompt for word in ("题干长", "条件", "漏", "多步骤", "复杂")):
+        causes.append("cognitive_load")
+    if any(word in prompt for word in ("看答案", "不会复习", "记不住", "只会看视频", "刷题没用")):
+        causes.append("strategy_gap")
+    if any(word in prompt for word in ("以为会", "一做就错", "不确定", "不知道哪里不会")):
+        causes.append("metacognitive_mismatch")
+    if any(word in prompt for word in ("焦虑", "害怕", "没信心", "压力", "挫败")):
+        causes.append("affective_barrier")
+    if any(word in prompt for word in ("图", "代码", "一步步", "例子", "换种讲法", "视频")):
+        causes.append("interaction_mismatch")
+
+    weak_points = []
+    for point in (
+        "数据预处理",
+        "特征工程",
+        "线性回归",
+        "逻辑回归",
+        "决策树",
+        "支持向量机",
+        "朴素贝叶斯",
+        "模型评估",
+        "混淆矩阵",
+        "过拟合",
+        "正则化",
+        "交叉验证",
+        "池化层",
+        "最大池化",
+        "平均池化",
+    ):
+        if point in prompt:
+            weak_points.append(point)
+
+    preferences = []
+    for keyword, preference in (
+        ("图", "图示演示"),
+        ("代码", "代码实操"),
+        ("一步步", "分步引导"),
+        ("例子", "具体例子"),
+        ("视频", "短视频讲解"),
+    ):
+        if keyword in prompt:
+            preferences.append(preference)
+
+    goals = []
+    for keyword, goal in (
+        ("期末", "期末复习"),
+        ("考试", "通过考试"),
+        ("项目", "机器学习项目实践"),
+        ("竞赛", "竞赛提升"),
+        ("就业", "就业能力"),
+        ("面试", "面试准备"),
+    ):
+        if keyword in prompt:
+            goals.append(goal)
+
+    major = "计算机专业" if "计算机" in prompt else ""
+    return json.dumps(
+        {
+            "course": "机器学习导论",
+            "major": major,
+            "goals": goals,
+            "weak_points": weak_points,
+            "preferences": preferences,
+            "learning_state_causes": sorted(set(causes)),
+        },
+        ensure_ascii=False,
+    )
+
+
 def _lecture(topic: str, prompt: str) -> str:
+    if any(word in topic for word in ("机器学习", "监督学习", "过拟合", "正则化", "逻辑回归", "模型评估", "混淆矩阵")):
+        return (
+            f"# {topic}讲义\n\n"
+            "机器学习导论的核心不是背模型名称，而是完成从数据到泛化能力的闭环："
+            "数据预处理、特征工程、模型训练、验证评估和误差分析。\n\n"
+            "学习路径建议：\n"
+            "1. 先确认任务类型：回归、分类或聚类。\n"
+            "2. 再检查数据：缺失值、异常值、类别编码和数值缩放。\n"
+            "3. 用基线模型建立可解释起点。\n"
+            "4. 用交叉验证判断泛化，而不是只看训练集分数。\n"
+            "5. 若训练好验证差，优先检查过拟合并考虑正则化。\n\n"
+            "画像驱动支持：若学生把 precision 和 recall 混淆，先用混淆矩阵反例辨析；"
+            "若学生只会看答案，先做检索练习；若学生以为会但一做就错，加入题前自评和题后校准。"
+        )
     if "池化" in topic:
         return (
             "# 池化层讲义\n\n"
@@ -159,6 +266,46 @@ def _lecture(topic: str, prompt: str) -> str:
 
 
 def _code(topic: str) -> str:
+    if any(word in topic for word in ("机器学习", "监督学习", "逻辑回归", "模型评估", "混淆矩阵")):
+        return (
+            "```python\n"
+            "from sklearn.datasets import load_breast_cancer\n"
+            "from sklearn.model_selection import train_test_split, cross_val_score\n"
+            "from sklearn.preprocessing import StandardScaler\n"
+            "from sklearn.linear_model import LogisticRegression\n"
+            "from sklearn.pipeline import Pipeline\n"
+            "from sklearn.metrics import classification_report, confusion_matrix\n\n"
+            "X, y = load_breast_cancer(return_X_y=True)\n"
+            "X_train, X_test, y_train, y_test = train_test_split(\n"
+            "    X, y, test_size=0.2, random_state=42, stratify=y\n"
+            ")\n\n"
+            "pipe = Pipeline([\n"
+            "    ('scaler', StandardScaler()),\n"
+            "    ('clf', LogisticRegression(max_iter=1000, C=1.0))\n"
+            "])\n\n"
+            "cv_scores = cross_val_score(pipe, X_train, y_train, cv=5, scoring='f1')\n"
+            "pipe.fit(X_train, y_train)\n"
+            "pred = pipe.predict(X_test)\n\n"
+            "print('CV F1:', cv_scores.mean().round(3))\n"
+            "print(confusion_matrix(y_test, pred))\n"
+            "print(classification_report(y_test, pred))\n"
+            "```\n"
+        )
+    if any(word in topic for word in ("过拟合", "正则化")):
+        return (
+            "```python\n"
+            "from sklearn.datasets import load_wine\n"
+            "from sklearn.linear_model import LogisticRegression\n"
+            "from sklearn.model_selection import cross_val_score\n"
+            "from sklearn.pipeline import make_pipeline\n"
+            "from sklearn.preprocessing import StandardScaler\n\n"
+            "X, y = load_wine(return_X_y=True)\n"
+            "for c in [0.01, 0.1, 1, 10, 100]:\n"
+            "    model = make_pipeline(StandardScaler(), LogisticRegression(C=c, max_iter=2000))\n"
+            "    score = cross_val_score(model, X, y, cv=5, scoring='accuracy').mean()\n"
+            "    print(f'C={c:<6} mean_cv_accuracy={score:.3f}')\n"
+            "```\n"
+        )
     if "池化" in topic:
         return (
             "```python\n"
@@ -177,6 +324,21 @@ def _code(topic: str) -> str:
 
 
 def _mermaid(topic: str) -> str:
+    if any(word in topic for word in ("机器学习", "监督学习", "逻辑回归", "模型评估", "过拟合", "正则化")):
+        return (
+            "```mermaid\n"
+            "flowchart LR\n"
+            "  A[学习目标] --> B[数据预处理]\n"
+            "  B --> C[特征工程]\n"
+            "  C --> D[训练基线模型]\n"
+            "  D --> E[交叉验证]\n"
+            "  E --> F{泛化表现}\n"
+            "  F -->|过拟合| G[正则化/降复杂度]\n"
+            "  F -->|指标不均衡| H[混淆矩阵与F1]\n"
+            "  G --> E\n"
+            "  H --> I[错因复盘与迁移练习]\n"
+            "```\n"
+        )
     return (
         "```mermaid\n"
         "flowchart LR\n"
@@ -189,6 +351,13 @@ def _mermaid(topic: str) -> str:
 
 
 def _quiz(topic: str) -> str:
+    if any(word in topic for word in ("机器学习", "监督学习", "逻辑回归", "模型评估", "过拟合", "正则化")):
+        return (
+            "1. 检索题：不看资料，说出训练集、验证集和测试集的区别。\n"
+            "2. 辨析题：某分类器 accuracy=95%，但少数类 recall=20%，这个模型适合上线吗？为什么？\n"
+            "3. 代码改错：如果逻辑回归在训练集 99%、验证集 70%，优先检查过拟合，并尝试正则化或交叉验证。\n"
+            "4. 元认知校准题：先自评“我能否解释 precision 与 recall 的差异”，再用混淆矩阵计算一次。"
+        )
     return (
         "1. 选择题：2x2 最大池化窗口 [1, 3; 5, 2] 的输出是多少？答案：5。\n"
         "2. 填空题：最大池化主要保留局部区域中的____响应。答案：最大/最强。\n"
@@ -199,6 +368,12 @@ def _quiz(topic: str) -> str:
 
 
 def _video_script(topic: str) -> str:
+    if any(word in topic for word in ("机器学习", "监督学习", "逻辑回归", "模型评估", "过拟合", "正则化")):
+        return (
+            "虚拟人脚本：先展示一个机器学习项目看板，从数据预处理进入模型训练。"
+            "画面切到混淆矩阵，讲解 accuracy 高但 recall 低的风险；"
+            "再展示训练误差下降、验证误差上升的过拟合曲线，最后用正则化和交叉验证完成修正。"
+        )
     return (
         "虚拟人脚本：先展示 4x4 特征图，再高亮第一个 2x2 窗口，播报“我们取这个窗口里最大的 6”，"
         "随后移动窗口得到 2x2 输出矩阵，最后提示最大池化降低尺寸但保留显著特征。"

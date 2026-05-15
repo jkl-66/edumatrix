@@ -45,6 +45,31 @@ class GraphRAG:
 
     def _build_professional_knowledge_graph(self) -> None:
         edges = [
+            ("Python编程", "数据预处理"),
+            ("线性代数", "向量表示"),
+            ("概率统计", "模型评估"),
+            ("概率统计", "朴素贝叶斯"),
+            ("微积分", "梯度下降"),
+            ("数据预处理", "特征工程"),
+            ("特征工程", "监督学习"),
+            ("监督学习", "线性回归"),
+            ("监督学习", "逻辑回归"),
+            ("监督学习", "决策树"),
+            ("监督学习", "支持向量机"),
+            ("监督学习", "朴素贝叶斯"),
+            ("线性回归", "损失函数"),
+            ("逻辑回归", "分类阈值"),
+            ("分类阈值", "模型评估"),
+            ("模型评估", "混淆矩阵"),
+            ("决策树", "过拟合"),
+            ("支持向量机", "间隔最大化"),
+            ("损失函数", "梯度下降"),
+            ("过拟合", "正则化"),
+            ("正则化", "模型泛化"),
+            ("模型评估", "交叉验证"),
+            ("交叉验证", "模型选择"),
+            ("模型泛化", "模型选择"),
+            ("模型选择", "机器学习项目实践"),
             ("线性代数", "矩阵乘法"),
             ("矩阵乘法", "张量运算"),
             ("张量运算", "特征图"),
@@ -76,6 +101,13 @@ class GraphRAG:
             "CNN": "卷积神经网络",
             "Feature Map": "特征图",
             "ReLU": "激活函数",
+            "ML": "监督学习",
+            "机器学习": "监督学习",
+            "machine learning": "监督学习",
+            "Machine Learning": "监督学习",
+            "分类": "逻辑回归",
+            "回归": "线性回归",
+            "过拟合": "过拟合",
         }
         if target in self.nodes:
             return target
@@ -202,6 +234,36 @@ class VisRAG:
                 anchors=("gradient", "partial derivative"),
                 metadata={"raw_image_ref": "data/patches/backprop_math.png", "page": 12},
             ),
+            Evidence(
+                id="IMG_PATCH_ML_PIPELINE_01",
+                title="机器学习项目流程图",
+                content="机器学习实践通常从数据理解、数据预处理、特征工程开始，随后训练模型、验证泛化能力并迭代选择模型。",
+                modality=EvidenceModality.IMAGE,
+                source="机器学习课程图像切片 ML:P03",
+                tags=("机器学习", "数据预处理", "特征工程", "模型评估"),
+                anchors=("pipeline", "train-test split", "cross validation"),
+                metadata={"raw_image_ref": "data/patches/ml_pipeline.png", "page": 3},
+            ),
+            Evidence(
+                id="IMG_PATCH_OVERFIT_01",
+                title="过拟合与欠拟合曲线",
+                content="训练误差持续下降而验证误差上升时通常意味着过拟合，可通过正则化、交叉验证和简化模型缓解。",
+                modality=EvidenceModality.IMAGE,
+                source="机器学习课程图像切片 ML:P18",
+                tags=("过拟合", "正则化", "交叉验证", "模型泛化"),
+                anchors=("overfitting", "validation error", "regularization"),
+                metadata={"raw_image_ref": "data/patches/overfit_curve.png", "page": 18},
+            ),
+            Evidence(
+                id="IMG_PATCH_CONFUSION_01",
+                title="混淆矩阵与分类指标图",
+                content="混淆矩阵展示 TP、FP、FN、TN，可进一步计算 accuracy、precision、recall 和 F1。",
+                modality=EvidenceModality.IMAGE,
+                source="机器学习课程图像切片 ML:P25",
+                tags=("模型评估", "混淆矩阵", "分类指标", "逻辑回归"),
+                anchors=("precision", "recall", "F1", "confusion matrix"),
+                metadata={"raw_image_ref": "data/patches/confusion_matrix.png", "page": 25},
+            ),
         )
 
     def search(self, query: str, top_k: int = 3) -> list[dict[str, object]]:
@@ -259,6 +321,51 @@ class TextKnowledgeIndex:
                 tags=("反向传播", "链式法则", "梯度下降"),
                 anchors=("梯度", "损失函数"),
             ),
+            Evidence(
+                id="TXT_ML_OVERVIEW_01",
+                title="机器学习导论课程边界",
+                content="机器学习导论课程覆盖数据预处理、监督学习、回归、分类、模型评估、过拟合与正则化，并通过实践项目训练完整建模流程。",
+                modality=EvidenceModality.TEXT,
+                source="机器学习课程知识库:Overview",
+                tags=("机器学习", "监督学习", "模型评估", "实践项目"),
+                anchors=("数据预处理", "模型泛化", "交叉验证"),
+            ),
+            Evidence(
+                id="TXT_ML_PREPROCESS_01",
+                title="数据预处理与特征工程",
+                content="数据预处理包括缺失值处理、数值缩放、类别编码和训练测试划分；特征工程决定模型能否从数据中学习有效规律。",
+                modality=EvidenceModality.TEXT,
+                source="机器学习课程知识库:Preprocessing",
+                tags=("数据预处理", "特征工程", "训练测试划分"),
+                anchors=("missing values", "scaling", "encoding", "train_test_split"),
+            ),
+            Evidence(
+                id="TXT_ML_LOGREG_01",
+                title="逻辑回归与分类阈值",
+                content="逻辑回归使用 sigmoid 将线性组合映射为概率，分类阈值会影响 precision、recall 与 F1，不应只看 accuracy。",
+                modality=EvidenceModality.TEXT,
+                source="机器学习课程知识库:Classification",
+                tags=("逻辑回归", "分类阈值", "模型评估"),
+                anchors=("sigmoid", "precision", "recall", "F1"),
+            ),
+            Evidence(
+                id="TXT_ML_OVERFIT_01",
+                title="过拟合、正则化与交叉验证",
+                content="过拟合表现为训练集效果好但验证集效果差；可通过 L1/L2 正则化、交叉验证、早停和降低模型复杂度提升泛化能力。",
+                modality=EvidenceModality.TEXT,
+                source="机器学习课程知识库:Generalization",
+                tags=("过拟合", "正则化", "交叉验证", "模型泛化"),
+                anchors=("L1", "L2", "validation", "generalization"),
+            ),
+            Evidence(
+                id="TXT_ML_EVAL_01",
+                title="模型评估指标",
+                content="分类任务需结合混淆矩阵理解 accuracy、precision、recall、F1 和 ROC-AUC；类别不均衡时 accuracy 可能产生误导。",
+                modality=EvidenceModality.TEXT,
+                source="机器学习课程知识库:Evaluation",
+                tags=("模型评估", "混淆矩阵", "分类指标"),
+                anchors=("accuracy", "precision", "recall", "F1", "ROC-AUC"),
+            ),
         )
 
     def search(self, query: str, top_k: int = 4) -> tuple[Evidence, ...]:
@@ -306,6 +413,14 @@ class HybridRAGPipeline:
                 return concept
         if "Pooling" in query or "池化" in query:
             return "池化层"
+        if "过拟合" in query or "正则化" in query:
+            return "过拟合"
+        if "逻辑回归" in query or "分类" in query or "混淆矩阵" in query:
+            return "逻辑回归"
+        if "线性回归" in query or "回归" in query:
+            return "线性回归"
+        if "机器学习" in query or "监督学习" in query or "模型评估" in query:
+            return "监督学习"
         if "CNN" in query or "卷积神经网络" in query:
             return "卷积神经网络"
         return "池化层"

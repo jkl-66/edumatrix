@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+import json
+import re
 
 from config import CONFIG
 from drag_debate import DebateAugmentedRAG
 from instruct_rag import InstructRAGGenerator
+from learning_strategy import LearningStrategyEngine
 from llm_client import DEFAULT_LLM, LLMBackend
 from manifold_alignment import ManifoldAlignmentVerifier
 from models import AgentOutput, LearningSignal, ResourcePackage, StudentProfile
@@ -34,9 +37,32 @@ AGENT_MATRIX: tuple[AgentSpec, ...] = (
 
 
 class ProfileProbeAgent:
+    def __init__(self, llm: LLMBackend = DEFAULT_LLM) -> None:
+        self.llm = llm
+
     def update(self, profile: StudentProfile, message: str) -> StudentProfile:
         profile.update_from_message(message)
+        extracted = self._extract_with_llm(message)
+        profile.apply_llm_features(extracted, source_text=message)
         return profile
+
+    def _extract_with_llm(self, message: str) -> dict:
+        system_prompt = (
+            "你是 EduMatrix 的画像抽取器，只能输出 JSON。"
+            "字段包括 course, major, goals, weak_points, preferences, learning_state_causes。"
+            "learning_state_causes 只能使用 prerequisite_gap, misconception, cognitive_load, "
+            "strategy_gap, metacognitive_mismatch, affective_barrier, interaction_mismatch。"
+        )
+        user_prompt = f"固定课程为机器学习导论。请从学生话语中抽取画像特征：{message}"
+        try:
+            raw = self.llm.generate(system_prompt, user_prompt, role="画像抽取器")
+            match = re.search(r"\{.*\}", raw, flags=re.S)
+            if not match:
+                return {}
+            data = json.loads(match.group(0))
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
 
 
 class ZPDPlannerAgent:
@@ -124,13 +150,14 @@ class EduMatrixSwarm:
     ) -> None:
         self.rag = rag
         self.profile_store = profile_store if profile_store is not None else {}
-        self.profile_probe = ProfileProbeAgent()
+        self.profile_probe = ProfileProbeAgent(llm)
         self.planner = ZPDPlannerAgent()
         self.debate = DebateAugmentedRAG()
         self.generator = InstructRAGGenerator(llm)
         self.factory = ResourceFactory(self.generator)
         self.alignment = ManifoldAlignmentVerifier()
         self.evaluator = EffectEvaluatorAgent()
+        self.strategy_engine = LearningStrategyEngine()
 
     def process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
         profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
@@ -168,6 +195,7 @@ class EduMatrixSwarm:
                 self_confidence=None,
                 hint_count=1,
             )
+        strategy_plan = self.strategy_engine.build_plan(profile, target=retrieval.target)
 
         return ResourcePackage(
             student_id=student_id,
@@ -178,6 +206,7 @@ class EduMatrixSwarm:
             resources=resources,
             alignment=alignment_report,
             learning_signal=learning_signal,
+            strategy_plan=strategy_plan,
         )
 
     def agent_topology(self) -> tuple[AgentSpec, ...]:
@@ -194,10 +223,15 @@ def render_console_summary(package: ResourcePackage) -> str:
         f"- {resource.agent} / {resource.resource_type}: {resource.content[:88].replace(chr(10), ' ')}..."
         for resource in package.resources
     )
+    strategy_lines = "\n".join(
+        f"- {action.title}: {action.description}"
+        for action in (package.strategy_plan.actions if package.strategy_plan else ())
+    )
     return (
         f"目标知识点: {package.target}\n"
         f"学习路径: {' -> '.join(package.retrieval.graph_context.learning_path)}\n"
         f"{package.profile.state_report()}\n"
+        f"学习策略引擎:\n{strategy_lines or '- 暂无额外策略'}\n"
         f"DRAG保留证据: {', '.join(kept)}\n"
         f"流形对齐: {'通过' if package.alignment.passed else '失败'} "
         f"(distance={package.alignment.distance:.3f}, threshold={package.alignment.threshold:.3f})\n"

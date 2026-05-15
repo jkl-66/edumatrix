@@ -5,6 +5,7 @@ from drag_debate import DebateAugmentedRAG
 from manifold_alignment import verify_consistency
 from models import StudentProfile
 from rag_engine import hybrid_rag
+from web_demo import _teacher_dashboard
 
 
 class EduMatrixPipelineTests(unittest.TestCase):
@@ -75,6 +76,26 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertLess(profile.concept_mastery["池化层"], before)
         self.assertIn("metacognitive_mismatch", profile.learning_state_causes)
         self.assertIn("strategy_gap", profile.learning_state_causes)
+
+    def test_machine_learning_course_flow_generates_strategy_plan(self):
+        swarm = EduMatrixSwarm()
+        package = swarm.process(
+            "我是计算机专业，期末要考机器学习。逻辑回归和混淆矩阵总混，"
+            "accuracy 很高但 recall 低我不知道怎么判断，希望用图和例子一步步讲。",
+            student_id="ml-student",
+        )
+
+        self.assertEqual(package.profile.target_course, "机器学习导论")
+        self.assertIn(package.target, {"逻辑回归", "混淆矩阵", "模型评估"})
+        self.assertTrue(package.strategy_plan)
+        self.assertTrue(package.strategy_plan.actions)
+        self.assertTrue(any("混淆矩阵" in item.content or "逻辑回归" in item.content for item in package.resources))
+
+    def test_teacher_dashboard_exposes_heatmap_and_interventions(self):
+        dashboard = _teacher_dashboard()
+        self.assertEqual(dashboard["course"], "机器学习导论")
+        self.assertTrue(dashboard["heatmap"])
+        self.assertTrue(dashboard["interventions"])
 
 
 if __name__ == "__main__":

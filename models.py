@@ -30,6 +30,15 @@ class LearningStateCause(str, Enum):
     INTERACTION_MISMATCH = "interaction_mismatch"
 
 
+class StrategyType(str, Enum):
+    RETRIEVAL_PRACTICE = "retrieval_practice"
+    SPACED_REVIEW = "spaced_review"
+    WORKED_EXAMPLE = "worked_example"
+    HINT_LADDER = "hint_ladder"
+    MISCONCEPTION_CONTRAST = "misconception_contrast"
+    METACOGNITIVE_CALIBRATION = "metacognitive_calibration"
+
+
 CAUSE_LABELS: dict[str, str] = {
     LearningStateCause.PREREQUISITE_GAP.value: "前置知识缺口",
     LearningStateCause.MISCONCEPTION.value: "误概念/易混点",
@@ -203,8 +212,48 @@ class CauseBreakdown:
 
 
 @dataclass
+class KnowledgeTrace:
+    concept: str
+    mastery: float = 0.48
+    attempts: int = 0
+    correct_attempts: int = 0
+    last_updated: str = field(default_factory=_utc_now)
+
+    def update(self, *, correct: bool, hinted: bool = False) -> None:
+        self.attempts += 1
+        if correct:
+            self.correct_attempts += 1
+        learning_gain = 0.16 if correct else -0.10
+        if hinted and correct:
+            learning_gain *= 0.55
+        if hinted and not correct:
+            learning_gain *= 1.15
+        self.mastery = round(_clamp(self.mastery + learning_gain), 2)
+        self.last_updated = _utc_now()
+
+
+@dataclass(frozen=True)
+class StrategyAction:
+    strategy: StrategyType
+    title: str
+    description: str
+    trigger: str
+    priority: int
+    scheduled_after: str = "now"
+
+
+@dataclass(frozen=True)
+class LearningStrategyPlan:
+    course: str
+    target: str
+    actions: tuple[StrategyAction, ...]
+    rationale: str
+
+
+@dataclass
 class StudentProfile:
     student_id: str = "demo-student"
+    target_course: str = "机器学习导论"
     knowledge_base: str = "初级"
     cognitive_style: str = "视觉+代码导向"
     weak_points: list[str] = field(default_factory=list)
@@ -220,6 +269,7 @@ class StudentProfile:
     learning_state_causes: dict[str, CauseBreakdown] = field(default_factory=dict)
     concept_mastery: dict[str, float] = field(default_factory=dict)
     misconception_patterns: dict[str, float] = field(default_factory=dict)
+    knowledge_traces: dict[str, KnowledgeTrace] = field(default_factory=dict)
 
     def update_from_message(self, message: str) -> None:
         self.history.append(message)
@@ -269,8 +319,51 @@ class StudentProfile:
             for point in self.weak_points:
                 old = self.concept_mastery.get(point, 0.45)
                 self.concept_mastery[point] = _clamp(old * 0.72 + accuracy * 0.28)
+                trace = self.knowledge_traces.setdefault(point, KnowledgeTrace(concept=point, mastery=old))
+                trace.update(correct=accuracy >= 0.68, hinted=hint_count > 0)
+                self.concept_mastery[point] = trace.mastery
         self._update_context(feedback)
         self._update_legacy_fields(feedback)
+        self._refresh_dynamic_profile()
+
+    def apply_llm_features(self, payload: dict[str, Any], *, source_text: str) -> None:
+        if not payload:
+            return
+        self.target_course = str(payload.get("course") or self.target_course or "机器学习导论")
+        major = str(payload.get("major") or "").strip()
+        if major:
+            self.major = major
+            self.major_preference = major
+        for goal in payload.get("goals", []) or []:
+            goal_text = str(goal).strip()
+            if goal_text and goal_text not in self.learning_goals:
+                self.learning_goals.append(goal_text)
+        for point in payload.get("weak_points", []) or []:
+            point_text = str(point).strip()
+            if point_text and point_text not in self.weak_points:
+                self.weak_points.append(point_text)
+            if point_text:
+                self.concept_mastery.setdefault(point_text, 0.44)
+                self.knowledge_traces.setdefault(point_text, KnowledgeTrace(concept=point_text, mastery=0.44))
+        feature_values = {
+            str(item).strip()
+            for item in (payload.get("learning_state_causes", []) or [])
+            if str(item).strip() in {cause.value for cause in LearningStateCause}
+        }
+        if feature_values:
+            self.profile_evidence.append(
+                ProfileEvidence(
+                    source=ProfileEvidenceSource.PERFORMANCE_SIGNAL,
+                    text=f"LLM画像抽取补充: {source_text[:96]}",
+                    features=tuple(sorted(feature_values)),
+                    weight=0.52,
+                    confidence=0.70,
+                )
+            )
+        for preference in payload.get("preferences", []) or []:
+            preference_text = str(preference).strip()
+            if preference_text and preference_text not in self.interaction_preferences:
+                self.interaction_preferences.append(preference_text)
         self._refresh_dynamic_profile()
 
     def profile_prompt(self) -> str:
@@ -289,7 +382,7 @@ class StudentProfile:
         goals = "、".join(self.learning_goals) or "未显式说明"
         preferences = "、".join(self.interaction_preferences) or self.cognitive_style
         return (
-            f"专业/方向={self.major or self.major_preference}；学习目标={goals}；"
+            f"课程={self.target_course}；专业/方向={self.major or self.major_preference}；学习目标={goals}；"
             f"偏好支持={preferences}；薄弱点={','.join(self.weak_points) or '待诊断'}；"
             f"动态维度={dimensions or '待初始化'}；不会原因占比={causes or '待诊断'}"
         )
@@ -297,7 +390,7 @@ class StudentProfile:
     def state_report(self) -> str:
         lines = ["学习状态画像:"]
         if self.major or self.learning_goals:
-            lines.append(f"- 背景目标: {self.major or self.major_preference}；{', '.join(self.learning_goals) or '目标待细化'}")
+            lines.append(f"- 背景目标: {self.target_course}；{self.major or self.major_preference}；{', '.join(self.learning_goals) or '目标待细化'}")
         for state in self.dimension_states.values():
             fragments = " / ".join(state.evidence_fragments[:2]) or "暂无直接证据"
             lines.append(
@@ -369,6 +462,22 @@ class StudentProfile:
 
     def _update_concepts(self, message: str, features: set[str]) -> None:
         known_points = ("池化层", "最大池化", "平均池化", "卷积核", "反向传播", "链式法则", "梯度下降", "特征图")
+        known_points += (
+            "机器学习",
+            "监督学习",
+            "数据预处理",
+            "特征工程",
+            "线性回归",
+            "逻辑回归",
+            "决策树",
+            "支持向量机",
+            "朴素贝叶斯",
+            "模型评估",
+            "混淆矩阵",
+            "过拟合",
+            "正则化",
+            "交叉验证",
+        )
         for point in known_points:
             if point in message:
                 if point not in self.weak_points and any(
@@ -387,6 +496,7 @@ class StudentProfile:
                     self.concept_mastery[point] = _clamp(current - 0.10)
                 else:
                     self.concept_mastery.setdefault(point, current)
+                self.knowledge_traces.setdefault(point, KnowledgeTrace(concept=point, mastery=self.concept_mastery.get(point, current)))
         if LearningStateCause.MISCONCEPTION.value in features:
             pattern = self._detect_misconception_pattern(message)
             self.misconception_patterns[pattern] = _clamp(self.misconception_patterns.get(pattern, 0.0) + 0.22)
@@ -395,7 +505,7 @@ class StudentProfile:
         feature_map: tuple[tuple[str, tuple[str, ...]], ...] = (
             (
                 LearningStateCause.PREREQUISITE_GAP.value,
-                ("基础", "前置", "定义", "概念", "公式看不懂", "从哪来", "为什么", "原理不懂"),
+                ("基础", "前置", "定义", "概念", "公式看不懂", "从哪来", "为什么", "不知道", "原理不懂"),
             ),
             (
                 LearningStateCause.MISCONCEPTION.value,
@@ -593,3 +703,4 @@ class ResourcePackage:
     resources: tuple[AgentOutput, ...]
     alignment: AlignmentReport
     learning_signal: LearningSignal
+    strategy_plan: LearningStrategyPlan | None = None

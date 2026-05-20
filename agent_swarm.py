@@ -97,6 +97,16 @@ class EffectEvaluatorAgent:
         )
 
 
+async def run_async_thread(func, *args, **kwargs):
+    """Executes a synchronous blocking function inside the default loop executor thread pool,
+    achieving true cooperative async multitasking in Python.
+    """
+    import asyncio
+    import functools
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+
+
 class ResourceFactory:
     def __init__(self, generator: InstructRAGGenerator) -> None:
         self.generator = generator
@@ -137,6 +147,34 @@ class ResourceFactory:
         order = {resource_type: index for index, (_, resource_type) in enumerate(self.jobs)}
         return tuple(sorted(outputs, key=lambda item: order[item.resource_type]))
 
+    async def async_generate_all(
+        self,
+        *,
+        query: str,
+        retrieval,
+        clean_evidence,
+        profile: StudentProfile,
+        correction: str = "",
+    ) -> tuple[AgentOutput, ...]:
+        import asyncio
+        tasks = []
+        for role, resource_type in self.jobs:
+            tasks.append(
+                run_async_thread(
+                    self.generator.generate,
+                    role=role,
+                    resource_type=resource_type,
+                    query=query,
+                    graph_context=retrieval.graph_context,
+                    evidence=clean_evidence,
+                    profile=profile,
+                    correction=correction,
+                )
+            )
+        outputs = await asyncio.gather(*tasks)
+        order = {resource_type: index for index, (_, resource_type) in enumerate(self.jobs)}
+        return tuple(sorted(outputs, key=lambda item: order[item.resource_type]))
+
 
 class EduMatrixSwarm:
     """1+3+5 full-band orchestration for EduMatrix."""
@@ -159,9 +197,12 @@ class EduMatrixSwarm:
         self.evaluator = EffectEvaluatorAgent()
         self.strategy_engine = LearningStrategyEngine()
 
-    def process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
+    async def async_process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
+        """Fully async pipeline execution enabling non-blocking concurrent request handling."""
         profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
-        profile = self.profile_probe.update(profile, user_input)
+        
+        # Async execution of LLM profiling via thread isolation
+        profile = await run_async_thread(self.profile_probe.update, profile, user_input)
 
         retrieval = self.planner.plan(self.rag, user_input, profile)
         debate_result = self.debate.clean(retrieval)
@@ -170,7 +211,7 @@ class EduMatrixSwarm:
         resources: tuple[AgentOutput, ...] = ()
         alignment_report = None
         for attempt in range(CONFIG.rollback_limit + 1):
-            resources = self.factory.generate_all(
+            resources = await self.factory.async_generate_all(
                 query=user_input,
                 retrieval=retrieval,
                 clean_evidence=debate_result.clean_evidence,
@@ -208,6 +249,25 @@ class EduMatrixSwarm:
             learning_signal=learning_signal,
             strategy_plan=strategy_plan,
         )
+
+    def process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
+        """Synchronous backward-compatible wrapper that executes the async pipeline safely
+        cross event loop boundaries. Ensures existing unit tests and CLI runners run flawlessly.
+        """
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        if loop.is_running():
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, self.async_process(user_input, student_id=student_id))
+                return future.result()
+        else:
+            return loop.run_until_complete(self.async_process(user_input, student_id=student_id))
 
     def agent_topology(self) -> tuple[AgentSpec, ...]:
         return AGENT_MATRIX

@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from agent_swarm import EduMatrixSwarm
 from models import DIMENSION_LABELS, StudentProfile
+from observability import TELEMETRY
 
 
 HOST = "127.0.0.1"
@@ -171,6 +172,22 @@ class EduMatrixHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/datasets":
             self._send_json({"course": "机器学习导论", "datasets": MACHINE_LEARNING_DATASETS})
+            return
+        if path == "/api/health":
+            self._send_json(
+                {
+                    "status": "ok",
+                    "course": "机器学习导论",
+                    "profiles": len(swarm.profile_store),
+                    "rag": {
+                        "visual_index_count": swarm.rag.visual_index.index.count(),
+                        "text_index_count": swarm.rag.text_index.index.count(),
+                    },
+                }
+            )
+            return
+        if path == "/api/metrics":
+            self._send_json(TELEMETRY.snapshot())
             return
         self.send_error(404, "Not Found")
 

@@ -26,5 +26,11 @@ class EduMatrixConfig:
 
     use_remote_llm: bool = os.getenv("EDUMATRIX_USE_REMOTE_LLM", "0") == "1"
 
+    embedding_provider: str = os.getenv("EDUMATRIX_EMBEDDING_PROVIDER", "local")
+    embedding_endpoint: str = os.getenv("EDUMATRIX_EMBEDDING_ENDPOINT", "")
+    embedding_api_key: str = os.getenv("EDUMATRIX_EMBEDDING_API_KEY", "")
+    embedding_model: str = os.getenv("EDUMATRIX_EMBEDDING_MODEL", "text-embedding-3-large")
+    embedding_dim: int = int(os.getenv("EDUMATRIX_EMBEDDING_DIM", "384"))
+
 
 CONFIG = EduMatrixConfig()

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import hashlib
 import hmac
 import json
+import re
 import ssl
 import time
 from typing import Protocol
@@ -135,7 +136,19 @@ class DeterministicEducationLLM:
 
 
 def _guess_topic(text: str) -> str:
+    target_match = re.search(r"(?<!学习)目标=([^;；\n]+)|GraphRAG目标知识点[：:]\s*([^\n]+)", text)
+    if target_match:
+        target = next((group for group in target_match.groups() if group), "").strip()
+        if target:
+            return target
     for word in (
+        "池化层",
+        "最大池化",
+        "平均池化",
+        "卷积核",
+        "反向传播",
+        "链式法则",
+        "梯度下降",
         "过拟合",
         "正则化",
         "逻辑回归",
@@ -144,13 +157,6 @@ def _guess_topic(text: str) -> str:
         "混淆矩阵",
         "监督学习",
         "机器学习",
-        "池化层",
-        "最大池化",
-        "平均池化",
-        "卷积核",
-        "反向传播",
-        "链式法则",
-        "梯度下降",
     ):
         if word in text:
             return word

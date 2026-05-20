@@ -2,9 +2,13 @@ import unittest
 
 from agent_swarm import EduMatrixSwarm
 from drag_debate import DebateAugmentedRAG
+from ingestion import DocumentIngestionPipeline
 from manifold_alignment import verify_consistency
 from models import StudentProfile
+from observability import TELEMETRY
 from rag_engine import hybrid_rag
+from retrieval_evaluation import RetrievalEvalCase, evaluate_retrieval
+from vector_store import InMemoryVectorIndex
 from web_demo import _teacher_dashboard
 
 
@@ -38,6 +42,8 @@ class EduMatrixPipelineTests(unittest.TestCase):
         )
         self.assertIn("knowledge_mastery", package.profile.dimension_states)
         self.assertTrue(package.profile.learning_state_causes)
+        combined = "\n".join(resource.content for resource in package.resources)
+        self.assertIn("MaxPool2d", combined)
 
     def test_dialogue_profile_extracts_state_causes_and_percentages(self):
         profile = StudentProfile(student_id="s1")
@@ -96,6 +102,47 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertEqual(dashboard["course"], "机器学习导论")
         self.assertTrue(dashboard["heatmap"])
         self.assertTrue(dashboard["interventions"])
+
+    def test_ingestion_pipeline_indexes_future_course_materials(self):
+        index = InMemoryVectorIndex("test-course-index")
+        pipeline = DocumentIngestionPipeline(index, chunk_size=80, overlap=10)
+        report = pipeline.ingest_text(
+            "最大池化使用窗口取局部最大值。混淆矩阵可以帮助学生理解 precision 和 recall 的差异。",
+            source="unit-test.md",
+            title="工业化摄入测试",
+        )
+
+        self.assertGreaterEqual(report.chunks, 1)
+        self.assertEqual(index.count(), report.chunks)
+        hits = index.search("最大池化 局部最大值", top_k=3)
+        self.assertTrue(hits)
+        self.assertIn("最大池化", hits[0].content)
+
+    def test_retrieval_evaluation_reports_recall_and_mrr(self):
+        report = evaluate_retrieval(
+            hybrid_rag,
+            (
+                RetrievalEvalCase(
+                    query="用 PyTorch 演示最大池化",
+                    target="池化层",
+                    expected_evidence_ids=("IMG_PATCH_POOL_01",),
+                ),
+            ),
+        )
+        self.assertEqual(report.cases, 1)
+        self.assertGreaterEqual(report.recall_at_k, 1.0)
+        self.assertGreater(report.mean_reciprocal_rank, 0.0)
+
+    def test_telemetry_records_pipeline_metrics(self):
+        TELEMETRY.clear()
+        swarm = EduMatrixSwarm()
+        swarm.process("我看不懂池化层，请用代码演示最大池化。")
+        snapshot = TELEMETRY.snapshot()
+        metric_names = {item["name"] for item in snapshot["metrics"]}
+        span_names = {item["name"] for item in snapshot["spans"]}
+        self.assertIn("retrieval.evidence_count", metric_names)
+        self.assertIn("alignment.rollback_count", metric_names)
+        self.assertIn("swarm.process", span_names)
 
 
 if __name__ == "__main__":

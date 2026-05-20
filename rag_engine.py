@@ -5,7 +5,18 @@ import math
 import re
 
 from config import CONFIG
+from embedding_models import EMBEDDINGS
 from models import Evidence, EvidenceModality, GraphContext, RetrievalBundle
+from observability import TELEMETRY, timed_span
+from vector_store import InMemoryVectorIndex, VectorIndex
+
+
+def _tokens(text: str) -> set[str]:
+    lower = text.lower()
+    words = set(re.findall(r"[a-zA-Z0-9_+\-.]+|[\u4e00-\u9fff]{2,}", lower))
+    chinese = re.findall(r"[\u4e00-\u9fff]", text)
+    words.update("".join(chinese[i : i + 2]) for i in range(max(0, len(chinese) - 1)))
+    return {word for word in words if word.strip()}
 
 
 class VectorMath:
@@ -137,9 +148,22 @@ def jinaclip_text_similarity(query: str, evidence: Evidence) -> float:
 
 
 def _similarity(query: str, item: Evidence) -> float:
-    """Backward-compatible wrapper routing to the Jina-CLIP text similarity.
-    """
-    return jinaclip_text_similarity(query, item)
+    query_tokens = _tokens(query)
+    doc_text = _evidence_text(item)
+    doc_tokens = _tokens(doc_text)
+    if not query_tokens or not doc_tokens:
+        return 0.0
+    overlap = len(query_tokens & doc_tokens)
+    jaccard = overlap / len(query_tokens | doc_tokens)
+    embedding_score = EMBEDDINGS.score(query, doc_text)
+    jina_score = jinaclip_text_similarity(query, item)
+    anchor_boost = sum(1 for anchor in item.anchors if anchor and anchor in query) * 0.18
+    tag_boost = sum(1 for tag in item.tags if tag and tag.lower() in query.lower()) * 0.12
+    return min(1.0, embedding_score * 0.35 + jina_score * 0.35 + jaccard * 0.20 + anchor_boost + tag_boost)
+
+
+def _evidence_text(item: Evidence) -> str:
+    return " ".join((item.title, item.content, " ".join(item.tags), " ".join(item.anchors)))
 
 
 class GraphRAG:
@@ -306,7 +330,7 @@ class VisRAG:
     ranking so the rest of the system is already integration-ready.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, index: VectorIndex | None = None) -> None:
         self.patch_db: tuple[Evidence, ...] = (
             Evidence(
                 id="IMG_PATCH_POOL_01",
@@ -379,6 +403,8 @@ class VisRAG:
                 metadata={"raw_image_ref": "data/patches/confusion_matrix.png", "page": 25},
             ),
         )
+        self.index = index or InMemoryVectorIndex("visrag-image-patches")
+        self.index.upsert(self.patch_db)
 
     def search(self, query: str, top_k: int = 3) -> list[dict[str, object]]:
         ranked = self.search_evidence(query, top_k)
@@ -388,16 +414,13 @@ class VisRAG:
         ]
 
     def search_evidence(self, query: str, top_k: int = 3) -> tuple[Evidence, ...]:
-        ranked = sorted(
-            (item.with_score(colpali_maxsim(query, item)) for item in self.patch_db),
-            key=lambda item: item.score,
-            reverse=True,
-        )
+        vector_hits = self.index.search(query, top_k=max(top_k * 3, top_k))
+        ranked = sorted((item.with_score(colpali_maxsim(query, item)) for item in vector_hits), key=lambda item: item.score, reverse=True)
         return tuple(item for item in ranked[:top_k] if item.score > 0.0)
 
 
 class TextKnowledgeIndex:
-    def __init__(self) -> None:
+    def __init__(self, index: VectorIndex | None = None) -> None:
         self.documents: tuple[Evidence, ...] = (
             Evidence(
                 id="TXT_POOL_DEF_01",
@@ -481,13 +504,12 @@ class TextKnowledgeIndex:
                 anchors=("accuracy", "precision", "recall", "F1", "ROC-AUC"),
             ),
         )
+        self.index = index or InMemoryVectorIndex("text-knowledge")
+        self.index.upsert(self.documents)
 
     def search(self, query: str, top_k: int = 4) -> tuple[Evidence, ...]:
-        ranked = sorted(
-            (item.with_score(jinaclip_text_similarity(query, item)) for item in self.documents),
-            key=lambda item: item.score,
-            reverse=True,
-        )
+        vector_hits = self.index.search(query, top_k=max(top_k * 3, top_k))
+        ranked = sorted((item.with_score(_similarity(query, item)) for item in vector_hits), key=lambda item: item.score, reverse=True)
         return tuple(item for item in ranked[:top_k] if item.score > 0.0)
 
 
@@ -503,23 +525,31 @@ class HybridRAGPipeline:
         self.text_index = text_index or TextKnowledgeIndex()
 
     def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k) -> RetrievalBundle:
-        target = target or self._infer_target(query)
-        graph_context = self.graph.get_context(target)
-        query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
-        candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
-        candidates.extend(self.text_index.search(query_with_graph, top_k=top_k))
-        dedup: dict[str, Evidence] = {}
-        for item in candidates:
-            existing = dedup.get(item.id)
-            if existing is None or item.score > existing.score:
-                dedup[item.id] = item
-        ranked = sorted(dedup.values(), key=lambda item: item.score, reverse=True)
-        return RetrievalBundle(
-            query=query,
-            target=graph_context.target,
-            graph_context=graph_context,
-            evidence=tuple(ranked[:top_k]),
-        )
+        with timed_span(TELEMETRY, "hybrid_rag.retrieve", top_k=top_k):
+            target = target or self._infer_target(query)
+            graph_context = self.graph.get_context(target)
+            query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
+            candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
+            candidates.extend(self.text_index.search(query_with_graph, top_k=top_k))
+            dedup: dict[str, Evidence] = {}
+            for item in candidates:
+                existing = dedup.get(item.id)
+                if existing is None or item.score > existing.score:
+                    dedup[item.id] = item
+            ranked = sorted(dedup.values(), key=lambda item: item.score, reverse=True)
+            result = RetrievalBundle(
+                query=query,
+                target=graph_context.target,
+                graph_context=graph_context,
+                evidence=tuple(ranked[:top_k]),
+            )
+            TELEMETRY.record_metric("retrieval.evidence_count", len(result.evidence), target=result.target)
+            TELEMETRY.record_metric(
+                "retrieval.image_count",
+                sum(1 for item in result.evidence if item.modality == EvidenceModality.IMAGE),
+                target=result.target,
+            )
+            return result
 
     def _infer_target(self, query: str) -> str:
         for concept in sorted(self.graph.nodes, key=len, reverse=True):

@@ -171,15 +171,20 @@ edumatrix/
 ├── agent_swarm.py          # 1+3+5 Agent 编排入口
 ├── config.py               # 运行配置和环境变量
 ├── drag_debate.py          # DRAG 三角色证据辩论
+├── embedding_models.py     # 本地/通用大模型 embedding 适配层
+├── ingestion.py            # 数据集到来前即可验证的文档摄入流水线
 ├── instruct_rag.py         # 画像与证据约束生成模板
 ├── learning_strategy.py    # 检索练习、间隔复习、worked example、提示阶梯策略引擎
 ├── llm_client.py           # 星火 WebSocket 适配器与离线 fallback
 ├── machine_learning_course_datasets.md # 机器学习导论公开数据集 URL
 ├── manifold_alignment.py   # 双曲流形对齐和符号冲突检测
 ├── models.py               # 数据模型、动态学生画像、学习状态占比
+├── observability.py        # 本地指标/追踪接口，可替换 OpenTelemetry/Prometheus
 ├── rag_engine.py           # GraphRAG、VisRAG、文本检索与 HybridRAG
+├── retrieval_evaluation.py # 检索 recall@k / MRR 评测骨架
 ├── swarm_orchestrator.py   # 命令行入口
 ├── test_edumatrix.py       # 单元测试
+├── vector_store.py         # 可替换 Milvus/FAISS/pgvector 的向量索引接口
 ├── web_demo.py             # 零依赖 Web Demo、学生端和教师端
 └── manual.md               # 完整架构报告
 ```
@@ -228,6 +233,28 @@ Web Demo 包含：
 python swarm_orchestrator.py "我是计算机专业，期末要考机器学习。逻辑回归和混淆矩阵总混，希望用图和例子一步步讲。" --json
 ```
 
+### 输出运行指标
+
+```bash
+python swarm_orchestrator.py "我看不懂池化层，请用图和 PyTorch 代码演示最大池化。" --json --metrics
+```
+
+指标快照会包含：
+
+- `retrieval.evidence_count`：召回证据数。
+- `retrieval.image_count`：视觉证据数。
+- `debate.keep_rate`：DRAG 证据保留率。
+- `alignment.rollback_count`：对齐失败回滚次数。
+- `learning.estimated_accuracy`：量化评估预测正确率。
+- `hybrid_rag.retrieve` / `swarm.process`：关键链路耗时 span。
+
+Web Demo 也提供：
+
+```text
+GET /api/health
+GET /api/metrics
+```
+
 
 ### 运行测试
 
@@ -243,6 +270,9 @@ python -m unittest discover -s . -p "test_*.py" -v
 - Swarm 是否生成完整五类资源包。
 - 对话画像是否能解析专业、目标、薄弱点、不会原因占比和 10 维动态画像。
 - 学生反馈是否能更新掌握度、学习策略缺口和元认知状态。
+- 文档摄入流水线是否能把未来课程材料切块并写入向量索引。
+- 检索评测是否能输出 recall@k 和 MRR。
+- 指标系统是否记录检索、DRAG、对齐和 Swarm 运行状态。
 
 ## 可选：启用科大讯飞星火
 
@@ -255,6 +285,42 @@ $env:SPARK_API_KEY="your_api_key"
 $env:SPARK_API_SECRET="your_api_secret"
 python swarm_orchestrator.py "我想学习池化层。"
 ```
+
+## 可选：启用通用大模型 Embedding
+
+默认检索使用本地 deterministic hash embedding，保证离线 demo 和 CI 稳定可复现。生产环境建议接入通用 embedding 大模型或企业统一模型网关，并把向量写入 Milvus、FAISS 或 pgvector。
+
+当前代码支持 OpenAI-compatible `/v1/embeddings` 接口：
+
+```powershell
+$env:EDUMATRIX_EMBEDDING_PROVIDER="openai_compatible"
+$env:EDUMATRIX_EMBEDDING_ENDPOINT="https://your-gateway.example.com/v1/embeddings"
+$env:EDUMATRIX_EMBEDDING_API_KEY="your_embedding_key"
+$env:EDUMATRIX_EMBEDDING_MODEL="text-embedding-3-large"
+python swarm_orchestrator.py "我想用图和代码理解最大池化。"
+```
+
+## 数据集到来后的接入方式
+
+当前即使没有真实数据集，也已经把工业化接口预埋好了：
+
+```python
+from ingestion import DocumentIngestionPipeline
+from vector_store import InMemoryVectorIndex
+
+index = InMemoryVectorIndex("course-index")
+pipeline = DocumentIngestionPipeline(index)
+report = pipeline.ingest_file("course_notes.md")
+print(report)
+```
+
+生产环境替换点：
+
+- `InMemoryVectorIndex` -> Milvus / FAISS / pgvector。
+- `HashEmbeddingBackend` -> 通用 embedding 大模型或企业 embedding 网关。
+- `DocumentIngestionPipeline.chunk_text()` -> PDF 渲染、版面检测、公式/图表/代码块切片。
+- `TelemetrySink` -> OpenTelemetry / Prometheus / 企业指标平台。
+- `RetrievalEvalCase` -> 标准课程问答集、教师标注证据集、比赛评测集。
 
 ## 示例输出节选
 
@@ -286,7 +352,7 @@ DRAG保留证据: TXT_CONV_PRE_01, TXT_POOL_DEF_01, IMG_PATCH_POOL_01
 | 层级 | 当前实现 | 生产升级 |
 |---|---|---|
 | 数据层 | 内存课程图谱和证据库 | Neo4j + Milvus/FAISS/pgvector |
-| 文档摄入 | 手工构造图像切片元数据 | PDF 渲染、版面检测、多模态 embedding |
+| 文档摄入 | 手工构造图像切片元数据 + 本地 hash embedding | PDF 渲染、版面检测、通用大模型 embedding、多模态 embedding |
 | 模型层 | 离线 deterministic fallback | 星火大模型、私有化模型或多模型路由 |
 | 服务层 | CLI 同步编排 | FastAPI + Worker + Redis Stream |
 | 视频层 | 虚拟人脚本 | TTS、虚拟人合成、教学短视频生成 |

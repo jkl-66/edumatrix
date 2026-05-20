@@ -12,6 +12,7 @@ from learning_strategy import LearningStrategyEngine
 from llm_client import DEFAULT_LLM, LLMBackend
 from manifold_alignment import ManifoldAlignmentVerifier
 from models import AgentOutput, LearningSignal, ResourcePackage, StudentProfile
+from observability import TELEMETRY, timed_span
 from rag_engine import HybridRAGPipeline, hybrid_rag
 
 
@@ -199,56 +200,64 @@ class EduMatrixSwarm:
 
     async def async_process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
         """Fully async pipeline execution enabling non-blocking concurrent request handling."""
-        profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
-        
-        # Async execution of LLM profiling via thread isolation
-        profile = await run_async_thread(self.profile_probe.update, profile, user_input)
+        with timed_span(TELEMETRY, "swarm.process", student_id=student_id):
+            profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
+            profile = await run_async_thread(self.profile_probe.update, profile, user_input)
 
-        retrieval = self.planner.plan(self.rag, user_input, profile)
-        debate_result = self.debate.clean(retrieval)
+            retrieval = self.planner.plan(self.rag, user_input, profile)
+            debate_result = self.debate.clean(retrieval)
+            TELEMETRY.record_metric(
+                "debate.keep_rate",
+                len(debate_result.clean_evidence) / max(1, len(retrieval.evidence)),
+                target=retrieval.target,
+            )
 
-        correction = ""
-        resources: tuple[AgentOutput, ...] = ()
-        alignment_report = None
-        for attempt in range(CONFIG.rollback_limit + 1):
-            resources = await self.factory.async_generate_all(
-                query=user_input,
-                retrieval=retrieval,
-                clean_evidence=debate_result.clean_evidence,
+            correction = ""
+            resources: tuple[AgentOutput, ...] = ()
+            alignment_report = None
+            rollback_count = 0
+            for attempt in range(CONFIG.rollback_limit + 1):
+                resources = await self.factory.async_generate_all(
+                    query=user_input,
+                    retrieval=retrieval,
+                    clean_evidence=debate_result.clean_evidence,
+                    profile=profile,
+                    correction=correction,
+                )
+                alignment_report = self.alignment.verify(resources)
+                if alignment_report.passed:
+                    break
+                rollback_count += 1
+                correction = (
+                    f"第 {attempt + 1} 次对齐失败：{alignment_report.advice} "
+                    "重写时必须统一池化类型、变量名和图示节点。"
+                )
+            TELEMETRY.record_metric("alignment.rollback_count", rollback_count, target=retrieval.target)
+
+            assert alignment_report is not None
+            learning_signal = self.evaluator.evaluate(profile, resources)
+            TELEMETRY.record_metric("learning.estimated_accuracy", learning_signal.accuracy, target=retrieval.target)
+            if learning_signal.needs_replan:
+                profile.cognitive_load = min(1.0, profile.cognitive_load + 0.08)
+                profile.update_from_feedback(
+                    feedback="系统量化评估显示当前正确率或沙盒错误率触发重规划，需要降低难度并补充诊断。",
+                    accuracy=learning_signal.accuracy,
+                    self_confidence=None,
+                    hint_count=1,
+                )
+            strategy_plan = self.strategy_engine.build_plan(profile, target=retrieval.target)
+
+            return ResourcePackage(
+                student_id=student_id,
+                target=retrieval.target,
                 profile=profile,
-                correction=correction,
+                retrieval=retrieval,
+                verdicts=debate_result.verdicts,
+                resources=resources,
+                alignment=alignment_report,
+                learning_signal=learning_signal,
+                strategy_plan=strategy_plan,
             )
-            alignment_report = self.alignment.verify(resources)
-            if alignment_report.passed:
-                break
-            correction = (
-                f"第 {attempt + 1} 次对齐失败：{alignment_report.advice} "
-                "重写时必须统一池化类型、变量名和图示节点。"
-            )
-
-        assert alignment_report is not None
-        learning_signal = self.evaluator.evaluate(profile, resources)
-        if learning_signal.needs_replan:
-            profile.cognitive_load = min(1.0, profile.cognitive_load + 0.08)
-            profile.update_from_feedback(
-                feedback="系统量化评估显示当前正确率或沙盒错误率触发重规划，需要降低难度并补充诊断。",
-                accuracy=learning_signal.accuracy,
-                self_confidence=None,
-                hint_count=1,
-            )
-        strategy_plan = self.strategy_engine.build_plan(profile, target=retrieval.target)
-
-        return ResourcePackage(
-            student_id=student_id,
-            target=retrieval.target,
-            profile=profile,
-            retrieval=retrieval,
-            verdicts=debate_result.verdicts,
-            resources=resources,
-            alignment=alignment_report,
-            learning_signal=learning_signal,
-            strategy_plan=strategy_plan,
-        )
 
     def process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
         """Synchronous backward-compatible wrapper that executes the async pipeline safely

@@ -32,5 +32,8 @@ class EduMatrixConfig:
     embedding_model: str = os.getenv("EDUMATRIX_EMBEDDING_MODEL", "text-embedding-3-large")
     embedding_dim: int = int(os.getenv("EDUMATRIX_EMBEDDING_DIM", "384"))
 
+    use_faiss: bool = os.getenv("EDUMATRIX_USE_FAISS", "1") == "1"
+    faiss_index_dir: str = os.getenv("EDUMATRIX_FAISS_DIR", "data/faiss_indexes")
+
 
 CONFIG = EduMatrixConfig()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from pathlib import Path
 import math
 import re
 
@@ -8,6 +9,7 @@ from config import CONFIG
 from embedding_models import EMBEDDINGS
 from models import Evidence, EvidenceModality, GraphContext, RetrievalBundle
 from observability import TELEMETRY, timed_span
+from vector_store import create_index
 from vector_store import InMemoryVectorIndex, VectorIndex
 
 
@@ -519,18 +521,31 @@ class HybridRAGPipeline:
         graph: GraphRAG | None = None,
         visual_index: VisRAG | None = None,
         text_index: TextKnowledgeIndex | None = None,
+        faiss_indexes: FAISSIndexSet | None = None,
     ) -> None:
         self.graph = graph or GraphRAG()
         self.visual_index = visual_index or VisRAG()
-        self.text_index = text_index or TextKnowledgeIndex()
+        self.faiss_indexes = faiss_indexes
+
+        if faiss_indexes is not None:
+            self.text_index = None
+        else:
+            self.text_index = text_index or TextKnowledgeIndex()
 
     def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k) -> RetrievalBundle:
         with timed_span(TELEMETRY, "hybrid_rag.retrieve", top_k=top_k):
             target = target or self._infer_target(query)
             graph_context = self.graph.get_context(target)
             query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
+
             candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
-            candidates.extend(self.text_index.search(query_with_graph, top_k=top_k))
+
+            if self.faiss_indexes is not None:
+                faiss_results = self.faiss_indexes.search(query_with_graph, top_k=top_k)
+                candidates.extend(faiss_results)
+            elif self.text_index is not None:
+                candidates.extend(self.text_index.search(query_with_graph, top_k=top_k))
+
             dedup: dict[str, Evidence] = {}
             for item in candidates:
                 existing = dedup.get(item.id)
@@ -570,6 +585,71 @@ class HybridRAGPipeline:
         return "池化层"
 
 
+class FAISSIndexSet:
+    """Loads and searches across all FAISS category indexes built from real course data."""
+
+    def __init__(self, index_dir: str | Path | None = None) -> None:
+        from vector_store_faiss import FaissVectorIndex
+
+        index_dir = Path(index_dir or CONFIG.faiss_index_dir)
+        if not index_dir.is_absolute():
+            index_dir = Path(__file__).resolve().parent / index_dir
+
+        self.indexes: dict[str, FaissVectorIndex] = {}
+        self.categories = ["courseware", "code", "textbook", "dataset", "ppt"]
+
+        for cat in self.categories:
+            index_path = index_dir / f"{cat}_index"
+            faiss_file = index_path.with_suffix(".faiss")
+            meta_file = index_path.with_suffix(".json")
+            if faiss_file.exists() and meta_file.exists():
+                try:
+                    self.indexes[cat] = FaissVectorIndex.load(index_path)
+                    print(f"  [FAISS] Loaded {cat} index: {self.indexes[cat].count()} vectors")
+                except Exception as e:
+                    print(f"  [FAISS] Failed to load {cat} index: {e}")
+
+        print(f"  [FAISS] Total: {sum(idx.count() for idx in self.indexes.values())} vectors across {len(self.indexes)} categories")
+
+    def search(self, query: str, top_k: int = 6, category_boost: dict[str, float] | None = None) -> tuple[Evidence, ...]:
+        boosts = category_boost or {
+            "courseware": 1.0,
+            "code": 1.05,
+            "textbook": 1.0,
+            "dataset": 0.6,
+            "ppt": 0.8,
+        }
+
+        all_results = []
+        for cat, index in self.indexes.items():
+            boost = boosts.get(cat, 1.0)
+            results = index.search(query, top_k=top_k)
+            for item in results:
+                scored = item.with_score(item.score * boost)
+                all_results.append(scored)
+
+        ranked = sorted(all_results, key=lambda item: item.score, reverse=True)
+        return tuple(ranked[:top_k])
+
+    def search_by_category(self, query: str, category: str, top_k: int = 4) -> tuple[Evidence, ...]:
+        if category in self.indexes:
+            return self.indexes[category].search(query, top_k=top_k)
+        return ()
+
+
+def build_rag_pipeline() -> HybridRAGPipeline:
+    """Factory that creates the appropriate RAG pipeline based on config."""
+    graph = GraphRAG()
+    vis_rag = VisRAG()
+
+    if CONFIG.use_faiss:
+        faiss_set = FAISSIndexSet()
+        return HybridRAGPipeline(graph=graph, visual_index=vis_rag, faiss_indexes=faiss_set)
+    else:
+        text_index = TextKnowledgeIndex()
+        return HybridRAGPipeline(graph=graph, visual_index=vis_rag, text_index=text_index)
+
+
 graph_rag = GraphRAG()
 vis_rag = VisRAG()
-hybrid_rag = HybridRAGPipeline(graph_rag, vis_rag)
+hybrid_rag = build_rag_pipeline()

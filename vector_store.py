@@ -69,3 +69,10 @@ def _cosine_01(left: tuple[float, ...], right: tuple[float, ...]) -> float:
     if left_norm == 0.0 or right_norm == 0.0:
         return 0.0
     return max(0.0, min(1.0, (dot / (left_norm * right_norm) + 1.0) / 2.0))
+
+
+def create_index(name: str, use_faiss: bool = False) -> VectorIndex:
+    if use_faiss:
+        from vector_store_faiss import FaissVectorIndex
+        return FaissVectorIndex(name)
+    return InMemoryVectorIndex(name)

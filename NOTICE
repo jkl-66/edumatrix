@@ -1,0 +1,71 @@
+EduMatrix - 个性化学习智能体系统
+Copyright 2026 EduMatrix Authors
+
+This product includes software developed by the EduMatrix project.
+
+======================================================================
+Open Source Attribution Notice
+======================================================================
+
+This project uses the following open-source libraries and frameworks:
+
+1. Python Ecosystem
+   - FastAPI (https://fastapi.tiangolo.com/) - MIT License
+     Web framework for building the backend API
+   - SQLAlchemy (https://www.sqlalchemy.org/) - MIT License
+     ORM for database operations
+   - Uvicorn (https://www.uvicorn.org/) - BSD License
+     ASGI server for Python
+   - httpx (https://www.python-httpx.org/) - BSD License
+     HTTP client for API calls
+   - PyPDF2 / pdfplumber - MIT License
+     PDF document parsing
+   - python-pptx - MIT License
+     PowerPoint document parsing
+   - pillow (PIL) - Historical Permission Notice
+     Image processing
+   - moviepy - MIT License
+     Video processing and audio extraction
+   - openai-whisper - MIT License
+     Speech-to-text transcription
+   - scikit-learn - BSD License
+     Machine learning utilities
+   - numpy / pandas - BSD License
+     Scientific computing and data analysis
+   - matplotlib - BSD License
+     Data visualization and plotting
+
+2. Frontend Ecosystem
+   - Vue 3 (https://vuejs.org/) - MIT License
+     Progressive JavaScript framework
+   - Vite (https://vitejs.dev/) - MIT License
+     Frontend build tool and dev server
+   - Vue Router (https://router.vuejs.org/) - MIT License
+     Client-side routing
+   - Axios (https://axios-http.com/) - MIT License
+     HTTP client for frontend API calls
+   - Tailwind CSS (https://tailwindcss.com/) - MIT License
+     Utility-first CSS framework
+   - Lucide Icons (https://lucide.dev/) - ISC License
+     Open source icon library
+
+3. AI/ML Frameworks
+   - PyTorch (https://pytorch.org/) - BSD License
+     Deep learning framework (used by whisper)
+   - Sentence-Transformers (https://www.sbert.net/) - Apache 2.0
+     Text embedding models
+   - FAISS (https://github.com/facebookresearch/faiss) - MIT License
+     Vector similarity search
+
+4. Core Architecture Patterns
+   - GraphRAG concept inspired by Microsoft Research
+     (https://www.microsoft.com/en-us/research/project/graphrag/)
+   - ColPali late interaction retrieval inspired by
+     (https://github.com/illuin-tech/colpali)
+   - Debate-Augmented RAG (DRAG) inspired by
+     multi-agent evidence cleaning patterns
+   - Manifold alignment verification inspired by
+     multi-modal consistency checking approaches
+
+For full license texts, please refer to the licenses directory
+or the individual library documentation.

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar, Presentation, Clock, GraduationCap, Settings } from '@lucide/vue'
+import { BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar, Presentation, Clock, GraduationCap, Library, Settings, UserCheck } from '@lucide/vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,6 +15,8 @@ const navItems = [
   { path: '/notes', label: '学习笔记', icon: StickyNote },
   { path: '/review', label: '复习计划', icon: Calendar },
   { path: '/history', label: '对话历史', icon: Clock },
+  { path: '/knowledge', label: '知识库', icon: Library },
+  { path: '/profile', label: '学习画像', icon: UserCheck },
   { path: '/teacher', label: '教师看板', icon: Presentation },
   { path: '/settings', label: 'LLM 设置', icon: Settings },
 ]
@@ -26,6 +28,8 @@ const pageTitle = computed(() => {
     '/notes': '学习笔记',
     '/review': '复习计划',
     '/history': '对话历史',
+    '/knowledge': '知识库',
+    '/profile': '学习画像',
     '/teacher': '教师看板',
     '/settings': 'LLM 设置',
   }
@@ -67,7 +71,7 @@ function goHome() {
         </router-link>
       </nav>
 
-      <div class="p-3 border-t border-white/10">
+      <div class="p-3 border-t border-white/10 space-y-2">
         <div class="flex items-center gap-2 px-2 py-1.5">
           <div class="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
             S
@@ -75,6 +79,12 @@ function goHome() {
           <div v-if="!sidebarCollapsed" class="min-w-0">
             <div class="text-white text-xs font-medium truncate">学生</div>
             <div class="text-white/40 text-[10px] truncate">{{ studentId.slice(0, 16) }}...</div>
+          </div>
+        </div>
+        <div v-if="!sidebarCollapsed" class="px-2 py-1 border-t border-white/5">
+          <div class="text-white/25 text-[9px] leading-relaxed">
+            EduMatrix v1.0 | Apache 2.0
+            <br>基于 FastAPI + Vue 3 + Tailwind CSS
           </div>
         </div>
       </div>

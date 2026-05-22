@@ -358,6 +358,19 @@ class HybridRAGPipeline:
         else:
             self.text_index = text_index or TextKnowledgeIndex()
 
+        self.user_index = InMemoryVectorIndex("user-documents")
+
+    def ingest_user_documents(self, evidence: tuple[Evidence, ...]) -> None:
+        if not evidence:
+            return
+        self.user_index.upsert(evidence)
+        TELEMETRY.record_metric("user_index.documents_ingested", len(evidence))
+
+    def remove_user_documents(self, source: str) -> None:
+        removed = self.user_index.remove_by_source(source)
+        if removed > 0:
+            TELEMETRY.record_metric("user_index.documents_removed", removed)
+
     def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k) -> RetrievalBundle:
         with timed_span(TELEMETRY, "hybrid_rag.retrieve", top_k=top_k):
             target = target or self._infer_target(query)
@@ -371,6 +384,9 @@ class HybridRAGPipeline:
                 candidates.extend(faiss_results)
             elif self.text_index is not None:
                 candidates.extend(self.text_index.search(query_with_graph, top_k=top_k))
+
+            user_results = self.user_index.search(query_with_graph, top_k=top_k)
+            candidates.extend(user_results)
 
             dedup: dict[str, Evidence] = {}
             for item in candidates:

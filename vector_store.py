@@ -32,6 +32,13 @@ class InMemoryVectorIndex:
             self._items[item.id] = item
             self._vectors[item.id] = self.embedding_backend.embed(evidence_to_text(item))
 
+    def remove_by_source(self, source: str) -> int:
+        ids_to_delete = [eid for eid, item in self._items.items() if item.source == source]
+        for eid in ids_to_delete:
+            self._items.pop(eid, None)
+            self._vectors.pop(eid, None)
+        return len(ids_to_delete)
+
     def search(self, query: str, *, top_k: int) -> tuple[Evidence, ...]:
         query_vector = self.embedding_backend.embed(query)
         scored = []

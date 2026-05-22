@@ -104,6 +104,73 @@ class DBConversationHistory(Base):
     alignment_passed = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+class DBKnowledgeDocument(Base):
+    """持久化物理表：存储用户上传的知识库文档"""
+    __tablename__ = "knowledge_documents"
+
+    id = Column(String(64), primary_key=True)
+    student_id = Column(String(64), index=True)
+    filename = Column(String(256))
+    file_type = Column(String(16))  # md / txt / pdf / pptx / mp4
+    file_size = Column(Integer, default=0)
+    title = Column(String(256), default="")
+    content = Column(Text, default="")
+    tags = Column(JSON, default=list)
+    chunk_count = Column(Integer, default=0)
+    is_multimodal = Column(Boolean, default=False)
+    multimodal_metadata = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DBQuizRecord(Base):
+    """持久化物理表：存储测验记录与置信度反馈"""
+    __tablename__ = "quiz_records"
+
+    id = Column(String(64), primary_key=True)
+    student_id = Column(String(64), index=True)
+    question = Column(Text)
+    student_answer = Column(Text)
+    correct_answer = Column(Text, default="")
+    ai_confidence = Column(Float, default=0.0)
+    student_confidence = Column(Float, default=0.0)
+    accuracy_score = Column(Float, default=0.0)
+    target_concept = Column(String(128), default="")
+    feedback = Column(Text, default="")
+    next_action = Column(String(64), default="review")  # review / practice / advance
+    attempt_number = Column(Integer, default=1)
+    session_id = Column(String(64), default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DBWebSearchHistory(Base):
+    """持久化物理表：存储联网搜索与文档加载记录"""
+    __tablename__ = "web_search_history"
+
+    id = Column(String(64), primary_key=True)
+    student_id = Column(String(64), index=True)
+    query = Column(String(512))
+    source_type = Column(String(32))  # web_search / url_load
+    source_url = Column(Text, default="")
+    title = Column(String(256), default="")
+    content_preview = Column(Text, default="")
+    chunk_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DBCodeExecution(Base):
+    """持久化物理表：存储代码执行记录"""
+    __tablename__ = "code_executions"
+
+    id = Column(String(64), primary_key=True)
+    student_id = Column(String(64), index=True)
+    code = Column(Text)
+    language = Column(String(32), default="python")
+    output = Column(Text, default="")
+    error = Column(Text, default="")
+    execution_time_ms = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 # 物理并网：自动创建所有本地 SQLite 数据库表
 def init_db():
     Base.metadata.create_all(bind=engine)

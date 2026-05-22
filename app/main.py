@@ -11,9 +11,7 @@ from sqlalchemy.orm import Session
 # 允许 app 导入 root 目录下的模块
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent_swarm import EduMatrixSwarm
-from concurrency import AsyncWorkerPool
-from llm_client import DEFAULT_ASYNC_LLM, AsyncOpenAIChatLLM
+from concurrency import AsyncWorkerPool, TokenBucket
 from models import DIMENSION_LABELS, StudentProfile
 from app.database import init_db, get_db, DBStudentProfile
 from app.crud import (
@@ -28,65 +26,23 @@ from app.crud import (
     record_conversation,
     get_conversation_history,
 )
+from knowledge_api import router as knowledge_router
+from quiz_api import router as quiz_router
+from web_search_api import router as web_search_router
+from code_exec_api import router as code_exec_router
+from profile_api import router as profile_router
+from stream_api import router as stream_router
 from note_engine import LearningProgressAnalyzer, ReviewScheduler
 from observability import TELEMETRY
+from swarm_factory import build_swarm_from_headers
 
 # 初始化 SQLite 数据库表
 init_db()
 
 _worker_pool: AsyncWorkerPool | None = None
 
-# Dynamic swarm cache per LLM config
-_swarm_cache: dict[str, EduMatrixSwarm] = {}
-
-
-def _get_llm_provider_name() -> str:
-    try:
-        from config import CONFIG
-        return CONFIG.llm_provider
-    except Exception:
-        return "unknown"
-
-
-def build_swarm_from_headers(headers) -> EduMatrixSwarm:
-    api_key = headers.get("x-edumatrix-api-key", "")
-    endpoint = headers.get("x-edumatrix-endpoint", "")
-    model = headers.get("x-edumatrix-model", "")
-    temp_str = headers.get("x-edumatrix-temperature", "")
-    mt_str = headers.get("x-edumatrix-max-tokens", "")
-
-    if not api_key:
-        return _swarm_cache.get("__default__")
-
-    cache_key = f"{api_key[-8:]}::{endpoint}::{model}"
-    cached = _swarm_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    temperature = 0.3
-    max_tokens = 4096
-    if temp_str:
-        try: temperature = float(temp_str)
-        except: pass
-    if mt_str:
-        try: max_tokens = int(mt_str)
-        except: pass
-
-    dynamic_llm = AsyncOpenAIChatLLM(
-        endpoint=endpoint,
-        api_key=api_key,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    new_swarm = EduMatrixSwarm(llm=dynamic_llm)
-    _swarm_cache[cache_key] = new_swarm
-    return new_swarm
-
-
-llm_provider = _get_llm_provider_name()
-swarm = EduMatrixSwarm(llm=DEFAULT_ASYNC_LLM)
-_swarm_cache["__default__"] = swarm
+llm_provider = "swarm_factory"
+swarm = build_swarm_from_headers(type("h", (), {"get": lambda s, k, d=None: d})())
 
 
 app = FastAPI(
@@ -322,6 +278,14 @@ async def process_student_message(request: Request, db: Session = Depends(get_db
     )
 
     return _package_response(package)
+
+
+app.include_router(knowledge_router)
+app.include_router(quiz_router)
+app.include_router(web_search_router)
+app.include_router(code_exec_router)
+app.include_router(profile_router)
+app.include_router(stream_router)
 
 
 @app.get("/api/health")

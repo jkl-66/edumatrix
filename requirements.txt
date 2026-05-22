@@ -1,0 +1,16 @@
+# EduMatrix 核心依赖 - 2026版 (RAG + Agent + Memory)
+sentence-transformers>=3.0.0        # 真实嵌入模型 (bge-m3)
+requests
+numpy
+faiss-cpu
+neo4j                               # 知识图谱
+torch
+torchvision
+pillow
+fastapi
+uvicorn[standard]
+pandas
+scikit-learn
+# 可选：完整多模态 (VisRAG)
+# opencv-python
+# pymupdf

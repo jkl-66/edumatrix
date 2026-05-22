@@ -7,6 +7,7 @@ import re
 
 from config import CONFIG
 from embedding_models import EMBEDDINGS
+from knowledge_base import load_evidence_from_file, load_seed_evidence
 from models import Evidence, EvidenceModality, GraphContext, RetrievalBundle
 from observability import TELEMETRY, timed_span
 from vector_store import create_index
@@ -28,67 +29,16 @@ class VectorMath:
 
     @staticmethod
     def cosine_similarity(v1: list[float], v2: list[float]) -> float:
-        # Since vectors are normalized, dot product is exactly the cosine similarity
-        return VectorMath.dot_product(v1, v2)
+        dot = sum(a * b for a, b in zip(v1, v2))
+        n1 = math.sqrt(sum(a * a for a in v1))
+        n2 = math.sqrt(sum(b * b for b in v2))
+        if n1 == 0.0 or n2 == 0.0:
+            return 0.0
+        return max(-1.0, min(1.0, dot / (n1 * n2)))
 
 
-def _encode_vector(text: str, dim: int = 128) -> list[float]:
-    """Deterministic, semantically-aware character-hash-based 128D normalized vector encoder.
-    Provides a stable mathematical representation of concepts for cosine and MaxSim calculations.
-    """
-    vec = [0.0] * dim
-    
-    # Semantic mapping to dedicated channels (concepts are mapped to specific dimensions)
-    concepts = {
-        "池化": (10, 2.5),
-        "pooling": (10, 2.5),
-        "最大池化": (11, 3.5),
-        "max": (11, 2.0),
-        "平均池化": (12, 3.5),
-        "mean": (12, 2.0),
-        "avg": (12, 2.0),
-        "卷积": (20, 2.5),
-        "kernel": (20, 1.5),
-        "stride": (21, 1.5),
-        "特征图": (22, 1.5),
-        "反向传播": (30, 2.5),
-        "链式法则": (31, 2.5),
-        "梯度": (32, 2.0),
-        "监督学习": (40, 2.0),
-        "逻辑回归": (41, 3.0),
-        "混淆矩阵": (42, 3.5),
-        "accuracy": (43, 2.0),
-        "recall": (44, 2.5),
-        "precision": (45, 2.5),
-        "过拟合": (50, 3.0),
-        "正则化": (51, 3.0),
-        "交叉验证": (52, 2.0),
-    }
-    
-    # Apply semantic signal
-    for keyword, (idx, weight) in concepts.items():
-        if keyword in text.lower():
-            vec[idx] += weight
-            # Add semantic side lobes
-            vec[(idx - 1) % dim] += weight * 0.4
-            vec[(idx + 1) % dim] += weight * 0.4
-            
-    # Stable character Fowler-Noll-Vo hash based seed to generate stable deterministic noise
-    h = 2166136261
-    for char in text:
-        h = (h ^ ord(char)) * 16777619
-        h &= 0xffffffff
-    
-    state = h
-    for i in range(dim):
-        state = (1103515245 * state + 12345) & 0x7fffffff
-        noise = (state / 0x7fffffff) * 0.2 - 0.1  # noise range [-0.1, 0.1]
-        vec[i] += noise
-        
-    # Calculate L2 norm and normalize vector
-    sq_sum = sum(x * x for x in vec)
-    norm = math.sqrt(sq_sum) if sq_sum > 0 else 1.0
-    return [x / norm for x in vec]
+def _encode_vector(text: str) -> list[float]:
+    return list(EMBEDDINGS.embed(text))
 
 
 def colpali_maxsim(query: str, evidence: Evidence) -> float:
@@ -325,88 +275,28 @@ class GraphRAG:
 
 
 class VisRAG:
-    """Image-patch retrieval over textbook pages and diagrams.
-
-    In production this class is the seam for a multimodal vector store. The
-    local implementation keeps the same metadata contract and deterministic
-    ranking so the rest of the system is already integration-ready.
-    """
-
     def __init__(self, index: VectorIndex | None = None) -> None:
-        self.patch_db: tuple[Evidence, ...] = (
-            Evidence(
-                id="IMG_PATCH_POOL_01",
-                title="2x2 最大池化矩阵演算图",
-                content="4x4 输入特征图经 2x2 Max Pooling 和 stride=2 变为 2x2 输出矩阵，窗口输出等于局部最大值。",
-                modality=EvidenceModality.IMAGE,
-                source="教材图像切片 PDF:P45",
-                tags=("池化层", "Pooling", "最大池化", "特征图"),
-                anchors=("MaxPool2d", "2x2", "局部最大值"),
-                metadata={"raw_image_ref": "data/patches/pooling_2x2.png", "page": 45},
-            ),
-            Evidence(
-                id="IMG_PATCH_POOL_02",
-                title="平均池化对照图",
-                content="Average Pooling 对窗口内数值求均值，适合说明它与最大池化的语义差异。",
-                modality=EvidenceModality.IMAGE,
-                source="教材图像切片 PDF:P46",
-                tags=("池化层", "平均池化", "Pooling"),
-                anchors=("AvgPool2d", "mean", "均值"),
-                metadata={"raw_image_ref": "data/patches/avg_pooling.png", "page": 46},
-            ),
-            Evidence(
-                id="IMG_PATCH_CONV_01",
-                title="卷积核滑动与步长示意图",
-                content="卷积核在输入特征图上按 stride 滑动，对局部区域做点积累加形成新的特征图。",
-                modality=EvidenceModality.IMAGE,
-                source="教材图像切片 PDF:P42",
-                tags=("卷积核", "卷积运算", "步长", "特征图"),
-                anchors=("kernel", "stride", "dot product"),
-                metadata={"raw_image_ref": "data/patches/conv_stride.png", "page": 42},
-            ),
-            Evidence(
-                id="IMG_PATCH_MATH_01",
-                title="反向传播链式法则推导",
-                content="保留微积分公式原始排版，展示损失函数对参数求导时的链式法则展开。",
-                modality=EvidenceModality.IMAGE,
-                source="数学手册图像切片 P12",
-                tags=("反向传播", "链式法则", "偏导数"),
-                anchors=("gradient", "partial derivative"),
-                metadata={"raw_image_ref": "data/patches/backprop_math.png", "page": 12},
-            ),
-            Evidence(
-                id="IMG_PATCH_ML_PIPELINE_01",
-                title="机器学习项目流程图",
-                content="机器学习实践通常从数据理解、数据预处理、特征工程开始，随后训练模型、验证泛化能力并迭代选择模型。",
-                modality=EvidenceModality.IMAGE,
-                source="机器学习课程图像切片 ML:P03",
-                tags=("机器学习", "数据预处理", "特征工程", "模型评估"),
-                anchors=("pipeline", "train-test split", "cross validation"),
-                metadata={"raw_image_ref": "data/patches/ml_pipeline.png", "page": 3},
-            ),
-            Evidence(
-                id="IMG_PATCH_OVERFIT_01",
-                title="过拟合与欠拟合曲线",
-                content="训练误差持续下降而验证误差上升时通常意味着过拟合，可通过正则化、交叉验证和简化模型缓解。",
-                modality=EvidenceModality.IMAGE,
-                source="机器学习课程图像切片 ML:P18",
-                tags=("过拟合", "正则化", "交叉验证", "模型泛化"),
-                anchors=("overfitting", "validation error", "regularization"),
-                metadata={"raw_image_ref": "data/patches/overfit_curve.png", "page": 18},
-            ),
-            Evidence(
-                id="IMG_PATCH_CONFUSION_01",
-                title="混淆矩阵与分类指标图",
-                content="混淆矩阵展示 TP、FP、FN、TN，可进一步计算 accuracy、precision、recall 和 F1。",
-                modality=EvidenceModality.IMAGE,
-                source="机器学习课程图像切片 ML:P25",
-                tags=("模型评估", "混淆矩阵", "分类指标", "逻辑回归"),
-                anchors=("precision", "recall", "F1", "confusion matrix"),
-                metadata={"raw_image_ref": "data/patches/confusion_matrix.png", "page": 25},
-            ),
-        )
+        file_evidence = load_seed_evidence()
+        if file_evidence:
+            self.patch_db = tuple(e for e in file_evidence if e.modality == EvidenceModality.IMAGE)
+        else:
+            self.patch_db = self._builtin_image_evidence()
+        if not self.patch_db:
+            self.patch_db = self._builtin_image_evidence()
         self.index = index or InMemoryVectorIndex("visrag-image-patches")
         self.index.upsert(self.patch_db)
+
+    @staticmethod
+    def _builtin_image_evidence() -> tuple[Evidence, ...]:
+        return (
+            Evidence(id="IMG_PATCH_POOL_01", title="2x2 最大池化矩阵演算图", content="4x4 输入特征图经 2x2 Max Pooling 和 stride=2 变为 2x2 输出矩阵，窗口输出等于局部最大值。", modality=EvidenceModality.IMAGE, source="教材图像切片 PDF:P45", tags=("池化层","Pooling","最大池化","特征图"), anchors=("MaxPool2d","2x2","局部最大值"), metadata={"raw_image_ref":"data/patches/pooling_2x2.png","page":45}),
+            Evidence(id="IMG_PATCH_POOL_02", title="平均池化对照图", content="Average Pooling 对窗口内数值求均值，适合说明它与最大池化的语义差异。", modality=EvidenceModality.IMAGE, source="教材图像切片 PDF:P46", tags=("池化层","平均池化","Pooling"), anchors=("AvgPool2d","mean","均值"), metadata={"raw_image_ref":"data/patches/avg_pooling.png","page":46}),
+            Evidence(id="IMG_PATCH_CONV_01", title="卷积核滑动与步长示意图", content="卷积核在输入特征图上按 stride 滑动，对局部区域做点积累加形成新的特征图。", modality=EvidenceModality.IMAGE, source="教材图像切片 PDF:P42", tags=("卷积核","卷积运算","步长","特征图"), anchors=("kernel","stride","dot product"), metadata={"raw_image_ref":"data/patches/conv_stride.png","page":42}),
+            Evidence(id="IMG_PATCH_MATH_01", title="反向传播链式法则推导", content="保留微积分公式原始排版，展示损失函数对参数求导时的链式法则展开。", modality=EvidenceModality.IMAGE, source="数学手册图像切片 P12", tags=("反向传播","链式法则","偏导数"), anchors=("gradient","partial derivative"), metadata={"raw_image_ref":"data/patches/backprop_math.png","page":12}),
+            Evidence(id="IMG_PATCH_ML_PIPELINE_01", title="机器学习项目流程图", content="机器学习实践通常从数据理解、数据预处理、特征工程开始，随后训练模型、验证泛化能力并迭代选择模型。", modality=EvidenceModality.IMAGE, source="机器学习课程图像切片 ML:P03", tags=("机器学习","数据预处理","特征工程","模型评估"), anchors=("pipeline","train-test split","cross validation"), metadata={"raw_image_ref":"data/patches/ml_pipeline.png","page":3}),
+            Evidence(id="IMG_PATCH_OVERFIT_01", title="过拟合与欠拟合曲线", content="训练误差持续下降而验证误差上升时通常意味着过拟合，可通过正则化、交叉验证和简化模型缓解。", modality=EvidenceModality.IMAGE, source="机器学习课程图像切片 ML:P18", tags=("过拟合","正则化","交叉验证","模型泛化"), anchors=("overfitting","validation error","regularization"), metadata={"raw_image_ref":"data/patches/overfit_curve.png","page":18}),
+            Evidence(id="IMG_PATCH_CONFUSION_01", title="混淆矩阵与分类指标图", content="混淆矩阵展示 TP、FP、FN、TN，可进一步计算 accuracy、precision、recall 和 F1。", modality=EvidenceModality.IMAGE, source="机器学习课程图像切片 ML:P25", tags=("模型评估","混淆矩阵","分类指标","逻辑回归"), anchors=("precision","recall","F1","confusion matrix"), metadata={"raw_image_ref":"data/patches/confusion_matrix.png","page":25}),
+        )
 
     def search(self, query: str, top_k: int = 3) -> list[dict[str, object]]:
         ranked = self.search_evidence(query, top_k)
@@ -423,91 +313,27 @@ class VisRAG:
 
 class TextKnowledgeIndex:
     def __init__(self, index: VectorIndex | None = None) -> None:
-        self.documents: tuple[Evidence, ...] = (
-            Evidence(
-                id="TXT_POOL_DEF_01",
-                title="池化层定义与作用",
-                content="池化层对特征图进行局部聚合，常见形式包括最大池化和平均池化，可降低空间维度并提升局部平移鲁棒性。",
-                modality=EvidenceModality.TEXT,
-                source="课程知识库:CNN/Pooling",
-                tags=("池化层", "特征图", "最大池化", "平均池化"),
-                anchors=("降采样", "局部聚合", "平移鲁棒性"),
-            ),
-            Evidence(
-                id="TXT_POOL_ERR_01",
-                title="池化层易错点",
-                content="最大池化取窗口最大值，平均池化取窗口均值；讲义、代码和导图必须保持同一种池化类型，否则会造成跨模态不一致。",
-                modality=EvidenceModality.TEXT,
-                source="课程知识库:CNN/Misconceptions",
-                tags=("池化层", "最大池化", "平均池化", "易错点"),
-                anchors=("MaxPool2d", "AvgPool2d", "一致性"),
-            ),
-            Evidence(
-                id="TXT_CONV_PRE_01",
-                title="池化层前置知识",
-                content="池化层通常接在卷积层生成的特征图之后，因此理解卷积核、步长和特征图是理解池化层的前置条件。",
-                modality=EvidenceModality.TEXT,
-                source="课程知识库:CNN/Prerequisite",
-                tags=("卷积核", "步长", "特征图", "池化层"),
-                anchors=("前置知识", "特征图"),
-            ),
-            Evidence(
-                id="TXT_BACKPROP_01",
-                title="反向传播基本逻辑",
-                content="反向传播基于链式法则将损失函数的梯度从输出层传回参数层，是神经网络训练的核心算法。",
-                modality=EvidenceModality.TEXT,
-                source="课程知识库:Optimization/Backprop",
-                tags=("反向传播", "链式法则", "梯度下降"),
-                anchors=("梯度", "损失函数"),
-            ),
-            Evidence(
-                id="TXT_ML_OVERVIEW_01",
-                title="机器学习导论课程边界",
-                content="机器学习导论课程覆盖数据预处理、监督学习、回归、分类、模型评估、过拟合与正则化，并通过实践项目训练完整建模流程。",
-                modality=EvidenceModality.TEXT,
-                source="机器学习课程知识库:Overview",
-                tags=("机器学习", "监督学习", "模型评估", "实践项目"),
-                anchors=("数据预处理", "模型泛化", "交叉验证"),
-            ),
-            Evidence(
-                id="TXT_ML_PREPROCESS_01",
-                title="数据预处理与特征工程",
-                content="数据预处理包括缺失值处理、数值缩放、类别编码和训练测试划分；特征工程决定模型能否从数据中学习有效规律。",
-                modality=EvidenceModality.TEXT,
-                source="机器学习课程知识库:Preprocessing",
-                tags=("数据预处理", "特征工程", "训练测试划分"),
-                anchors=("missing values", "scaling", "encoding", "train_test_split"),
-            ),
-            Evidence(
-                id="TXT_ML_LOGREG_01",
-                title="逻辑回归与分类阈值",
-                content="逻辑回归使用 sigmoid 将线性组合映射为概率，分类阈值会影响 precision、recall 与 F1，不应只看 accuracy。",
-                modality=EvidenceModality.TEXT,
-                source="机器学习课程知识库:Classification",
-                tags=("逻辑回归", "分类阈值", "模型评估"),
-                anchors=("sigmoid", "precision", "recall", "F1"),
-            ),
-            Evidence(
-                id="TXT_ML_OVERFIT_01",
-                title="过拟合、正则化与交叉验证",
-                content="过拟合表现为训练集效果好但验证集效果差；可通过 L1/L2 正则化、交叉验证、早停和降低模型复杂度提升泛化能力。",
-                modality=EvidenceModality.TEXT,
-                source="机器学习课程知识库:Generalization",
-                tags=("过拟合", "正则化", "交叉验证", "模型泛化"),
-                anchors=("L1", "L2", "validation", "generalization"),
-            ),
-            Evidence(
-                id="TXT_ML_EVAL_01",
-                title="模型评估指标",
-                content="分类任务需结合混淆矩阵理解 accuracy、precision、recall、F1 和 ROC-AUC；类别不均衡时 accuracy 可能产生误导。",
-                modality=EvidenceModality.TEXT,
-                source="机器学习课程知识库:Evaluation",
-                tags=("模型评估", "混淆矩阵", "分类指标"),
-                anchors=("accuracy", "precision", "recall", "F1", "ROC-AUC"),
-            ),
-        )
+        file_evidence = load_seed_evidence()
+        if file_evidence:
+            self.documents = tuple(e for e in file_evidence if e.modality == EvidenceModality.TEXT)
+        if not self.documents:
+            self.documents = self._builtin_text_evidence()
         self.index = index or InMemoryVectorIndex("text-knowledge")
         self.index.upsert(self.documents)
+
+    @staticmethod
+    def _builtin_text_evidence() -> tuple[Evidence, ...]:
+        return (
+            Evidence(id="TXT_POOL_DEF_01", title="池化层定义与作用", content="池化层对特征图进行局部聚合，常见形式包括最大池化和平均池化，可降低空间维度并提升局部平移鲁棒性。", modality=EvidenceModality.TEXT, source="课程知识库:CNN/Pooling", tags=("池化层","特征图","最大池化","平均池化"), anchors=("降采样","局部聚合","平移鲁棒性")),
+            Evidence(id="TXT_POOL_ERR_01", title="池化层易错点", content="最大池化取窗口最大值，平均池化取窗口均值；讲义、代码和导图必须保持同一种池化类型，否则会造成跨模态不一致。", modality=EvidenceModality.TEXT, source="课程知识库:CNN/Misconceptions", tags=("池化层","最大池化","平均池化","易错点"), anchors=("MaxPool2d","AvgPool2d","一致性")),
+            Evidence(id="TXT_CONV_PRE_01", title="池化层前置知识", content="池化层通常接在卷积层生成的特征图之后，因此理解卷积核、步长和特征图是理解池化层的前置条件。", modality=EvidenceModality.TEXT, source="课程知识库:CNN/Prerequisite", tags=("卷积核","步长","特征图","池化层"), anchors=("前置知识","特征图")),
+            Evidence(id="TXT_BACKPROP_01", title="反向传播基本逻辑", content="反向传播基于链式法则将损失函数的梯度从输出层传回参数层，是神经网络训练的核心算法。", modality=EvidenceModality.TEXT, source="课程知识库:Optimization/Backprop", tags=("反向传播","链式法则","梯度下降"), anchors=("梯度","损失函数")),
+            Evidence(id="TXT_ML_OVERVIEW_01", title="机器学习导论课程边界", content="机器学习导论课程覆盖数据预处理、监督学习、回归、分类、模型评估、过拟合与正则化，并通过实践项目训练完整建模流程。", modality=EvidenceModality.TEXT, source="机器学习课程知识库:Overview", tags=("机器学习","监督学习","模型评估","实践项目"), anchors=("数据预处理","模型泛化","交叉验证")),
+            Evidence(id="TXT_ML_PREPROCESS_01", title="数据预处理与特征工程", content="数据预处理包括缺失值处理、数值缩放、类别编码和训练测试划分；特征工程决定模型能否从数据中学习有效规律。", modality=EvidenceModality.TEXT, source="机器学习课程知识库:Preprocessing", tags=("数据预处理","特征工程","训练测试划分"), anchors=("missing values","scaling","encoding","train_test_split")),
+            Evidence(id="TXT_ML_LOGREG_01", title="逻辑回归与分类阈值", content="逻辑回归使用 sigmoid 将线性组合映射为概率，分类阈值会影响 precision、recall 与 F1，不应只看 accuracy。", modality=EvidenceModality.TEXT, source="机器学习课程知识库:Classification", tags=("逻辑回归","分类阈值","模型评估"), anchors=("sigmoid","precision","recall","F1")),
+            Evidence(id="TXT_ML_OVERFIT_01", title="过拟合、正则化与交叉验证", content="过拟合表现为训练集效果好但验证集效果差；可通过 L1/L2 正则化、交叉验证、早停和降低模型复杂度提升泛化能力。", modality=EvidenceModality.TEXT, source="机器学习课程知识库:Generalization", tags=("过拟合","正则化","交叉验证","模型泛化"), anchors=("L1","L2","validation","generalization")),
+            Evidence(id="TXT_ML_EVAL_01", title="模型评估指标", content="分类任务需结合混淆矩阵理解 accuracy、precision、recall、F1 和 ROC-AUC；类别不均衡时 accuracy 可能产生误导。", modality=EvidenceModality.TEXT, source="机器学习课程知识库:Evaluation", tags=("模型评估","混淆矩阵","分类指标"), anchors=("accuracy","precision","recall","F1","ROC-AUC")),
+        )
 
     def search(self, query: str, top_k: int = 4) -> tuple[Evidence, ...]:
         vector_hits = self.index.search(query, top_k=max(top_k * 3, top_k))

@@ -3,37 +3,50 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 
 @dataclass(frozen=True)
 class EduMatrixConfig:
-    """Runtime switches for the EduMatrix pipeline.
-
-    The default configuration is intentionally runnable on a laptop. Production
-    deployments can replace the in-memory graph/vector indexes with Neo4j,
-    Milvus/FAISS, SparkDesk, and virtual-human services through these knobs.
-    """
-
     spark_app_id: str = os.getenv("SPARK_APP_ID", "")
     spark_api_key: str = os.getenv("SPARK_API_KEY", "")
     spark_api_secret: str = os.getenv("SPARK_API_SECRET", "")
     spark_url: str = os.getenv("SPARK_URL", "wss://spark-api.xf-yun.com/v3.5/chat")
     spark_domain: str = os.getenv("SPARK_DOMAIN", "generalv3.5")
 
+    llm_provider: str = os.getenv("EDUMATRIX_LLM_PROVIDER", "openai")
+    llm_endpoint: str = os.getenv("EDUMATRIX_LLM_ENDPOINT", "https://windhub.cc/v1/chat/completions")
+    llm_api_key: str = os.getenv("EDUMATRIX_LLM_API_KEY", "")
+    llm_model: str = os.getenv("EDUMATRIX_LLM_MODEL", "doubao-1-5-pro-32k-250115")
+    llm_temperature: float = float(os.getenv("EDUMATRIX_LLM_TEMPERATURE", "0.3"))
+    llm_max_tokens: int = int(os.getenv("EDUMATRIX_LLM_MAX_TOKENS", "4096"))
+    llm_timeout: int = int(os.getenv("EDUMATRIX_LLM_TIMEOUT", "120"))
+
     retrieval_top_k: int = int(os.getenv("EDUMATRIX_TOP_K", "6"))
     debate_min_score: float = float(os.getenv("EDUMATRIX_DEBATE_MIN_SCORE", "0.42"))
-    alignment_threshold: float = float(os.getenv("EDUMATRIX_ALIGNMENT_THRESHOLD", "2.60"))
+    alignment_threshold: float = float(os.getenv("EDUMATRIX_ALIGNMENT_THRESHOLD", "0.65"))
     rollback_limit: int = int(os.getenv("EDUMATRIX_ROLLBACK_LIMIT", "2"))
 
-    use_remote_llm: bool = os.getenv("EDUMATRIX_USE_REMOTE_LLM", "0") == "1"
-
-    embedding_provider: str = os.getenv("EDUMATRIX_EMBEDDING_PROVIDER", "local")
+    embedding_provider: str = os.getenv("EDUMATRIX_EMBEDDING_PROVIDER", "hash")
     embedding_endpoint: str = os.getenv("EDUMATRIX_EMBEDDING_ENDPOINT", "")
     embedding_api_key: str = os.getenv("EDUMATRIX_EMBEDDING_API_KEY", "")
-    embedding_model: str = os.getenv("EDUMATRIX_EMBEDDING_MODEL", "text-embedding-3-large")
+    embedding_model: str = os.getenv("EDUMATRIX_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
     embedding_dim: int = int(os.getenv("EDUMATRIX_EMBEDDING_DIM", "384"))
 
-    use_faiss: bool = os.getenv("EDUMATRIX_USE_FAISS", "1") == "1"
+    use_faiss: bool = os.getenv("EDUMATRIX_USE_FAISS", "0") == "1"
     faiss_index_dir: str = os.getenv("EDUMATRIX_FAISS_DIR", "data/faiss_indexes")
+
+    max_concurrent_llm: int = int(os.getenv("EDUMATRIX_MAX_CONCURRENT_LLM", "8"))
+    llm_rate_limit_rpm: int = int(os.getenv("EDUMATRIX_LLM_RATE_LIMIT_RPM", "120"))
+    llm_rate_limit_tpm: int = int(os.getenv("EDUMATRIX_LLM_RATE_LIMIT_TPM", "100000"))
+    llm_circuit_breaker_threshold: int = int(os.getenv("EDUMATRIX_CIRCUIT_BREAKER_THRESHOLD", "5"))
+    llm_circuit_breaker_window: int = int(os.getenv("EDUMATRIX_CIRCUIT_BREAKER_WINDOW", "60"))
+    llm_retry_max_attempts: int = int(os.getenv("EDUMATRIX_RETRY_MAX_ATTEMPTS", "3"))
+    llm_request_queue_size: int = int(os.getenv("EDUMATRIX_REQUEST_QUEUE_SIZE", "200"))
 
 
 CONFIG = EduMatrixConfig()

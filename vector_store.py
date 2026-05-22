@@ -22,16 +22,8 @@ class VectorIndex(Protocol):
 
 @dataclass
 class InMemoryVectorIndex:
-    """Production-shaped vector index with a deterministic local backend.
-
-    The interface mirrors the operations expected from Milvus, FAISS, pgvector,
-    or an enterprise vector gateway: upsert normalized evidence, search by
-    query embedding, and expose index cardinality. It keeps the current demo
-    offline while making the storage layer replaceable.
-    """
-
     name: str
-    embedding_backend: EmbeddingBackend = EMBEDDINGS
+    embedding_backend: EmbeddingBackend = field(default_factory=lambda: EMBEDDINGS)
     _items: dict[str, Evidence] = field(default_factory=dict)
     _vectors: dict[str, tuple[float, ...]] = field(default_factory=dict)
 

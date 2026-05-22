@@ -17,15 +17,9 @@ from vector_store import VectorIndex
 
 @dataclass
 class FaissVectorIndex:
-    """FAISS-based vector index that implements the VectorIndex protocol.
-
-    Uses IVF (Inverted File) with Flat quantizer for fast approximate search,
-    with the option to use exact search (IndexFlatIP) for smaller indexes.
-    """
-
     name: str
-    embedding_backend: EmbeddingBackend = EMBEDDINGS
-    dim: int = 384
+    embedding_backend: EmbeddingBackend = field(default_factory=lambda: EMBEDDINGS)
+    dim: int = 0
     _items: dict[str, Evidence] = field(default_factory=dict)
     _id_to_idx: dict[str, int] = field(default_factory=dict)
     _idx_to_id: dict[int, str] = field(default_factory=dict)
@@ -34,6 +28,9 @@ class FaissVectorIndex:
     _use_ivf: bool = False
 
     def __post_init__(self):
+        if self.dim == 0:
+            sample = self.embedding_backend.embed("auto-detect-dim")
+            self.dim = len(sample)
         if self._index is None:
             self._index = faiss.IndexFlatIP(self.dim)
 

@@ -7,7 +7,7 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import StudentProfile, DimensionState, CauseBreakdown, KnowledgeTrace, AlignmentReport
-from app.database import DBStudentProfile, DBAlignmentLog
+from app.database import DBStudentProfile, DBAlignmentLog, DBNote, DBReviewPlan, DBConversationHistory
 
 def to_dict_safe(obj) -> dict:
     """递归将 dataclass 转换为字典"""
@@ -18,7 +18,7 @@ def to_dict_safe(obj) -> dict:
     elif isinstance(obj, list):
         return [to_dict_safe(v) for v in obj]
     elif isinstance(obj, tuple):
-        return tuple(to_dict_safe(v) for v in obj)
+        return [to_dict_safe(v) for v in obj]
     return obj
 
 def load_student_profile(db: Session, student_id: str) -> StudentProfile:
@@ -121,3 +121,101 @@ def record_alignment_log(db: Session, student_id: str, report: AlignmentReport, 
     )
     db.add(log_entry)
     db.commit()
+
+
+def create_note(db: Session, student_id: str, source: str, content: str, tags: list[str] | None = None, concepts: list[str] | None = None) -> DBNote:
+    import hashlib
+    note_id = hashlib.sha256(f"{student_id}:{content[:64]}:{datetime.utcnow().isoformat()}".encode()).hexdigest()[:16]
+    db_note = DBNote(
+        id=note_id,
+        student_id=student_id,
+        source=source,
+        content=content,
+        tags=tags or [],
+        concepts=concepts or [],
+    )
+    db.add(db_note)
+    db.commit()
+    db.refresh(db_note)
+    return db_note
+
+
+def get_notes(db: Session, student_id: str, limit: int = 20) -> list[DBNote]:
+    return (
+        db.query(DBNote)
+        .filter(DBNote.student_id == student_id)
+        .order_by(DBNote.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def delete_note(db: Session, note_id: str) -> bool:
+    note = db.query(DBNote).filter(DBNote.id == note_id).first()
+    if not note:
+        return False
+    db.delete(note)
+    db.commit()
+    return True
+
+
+def get_review_plan(db: Session, student_id: str) -> list[DBReviewPlan]:
+    from datetime import datetime as dt
+    return (
+        db.query(DBReviewPlan)
+        .filter(DBReviewPlan.student_id == student_id)
+        .filter(DBReviewPlan.next_review_at <= dt.utcnow())
+        .order_by(DBReviewPlan.next_review_at.asc())
+        .all()
+    )
+
+
+def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: float, interval_days: int) -> DBReviewPlan:
+    from datetime import timedelta
+    existing = (
+        db.query(DBReviewPlan)
+        .filter(DBReviewPlan.student_id == student_id, DBReviewPlan.concept == concept)
+        .first()
+    )
+    if existing:
+        existing.interval_days = interval_days
+        existing.next_review_at = datetime.utcnow() + timedelta(days=interval_days)
+        existing.mastery = mastery
+        existing.review_count += 1
+    else:
+        existing = DBReviewPlan(
+            student_id=student_id,
+            concept=concept,
+            interval_days=interval_days,
+            next_review_at=datetime.utcnow() + timedelta(days=interval_days),
+            mastery=mastery,
+        )
+        db.add(existing)
+    db.commit()
+    return existing
+
+
+def record_conversation(
+    db: Session, student_id: str, query: str, response_summary: str, target: str, resources_count: int, alignment_passed: bool
+) -> DBConversationHistory:
+    record = DBConversationHistory(
+        student_id=student_id,
+        query=query,
+        response_summary=response_summary,
+        target=target,
+        resources_count=resources_count,
+        alignment_passed=alignment_passed,
+    )
+    db.add(record)
+    db.commit()
+    return record
+
+
+def get_conversation_history(db: Session, student_id: str, limit: int = 30) -> list[DBConversationHistory]:
+    return (
+        db.query(DBConversationHistory)
+        .filter(DBConversationHistory.student_id == student_id)
+        .order_by(DBConversationHistory.created_at.desc())
+        .limit(limit)
+        .all()
+    )

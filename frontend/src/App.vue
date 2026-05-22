@@ -1,0 +1,102 @@
+<script setup>
+import { ref, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar, Presentation, Clock, GraduationCap, Settings } from '@lucide/vue'
+
+const route = useRoute()
+const router = useRouter()
+
+const studentId = ref('stu-' + Date.now())
+const sidebarCollapsed = ref(false)
+
+const navItems = [
+  { path: '/', label: '学习仪表盘', icon: LayoutDashboard },
+  { path: '/learn', label: '智能对话', icon: MessageSquare },
+  { path: '/notes', label: '学习笔记', icon: StickyNote },
+  { path: '/review', label: '复习计划', icon: Calendar },
+  { path: '/history', label: '对话历史', icon: Clock },
+  { path: '/teacher', label: '教师看板', icon: Presentation },
+  { path: '/settings', label: 'LLM 设置', icon: Settings },
+]
+
+const pageTitle = computed(() => {
+  const map = {
+    '/': '学习仪表盘',
+    '/learn': '智能对话',
+    '/notes': '学习笔记',
+    '/review': '复习计划',
+    '/history': '对话历史',
+    '/teacher': '教师看板',
+    '/settings': 'LLM 设置',
+  }
+  return map[route.path] || 'EduMatrix'
+})
+
+function goHome() {
+  router.push('/')
+}
+</script>
+
+<template>
+  <div class="flex h-screen overflow-hidden">
+    <!-- Sidebar -->
+    <aside
+      class="bg-[#0f172a] flex flex-col transition-all duration-200 shrink-0"
+      :class="sidebarCollapsed ? 'w-16' : 'w-60'"
+    >
+      <div class="flex items-center gap-2.5 px-4 h-16 border-b border-white/10 shrink-0">
+        <div
+          class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center cursor-pointer shrink-0"
+          @click="sidebarCollapsed = !sidebarCollapsed"
+        >
+          <GraduationCap :size="18" class="text-white" />
+        </div>
+        <span v-if="!sidebarCollapsed" class="text-white font-semibold text-sm truncate">EduMatrix</span>
+      </div>
+
+      <nav class="flex-1 p-3 space-y-1 overflow-y-auto scrollbar-thin">
+        <router-link
+          v-for="item in navItems"
+          :key="item.path"
+          :to="item.path"
+          class="sidebar-link"
+          :class="{ active: route.path === item.path }"
+        >
+          <component :is="item.icon" :size="20" class="shrink-0" />
+          <span v-if="!sidebarCollapsed">{{ item.label }}</span>
+        </router-link>
+      </nav>
+
+      <div class="p-3 border-t border-white/10">
+        <div class="flex items-center gap-2 px-2 py-1.5">
+          <div class="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
+            S
+          </div>
+          <div v-if="!sidebarCollapsed" class="min-w-0">
+            <div class="text-white text-xs font-medium truncate">学生</div>
+            <div class="text-white/40 text-[10px] truncate">{{ studentId.slice(0, 16) }}...</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <div class="flex-1 flex flex-col min-w-0">
+      <!-- Top bar -->
+      <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0">
+        <h1 class="text-lg font-semibold text-gray-900">{{ pageTitle }}</h1>
+        <div class="flex items-center gap-3">
+          <button class="btn btn-outline text-xs" @click="goHome">
+            <LayoutDashboard :size="14" />
+            <span>仪表盘</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Page content -->
+      <main class="flex-1 overflow-y-auto p-6">
+        <router-view :student-id="studentId" />
+      </main>
+    </div>
+  </div>
+</template>

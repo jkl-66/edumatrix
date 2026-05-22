@@ -29,7 +29,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
     def test_alignment_detects_pooling_conflict(self):
         text = "本讲义讲最大池化，窗口取局部最大值。"
         code = "import torch.nn as nn\npool = nn.AvgPool2d(2)"
-        self.assertFalse(verify_consistency(text, code, threshold=9.0))
+        self.assertFalse(verify_consistency(text, code, threshold=0.4).passed)
 
     def test_swarm_generates_full_resource_package(self):
         swarm = EduMatrixSwarm()

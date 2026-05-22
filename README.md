@@ -388,6 +388,97 @@ EduMatrix 不承诺“绝对零幻觉”。更稳健的工程目标是：
 - Learning Analytics: dynamic learner modeling and knowledge tracing
 - Learning Science: retrieval practice, spaced practice, metacognition, formative feedback
 
+## Docker 一键部署（推荐）
+
+无需安装 Python/Node.js，一行命令启动全部功能。
+
+### 前置条件
+
+- 安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- 注册一个 OpenAI 兼容的 API Key（如豆包、DeepSeek、GPT 等）
+
+### 启动
+
+```bash
+# 克隆仓库
+git clone https://github.com/jkl-66/edumatrix.git
+cd edumatrix
+
+# 一键启动（后台运行）
+docker compose up -d
+
+# 查看启动日志
+docker compose logs -f
+```
+
+### 配置 API Key（关键步骤）
+
+⚠️ **代码库中不包含任何 API Key。** 每个用户需要自己配置。
+
+启动后：
+
+1. 浏览器打开 **http://localhost:8000/settings**
+2. 填入你的 API Key、Endpoint 和模型名称
+3. 点击"保存配置"
+4. 打开 **http://localhost:8000/learn** 开始对话
+
+**默认配置**（豆包 Doubao API 示例）：
+
+| 配置项 | 默认值 |
+|---|---|
+| Endpoint | `https://windhub.cc/v1/chat/completions` |
+| Model | `doubao-1-5-pro-32k-250115` |
+| Temperature | 0.3 |
+| Max Tokens | 4096 |
+
+也支持任意 OpenAI 兼容接口：GPT、DeepSeek、通义千问、Moonshot 等。
+
+### 更新
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+### 停止
+
+```bash
+docker compose down
+```
+
+### 持久化数据
+
+SQLite 数据库存储在 Docker 卷 `edumatrix_data` 中，重启和更新不会丢失数据：
+
+```bash
+docker compose down -v    # 谨慎：删除所有数据
+```
+
+## 非 Docker 本地运行
+
+### 环境要求
+
+- Python 3.10+
+- Node.js 20+（仅开发前端时需要）
+
+### 后端启动
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env    # 编辑 .env 配置（可选）
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+### 前端开发模式（可选）
+
+```bash
+cd frontend
+npm install
+npm run dev     # 访问 http://localhost:5173
+```
+
+生产模式下，前端已由后端自动托管（`http://localhost:8000`）。
+
 ## License
 
 当前仓库尚未声明开源许可证。若用于公开发布或团队协作，建议补充 `LICENSE` 文件并明确使用范围。

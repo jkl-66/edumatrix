@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import hmac
 import json
+import math
+import random
 import re
 import ssl
 import time
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlencode, urlparse
 
 from config import CONFIG, EduMatrixConfig
+from concurrency import APIRateLimiter, CircuitBreaker, retry_with_backoff
 
 
 class LLMBackend(Protocol):
@@ -19,15 +22,153 @@ class LLMBackend(Protocol):
         ...
 
 
+class AsyncLLMBackend(Protocol):
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        ...
+
+
+_shared_httpx_client: Any | None = None
+
+
+async def _get_httpx_client() -> Any:
+    global _shared_httpx_client
+    if _shared_httpx_client is None:
+        import httpx
+        limits = httpx.Limits(
+            max_keepalive_connections=CONFIG.max_concurrent_llm * 2,
+            max_connections=CONFIG.max_concurrent_llm * 4,
+            keepalive_expiry=30.0,
+        )
+        _shared_httpx_client = httpx.AsyncClient(
+            limits=limits,
+            timeout=httpx.Timeout(CONFIG.llm_timeout, connect=10.0),
+            headers={"Content-Type": "application/json"},
+        )
+    return _shared_httpx_client
+
+
+@dataclass
+class AsyncOpenAIChatLLM:
+    endpoint: str
+    api_key: str
+    model: str
+    temperature: float = 0.3
+    max_tokens: int = 4096
+    timeout_seconds: int = 120
+
+    rate_limiter: APIRateLimiter = field(init=False)
+    circuit_breaker: CircuitBreaker = field(init=False)
+    _client_init: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "rate_limiter", APIRateLimiter(
+            max_rpm=CONFIG.llm_rate_limit_rpm,
+            max_tpm=CONFIG.llm_rate_limit_tpm,
+            max_concurrent=CONFIG.max_concurrent_llm,
+        ))
+        object.__setattr__(self, "circuit_breaker", CircuitBreaker(
+            name=f"llm:{self.model}",
+            failure_threshold=CONFIG.llm_circuit_breaker_threshold,
+            recovery_timeout=float(CONFIG.llm_circuit_breaker_window),
+        ))
+
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        estimated_tokens = len(system_prompt + user_prompt) // 2 + 500
+
+        async def _do_call() -> str:
+            acquired = await self.rate_limiter.acquire(
+                estimated_tokens=estimated_tokens, timeout=30.0
+            )
+            if not acquired:
+                raise RuntimeError("API 限流等待超时，请降低请求频率。")
+
+            try:
+                client = await _get_httpx_client()
+                payload = {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                }
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                }
+                resp = await client.post(
+                    self.endpoint,
+                    json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"].strip()
+                usage = data.get("usage", {})
+                prompt_tokens = usage.get("prompt_tokens", 0)
+                completion_tokens = usage.get("completion_tokens", 0)
+                return content
+            finally:
+                self.rate_limiter.release()
+
+        return await self.circuit_breaker.call(
+            lambda: retry_with_backoff(
+                _do_call,
+                max_attempts=CONFIG.llm_retry_max_attempts,
+                base_delay=1.0,
+                max_delay=30.0,
+            )
+        )
+
+
+class OpenAIChatLLM:
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        model: str = "gpt-4o-mini",
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+        timeout_seconds: int = 60,
+    ) -> None:
+        self.endpoint = endpoint
+        self.api_key = api_key
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.timeout_seconds = timeout_seconds
+
+    def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        import requests
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        try:
+            resp = requests.post(
+                self.endpoint,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"].strip()
+        except Exception as exc:
+            raise RuntimeError(f"OpenAI API 调用失败: {exc}") from exc
+
+
 @dataclass
 class SparkClient:
-    """科大讯飞星火 WebSocket 适配器。
-
-    The adapter is isolated behind LLMBackend so tests and local demos never
-    depend on external network access. Set EDUMATRIX_USE_REMOTE_LLM=1 and the
-    SPARK_* environment variables to enable the remote provider.
-    """
-
     app_id: str
     api_key: str
     api_secret: str
@@ -57,13 +198,12 @@ class SparkClient:
     def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
         try:
             import websocket
-        except ImportError as exc:  # pragma: no cover - depends on optional package
+        except ImportError as exc:
             raise RuntimeError("缺少 websocket-client；请安装后再启用远程星火模式。") from exc
 
         result: list[str] = []
         errors: list[str] = []
         url = self._create_url()
-
         payload = {
             "header": {"app_id": self.app_id},
             "parameter": {
@@ -109,13 +249,6 @@ class SparkClient:
 
 
 class DeterministicEducationLLM:
-    """Offline provider used for CI, demos, and fallback.
-
-    It is deliberately evidence-grounded: every response quotes retrieved
-    anchors instead of inventing external facts. This makes the RAG pipeline
-    testable before real API keys are supplied.
-    """
-
     def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
         if "画像抽取器" in role:
             return _profile_json(user_prompt)
@@ -135,6 +268,56 @@ class DeterministicEducationLLM:
         return f"{role} 已基于检索证据处理主题：{topic}。"
 
 
+class AsyncDeterministicEducationLLM:
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        return DeterministicEducationLLM().generate(system_prompt, user_prompt, role=role)
+
+
+def build_llm(config: EduMatrixConfig = CONFIG) -> LLMBackend:
+    provider = config.llm_provider.lower().strip()
+    if provider == "spark":
+        if config.spark_app_id and config.spark_api_key and config.spark_api_secret:
+            return SparkClient(
+                app_id=config.spark_app_id,
+                api_key=config.spark_api_key,
+                api_secret=config.spark_api_secret,
+                spark_url=config.spark_url,
+                domain=config.spark_domain,
+            )
+    if provider == "openai" and config.llm_api_key:
+        return OpenAIChatLLM(
+            endpoint=config.llm_endpoint,
+            api_key=config.llm_api_key,
+            model=config.llm_model,
+            temperature=config.llm_temperature,
+            max_tokens=config.llm_max_tokens,
+            timeout_seconds=config.llm_timeout,
+        )
+    return DeterministicEducationLLM()
+
+
+def build_async_llm(config: EduMatrixConfig = CONFIG) -> AsyncLLMBackend:
+    provider = config.llm_provider.lower().strip()
+    if provider == "openai" and config.llm_api_key:
+        return AsyncOpenAIChatLLM(
+            endpoint=config.llm_endpoint,
+            api_key=config.llm_api_key,
+            model=config.llm_model,
+            temperature=config.llm_temperature,
+            max_tokens=config.llm_max_tokens,
+            timeout_seconds=config.llm_timeout,
+        )
+    return AsyncDeterministicEducationLLM()
+
+
+DEFAULT_LLM = build_llm()
+DEFAULT_ASYNC_LLM = build_async_llm()
+
+
+def call_spark_api(prompt: str, role: str = "助手") -> str:
+    return DEFAULT_LLM.generate(f"你现在是 EduMatrix 系统的{role}", prompt, role=role)
+
+
 def _guess_topic(text: str) -> str:
     target_match = re.search(r"(?<!学习)目标=([^;；\n]+)|GraphRAG目标知识点[：:]\s*([^\n]+)", text)
     if target_match:
@@ -142,21 +325,9 @@ def _guess_topic(text: str) -> str:
         if target:
             return target
     for word in (
-        "池化层",
-        "最大池化",
-        "平均池化",
-        "卷积核",
-        "反向传播",
-        "链式法则",
-        "梯度下降",
-        "过拟合",
-        "正则化",
-        "逻辑回归",
-        "线性回归",
-        "模型评估",
-        "混淆矩阵",
-        "监督学习",
-        "机器学习",
+        "池化层", "最大池化", "平均池化", "卷积核", "反向传播",
+        "链式法则", "梯度下降", "过拟合", "正则化", "逻辑回归",
+        "线性回归", "模型评估", "混淆矩阵", "监督学习", "机器学习",
     ):
         if word in text:
             return word
@@ -182,44 +353,25 @@ def _profile_json(prompt: str) -> str:
 
     weak_points = []
     for point in (
-        "数据预处理",
-        "特征工程",
-        "线性回归",
-        "逻辑回归",
-        "决策树",
-        "支持向量机",
-        "朴素贝叶斯",
-        "模型评估",
-        "混淆矩阵",
-        "过拟合",
-        "正则化",
-        "交叉验证",
-        "池化层",
-        "最大池化",
-        "平均池化",
+        "数据预处理", "特征工程", "线性回归", "逻辑回归", "决策树",
+        "支持向量机", "朴素贝叶斯", "模型评估", "混淆矩阵", "过拟合",
+        "正则化", "交叉验证", "池化层", "最大池化", "平均池化",
     ):
         if point in prompt:
             weak_points.append(point)
 
     preferences = []
     for keyword, preference in (
-        ("图", "图示演示"),
-        ("代码", "代码实操"),
-        ("一步步", "分步引导"),
-        ("例子", "具体例子"),
-        ("视频", "短视频讲解"),
+        ("图", "图示演示"), ("代码", "代码实操"),
+        ("一步步", "分步引导"), ("例子", "具体例子"), ("视频", "短视频讲解"),
     ):
         if keyword in prompt:
             preferences.append(preference)
 
     goals = []
     for keyword, goal in (
-        ("期末", "期末复习"),
-        ("考试", "通过考试"),
-        ("项目", "机器学习项目实践"),
-        ("竞赛", "竞赛提升"),
-        ("就业", "就业能力"),
-        ("面试", "面试准备"),
+        ("期末", "期末复习"), ("考试", "通过考试"), ("项目", "机器学习项目实践"),
+        ("竞赛", "竞赛提升"), ("就业", "就业能力"), ("面试", "面试准备"),
     ):
         if keyword in prompt:
             goals.append(goal)
@@ -264,9 +416,9 @@ def _lecture(topic: str, prompt: str) -> str:
             "2. 按 stride 移动窗口。\n"
             "3. 对每个窗口取 max 得到输出矩阵中的一个元素。\n\n"
             "常见误区：最大池化不是卷积，不学习参数；平均池化取均值，最大池化取最大值，二者不能混用。\n\n"
-            "画像驱动支持：若学生反馈“最大池化和平均池化总混”，先做反例辨析；"
-            "若反馈“题干长会漏条件”，先列窗口大小、stride、池化类型三项条件清单；"
-            "若反馈“看答案才懂”，先给局部提示，再让学生独立完成一个 2x2 窗口。"
+            "画像驱动支持：若学生反馈\u201c最大池化和平均池化总混\u201d，先做反例辨析；"
+            "若反馈\u201c题干长会漏条件\u201d，先列窗口大小、stride、池化类型三项条件清单；"
+            "若反馈\u201c看答案才懂\u201d，先给局部提示，再让学生独立完成一个 2x2 窗口。"
         )
     return f"# {topic}讲义\n\n基于检索证据，先说明前置概念，再解释核心机制、计算步骤和常见误区。"
 
@@ -362,7 +514,7 @@ def _quiz(topic: str) -> str:
             "1. 检索题：不看资料，说出训练集、验证集和测试集的区别。\n"
             "2. 辨析题：某分类器 accuracy=95%，但少数类 recall=20%，这个模型适合上线吗？为什么？\n"
             "3. 代码改错：如果逻辑回归在训练集 99%、验证集 70%，优先检查过拟合，并尝试正则化或交叉验证。\n"
-            "4. 元认知校准题：先自评“我能否解释 precision 与 recall 的差异”，再用混淆矩阵计算一次。"
+            "4. 元认知校准题：先自评\u201c我能否解释 precision 与 recall 的差异\u201d，再用混淆矩阵计算一次。"
         )
     return (
         "1. 选择题：2x2 最大池化窗口 [1, 3; 5, 2] 的输出是多少？答案：5。\n"
@@ -381,27 +533,6 @@ def _video_script(topic: str) -> str:
             "再展示训练误差下降、验证误差上升的过拟合曲线，最后用正则化和交叉验证完成修正。"
         )
     return (
-        "虚拟人脚本：先展示 4x4 特征图，再高亮第一个 2x2 窗口，播报“我们取这个窗口里最大的 6”，"
+        "虚拟人脚本：先展示 4x4 特征图，再高亮第一个 2x2 窗口，播报\u201c我们取这个窗口里最大的 6\u201d，"
         "随后移动窗口得到 2x2 输出矩阵，最后提示最大池化降低尺寸但保留显著特征。"
     )
-
-
-def build_llm(config: EduMatrixConfig = CONFIG) -> LLMBackend:
-    if config.use_remote_llm and config.spark_app_id and config.spark_api_key and config.spark_api_secret:
-        return SparkClient(
-            app_id=config.spark_app_id,
-            api_key=config.spark_api_key,
-            api_secret=config.spark_api_secret,
-            spark_url=config.spark_url,
-            domain=config.spark_domain,
-        )
-    return DeterministicEducationLLM()
-
-
-DEFAULT_LLM = build_llm()
-
-
-def call_spark_api(prompt: str, role: str = "助手") -> str:
-    """Backward-compatible entry point used by older scripts."""
-
-    return DEFAULT_LLM.generate(f"你现在是 EduMatrix 系统的{role}", prompt, role=role)

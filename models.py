@@ -689,7 +689,7 @@ class AlignmentReport:
     passed: bool
     distance: float
     threshold: float
-    conflicts: tuple[str, ...] = ()
+    conflicts: tuple | list = ()
     advice: str = ""
 
 

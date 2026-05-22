@@ -1,16 +1,7 @@
-# EduMatrix 核心依赖 - 2026版 (RAG + Agent + Memory)
-sentence-transformers>=3.0.0        # 真实嵌入模型 (bge-m3)
-requests
-numpy
-faiss-cpu
-neo4j                               # 知识图谱
-torch
-torchvision
-pillow
-fastapi
-uvicorn[standard]
-pandas
-scikit-learn
-# 可选：完整多模态 (VisRAG)
-# opencv-python
-# pymupdf
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+sqlalchemy>=2.0.0
+httpx>=0.27.0
+websocket-client>=1.6.0
+python-dotenv>=1.0.0
+requests>=2.31.0

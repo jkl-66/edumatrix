@@ -6,10 +6,16 @@ import json
 import re
 
 from config import CONFIG
+from concurrency import AsyncWorkerPool
 from drag_debate import DebateAugmentedRAG
-from instruct_rag import InstructRAGGenerator
+from instruct_rag import AsyncInstructRAGGenerator, InstructRAGGenerator
 from learning_strategy import LearningStrategyEngine
-from llm_client import DEFAULT_LLM, LLMBackend
+from llm_client import (
+    AsyncLLMBackend,
+    DEFAULT_ASYNC_LLM,
+    DEFAULT_LLM,
+    LLMBackend,
+)
 from manifold_alignment import ManifoldAlignmentVerifier
 from models import AgentOutput, LearningSignal, ResourcePackage, StudentProfile
 from observability import TELEMETRY, timed_span
@@ -37,17 +43,32 @@ AGENT_MATRIX: tuple[AgentSpec, ...] = (
 )
 
 
+def _build_conversation_memory(profile: StudentProfile, max_turns: int = 6) -> str:
+    if not profile.history:
+        return ""
+    recent = profile.history[-(max_turns * 2):]
+    turns = []
+    for i in range(0, len(recent), 2):
+        user_msg = recent[i]
+        turns.append(f"学生: {user_msg[:200]}")
+    return "\n".join(turns[-max_turns:])
+
+
 class ProfileProbeAgent:
-    def __init__(self, llm: LLMBackend = DEFAULT_LLM) -> None:
+    def __init__(self, llm: AsyncLLMBackend = DEFAULT_ASYNC_LLM) -> None:
         self.llm = llm
 
     def update(self, profile: StudentProfile, message: str) -> StudentProfile:
         profile.update_from_message(message)
-        extracted = self._extract_with_llm(message)
+        return profile
+
+    async def async_update(self, profile: StudentProfile, message: str) -> StudentProfile:
+        profile.update_from_message(message)
+        extracted = await self._async_extract_with_llm(message)
         profile.apply_llm_features(extracted, source_text=message)
         return profile
 
-    def _extract_with_llm(self, message: str) -> dict:
+    async def _async_extract_with_llm(self, message: str) -> dict:
         system_prompt = (
             "你是 EduMatrix 的画像抽取器，只能输出 JSON。"
             "字段包括 course, major, goals, weak_points, preferences, learning_state_causes。"
@@ -56,7 +77,7 @@ class ProfileProbeAgent:
         )
         user_prompt = f"固定课程为机器学习导论。请从学生话语中抽取画像特征：{message}"
         try:
-            raw = self.llm.generate(system_prompt, user_prompt, role="画像抽取器")
+            raw = await self.llm.generate(system_prompt, user_prompt, role="画像抽取器")
             match = re.search(r"\{.*\}", raw, flags=re.S)
             if not match:
                 return {}
@@ -70,27 +91,52 @@ class ZPDPlannerAgent:
     def plan(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile):
         if "最大池化与平均池化混淆" in profile.misconception_patterns:
             target = "池化层"
+        elif profile.weak_points:
+            target = profile.weak_points[-1]
+            for point in ("池化层", "逻辑回归", "过拟合", "反向传播", "链式法则"):
+                if point in profile.weak_points:
+                    target = point
+                    break
         else:
-            target = profile.weak_points[-1] if profile.weak_points else None
+            target = None
         return rag.retrieve(query, target=target)
 
 
 class EffectEvaluatorAgent:
     def evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
-        load_penalty = max(0.0, profile.cognitive_load - 0.5) * 0.18
-        strategy_gap = profile.learning_state_causes.get("strategy_gap")
-        misconception = profile.learning_state_causes.get("misconception")
-        prerequisite_gap = profile.learning_state_causes.get("prerequisite_gap")
-        state_penalty = 0.0
-        for cause in (strategy_gap, misconception, prerequisite_gap):
+        profile_causes = profile.learning_state_causes
+
+        cause_penalty = 0.0
+        for key in ("prerequisite_gap", "misconception", "cognitive_load", "strategy_gap"):
+            cause = profile_causes.get(key)
             if cause is not None:
-                state_penalty += cause.percentage / 100 * 0.035
-        has_code = any(resource.resource_type == "代码实操案例" for resource in resources)
-        has_quiz = any(resource.resource_type == "练习题" for resource in resources)
-        profile_bonus = 0.03 if profile.dimension_states else 0.0
-        accuracy = 0.78 + profile_bonus + (0.06 if has_code else 0.0) + (0.04 if has_quiz else 0.0) - load_penalty - state_penalty
-        sandbox_error_rate = 0.18 if has_code else 0.42
-        dwell_seconds = 420 if profile.cognitive_style.startswith("视觉") else 360
+                cause_penalty += cause.percentage / 100 * 0.04
+
+        has_code = any(r.resource_type == "代码实操案例" for r in resources)
+        has_quiz = any(r.resource_type == "练习题" for r in resources)
+        has_theory = any(r.resource_type == "专业讲义" for r in resources)
+        has_mermaid = any(r.resource_type == "思维导图" for r in resources)
+
+        resource_coverage = sum([has_code, has_quiz, has_theory, has_mermaid]) / 4.0
+
+        accuracy = 0.78
+        accuracy -= cause_penalty
+        accuracy += resource_coverage * 0.08
+        accuracy += 0.04 if resource_coverage >= 0.75 else 0.0
+        accuracy -= max(0.0, profile.cognitive_load - 0.5) * 0.12
+
+        sandbox_error_rate = 0.42
+        if has_code and profile.cognitive_load < 0.6:
+            sandbox_error_rate = 0.18
+        elif has_code:
+            sandbox_error_rate = 0.30
+
+        dwell_seconds = 420
+        if profile.cognitive_style and "视觉" in profile.cognitive_style:
+            dwell_seconds = 480
+        if has_code or has_quiz:
+            dwell_seconds += 60
+
         return LearningSignal(
             accuracy=max(0.0, min(1.0, accuracy)),
             dwell_seconds=dwell_seconds,
@@ -99,17 +145,14 @@ class EffectEvaluatorAgent:
 
 
 async def run_async_thread(func, *args, **kwargs):
-    """Executes a synchronous blocking function inside the default loop executor thread pool,
-    achieving true cooperative async multitasking in Python.
-    """
     import asyncio
     import functools
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 
-class ResourceFactory:
-    def __init__(self, generator: InstructRAGGenerator) -> None:
+class AsyncResourceFactory:
+    def __init__(self, generator: AsyncInstructRAGGenerator) -> None:
         self.generator = generator
         self.jobs: tuple[tuple[str, str], ...] = (
             ("理论教授", "专业讲义"),
@@ -119,7 +162,7 @@ class ResourceFactory:
             ("虚拟导演", "虚拟人视频脚本"),
         )
 
-    def generate_all(
+    async def generate_all(
         self,
         *,
         query: str,
@@ -127,82 +170,74 @@ class ResourceFactory:
         clean_evidence,
         profile: StudentProfile,
         correction: str = "",
-    ) -> tuple[AgentOutput, ...]:
-        outputs: list[AgentOutput] = []
-        with ThreadPoolExecutor(max_workers=len(self.jobs)) as executor:
-            futures = [
-                executor.submit(
-                    self.generator.generate,
-                    role=role,
-                    resource_type=resource_type,
-                    query=query,
-                    graph_context=retrieval.graph_context,
-                    evidence=clean_evidence,
-                    profile=profile,
-                    correction=correction,
-                )
-                for role, resource_type in self.jobs
-            ]
-            for future in as_completed(futures):
-                outputs.append(future.result())
-        order = {resource_type: index for index, (_, resource_type) in enumerate(self.jobs)}
-        return tuple(sorted(outputs, key=lambda item: order[item.resource_type]))
-
-    async def async_generate_all(
-        self,
-        *,
-        query: str,
-        retrieval,
-        clean_evidence,
-        profile: StudentProfile,
-        correction: str = "",
+        conversation_memory: str = "",
     ) -> tuple[AgentOutput, ...]:
         import asyncio
-        tasks = []
-        for role, resource_type in self.jobs:
-            tasks.append(
-                run_async_thread(
-                    self.generator.generate,
-                    role=role,
-                    resource_type=resource_type,
-                    query=query,
-                    graph_context=retrieval.graph_context,
-                    evidence=clean_evidence,
-                    profile=profile,
-                    correction=correction,
-                )
+
+        async def _generate_one(role: str, resource_type: str) -> AgentOutput:
+            return await self.generator.generate(
+                role=role,
+                resource_type=resource_type,
+                query=query,
+                graph_context=retrieval.graph_context,
+                evidence=clean_evidence,
+                profile=profile,
+                correction=correction,
+                conversation_memory=conversation_memory,
             )
-        outputs = await asyncio.gather(*tasks)
+
+        tasks = [_generate_one(role, rt) for role, rt in self.jobs]
+        outputs = await asyncio.gather(*tasks, return_exceptions=True)
+
+        results: list[AgentOutput] = []
+        for i, output in enumerate(outputs):
+            if isinstance(output, Exception):
+                role_name = self.jobs[i][0]
+                resource_type_name = self.jobs[i][1]
+                TELEMETRY.record_metric(
+                    "resource_factory.error", 1.0,
+                    role=role_name, error=str(output)[:100],
+                )
+                results.append(AgentOutput(
+                    agent=role_name,
+                    resource_type=resource_type_name,
+                    content=f"# {resource_type_name} 生成暂时不可用\n\n当前角色暂时无法生成内容，请稍后再试。",
+                    citations=(),
+                    private_rationale=f"生成失败: {output}",
+                ))
+            else:
+                results.append(output)
+
         order = {resource_type: index for index, (_, resource_type) in enumerate(self.jobs)}
-        return tuple(sorted(outputs, key=lambda item: order[item.resource_type]))
+        return tuple(sorted(results, key=lambda item: order[item.resource_type]))
 
 
 class EduMatrixSwarm:
-    """1+3+5 full-band orchestration for EduMatrix."""
+    """1+3+5 full-band orchestration for EduMatrix with async concurrency control."""
 
     def __init__(
         self,
         *,
         rag: HybridRAGPipeline = hybrid_rag,
-        llm: LLMBackend = DEFAULT_LLM,
+        llm: AsyncLLMBackend | None = None,
         profile_store: dict[str, StudentProfile] | None = None,
     ) -> None:
         self.rag = rag
         self.profile_store = profile_store if profile_store is not None else {}
-        self.profile_probe = ProfileProbeAgent(llm)
+        use_llm = llm if llm is not None else DEFAULT_ASYNC_LLM
+        self.profile_probe = ProfileProbeAgent(use_llm)
         self.planner = ZPDPlannerAgent()
         self.debate = DebateAugmentedRAG()
-        self.generator = InstructRAGGenerator(llm)
-        self.factory = ResourceFactory(self.generator)
+        self.async_generator = AsyncInstructRAGGenerator(use_llm)
+        self.factory = AsyncResourceFactory(self.async_generator)
         self.alignment = ManifoldAlignmentVerifier()
         self.evaluator = EffectEvaluatorAgent()
         self.strategy_engine = LearningStrategyEngine()
 
     async def async_process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
-        """Fully async pipeline execution enabling non-blocking concurrent request handling."""
         with timed_span(TELEMETRY, "swarm.process", student_id=student_id):
             profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
-            profile = await run_async_thread(self.profile_probe.update, profile, user_input)
+            profile = await self.profile_probe.async_update(profile, user_input)
 
             retrieval = self.planner.plan(self.rag, user_input, profile)
             debate_result = self.debate.clean(retrieval)
@@ -212,17 +247,20 @@ class EduMatrixSwarm:
                 target=retrieval.target,
             )
 
+            conversation_memory = _build_conversation_memory(profile, max_turns=6)
+
             correction = ""
             resources: tuple[AgentOutput, ...] = ()
             alignment_report = None
             rollback_count = 0
             for attempt in range(CONFIG.rollback_limit + 1):
-                resources = await self.factory.async_generate_all(
+                resources = await self.factory.generate_all(
                     query=user_input,
                     retrieval=retrieval,
                     clean_evidence=debate_result.clean_evidence,
                     profile=profile,
                     correction=correction,
+                    conversation_memory=conversation_memory,
                 )
                 alignment_report = self.alignment.verify(resources)
                 if alignment_report.passed:
@@ -260,9 +298,6 @@ class EduMatrixSwarm:
             )
 
     def process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
-        """Synchronous backward-compatible wrapper that executes the async pipeline safely
-        cross event loop boundaries. Ensures existing unit tests and CLI runners run flawlessly.
-        """
         import asyncio
         try:
             loop = asyncio.get_event_loop()
@@ -277,44 +312,3 @@ class EduMatrixSwarm:
                 return future.result()
         else:
             return loop.run_until_complete(self.async_process(user_input, student_id=student_id))
-
-    def agent_topology(self) -> tuple[AgentSpec, ...]:
-        return AGENT_MATRIX
-
-
-class EduSwarm(EduMatrixSwarm):
-    """Backward-compatible alias for the previous demo entry point."""
-
-
-def render_console_summary(package: ResourcePackage) -> str:
-    kept = [verdict.evidence_id for verdict in package.verdicts if verdict.keep]
-    resource_lines = "\n".join(
-        f"- {resource.agent} / {resource.resource_type}: {resource.content[:88].replace(chr(10), ' ')}..."
-        for resource in package.resources
-    )
-    strategy_lines = "\n".join(
-        f"- {action.title}: {action.description}"
-        for action in (package.strategy_plan.actions if package.strategy_plan else ())
-    )
-    return (
-        f"目标知识点: {package.target}\n"
-        f"学习路径: {' -> '.join(package.retrieval.graph_context.learning_path)}\n"
-        f"{package.profile.state_report()}\n"
-        f"学习策略引擎:\n{strategy_lines or '- 暂无额外策略'}\n"
-        f"DRAG保留证据: {', '.join(kept)}\n"
-        f"流形对齐: {'通过' if package.alignment.passed else '失败'} "
-        f"(distance={package.alignment.distance:.3f}, threshold={package.alignment.threshold:.3f})\n"
-        f"量化评估: accuracy={package.learning_signal.accuracy:.2f}, "
-        f"sandbox_error_rate={package.learning_signal.sandbox_error_rate:.2f}\n"
-        f"资源包:\n{resource_lines}"
-    )
-
-
-def main() -> None:
-    swarm = EduMatrixSwarm()
-    package = swarm.process("我还是看不懂卷积神经网络里的池化层，能用图和 PyTorch 代码演示最大池化吗？")
-    print(render_console_summary(package))
-
-
-if __name__ == "__main__":
-    main()

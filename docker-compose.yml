@@ -1,0 +1,26 @@
+name: edumatrix
+services:
+  edumatrix:
+    build: .
+    container_name: edumatrix
+    ports:
+      - "8000:8000"
+    volumes:
+      - edumatrix_data:/app/data
+    restart: unless-stopped
+    environment:
+      # No API key needed - user configures it in the browser UI
+      - EDUMATRIX_LLM_PROVIDER=openai
+      - EDUMATRIX_EMBEDDING_PROVIDER=hash
+      - EDUMATRIX_USE_FAISS=0
+      - EDUMATRIX_LLM_ENDPOINT=https://windhub.cc/v1/chat/completions
+      - EDUMATRIX_LLM_MODEL=doubao-1-5-pro-32k-250115
+      - EDUMATRIX_MAX_CONCURRENT_LLM=8
+      - EDUMATRIX_LLM_RATE_LIMIT_RPM=120
+      - EDUMATRIX_LLM_RATE_LIMIT_TPM=100000
+      - EDUMATRIX_CIRCUIT_BREAKER_THRESHOLD=5
+      - EDUMATRIX_CIRCUIT_BREAKER_WINDOW=60
+      - EDUMATRIX_RETRY_MAX_ATTEMPTS=3
+
+volumes:
+  edumatrix_data:

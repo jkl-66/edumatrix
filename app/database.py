@@ -53,18 +53,56 @@ class DBStudentProfile(Base):
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class DBAlignmentLog(Base):
-    """持久化审计表：存储 Swarm 智能体每一轮的流形测地线对齐记录，供时间轴与图表展现"""
     __tablename__ = "alignment_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     student_id = Column(String(64), index=True)
-    target_concept = Column(String(128))                 # 对齐的知识点
+    target_concept = Column(String(128))
     passed = Column(Boolean, default=False)
     distance = Column(Float)
     threshold = Column(Float)
-    conflicts = Column(JSON, default=list)               # 具体的冲突点描述
-    advice = Column(Text)                                # 对齐回滚建议
+    conflicts = Column(JSON, default=list)
+    advice = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
+
+
+class DBNote(Base):
+    __tablename__ = "notes"
+
+    id = Column(String(64), primary_key=True)
+    student_id = Column(String(64), index=True)
+    source = Column(String(128), default="conversation")
+    content = Column(Text)
+    tags = Column(JSON, default=list)
+    concepts = Column(JSON, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DBReviewPlan(Base):
+    __tablename__ = "review_plans"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(64), index=True)
+    concept = Column(String(128))
+    interval_days = Column(Integer, default=1)
+    next_review_at = Column(DateTime)
+    mastery = Column(Float, default=0.0)
+    review_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DBConversationHistory(Base):
+    __tablename__ = "conversation_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(64), index=True)
+    query = Column(Text)
+    response_summary = Column(Text)
+    target = Column(String(128))
+    resources_count = Column(Integer, default=0)
+    alignment_passed = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 # 物理并网：自动创建所有本地 SQLite 数据库表
 def init_db():

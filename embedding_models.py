@@ -33,10 +33,35 @@ def cosine_similarity(left: tuple[float, ...], right: tuple[float, ...]) -> floa
     return max(0.0, min(1.0, (dot / (left_norm * right_norm) + 1.0) / 2.0))
 
 
+@dataclass
+class SentenceTransformerEmbedding:
+    model_name: str = "BAAI/bge-small-zh-v1.5"
+    name: str = "sentence-transformer"
+
+    def __post_init__(self):
+        self._model = None
+
+    def _load_model(self):
+        if self._model is None:
+            import sentence_transformers
+            self._model = sentence_transformers.SentenceTransformer(
+                self.model_name,
+                device="cpu",
+            )
+
+    def embed(self, text: str) -> tuple[float, ...]:
+        self._load_model()
+        vec = self._model.encode(text, normalize_embeddings=True)
+        return tuple(float(v) for v in vec)
+
+    def score(self, query: str, document: str) -> float:
+        q_vec = self.embed(query)
+        d_vec = self.embed(document)
+        return cosine_similarity(q_vec, d_vec)
+
+
 @dataclass(frozen=True)
 class HashEmbeddingBackend:
-    """Deterministic local embedding for offline demos and CI."""
-
     dim: int = 384
     name: str = "hash-embedding"
 
@@ -49,7 +74,7 @@ class HashEmbeddingBackend:
             weight = 1.0 + min(3, len(token) // 4) * 0.15
             vector[index] += sign * weight
         norm = math.sqrt(sum(value * value for value in vector))
-        if norm == 0.0:
+        if norm == 0:
             return tuple(vector)
         return tuple(value / norm for value in vector)
 
@@ -59,8 +84,6 @@ class HashEmbeddingBackend:
 
 @dataclass(frozen=True)
 class OpenAICompatibleEmbeddingBackend:
-    """Adapter for general-purpose embedding models behind /v1/embeddings."""
-
     endpoint: str
     api_key: str
     model: str
@@ -84,7 +107,6 @@ class OpenAICompatibleEmbeddingBackend:
 
 def _tokens(text: str) -> tuple[str, ...]:
     import re
-
     lower = text.lower()
     tokens = re.findall(r"[a-zA-Z0-9_+\-.]+|[\u4e00-\u9fff]{2,}", lower)
     chinese = re.findall(r"[\u4e00-\u9fff]", text)
@@ -94,6 +116,11 @@ def _tokens(text: str) -> tuple[str, ...]:
 
 def build_embedding_backend() -> EmbeddingBackend:
     provider = CONFIG.embedding_provider.lower().strip()
+    if provider == "sentence_transformer":
+        try:
+            return SentenceTransformerEmbedding(model_name=CONFIG.embedding_model)
+        except Exception:
+            pass
     if provider in {"openai", "openai_compatible", "compatible"}:
         if CONFIG.embedding_endpoint and CONFIG.embedding_api_key:
             return OpenAICompatibleEmbeddingBackend(

@@ -3,7 +3,8 @@ import os
 from dataclasses import asdict
 from typing import Any
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -11,17 +12,87 @@ from sqlalchemy.orm import Session
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent_swarm import EduMatrixSwarm
+from concurrency import AsyncWorkerPool
+from llm_client import DEFAULT_ASYNC_LLM, AsyncOpenAIChatLLM
 from models import DIMENSION_LABELS, StudentProfile
 from app.database import init_db, get_db, DBStudentProfile
-from app.crud import load_student_profile, save_student_profile, record_alignment_log
+from app.crud import (
+    load_student_profile,
+    save_student_profile,
+    record_alignment_log,
+    create_note,
+    get_notes,
+    delete_note,
+    get_review_plan,
+    upsert_review_plan,
+    record_conversation,
+    get_conversation_history,
+)
+from note_engine import LearningProgressAnalyzer, ReviewScheduler
+from observability import TELEMETRY
 
 # 初始化 SQLite 数据库表
 init_db()
 
+_worker_pool: AsyncWorkerPool | None = None
+
+# Dynamic swarm cache per LLM config
+_swarm_cache: dict[str, EduMatrixSwarm] = {}
+
+
+def _get_llm_provider_name() -> str:
+    try:
+        from config import CONFIG
+        return CONFIG.llm_provider
+    except Exception:
+        return "unknown"
+
+
+def build_swarm_from_headers(headers) -> EduMatrixSwarm:
+    api_key = headers.get("x-edumatrix-api-key", "")
+    endpoint = headers.get("x-edumatrix-endpoint", "")
+    model = headers.get("x-edumatrix-model", "")
+    temp_str = headers.get("x-edumatrix-temperature", "")
+    mt_str = headers.get("x-edumatrix-max-tokens", "")
+
+    if not api_key:
+        return _swarm_cache.get("__default__")
+
+    cache_key = f"{api_key[-8:]}::{endpoint}::{model}"
+    cached = _swarm_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    temperature = 0.3
+    max_tokens = 4096
+    if temp_str:
+        try: temperature = float(temp_str)
+        except: pass
+    if mt_str:
+        try: max_tokens = int(mt_str)
+        except: pass
+
+    dynamic_llm = AsyncOpenAIChatLLM(
+        endpoint=endpoint,
+        api_key=api_key,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    new_swarm = EduMatrixSwarm(llm=dynamic_llm)
+    _swarm_cache[cache_key] = new_swarm
+    return new_swarm
+
+
+llm_provider = _get_llm_provider_name()
+swarm = EduMatrixSwarm(llm=DEFAULT_ASYNC_LLM)
+_swarm_cache["__default__"] = swarm
+
+
 app = FastAPI(
     title="EduMatrix 智教矩阵 API",
     description="基于 FastAPI + SQLite + Swarm 智能体的高并发个性化教育系统后端",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 # 限制级跨域配置（防 * 安全漏洞，锁定前端Vue开发域）
@@ -33,7 +104,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-swarm = EduMatrixSwarm()
+
+@app.on_event("startup")
+async def startup():
+    global _worker_pool
+    from config import CONFIG
+    _worker_pool = AsyncWorkerPool(max_workers=CONFIG.max_concurrent_llm)
+    await _worker_pool.start()
+    print(f"  [EduMatrix] AsyncWorkerPool started: {CONFIG.max_concurrent_llm} workers")
+    print(f"  [EduMatrix] LLM: {CONFIG.llm_provider} @ {CONFIG.llm_endpoint} model={CONFIG.llm_model}")
+    print(f"  [EduMatrix] Rate limit: {CONFIG.llm_rate_limit_rpm} RPM / {CONFIG.llm_rate_limit_tpm} TPM")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _worker_pool
+    if _worker_pool is not None:
+        await _worker_pool.stop()
+        print("  [EduMatrix] AsyncWorkerPool stopped")
 
 # 静态课程数据集（来自 web_demo.py）
 MACHINE_LEARNING_DATASETS = [
@@ -138,9 +226,14 @@ def _package_response(package) -> dict[str, Any]:
         "kept_evidence": [verdict.evidence_id for verdict in package.verdicts if verdict.keep],
     }
 
+FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist")
+
 @app.get("/", response_class=HTMLResponse)
 async def read_index():
-    """提供交互式 Web 演示页面"""
+    """提供前端 SPA 入口"""
+    index_path = os.path.join(FRONTEND_DIST, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
     from web_demo import INDEX_HTML
     return INDEX_HTML
 
@@ -206,20 +299,211 @@ async def process_student_message(request: Request, db: Session = Depends(get_db
 
     # 1. 物理层：从本地 SQLite 数据库中加载/初始化学生画像
     profile = load_student_profile(db, student_id)
-    
-    # 2. 内存同步：注入 Swarm 运行上下文
-    swarm.profile_store[student_id] = profile
-    
-    # 3. 编排层：运行 1+3+5 智能体矩阵进行画像抽取与资源交付
-    package = await swarm.async_process(message, student_id=student_id)
+
+    # 2. 动态 LLM：从前端请求头读取 API 配置，构建或复用 Swarm 实例
+    active_swarm = build_swarm_from_headers(request.headers)
+
+    # 3. 内存同步：注入 Swarm 运行上下文
+    active_swarm.profile_store[student_id] = profile
+
+    # 4. 编排层：运行 1+3+5 智能体矩阵进行画像抽取与资源交付
+    package = await active_swarm.async_process(message, student_id=student_id)
     
     # 4. 持久化层：将 Swarm 更新后的最新画像存回 SQLite，确保事务完整性
     save_student_profile(db, package.profile)
     
     # 5. 审计层：保存流形对齐校验记录
     record_alignment_log(db, student_id, package.alignment, package.target)
-    
+
+    resource_summary = "; ".join(f"{r.agent}:{r.resource_type}" for r in package.resources)
+    record_conversation(
+        db, student_id, message, resource_summary,
+        package.target, len(package.resources), package.alignment.passed,
+    )
+
     return _package_response(package)
+
+
+@app.get("/api/health")
+async def health_check(request: Request):
+    from config import CONFIG
+    user_api_key = request.headers.get("x-edumatrix-api-key", "")
+    has_user_key = bool(user_api_key)
+    return {
+        "status": "ok",
+        "version": "1.1.0",
+        "service": "EduMatrix 智教矩阵",
+        "llm_provider": CONFIG.llm_provider,
+        "llm_model": CONFIG.llm_model,
+        "llm_endpoint": CONFIG.llm_endpoint,
+        "llm_api_key_configured": bool(CONFIG.llm_api_key) or has_user_key,
+        "user_api_key_provided": has_user_key,
+        "embedding_provider": CONFIG.embedding_provider,
+        "concurrent_llm": CONFIG.max_concurrent_llm,
+        "rate_limit_rpm": CONFIG.llm_rate_limit_rpm,
+    }
+
+
+@app.get("/api/metrics")
+async def get_metrics():
+    from observability import TELEMETRY
+    return {
+        "recent_metrics": [{"name": m.name, "value": m.value, "tags": m.tags} for m in TELEMETRY.metrics[-20:]],
+        "total_recorded": len(TELEMETRY.metrics),
+    }
+
+
+@app.get("/api/sessions/{student_id}")
+async def list_sessions(student_id: str, db: Session = Depends(get_db)):
+    conversations = get_conversation_history(db, student_id, limit=20)
+    return {
+        "student_id": student_id,
+        "sessions": [
+            {
+                "id": c.id,
+                "query": c.query[:200],
+                "target": c.target,
+                "resources_count": c.resources_count,
+                "alignment_passed": c.alignment_passed,
+                "created_at": c.created_at.isoformat(),
+            }
+            for c in conversations
+        ],
+    }
+
+
+_feedback_count: int = 0
+_feedback_sum: int = 0
+
+
+@app.get("/api/feedback")
+async def get_feedback_stats():
+    return {
+        "total_feedback": _feedback_count,
+        "average_rating": round(_feedback_sum / _feedback_count, 2) if _feedback_count > 0 else 0,
+    }
+
+
+@app.post("/api/feedback")
+async def submit_feedback(request: Request):
+    global _feedback_count, _feedback_sum
+    payload = await request.json()
+    rating = int(payload.get("rating", 0))
+    _feedback_count += 1
+    _feedback_sum += rating
+    TELEMETRY.record_metric("feedback.rating", rating)
+    return {
+        "received": True,
+        "total_feedback": _feedback_count,
+        "average_rating": round(_feedback_sum / _feedback_count, 2) if _feedback_count > 0 else 0,
+    }
+
+
+@app.get("/api/notes/{student_id}")
+async def list_notes(student_id: str, db: Session = Depends(get_db)):
+    notes = get_notes(db, student_id)
+    return {"student_id": student_id, "notes": [{"id": n.id, "source": n.source, "content": n.content[:300], "tags": n.tags, "concepts": n.concepts, "created_at": n.created_at.isoformat()} for n in notes]}
+
+
+@app.post("/api/notes/{student_id}")
+async def add_note(student_id: str, request: Request, db: Session = Depends(get_db)):
+    payload = await request.json()
+    content = str(payload.get("content", "")).strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    note = create_note(
+        db, student_id, source=payload.get("source", "manual"),
+        content=content, tags=payload.get("tags"), concepts=payload.get("concepts"),
+    )
+    return {"id": note.id, "created_at": note.created_at.isoformat()}
+
+
+@app.delete("/api/notes/{note_id}")
+async def remove_note(note_id: str, db: Session = Depends(get_db)):
+    if not delete_note(db, note_id):
+        raise HTTPException(status_code=404, detail="note not found")
+    return {"deleted": True}
+
+
+@app.get("/api/progress/{student_id}")
+async def get_progress(student_id: str, db: Session = Depends(get_db)):
+    profile = load_student_profile(db, student_id)
+    notes = get_notes(db, student_id, limit=5)
+    analyzer = LearningProgressAnalyzer()
+    report = analyzer.build_report(
+        student_id, profile.concept_mastery,
+        notes=[{"id": n.id, "source": n.source, "content": n.content[:200], "tags": n.tags, "concepts": n.concepts, "created_at": n.created_at.isoformat()} for n in notes],
+    )
+    return {
+        "student_id": report.student_id,
+        "total_concepts": report.total_concepts,
+        "mastered": report.mastered,
+        "in_progress": report.in_progress,
+        "needs_review": report.needs_review,
+        "average_mastery": report.average_mastery,
+        "recent_notes": report.recent_notes[:5],
+    }
+
+
+@app.get("/api/history/{student_id}")
+async def get_history(student_id: str, db: Session = Depends(get_db)):
+    conversations = get_conversation_history(db, student_id)
+    return {
+        "student_id": student_id,
+        "history": [
+            {
+                "id": c.id,
+                "query": c.query[:500],
+                "target": c.target,
+                "resources_count": c.resources_count,
+                "alignment_passed": c.alignment_passed,
+                "created_at": c.created_at.isoformat(),
+            }
+            for c in conversations
+        ],
+    }
+
+
+@app.get("/api/review/{student_id}")
+async def get_review(student_id: str, db: Session = Depends(get_db)):
+    plans = get_review_plan(db, student_id)
+    return {
+        "student_id": student_id,
+        "due_reviews": [
+            {
+                "concept": p.concept,
+                "interval_days": p.interval_days,
+                "next_review_at": p.next_review_at.isoformat(),
+                "mastery": p.mastery,
+                "review_count": p.review_count,
+            }
+            for p in plans
+        ],
+    }
+
+
+@app.post("/api/review/{student_id}")
+async def update_review(student_id: str, request: Request, db: Session = Depends(get_db)):
+    payload = await request.json()
+    concept = str(payload.get("concept", "")).strip()
+    mastery = float(payload.get("mastery", 0.5))
+    if not concept:
+        raise HTTPException(status_code=400, detail="concept is required")
+    scheduler = ReviewScheduler()
+    plan = upsert_review_plan(db, student_id, concept, mastery, scheduler.INTERVALS[0])
+    return {
+        "concept": plan.concept,
+        "next_review_at": plan.next_review_at.isoformat(),
+        "interval_days": plan.interval_days,
+        "mastery": plan.mastery,
+    }
+
+
+# ============================================================
+# SPA static file serving (for Docker/production)
+# ============================================================
+if os.path.isdir(FRONTEND_DIST):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn

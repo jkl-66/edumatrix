@@ -316,7 +316,38 @@ class StudentProfileSchema(BaseModel):
 
 ---
 
-## 十、 配置参考 (.env 核心环境变量)
+## 十、 智能体分级调度与任务路由规则 (Task Routing & Tier Delegation Rules)
+
+为保障整个 AI 团队在开发中的高可用与超低成本，全脑主控协调官 (Coordinator Agent / Sisyphus) 必须严格遵循以下 **“任务难度阶梯派发”** 与 **“自愈升级控制流”**：
+
+### 1. 任务难度分级标准 (Task Difficulty Classification)
+
+Sisyphus 在解析 `plan.md` 中的每个开发任务时，必须先将其分类为以下两个级别之一：
+
+* **Tier-1 级任务 (常规业务代码)**
+  * *判定标准*：常规增删改查 (CRUD) 接口、SQL 映射、Pydantic 实体声明、单元测试用例编写、常规逻辑重构。
+  * *默认派发目标*：**GLM-5.1 智能体** (绑定 `backend-api` 或 `database-design` 技能)。
+  * *成本策略*：超低成本、高并发生成。
+* **Tier-2 级任务 (高难算法与安全防卫)**
+  * *判定标准*：拓扑空间流形对齐数学建模 (`manifold_alignment.py`)、多模态 RAG 视觉特征向量重排 (`rag_engine.py`)、高并发异步协程锁安全 (`concurrency.py`)、隔离代码沙箱防逃逸机制。
+  * *默认派发目标*：**Claude Sonnet / Opus 智能体** (通过向量引擎 API 终端调用 **Claude Code**)。
+  * *成本策略*：精密设计、高逻辑深度。
+
+### 2. 自愈升级控制流协议 (Escalation & Self-Healing Protocol)
+
+当 Tier-1 级任务在执行中出现问题时，Sisyphus 必须自动触发以下 **自愈升级机制**，不得盲目重复调用低级别模型：
+
+1. **测试驱动拦截**：任何由 GLM-5.1 编写的代码在提交前，必须运行单元测试或代码静态分析 (Linter)。
+2. **重试上限限制**：若 GLM-5.1 运行测试失败并尝试自愈修改，**重试次数上限为 2 次**。
+3. **自动升级派发 (Escalation)**：
+   * 若 GLM-5.1 重试 2 次后测试依然报错，或者在 Linter 检查中存在无法解决的隐式类型/指针泄漏隐患；
+   * Sisyphus 必须**立即终止**对 GLM-5.1 的调用；
+   * 自动将当前任务升级为 **Tier-2 级**，打包当前的代码状态、测试报错日志以及 `AGENTS.md` 规范约束；
+   * **派发给 Claude 智能体 (Claude Code)**，由其作为“技术总监”接入，对已有代码进行降维打击式重构与修复，直至测试完全通过。
+
+---
+
+## 十一、 配置参考 (.env 核心环境变量)
 
 系统启动需要依赖以下配置项，统一在项目根目录的 `.env` 中维护：
 
@@ -332,7 +363,7 @@ class StudentProfileSchema(BaseModel):
 
 ---
 
-## 十一、 scripts 工具脚本说明
+## 十二、 scripts 工具脚本说明
 
 为方便日常维护、数据准备与算法测试，系统在 `scripts/` 目录下提供了一套完备的自动化脚本：
 

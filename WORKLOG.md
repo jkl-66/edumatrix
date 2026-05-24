@@ -31,11 +31,17 @@
 * **核心突破**：解决了挂载全局代理（VPN/梯子）时，浏览器误将本地流量发送至外部代理服务器导致前端网页无法访问的痛点。
 * **实施方案**：直接重构了 [frontend/vite.config.js](file:///d:/桌面/edumatrix-main/frontend/vite.config.js) 配置文件，强制让 Vite 服务绑定纯 IP 地址 `127.0.0.1` 运行。利用代理软件默认不拦截本地回环 IP 的特性，实现了**挂着梯子也能正常开发和调试本地项目**。
 
-#### 4. 高效 Git 协作体系建设
-* **脚本产出**：编写并优化了纯 ASCII 编码的高鲁棒性同步脚本 [sync.bat](file:///d:/桌面/edumatrix-main/sync.bat)（一键推送）与 [pull.bat](file:///d:/桌面/edumatrix-main/pull.bat)（一键下载队友更新），彻底解决了中文字符导致 Windows cmd.exe 闪退的问题。
-* **快捷键绑定**：在编辑器配置文件中完美绑定了以下高频协作热键：
-  * **`Alt + G`**：一键 Stage、Commit 并在后台无缝 push 代码到 GitHub 仓库。
-  * **`Alt + P`**：一键拉取（`git pull --rebase`）队友的最新代码并合并到本地。
+#### 4. 高效 Git 协作与冲突合并
+* **脚本产出**：编写并优化了纯 ASCII 编码的高鲁棒性同步脚本 [sync.bat](file:///d:/桌面/edumatrix-main/sync.bat)（一键推送）与 [pull.bat](file:///d:/桌面/edumatrix-main/pull.bat)（一键下载队友更新），彻底解决了中文字符和 Emoji 导致 Windows cmd.exe 语法解析错误和闪退的问题。
+* **冲突解决**：在首次拉取（`git pull --rebase`）合并时，成功对齐了云端与本地的多处修改冲突，手动保留了 `frontend/vite.config.js` 的 127.0.0.1 端口白名单配置以及 `rag_engine.py` 的 Bug 修复代码，最终圆满完成变基（Rebase）和 GitHub 推送同步，保持云端和本地代码处于最新干净状态。
+
+#### 5. 极速系统启动与开发体验升级
+* **快捷启动器**：编写了极速启动脚本 [start.bat](file:///d:/桌面/edumatrix-main/start.bat)。该脚本采用 `%~dp0` 相对路径实现完全便携式设计，支持一键同时在后台拉起后端 FastAPI 和前端 Vite 服务，并在 3 秒延时后自动唤起默认浏览器打开 [http://127.0.0.1:5173](http://127.0.0.1:5173) 网页，极大地简化了日常调试和环境配置步骤。
+* **终极热键流**：在编辑器 `keybindings.json` 和 `tasks.json` 中配置了三个核心极速快捷键：
+  * **`Alt + L`**：一键后台启动整个 EduMatrix 前后端系统并打开网页。
+  * **`Alt + G`**：一键将本地所有最新成果推送同步到 GitHub。
+  * **`Alt + P`**：一键拉取合并队友最新的提交更新。
+* **环境配置优化**：提供了 `.env` 环境变量配置模板，实现了无需在终端重复设置、一劳永逸自动读取大模型 API 密钥的优雅降级与真实模型联调流。
 
 ---
 

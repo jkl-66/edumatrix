@@ -1,5 +1,15 @@
 # AGENTS.md — EduMatrix 智教矩阵系统架构与设计说明书
 
+> [!IMPORTANT]
+> **🤖 面向第三方 AI 助手与开发引擎的系统指令 (Instruction for External AI Assistants, e.g., Copilot, Cursor, Roo-Code)**
+> 如果你是正在读取本文档的外部 AI 开发助手，请严格区分 **“系统业务功能”** 与 **“本地开发环境”**，以防元认知逻辑混淆：
+> 1. **系统业务代码（你必须全力帮用户实现）**：本文档所定义的 `1+3+5 智能体协作 Swarm 调度`、`agent_swarm.py` 中的决策类、以及 `drag_debate.py`（辩论主控）等，均属于本项目系统的 **核心业务功能**。当用户（包括你的队友）要求你编写、修改或扩展这些多智能体协作、推荐算法和数据库操作代码时，**你必须全力以赴、作为顶级全栈程序员协助用户编写出完美的业务逻辑代码**。
+> 2. **本地工具与编排（你无需在开发中强行介入）**：文档中提到的 `oh-my-ag` 本地编排工具、`antigravity-awesome-skills` 本地技能库以及 Git 校验钩子，属于 **本地物理开发辅助环境**。你在生成代码或解答疑问时，无需纠结或尝试在后台执行这些本地环境命令。
+> 3. **代码规范（你必须无条件死守）**：当你为用户（或队友）产出任何代码时，**必须严格继承并死守第九部分中所规定的核心天条** —— 强制遵循 **“单一职责原则 (SRP)”**，并在网络 I/O 边界自动应用 **“蛇形与驼峰命名转换防线（snake_case ➡️ camelCase）”**。
+> 4. **本地协作规则绝缘 (Local Orchestration Rules Immunity)**：本文档第十部分中所定义的“JIT 技能自动匹配”、“Sisyphus 团队调度”、“脑暴辩论机制 (`scripts/arch_debate.py`)”等，**仅属于项目架构师本地的专用 AI 编排流**。如果你当前在为其他普通开发人员工作，**你必须完全忽略第十部分中的这些开发匹配与唤醒规则**！不要在编写常规业务代码（如 API 路由、Vue 页面、常规 SQL）时，去寻找这些不存在的本地 Skills，也不要在代码或注释中产生任何关于这些工具或技能库的依赖、引用与注释说明，保持生成的业务代码高纯净度！
+
+---
+
 `EduMatrix 智教矩阵` 是一款基于大语言模型（LLM）、GraphRAG（图谱检索增强生成）与多模态检索技术构建的高智能个性化自适应教育系统。系统采用 **1+3+5 智能体协作矩阵架构**，通过多通道协作（流式交互、跨智能体辩论、拓扑流形对齐），实现因材施教、动态诊断和个性化知识推荐的闭环。
 
 ---
@@ -344,6 +354,50 @@ Sisyphus 在解析 `plan.md` 中的每个开发任务时，必须先将其分类
    * Sisyphus 必须**立即终止**对 GLM-5.1 的调用；
    * 自动将当前任务升级为 **Tier-2 级**，打包当前的代码状态、测试报错日志以及 `AGENTS.md` 规范约束；
    * **派发给 Claude 智能体 (Claude Code)**，由其作为“技术总监”接入，对已有代码进行降维打击式重构与修复，直至测试完全通过。
+
+### 3. 本地智能体技能库触发与匹配规则 (Local Agent Skills Activation Rules)
+
+为了避免内存与上下文（Token）过载，智能体在处理具体开发任务时，不得盲目全量加载本地技能包。全脑主控协调官 (Sisyphus) 以及协同智能体（包括 Antigravity、Claude Code 等）在识别到特定文件路径或开发场景时，**必须且仅限**按需动态加载并遵循以下 5 大场景的 8 个精选技能包：
+
+| 核心开发场景 | 推荐本地 Skill | 本地映射路径 (Skills Directory) | 能为项目做什么 (赛题核心用途) | 技能触发匹配条件与硬约束 |
+| :--- | :--- | :--- | :--- | :--- |
+| **规划与架构** | `solution-architect` | `.agents/skills/solution-architect/` | 设计系统高并发架构、模块划分和技术选型。 | **触发**：制定/修改 `plan.md`，对 1+3+5 智能体架构做顶层逻辑调整时自动加载。<br>**硬约束**：接口协议和底层依赖必须具备高鲁棒性。 |
+| **前端开发** | `frontend-design`<br>`ui-ux-pro-max-skill` | `.agents/skills/frontend-design/`<br>`.agents/skills/ui-ux-pro-max-skill/` | 生成高质量、风格化、无“廉价 AI 味”的现代极简前端界面。 | **触发**：修改 `frontend/src/` 中的 Vue 3 组件、CSS 动效或界面布局时加载。<br>**硬约束**：强制执行“去 AI 廉价感视觉调优”；使用 Outfit/Inter 现代字体；采用 HSL 调校的深色美学底色。 |
+| **后端开发** | `backend-api`<br>`database-design` | `.agents/skills/backend-api/`<br>`.agents/skills/database-design/` | 设计规范 RESTful API、优化多维 E-R 数据库表。 | **触发**：修改 `run.py`、`app/` 路由、`models.py` (SQLAlchemy 模型) 时加载。<br>**硬约束**：API 设计遵循 RESTful 规范；SQLAlchemy 模型关联必须配置级联删除 (`cascade="all, delete-orphan"`)；SQLite 数据库写入强制配置 WAL 模式。 |
+| **质量保障** | `code-reviewer`<br>`security-auditor` | `.agents/skills/code-reviewer/`<br>`.agents/skills/security-auditor/` | 进行静态代码审查、主动发现高并发死锁与逻辑漏洞。 | **触发**：修改 `concurrency.py`、`code_exec_api.py` (代码沙箱) 或代码提交前终审时加载。<br>**硬约束**：沙箱子进程强制限制最大 CPU 时间与内存，拦截死锁与逻辑越权。 |
+| **文档生成** | `doc-coauthoring` | `.agents/skills/doc-coauthoring/` | 根据前后端代码库自动生成高质量参赛技术报告与用户手册。 | **触发**：更新日常 CHANGELOG 日志、生成最终参赛技术报告、系统概要设计或答辩 PPT 大纲时加载。<br>**硬约束**：确保学术级的技术深度、格式规范且逻辑自洽。 |
+| **图谱渲染** | `mermaid-expert` | `.agents/skills/mermaid-expert/` | 在展示层 `Chat.vue` 中渲染高颜值、无语法错误的 Mermaid 概念拓扑图。 | **触发**：由 Visualizer 智能体生成关系图谱时自动唤醒。<br>**硬约束**：严禁 Mermaid 语法错误；节点标签内严禁使用特殊括号与 HTML 标签。 |
+| **异步API调优** | `fastapi-pro` | `.agents/skills/fastapi-pro/` | 优化 API 路由吞吐量，规避 CPU 密集型任务阻塞主线程。 | **触发**：修改 `stream_api.py` 或 `app/` 下的核心接口时加载。<br>**硬约束**：耗时 I/O 必须声明为异步协程；耗时 CPU 计算必须丢进进程池或异步工作池。 |
+| **检索重排** | `rag-engineer`<br>`hybrid-search-implementation` | `.agents/skills/rag-engineer/`<br>`.agents/skills/hybrid-search-implementation/` | 精准调优混合 RAG 算法，结合 ColPali 视觉特征实现高精度重排。 | **触发**：重构 `rag_engine.py` 或进行检索精度评估 `retrieval_evaluation.py` 时加载。<br>**硬约束**：检索必须具备最小相关度分数过滤；大尺寸图片必须先进行特征切片。 |
+| **去 AI 腔调** | `avoid-ai-writing`<br>`humanize-chinese` | `.agents/skills/avoid-ai-writing/`<br>`.agents/skills/humanize-chinese/` | 彻底剔除大语言模型自带的“廉价译制腔与机械感”，生成极具名师感、温和睿智的中文讲解。 | **触发**：编写教学活动控制器 `SessionDirector` 讲解逻辑或苏格拉底辩论模版时自动加载。<br>**硬约束**：严禁使用“总而言之”、“首先/其次/最后”等八股套话；语气需接地气。 |
+| **性能极限优化** | `python-performance-optimization` | `.agents/skills/python-performance-optimization/` | 对拓扑空间流形仿射对齐的矩阵乘法进行极致加速，优化 CPU 计算。 | **触发**：优化 `manifold_alignment.py` 或 `learning_strategy.py` 前自动加载。<br>**硬约束**：大型矩阵运算强制调用向量化 NumPy 操作，严禁高维大循环。 |
+
+### 4. AI 全明星团队最佳分工与任务下达矩阵 (AI All-Star Team Division & Task Dispatch Matrix)
+
+为彻底打通系统高效协同，全脑主控协调官 (Sisyphus) 在进行任务派发与日常协作时，必须完全严格遵循以下 **“AI 全明星队最佳分工与任务下达指令模版”**：
+
+| 任务下达方式 (你对 Sisyphus 说什么) | 对应执行模型 | 本地接入方式 | 核心赛题用途与场景职责 | 推荐绑定本地 Skill |
+| :--- | :--- | :--- | :--- | :--- |
+| **顶层规划与战略下达**：<br>在 `oma` 对话中直接对 Sisyphus 下达顶层战略与任务分解 | **Claude Opus 4.6/4.7** | Antigravity 内置 / 向量引擎 | 顶层规划、任务编排、计划跟踪，保障多智能体全局逻辑闭环。 | `solution-architect` |
+| **后端/核心算法默认配置**：<br>告诉 Sisyphus：*“后端/算法任务默认使用 GLM-5.1”* | **GLM-5.1** | CCSwitch → oh-my-ag | 常规业务 API 编写、SQL 映射、基础 CRUD 逻辑的高效实现。 | `backend-api`<br>`database-design` |
+| **前端/视觉任务默认配置**：<br>告诉 Sisyphus：*“前端/视觉任务默认使用 Gemini”* | **Gemini 3.5 Flash (High)** | Antigravity 内置 (免费) | 视网膜 UI 界面绘制、现代组件开发、视觉审美打磨，实现 Wow 质感。 | `frontend-design`<br>`ui-ux-pro-max-skill` |
+| **安全审计与高难重构攻坚**：<br>对 Sisyphus 说：*“用 Opus 审查最新的代码安全性”* | **Claude Opus 4.6/4.7** | 向量引擎中转 → Claude Code | 高并发协程死锁拦截、多租户安全审计、复杂算法攻坚与自愈重构。 | `code-reviewer`<br>`security-auditor` |
+| **日常注释与日志更新**：<br>日常更新：*“@gemini-agent 补充当前接口注释”* | **Gemini 3.5 Flash (High)** | Antigravity 内置 (免费) | API 注释生成、日常 CHANGELOG 日志更新与轻量级更新跟踪。 | `doc-coauthoring` |
+| **最终参赛技术报告输出**：<br>终稿生成：*“请 Claude Opus 整合生成最终参赛技术报告”* | **Claude Opus 4.6/4.7** | 内置接口 / 向量引擎 | 整合生成最终高学术质量参赛技术报告、系统概要设计及答辩 PPT 演示大纲。 | `doc-coauthoring` |
+
+### 5. 高难度算法开发前置脑暴辩论机制 (Architecture DragDebate Protocol)
+
+为彻底解决大模型在重构核心/高难算法时极易陷入局部最优、产生隐性内存泄漏或数学边界溢出的痛点，全脑主控协调官 (Sisyphus) 必须对所有 **Tier-2 级开发任务** 强制执行前置对撞辩论规则：
+
+1. **自动前置触发**：凡是涉及修改 `manifold_alignment.py` (拓扑对齐建模)、`learning_strategy.py` (艾宾浩斯自适应) 等核心算法前，Sisyphus 必须自动在终端唤醒对撞仿真器：
+   ```powershell
+   python scripts/arch_debate.py
+   ```
+2. **极速降本三枷锁 (Cost Constraint)**：
+   * **硬性轮数限制**：正反方交锋 **最多 1.5 轮** (即正方提议 ➡️ 反方找茬 ➡️ 正方闭环收敛，共 3 次发言)，点到为止，杜绝废话。
+   * **极简大纲格式**：限制每次发言 **严禁超过 150 字**，禁止任何虚客套，直奔架构痛点。
+   * **高低配协作**：正方（提方案）指派高智能的 `Claude Opus/Sonnet`，反方（挑刺找茬）指派完全免费的 `Gemini 3.5 Flash (High)`，最大化砍掉 80% Token 成本。
+3. **成果自动双写**：辩论收敛出的最终决策，必须由 `doc-coauthoring` 自动转化为精简的 Markdown 追加到 `DEVELOPMENT_TRACE.md` 日志中，作为工程演进铁证。
 
 ---
 

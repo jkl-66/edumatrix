@@ -24,7 +24,12 @@ echo [1/3] Staging changes...
 git add .
 
 echo [2/3] Committing changes...
-git commit -m "Auto-sync"
+set "commit_msg="
+set /p commit_msg="Enter commit message (e.g., fix(rag): resolve AttributeError) [Press Enter for default 'feat(auto): auto-sync update']: "
+if "%commit_msg%"=="" (
+    set "commit_msg=feat(auto): auto-sync update"
+)
+git commit -m "%commit_msg%"
 
 echo [3/3] Pushing to GitHub...
 git push origin main

@@ -4,6 +4,11 @@ echo             EduMatrix System Quick Launcher
 echo ====================================================
 echo.
 
+:: 0. Run database fast diagnostic and heal check
+echo [0/3] Checking database health and updating cold backup...
+python scripts\db_heal.py
+echo.
+
 :: 1. Launch the FastAPI backend server in a new window
 echo [1/3] Starting Backend Server (FastAPI on Port 8000)...
 start "EduMatrix Backend (FastAPI)" cmd /c "cd /d "%~dp0" && python run.py"

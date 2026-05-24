@@ -2,6 +2,13 @@
 
 本手册旨在指导开发团队充分释放 **Antigravity IDE**、**Claude Code** 及多智能体框架的潜能，高效应对软件杯 A3 赛题（基于大模型的个性化资源生成与学习多智能体系统开发）。本手册已全量整合**“向量引擎 API 中转方案”**、**“SOP 极速团队 Git 协作流”**、**“本地一键启动与离线熔断机制”**、**“西西弗斯分级调度自愈协议”**与**“去 AI 视觉味 UI/UX 调优规范”**，是一份开箱即用、直击国赛特等奖的保姆级实操宝典。
 
+> [!NOTE]
+> **📢 团队协作零侵入性声明 (Green & Zero-Intrusive)**
+> 本项目所集成的所有一键启动器 (`start.bat`)、约定式推送 (`sync.bat`)、架构脑暴与全链路追溯规则均为 **“纯绿色、独立且完全自愿使用”** 的开发辅助组件。
+> 如果你的队友不使用 AI 协作或习惯传统开发：
+> 1. 他们可以**完全忽略**这些 `.bat` 脚本与 `.md` 规则手册，继续使用他们熟悉的命令行（如 `npm run dev`，`git push`）进行纯手工开发，**绝对不会对他们的本地环境产生任何副作用、拦截或污染**。
+> 2. 带有你私密 API 密钥的 `.env` 文件已被 `.gitignore` 严格本地屏蔽，绝对不会上传污染云端或扣除你的额度。
+
 ---
 
 ## 一、 目标与工具概览
@@ -23,7 +30,7 @@
 | :--- | :--- | :--- | :--- | :--- |
 | **🧠 总指挥 / 计划制定 (Sisyphus)** | **Claude Opus 4.6/4.7** | Antigravity 内置 / 向量引擎 | 顶级战略推理、1M 超长上下文，极其稳定的任务拆解与 Agent 团队调度能力 | `solution-architect` |
 | **⚙️ 后端 / 核心算法** | **GLM-5.1** | CCSwitch → oh-my-ag | 8 小时自主工作、SWE-Bench Pro 第一、对中文教研概念理解深厚且成本极低 | `backend-api`, `database-design` |
-| **🎨 前端 / 视觉开发** | **Gemini 3.1 Pro** | Antigravity 内置 (免费) | 绝佳的多模态视觉理解与实时渲染，快速缩短“设计到代码”的迭代循环 | `frontend-design`, `ui-ux-pro-max-skill` |
+| **🎨 前端 / 视觉开发** | **Gemini 3.5 Flash (High)** | Antigravity 内置 (免费) | 绝佳的多模态视觉理解与实时渲染，快速缩短“设计到代码”的迭代循环 | `frontend-design`, `ui-ux-pro-max-skill` |
 | **📄 文档与注释** | **混合**：日常 Gemini，终稿 Opus | 内置接口 / 向量引擎 | 日常轻量日志快速低成本，最终报告高一致性与专业规范度 | `doc-coauthoring` |
 | **🔍 代码审查 / 安全审计** | **Claude Opus 4.6/4.7** | **向量引擎 API 中转 → Claude Code** | 顶级批判性思维，专门用于拦截跨文件异步死锁、SQL 注入与逻辑越权防御 | `code-reviewer`, `security-auditor` |
 
@@ -84,18 +91,39 @@ Skill 是为 AI 预设的专业工作流程包，能让 AI 从“通用助手”
 
 #### C. 精选 Skill 推荐表
 
-| 场景 | 推荐 Skill | 能为你的项目做什么 |
-| :--- | :--- | :--- |
-| **规划与架构** | `solution-architect` | 设计系统高并发架构、模块划分和技术选型 |
-| **前端开发** | `frontend-design`, `ui-ux-pro-max-skill` | 生成高质量、风格化、无“廉价 AI 味”的现代极简前端界面 |
-| **后端开发** | `backend-api`, `database-design` | 设计规范 RESTful API、优化多维 E-R 数据库表 |
-| **质量保障** | `code-reviewer`, `security-auditor` | 进行静态代码审查、主动发现高并发死锁与逻辑漏洞 |
-| **文档生成** | `doc-coauthoring` | 根据前后端代码库自动生成高质量参赛技术报告与用户手册 |
+在本地克隆安装好的 `C:\Users\iray\.agents\skills` 目录下，包含以下 5 大核心开发场景下的 8 个顶级专业技能（Skills）包。智能体加载后可立即遵循工业级最高开发准则：
 
-#### D. 如何在对话中调用 Skill
-对 Sisyphus 下达指令时明确指定 Skill 即可，例如：
-* *“Sisyphus，让前端 Agent 在设计仪表盘时，使用 `frontend-design` 技能，采用现代简约风格。”*
-* *“Sisyphus，让后端 Agent 使用 `backend-api` 技能来设计用户管理模块的 API。”*
+| 开发场景 | 推荐本地 Skill | 能为你的项目做什么 (赛题核心价值) |
+| :--- | :--- | :--- |
+| **规划与架构** | `solution-architect` | 设计系统高并发架构、模块划分和技术选型，保障 1+3+5 架构稳健性。 |
+| **前端开发** | `frontend-design`<br>`ui-ux-pro-max-skill` | 生成高质量、风格化、无“廉价 AI 味”的现代极简前端界面，打磨视觉 wow 档次。 |
+| **后端开发** | `backend-api`<br>`database-design` | 设计规范 RESTful API、优化多维 E-R 数据库表、管理 SQLite 级联与 WAL 写入。 |
+| **质量保障** | `code-reviewer`<br>`security-auditor` | 进行静态代码审查、主动发现高并发死锁与逻辑漏洞，确保隔离沙箱安全防逃逸。 |
+| **文档生成** | `doc-coauthoring` | 根据前后端代码库自动生成高质量学术级国赛技术报告、设计说明书与答辩 PPT 演示大纲。 |
+
+#### D. AI 全明星团队最佳分工与任务下达矩阵
+
+当你使用 `npx oh-my-ag` 启动 Sisyphus（主脑）分配任务，或者在终端里使用 `claude-code`进行快速结对攻坚时，请完全严格遵循以下 **“AI 全明星队最佳分工与任务下达指令模版”**，保障团队以最低 Token 成本产出最高学术级项目：
+
+| 任务下达方式 (你对 Sisyphus 说什么) | 对应执行模型 | 本地接入方式 | 核心赛题用途与场景职责 | 推荐绑定本地 Skill |
+| :--- | :--- | :--- | :--- | :--- |
+| **顶层规划与战略下达**：<br>在 `oma` 对话中直接对 Sisyphus 下达顶层战略与任务分解 | **Claude Opus 4.6/4.7** | Antigravity 内置 / 向量引擎 | 顶层规划、任务编排、计划跟踪，保障多智能体全局逻辑闭环。 | `solution-architect` |
+| **后端/核心算法默认配置**：<br>告诉 Sisyphus：*“后端/算法任务默认使用 GLM-5.1”* | **GLM-5.1** | CCSwitch → oh-my-ag | 常规业务 API 编写、SQL 映射、基础 CRUD 逻辑的高效实现。 | `backend-api`<br>`database-design` |
+| **前端/视觉任务默认配置**：<br>告诉 Sisyphus：*“前端/视觉任务默认使用 Gemini”* | **Gemini 3.5 Flash (High)** | Antigravity 内置 (免费) | 视网膜 UI 界面绘制、现代组件开发、视觉审美打磨，实现 Wow 质感。 | `frontend-design`<br>`ui-ux-pro-max-skill` |
+| **安全审计与高难重构攻坚**：<br>对 Sisyphus 说：*“用 Opus 审查最新的代码安全性”* | **Claude Opus 4.6/4.7** | 向量引擎中转 → Claude Code | 高并发协程死锁拦截、多租户安全审计、复杂算法攻坚与自愈重构。 | `code-reviewer`<br>`security-auditor` |
+| **日常注释与日志更新**：<br>日常更新：*“@gemini-agent 补充当前接口注释”* | **Gemini 3.5 Flash (High)** | Antigravity 内置 (免费) | API 注释生成、日常 CHANGELOG 日志更新与轻量级更新跟踪。 | `doc-coauthoring` |
+| **最终参赛技术报告输出**：<br>终稿生成：*“请 Claude Opus 整合生成最终参赛技术报告”* | **Claude Opus 4.6/4.7** | 内置接口 / 向量引擎 | 整合生成最终高学术质量参赛技术报告、系统概要设计及答辩 PPT 演示大纲。 | `doc-coauthoring` |
+
+#### E. 本地智能体自动触发匹配规则 (JIT Auto-Trigger Rules)
+为了节省 Token 且不牺牲开发专业度，智能体（包含 Antigravity 本身与 Claude Code）配备了**即时自动唤醒规则（Just-In-Time Rules）**。当你开启特定任务或打开特定文件时，智能体会根据下表**自动匹配并加载**对应技能：
+
+* **修改后端 API / 实时流（如 `run.py`, `app/`, `stream_api.py`）**：自动唤醒 `oma-backend` 与 `skills/fastapi-pro`。强制推行 RESTful API 规范、异步协程 I/O 调优与全局异常阻断。
+* **修改前端 Vue 3 组件 / 拓扑渲染（如 `frontend/src/`）**：自动唤醒 `oma-frontend` 与 `skills/mermaid-expert`。在 `Chat.vue` 中渲染高颜值、无语法错误的 Mermaid 概念脑图。
+* **修改 SQLAlchemy 模型 / 向量检索库（如 `models.py`, `rag_engine.py`）**：自动唤醒 `oma-db` 与 `skills/rag-engineer` 及 `skills/hybrid-search-implementation`。精准调优混合检索与评分重排。
+* **精细化调优 CSS / 视觉动效（如 `frontend/src/index.css`）**：自动唤醒 `oma-design` 与 `skills/ui-ux-pro-max-skill`。强制执行“去 AI 廉价感视觉调优”，微调 Outfit 字体及高大上毛玻璃动效。
+* **遭遇任何单元测试闪退 / 逻辑报错（如 Linter 拦截, AttributeError）**：自动唤醒 `oma-debug` 与 `skills/code-reviewer`。开启二分精密诊断定位并自动编写回归测试。
+* **修改协程并发控制 / 隔离代码沙箱（如 `concurrency.py`, `code_exec_api.py`）**：自动唤醒 `oma-qa` 与 `skills/security-auditor`。严密拦截沙箱越权与 SQL 注入风险，引入并发令牌桶。
+* **算法大改 / 自适应路径推荐（如 `manifold_alignment.py`）**：自动唤醒 `oma-brainstorm`、`skills/avoid-ai-writing` (名师化引导中文输出) 与 `skills/python-performance-optimization` (NumPy 矩阵运算加速)。
 
 ---
 
@@ -181,6 +209,15 @@ EDUMATRIX_LLM_MODEL=gpt-4o-mini
 3. **自动升级派发 (Escalation)**：若 GLM 重试 2 次后测试依然报错，Sisyphus 必须立即终止 GLM 调用，**将当前任务自动升级为 Tier-2 级**。打包代码及报错日志，**派发给 Claude 智能体 (Claude Code)** 进行重构与攻坚。
 4. **进展双写**：每个 Agent 完工后，必须更新 `plan.md` 并将修改记录写入 `CHANGELOG.md`。
 
+### 前置第 4.5 步：高难算法开发前的“极简脑暴对撞辩论” (Architecture DragDebate)
+在进行高难度（**Tier-2** 级，如 `manifold_alignment.py` 拓扑流形对齐数学建模）开发或重构前，**必须且强制**在控制台执行对撞仿真器脚本：
+1. **运行脑暴**：在底部终端（PowerShell）运行以下命令：
+   ```powershell
+   python scripts/arch_debate.py
+   ```
+2. **交锋与收敛**：Sisyphus 会在后台拉起 `Claude Opus`（正方）与 `Gemini 3.5 Flash (High)`（反方）进行最多 1.5 轮（字数 < 150字）的降本对撞辩论。
+3. **记录沉淀**：辩论收敛结晶会自动双写追加到 `DEVELOPMENT_TRACE.md` 日志中，作为极佳的系统工程设计和答辩凭证！
+
 ### 第 5 步：人工打磨与去“AI 味”视觉调优
 国赛评委极度反感千篇一律的 AI 生成界面。必须在前端开发中彻底剔除 AI 标志性的“大圆角蓝色高光、低质毛玻璃、重度投影阴影”的浮夸风格，进行人工与模型的定向调优：
 * **去 AI 视觉味规范**：命令前端 Agent 强制使用现代高级设计风格进行改造：
@@ -189,7 +226,7 @@ EDUMATRIX_LLM_MODEL=gpt-4o-mini
   > **“请调用 `code-reviewer` 智能体，使用 `security-auditor` 技能审查最新提交的代码，检查 SQL 注入与 XSS 漏洞，并输出安全报告。”**
 
 ### 第 6 步：文档与答辩准备（双模混合策略）
-* **日常文档**：使用免费的 Gemini 3.1 Pro 快速撰写轻量文档、更新日志或 API 注释。
+* **日常文档**：使用免费的 Gemini 3.5 Flash (High) 快速撰写轻量文档、更新日志或 API 注释。
 * **终稿参赛文档**：项目后期，调用 Claude Opus 一次性合并生成高质量技术论文级文档：
   > **“使用 `doc-coauthoring` 技能，通读所有项目源文件和变更历史，生成《需求分析说明书》《系统概要设计》《技术难点攻克报告》与《答辩PPT演示大纲》，确保格式专业严谨、逻辑自洽一致。”**
 

@@ -314,6 +314,7 @@ class VisRAG:
 class TextKnowledgeIndex:
     def __init__(self, index: VectorIndex | None = None) -> None:
         file_evidence = load_seed_evidence()
+        self.documents = ()
         if file_evidence:
             self.documents = tuple(e for e in file_evidence if e.modality == EvidenceModality.TEXT)
         if not self.documents:

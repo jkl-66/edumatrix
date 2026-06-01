@@ -63,6 +63,12 @@ class DebateAugmentedRAG:
     def _prover(self, query: str, target: str, item: Evidence) -> float:
         text = " ".join((item.title, item.content, " ".join(item.tags), " ".join(item.anchors)))
         score = item.score
+
+        # === 新增：学术特权提分 ===
+        if item.metadata.get("is_academic") or item.source == "arXiv.org":
+            score += 0.25 # 给学术源直接加 0.25 的信用基础分，避免被当作噪声误杀
+        # === 新增结束 ===
+
         if target in text:
             score += 0.28
         if any(anchor in query or anchor.lower() in query.lower() for anchor in item.anchors):
@@ -95,6 +101,11 @@ class DebateAugmentedRAG:
 
     def _reason(self, item: Evidence, pro: float, con: float, judge: float, keep: bool) -> str:
         action = "保留" if keep else "剔除"
+        
+        # 优化学术记录日志展示
+        if keep and (item.metadata.get("is_academic") or item.source == "arXiv.org"):
+            action = "🔬 权威保留"
+            
         return (
             f"{action} {item.title}：正方相关性 {pro:.2f}，反方噪声/矛盾风险 {con:.2f}，"
             f"法官分 {judge:.2f}。"

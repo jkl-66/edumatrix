@@ -4,6 +4,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 import math
 import re
+import concurrent.futures
 
 from config import CONFIG
 from embedding_models import EMBEDDINGS
@@ -12,7 +13,6 @@ from models import Evidence, EvidenceModality, GraphContext, RetrievalBundle
 from observability import TELEMETRY, timed_span
 from vector_store import create_index
 from vector_store import InMemoryVectorIndex, VectorIndex
-
 
 def _tokens(text: str) -> set[str]:
     lower = text.lower()
@@ -42,19 +42,12 @@ def _encode_vector(text: str) -> list[float]:
 
 
 def colpali_maxsim(query: str, evidence: Evidence) -> float:
-    """Mathematical implementation of ColPali's multi-vector late interaction MaxSim operator.
-    Query Q is tokenized into N_q terms. Document D is treated as a set of visual/text patches.
-    MaxSim(Q, D) = sum_{i=1}^{N_q} max_{j=1}^{N_d} (q_i . d_j^T)
-    """
-    # 1. Split query into semantic tokens
     tokens = [t.strip().lower() for t in re.split(r"[，。！、\s]+", query) if t.strip()]
     if not tokens:
         tokens = [query]
     
-    # 2. Encode query tokens to 128D vectors
     q_vecs = [_encode_vector(t) for t in tokens]
     
-    # 3. Simulate ColPali page patches based on Title, Content, and Tags
     patches = [
         evidence.title,
         evidence.content,
@@ -67,17 +60,13 @@ def colpali_maxsim(query: str, evidence: Evidence) -> float:
         
     d_vecs = [_encode_vector(p) for p in patches]
     
-    # 4. Compute ColPali Late Interaction MaxSim
     total_maxsim = 0.0
     for q_v in q_vecs:
-        # Max dot product with any document patch
         max_sim = max(VectorMath.dot_product(q_v, d_v) for d_v in d_vecs)
         total_maxsim += max_sim
         
-    # Normalized average MaxSim score
     avg_maxsim = total_maxsim / len(q_vecs) if q_vecs else 0.0
     
-    # Apply keyword alignment boost to preserve exact match capabilities
     anchor_boost = sum(1 for anchor in evidence.anchors if anchor and anchor in query) * 0.18
     tag_boost = sum(1 for tag in evidence.tags if tag and tag.lower() in query.lower()) * 0.12
     
@@ -85,8 +74,6 @@ def colpali_maxsim(query: str, evidence: Evidence) -> float:
 
 
 def jinaclip_text_similarity(query: str, evidence: Evidence) -> float:
-    """Joint dense text-to-text cosine similarity mapping representing Jina-CLIP-v2.
-    """
     q_vec = _encode_vector(query)
     doc_text = " ".join((evidence.title, evidence.content, " ".join(evidence.tags), " ".join(evidence.anchors)))
     d_vec = _encode_vector(doc_text)
@@ -119,8 +106,6 @@ def _evidence_text(item: Evidence) -> str:
 
 
 class GraphRAG:
-    """Course concept graph used to recall complete knowledge boundaries."""
-
     def __init__(self) -> None:
         self.nodes: set[str] = set()
         self.forward: dict[str, set[str]] = defaultdict(set)
@@ -135,68 +120,31 @@ class GraphRAG:
 
     def _build_professional_knowledge_graph(self) -> None:
         edges = [
-            ("Python编程", "数据预处理"),
-            ("线性代数", "向量表示"),
-            ("概率统计", "模型评估"),
-            ("概率统计", "朴素贝叶斯"),
-            ("微积分", "梯度下降"),
-            ("数据预处理", "特征工程"),
-            ("特征工程", "监督学习"),
-            ("监督学习", "线性回归"),
-            ("监督学习", "逻辑回归"),
-            ("监督学习", "决策树"),
-            ("监督学习", "支持向量机"),
-            ("监督学习", "朴素贝叶斯"),
-            ("线性回归", "损失函数"),
-            ("逻辑回归", "分类阈值"),
-            ("分类阈值", "模型评估"),
-            ("模型评估", "混淆矩阵"),
-            ("决策树", "过拟合"),
-            ("支持向量机", "间隔最大化"),
-            ("损失函数", "梯度下降"),
-            ("过拟合", "正则化"),
-            ("正则化", "模型泛化"),
-            ("模型评估", "交叉验证"),
-            ("交叉验证", "模型选择"),
-            ("模型泛化", "模型选择"),
-            ("模型选择", "机器学习项目实践"),
-            ("线性代数", "矩阵乘法"),
-            ("矩阵乘法", "张量运算"),
-            ("张量运算", "特征图"),
-            ("微积分", "导数"),
-            ("导数", "偏导数"),
-            ("偏导数", "链式法则"),
-            ("链式法则", "反向传播"),
-            ("损失函数", "反向传播"),
-            ("反向传播", "梯度下降"),
-            ("卷积核", "卷积运算"),
-            ("步长", "卷积运算"),
-            ("填充", "卷积运算"),
-            ("卷积运算", "特征图"),
-            ("特征图", "池化层"),
-            ("池化层", "最大池化"),
-            ("池化层", "平均池化"),
-            ("池化层", "全连接层"),
-            ("激活函数", "卷积神经网络"),
-            ("全连接层", "卷积神经网络"),
+            ("Python编程", "数据预处理"), ("线性代数", "向量表示"), ("概率统计", "模型评估"),
+            ("概率统计", "朴素贝叶斯"), ("微积分", "梯度下降"), ("数据预处理", "特征工程"),
+            ("特征工程", "监督学习"), ("监督学习", "线性回归"), ("监督学习", "逻辑回归"),
+            ("监督学习", "决策树"), ("监督学习", "支持向量机"), ("监督学习", "朴素贝叶斯"),
+            ("线性回归", "损失函数"), ("逻辑回归", "分类阈值"), ("分类阈值", "模型评估"),
+            ("模型评估", "混淆矩阵"), ("决策树", "过拟合"), ("支持向量机", "间隔最大化"),
+            ("损失函数", "梯度下降"), ("过拟合", "正则化"), ("正则化", "模型泛化"),
+            ("模型评估", "交叉验证"), ("交叉验证", "模型选择"), ("模型泛化", "模型选择"),
+            ("模型选择", "机器学习项目实践"), ("线性代数", "矩阵乘法"), ("矩阵乘法", "张量运算"),
+            ("张量运算", "特征图"), ("微积分", "导数"), ("导数", "偏导数"),
+            ("偏导数", "链式法则"), ("链式法则", "反向传播"), ("损失函数", "反向传播"),
+            ("反向传播", "梯度下降"), ("卷积核", "卷积运算"), ("步长", "卷积运算"),
+            ("填充", "卷积运算"), ("卷积运算", "特征图"), ("特征图", "池化层"),
+            ("池化层", "最大池化"), ("池化层", "平均池化"), ("池化层", "全连接层"),
+            ("激活函数", "卷积神经网络"), ("全连接层", "卷积神经网络"),
         ]
         for source, target in edges:
             self._add_edge(source, target)
 
     def _normalize_target(self, target: str) -> str:
         aliases = {
-            "Pooling": "池化层",
-            "pooling": "池化层",
-            "池化": "池化层",
-            "CNN": "卷积神经网络",
-            "Feature Map": "特征图",
-            "ReLU": "激活函数",
-            "ML": "监督学习",
-            "机器学习": "监督学习",
-            "machine learning": "监督学习",
-            "Machine Learning": "监督学习",
-            "分类": "逻辑回归",
-            "回归": "线性回归",
+            "Pooling": "池化层", "pooling": "池化层", "池化": "池化层",
+            "CNN": "卷积神经网络", "Feature Map": "特征图", "ReLU": "激活函数",
+            "ML": "监督学习", "机器学习": "监督学习", "machine learning": "监督学习",
+            "Machine Learning": "监督学习", "分类": "逻辑回归", "回归": "线性回归",
             "过拟合": "过拟合",
         }
         if target in self.nodes:
@@ -373,6 +321,9 @@ class HybridRAGPipeline:
             TELEMETRY.record_metric("user_index.documents_removed", removed)
 
     def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k) -> RetrievalBundle:
+        # === 关键修复：延迟加载，打破循环导入 ===
+        from web_search_api import search_arxiv
+        
         with timed_span(TELEMETRY, "hybrid_rag.retrieve", top_k=top_k):
             target = target or self._infer_target(query)
             graph_context = self.graph.get_context(target)
@@ -380,11 +331,21 @@ class HybridRAGPipeline:
 
             candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
 
-            if self.faiss_indexes is not None:
-                faiss_results = self.faiss_indexes.search(query_with_graph, top_k=top_k)
-                candidates.extend(faiss_results)
-            elif self.text_index is not None:
-                candidates.extend(self.text_index.search(query_with_graph, top_k=top_k))
+            # === 核心修改区：并发拉取本地库和外网 arXiv ===
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                # 提交本地检索任务
+                if self.faiss_indexes is not None:
+                    future_local = executor.submit(self.faiss_indexes.search, query_with_graph, top_k)
+                else:
+                    future_local = executor.submit(self.text_index.search, query_with_graph, top_k)
+                
+                # 提交外网 arXiv 检索任务 (使用原始 query 更精准，只拿 Top 2 补充)
+                future_arxiv = executor.submit(search_arxiv, query, 2) 
+
+                # 收集结果
+                candidates.extend(future_local.result())
+                candidates.extend(future_arxiv.result())
+            # === 修改区结束 ===
 
             user_results = self.user_index.search(query_with_graph, top_k=top_k)
             candidates.extend(user_results)
@@ -429,8 +390,6 @@ class HybridRAGPipeline:
 
 
 class FAISSIndexSet:
-    """Loads and searches across all FAISS category indexes built from real course data."""
-
     def __init__(self, index_dir: str | Path | None = None) -> None:
         from vector_store_faiss import FaissVectorIndex
 
@@ -481,7 +440,6 @@ class FAISSIndexSet:
 
 
 def build_rag_pipeline() -> HybridRAGPipeline:
-    """Factory that creates the appropriate RAG pipeline based on config."""
     graph = GraphRAG()
     vis_rag = VisRAG()
 

@@ -6,6 +6,9 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
+import urllib.request
+import xml.etree.ElementTree as ET
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
@@ -13,6 +16,7 @@ from app.database import DBWebSearchHistory, get_db
 from document_parser import chunk_document
 from rag_engine import hybrid_rag
 from swarm_factory import build_swarm_from_headers
+from models import Evidence, EvidenceModality  # 补充导入
 
 router = APIRouter(prefix="/api/web", tags=["web_search"])
 
@@ -282,3 +286,90 @@ async def get_search_history(
         }
         for r in records
     ]
+
+
+def search_arxiv(query: str, max_results: int = 3) -> tuple[Evidence, ...]:
+    """内部函数：并发调用的 arXiv 学术检索接口"""
+    safe_query = urllib.parse.quote(query)
+    url = f"http://export.arxiv.org/api/query?search_query=all:{safe_query}&max_results={max_results}"
+    
+    results = []
+    try:
+        with urllib.request.urlopen(url, timeout=5.0) as response:
+            xml_data = response.read()
+            
+        root = ET.fromstring(xml_data)
+        namespace = {'atom': 'http://www.w3.org/2005/Atom'}
+        
+        for entry in root.findall('atom:entry', namespace):
+            title_elem = entry.find('atom:title', namespace)
+            summary_elem = entry.find('atom:summary', namespace)
+            if title_elem is None or summary_elem is None:
+                continue
+                
+            title = title_elem.text.replace('\n', ' ').strip()
+            summary = summary_elem.text.replace('\n', ' ').strip()
+            link = entry.find("atom:link[@type='text/html']", namespace)
+            pdf_url = link.attrib['href'] if link is not None else ""
+            
+            authors = [
+                author.find('atom:name', namespace).text 
+                for author in entry.findall('atom:author', namespace) 
+                if author.find('atom:name', namespace) is not None
+            ]
+            
+            evidence = Evidence(
+                id=f"ARXIV_{pdf_url.split('/')[-1]}",
+                title=f"[学术文献] {title}",
+                content=summary,
+                modality=EvidenceModality.TEXT,
+                source="arXiv.org",
+                tags=("学术论文", "arXiv"),
+                anchors=tuple(authors[:2]),
+                score=0.65,
+                metadata={
+                    "is_academic": True,
+                    "url": pdf_url,
+                    "authors": authors
+                }
+            )
+            results.append(evidence)
+    except Exception as e:
+        print(f"  [arXiv] API 调用失败或超时: {e}")
+        
+    return tuple(results)
+
+
+@router.get("/arxiv-search")
+async def explicit_arxiv_search(query: str, max_results: int = 5) -> dict[str, Any]:
+    """
+    供前端学术探索专区直接调用的显式搜索接口。
+    不会将结果喂给大模型，而是直接返回结构化的论文列表供用户自行阅读。
+    """
+    if not query:
+        raise HTTPException(status_code=400, detail="搜索查询不能为空")
+        
+    # 直接调用上面的内部并发函数
+    results = search_arxiv(query, max_results)
+    
+    # 将后端的 Evidence 对象转换为前端友好的 JSON 格式
+    formatted_papers = []
+    for r in results:
+        # 清洗掉我们在后端为了 RAG 区分加的 "[学术文献] " 前缀
+        clean_title = r.title.replace("[学术文献] ", "")
+        
+        formatted_papers.append({
+            "id": r.id,
+            "title": clean_title,
+            "abstract": r.content,
+            "authors": r.metadata.get("authors", []),
+            "pdf_url": r.metadata.get("url", ""),
+            "score": r.score
+        })
+        
+    return {
+        "status": "success",
+        "query": query,
+        "total_returned": len(formatted_papers),
+        "papers": formatted_papers
+    }

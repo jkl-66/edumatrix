@@ -236,7 +236,18 @@ INDEX_HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>EduMatrix 智教矩阵 | 机器学习导论</title>
+  <title>EduMatrix 智教矩阵 | 数理化全能渲染引擎</title>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/mhchem.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+
+  <script src="https://unpkg.com/smiles-drawer@1.0.10/dist/smiles-drawer.min.js"></script>
+
+  <script src="https://unpkg.com/d3@3/d3.min.js"></script>
+  <script src="https://unpkg.com/function-plot@1/dist/function-plot.js"></script>
+
   <style>
     :root {
       --ink: #17202a;
@@ -330,7 +341,33 @@ INDEX_HTML = r"""<!doctype html>
       background: #fbfdff;
     }
     .resource h3 { margin: 0 0 8px; font-size: 16px; color: #0f766e; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow: auto; }
+    
+    /* 专为文本与可视化图表混合排版设计的容器 */
+    .content-box { 
+      white-space: pre-wrap; 
+      word-break: break-word; 
+      background: #0f172a; 
+      color: #e2e8f0; 
+      padding: 18px; 
+      border-radius: 8px; 
+      overflow: hidden; 
+      font-family: Consolas, monospace;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    
+    /* 专为渲染引擎提供的白色小黑板背景 */
+    .molecule-board {
+      background: #ffffff;
+      color: #17202a;
+      padding: 20px;
+      border-radius: 8px;
+      text-align: center;
+      margin: 16px 0;
+      box-shadow: inset 0 2px 8px rgba(0,0,0,0.05);
+      font-family: Inter, sans-serif;
+    }
+
     .heatmap { overflow-x: auto; }
     table { border-collapse: collapse; width: 100%; font-size: 13px; }
     th, td { border: 1px solid var(--line); padding: 8px; text-align: center; }
@@ -351,7 +388,7 @@ INDEX_HTML = r"""<!doctype html>
     <section class="hero">
       <div class="eyebrow">机器学习导论 · 个性化学习智能体 Web Demo</div>
       <h1>EduMatrix 智教矩阵</h1>
-      <p>围绕赛题核心要求，固定机器学习课程场景，提供对话式学习画像、多智能体资源生成、个性化学习路径、智能辅导、学习效果评估与教师端诊断。</p>
+      <p>突破理科可视化盲区！内置 <strong>KaTeX + mhchem</strong> 数学与化学方程式排版、<strong>SmilesDrawer</strong> 分子结构式渲染，以及 <strong>Function-Plot</strong> 与 <strong>SVG</strong> 实时数理互动绘图引擎。</p>
       <div class="hero-actions">
         <button class="primary" onclick="scrollToApp()">开始体验</button>
         <button class="secondary" onclick="loadTeacher()">查看教师端</button>
@@ -387,6 +424,8 @@ INDEX_HTML = r"""<!doctype html>
           <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
             <button class="primary" style="background:#0f766e;color:white" onclick="runStudent()">生成个性化资源</button>
             <button class="tab" onclick="loadTeacher()">刷新教师端</button>
+            
+            <button class="secondary" style="background:#dc2626;color:white;border:none;font-weight:bold;" onclick="triggerAllSTEMDemo()">🚀 一键测试数理化全能渲染</button>
           </div>
         </div>
       </div>
@@ -410,10 +449,10 @@ INDEX_HTML = r"""<!doctype html>
     <section class="panel" style="margin-top:18px;">
       <div class="panel-head">
         <h2>多智能体资源包</h2>
-        <span class="muted">讲义 · 导图 · 代码 · 练习 · 视频脚本</span>
+        <span class="muted">智能识别拦截 &lt;smiles&gt;, &lt;plot&gt;, &lt;svg&gt; 等大模型专属渲染标签</span>
       </div>
       <div class="panel-body" id="resources">
-        <span class="muted">点击生成后展示。</span>
+        <span class="muted">点击上方按钮生成，或点击【一键测试数理化全能渲染】体验震撼效果。</span>
       </div>
     </section>
 
@@ -427,13 +466,30 @@ INDEX_HTML = r"""<!doctype html>
           <span class="muted">等待画像触发。</span>
         </div>
       </div>
+      
       <div class="panel">
         <div class="panel-head">
-          <h2>机器学习课程数据集</h2>
-          <span class="muted">公开教学数据源</span>
+          <h2>学术探索专区 (arXiv)</h2>
+          <span class="muted">硬核前沿论文直搜</span>
         </div>
-        <div class="panel-body dataset-list" id="datasets"></div>
+        <div class="panel-body">
+          <div style="display:flex; gap:10px; margin-bottom: 14px;">
+            <input id="arxiv-query" placeholder="输入学术概念，如：Transformer" style="flex:1;" />
+            <button class="primary" style="background:#2563eb; color:white;" onclick="searchArxiv()">检索论文</button>
+          </div>
+          <div id="arxiv-results" style="display:flex; flex-direction:column; gap:12px;">
+            <span class="muted">输入关键词，开始探索权威文献。</span>
+          </div>
+        </div>
       </div>
+    </section>
+    
+    <section class="panel" style="margin-top:18px;">
+      <div class="panel-head">
+        <h2>机器学习课程数据集</h2>
+        <span class="muted">公开教学数据源</span>
+      </div>
+      <div class="panel-body dataset-list" id="datasets"></div>
     </section>
 
     <section class="panel" style="margin-top:18px;">
@@ -456,6 +512,102 @@ INDEX_HTML = r"""<!doctype html>
     function usePreset(){ if ($('preset').value) $('message').value = $('preset').value; }
     function esc(s){ return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
 
+    // ==========================================
+    // 🧠 核心：理科全能标签解析拦截器
+    // ==========================================
+    function formatContent(text) {
+      let safeText = esc(text);
+
+      // 1. 拦截 SVG (物理图解)，将转义后的标签还原
+      safeText = safeText.replace(/&lt;svg([\s\S]*?)&lt;\/svg&gt;/g, function(match, inner) {
+        let svgCode = "<svg" + inner + "</svg>";
+        svgCode = svgCode.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&amp;/g, '&');
+        return `
+          <div class="molecule-board" style="background:#f1f5f9;">
+            <div style="font-weight:bold; color:#0f766e; margin-bottom:8px;">📐 物理/几何矢量分析图</div>
+            ${svgCode}
+          </div>
+        `;
+      });
+
+      // 2. 拦截 <smiles> (化学结构)
+      safeText = safeText.replace(/&lt;smiles&gt;(.*?)&lt;\/smiles&gt;/g, function(match, smilesCode) {
+        return `
+          <div class="molecule-board">
+            <div style="font-weight:bold; color:#0f766e; margin-bottom:8px;">🧪 化学结构实时渲染</div>
+            <canvas class="smiles-canvas" data-smiles="${smilesCode}"></canvas>
+            <div style="color: #64748b; font-size: 12px; margin-top: 8px;">SMILES: ${smilesCode}</div>
+          </div>
+        `;
+      });
+
+      // 3. 拦截 <plot> (数学交互函数)
+      safeText = safeText.replace(/&lt;plot&gt;(.*?)&lt;\/plot&gt;/g, function(match, functions) {
+        let plotId = 'plot-' + Math.random().toString(36).substr(2, 9);
+        return `
+          <div class="molecule-board" style="padding:10px;">
+            <div style="font-weight:bold; color:#0f766e; margin-bottom:8px;">📈 可交互数学函数 (支持鼠标拖拽缩放)</div>
+            <div id="${plotId}" class="math-plot" data-funcs="${esc(functions)}" style="display:flex; justify-content:center;"></div>
+          </div>
+        `;
+      });
+
+      return safeText;
+    }
+
+    // ==========================================
+    // 🚀 触发第三方引擎接管渲染
+    // ==========================================
+    function renderMathAndMolecules() {
+      // 1. KaTeX 渲染数学和化学式 (寻找 $$ 和 \ce)
+      if (window.renderMathInElement) {
+        renderMathInElement(document.getElementById('resources'), {
+          delimiters: [
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false},
+            {left: '\\(', right: '\\)', display: false},
+            {left: '\\[', right: '\\]', display: true}
+          ],
+          throwOnError: false
+        });
+      }
+      
+      // 2. SmilesDrawer 渲染有机化学分子
+      if (window.SmilesDrawer) {
+        let smilesDrawer = new SmilesDrawer.Drawer({ width: 400, height: 300, bondThickness: 1.5 });
+        document.querySelectorAll('.smiles-canvas').forEach(canvas => {
+          let smilesString = canvas.getAttribute('data-smiles');
+          SmilesDrawer.parse(smilesString, function(tree) {
+            smilesDrawer.draw(tree, canvas, 'light', false);
+          }, function(err) { console.error("分子绘制失败:", err); });
+        });
+      }
+
+      // 3. function-plot 渲染可交互数学坐标系
+      if (window.functionPlot) {
+        document.querySelectorAll('.math-plot').forEach(container => {
+          if(container.innerHTML !== "") return; 
+          let funcsStr = container.getAttribute('data-funcs');
+          // 允许多函数同时渲染，用逗号分隔
+          let dataArray = funcsStr.split(',').map(f => ({ fn: f.trim() }));
+          try {
+            functionPlot({
+              target: '#' + container.id,
+              width: 500,
+              height: 300,
+              grid: true,
+              data: dataArray
+            });
+          } catch (err) {
+            container.innerHTML = `<span style="color:red">函数解析错误: ${err.message}</span>`;
+          }
+        });
+      }
+    }
+
+    // ==========================================
+    // 流程控制器
+    // ==========================================
     async function runStudent(){
       document.body.classList.add('loading');
       try {
@@ -489,13 +641,17 @@ INDEX_HTML = r"""<!doctype html>
         </div>
       `).join('') || '<span class="muted">暂无画像原因。</span>';
 
+      // 核心：调用 formatContent 解析标签
       $('resources').innerHTML = data.resources.map(r => `
         <article class="resource">
           <h3>${esc(r.agent)} / ${esc(r.type)}</h3>
-          <pre>${esc(r.content)}</pre>
-          <div class="muted">证据：${esc((r.citations || []).join(', '))}</div>
+          <div class="content-box">${formatContent(r.content)}</div>
+          <div class="muted" style="margin-top: 10px;">证据：${esc((r.citations || []).join(', '))}</div>
         </article>
       `).join('');
+
+      // 核心：延迟100ms让DOM生效后，激活渲染引擎
+      setTimeout(renderMathAndMolecules, 100);
 
       const actions = data.strategy_plan?.actions || [];
       $('strategies').innerHTML = actions.map(a => `
@@ -505,6 +661,97 @@ INDEX_HTML = r"""<!doctype html>
           <div class="muted">触发原因：${esc(a.trigger)} · 时间：${esc(a.scheduled_after)}</div>
         </article>
       `).join('') || '<span class="muted">暂无策略。</span>';
+    }
+
+    // ==========================================
+    // 💡 终极展示：一键模拟数理化全能渲染
+    // ==========================================
+    function triggerAllSTEMDemo() {
+      const demoData = {
+        path: ["理科基础", "多模态可视化", "智能体排版"],
+        alignment: { passed: true },
+        learning_signal: { accuracy: 0.99 },
+        target: "理科可视化引擎验收",
+        profile: { causes: [] },
+        resources: [
+          {
+            agent: "理论教授 (Agent 5)",
+            type: "深度讲义 (物理篇)",
+            citations: ["基础物理学"],
+            content: `这道题我们首先进行受力分析。假设一个蓝色物块静止在粗糙的斜面上，它受到重力(G)向下，以及斜面的支持力(N)和摩擦力(f)。
+大模型在遇到物理题时，可以通过直接生成 SVG 代码来代替干巴巴的语言描述：
+
+<svg width="300" height="200" viewBox="0 0 300 200">
+  <polygon points="50,180 250,180 250,100" fill="#e2e8f0" stroke="#64748b" stroke-width="2"/>
+  <rect x="130" y="110" width="40" height="40" transform="rotate(22 150 130)" fill="#3b82f6" opacity="0.8"/>
+  <line x1="150" y1="130" x2="150" y2="190" stroke="#ef4444" stroke-width="3" />
+  <polygon points="145,185 155,185 150,195" fill="#ef4444" />
+  <text x="160" y="180" fill="#ef4444" font-weight="bold">G</text>
+  <line x1="150" y1="130" x2="135" y2="70" stroke="#22c55e" stroke-width="3" />
+  <polygon points="130,75 140,73 133,63" fill="#22c55e" />
+  <text x="115" y="70" fill="#22c55e" font-weight="bold">N</text>
+</svg>`
+          },
+          {
+            agent: "逻辑画师 (Agent 6)",
+            type: "数学公式推演 (数学篇)",
+            citations: ["微积分与代数"],
+            content: `在机器学习中，我们常常需要对比平滑的函数与产生过拟合抖动的函数。
+比如最简单的二次函数 $y=x^2$，和带有高频噪声的函数 $y=x^2 + \sin(8x)$。
+
+系统通过拦截特定的 \`<plot>\` 标签，可以直接召唤出一个可以**用鼠标拖拽和滚轮缩放**的坐标系：
+<plot>x^2, x^2 + sin(8*x)</plot>
+你可以把鼠标放上去，观察它是如何显示每个点的精确坐标的。`
+          },
+          {
+            agent: "极客助教 (Agent 7)",
+            type: "分子与方程式 (化学篇)",
+            citations: ["有机化学基础"],
+            content: `最后来看看化学能力。通过 KaTeX 的 mhchem 扩展，化学方程式的排版极其优雅（注意下标和反应条件）：
+$$ \\ce{C7H6O3 + C4H6O3 ->[H+] C9H8O4 + C2H4O2} $$
+
+纯文字往往无法传达有机物的立体结构。现在，只要大模型输出一行 SMILES 码，前端就能瞬间绘制出阿司匹林（Aspirin）的分子图谱：
+<smiles>CC(=O)OC1=CC=CC=C1C(=O)O</smiles>
+
+这一切，都完美地无缝嵌在了一个对话资源包中！`
+          }
+        ]
+      };
+      renderStudent(demoData);
+      setTimeout(() => {
+         $('resources').scrollIntoView({behavior:'smooth', block: 'start'});
+      }, 200);
+    }
+
+    // ==========================================
+    // 学术探索与后端数据拉取
+    // ==========================================
+    async function searchArxiv() {
+      const query = $('arxiv-query').value.trim();
+      if (!query) return;
+      $('arxiv-results').innerHTML = '<span class="muted">正在跨洋检索 arXiv 数据库...</span>';
+      try {
+        const res = await fetch(`/api/web/arxiv-search?query=${encodeURIComponent(query)}&max_results=3`);
+        const data = await res.json();
+        if (data.papers && data.papers.length > 0) {
+          $('arxiv-results').innerHTML = data.papers.map(p => `
+            <article class="resource" style="background:#f8fafc; border-left: 4px solid #2563eb; text-align: left;">
+              <h3 style="color:#1e293b; margin: 0 0 4px; font-size: 15px;">${esc(p.title)}</h3>
+              <div class="muted" style="font-size:12px; margin-bottom: 8px;">👨‍🔬 作者: ${esc(p.authors.join(', '))}</div>
+              <p style="font-size:13px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:10px; text-align: justify;">
+                ${esc(p.abstract)}
+              </p>
+              <a href="${esc(p.pdf_url)}" target="_blank" rel="noreferrer" style="color:#2563eb; background:#dbeafe; padding:6px 10px; border-radius:4px; font-size:12px; display:inline-block;">
+                📄 阅读 PDF 原文
+              </a>
+            </article>
+          `).join('');
+        } else {
+          $('arxiv-results').innerHTML = '<span class="muted">未找到相关论文。</span>';
+        }
+      } catch (e) {
+        $('arxiv-results').innerHTML = `<span style="color:var(--danger)">检索失败：请检查后端服务是否启动。(${e.message})</span>`;
+      }
     }
 
     async function loadTeacher(){

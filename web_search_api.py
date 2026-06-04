@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+import time
 from typing import Any
 from urllib.parse import urlparse
 
 import urllib.request
+import urllib.parse
+import urllib.error
 import xml.etree.ElementTree as ET
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,7 +19,7 @@ from app.database import DBWebSearchHistory, get_db
 from document_parser import chunk_document
 from rag_engine import hybrid_rag
 from swarm_factory import build_swarm_from_headers
-from models import Evidence, EvidenceModality  # 补充导入
+from models import Evidence, EvidenceModality
 
 router = APIRouter(prefix="/api/web", tags=["web_search"])
 
@@ -289,15 +292,40 @@ async def get_search_history(
 
 
 def search_arxiv(query: str, max_results: int = 3) -> tuple[Evidence, ...]:
-    """内部函数：并发调用的 arXiv 学术检索接口"""
+    """内部函数：并发调用的 arXiv 学术检索接口（带自动重试抗压机制）"""
     safe_query = urllib.parse.quote(query)
     url = f"http://export.arxiv.org/api/query?search_query=all:{safe_query}&max_results={max_results}"
     
+    xml_data = None
+    max_retries = 3  # 最多重试 3 次
+    
+    # 带有指数退避的重试循环
+    for attempt in range(max_retries):
+        try:
+            # 超时放宽到 10 秒，给 arXiv 喘息的时间
+            with urllib.request.urlopen(url, timeout=10.0) as response:
+                xml_data = response.read()
+            break  # 成功拿到数据，跳出循环
+            
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                sleep_time = 2 ** attempt  # 指数退避：1秒 -> 2秒 -> 4秒
+                print(f"  [arXiv] 触发官方限流(429)，等待 {sleep_time} 秒后进行第 {attempt+1} 次重试...")
+                time.sleep(sleep_time)
+            else:
+                print(f"  [arXiv] HTTP 错误: {e}")
+                break
+        except Exception as e:
+            print(f"  [arXiv] 网络超时或错误 ({e})，正在进行第 {attempt+1} 次重试...")
+            time.sleep(1.5)  # 普通超时等 1.5 秒重试
+            
+    # 如果重试 3 次还是失败，优雅降级，返回空结果
+    if not xml_data:
+        print("  [arXiv] 多次尝试失败，放弃本次学术检索，继续主线任务。")
+        return tuple()
+
     results = []
     try:
-        with urllib.request.urlopen(url, timeout=5.0) as response:
-            xml_data = response.read()
-            
         root = ET.fromstring(xml_data)
         namespace = {'atom': 'http://www.w3.org/2005/Atom'}
         
@@ -335,7 +363,7 @@ def search_arxiv(query: str, max_results: int = 3) -> tuple[Evidence, ...]:
             )
             results.append(evidence)
     except Exception as e:
-        print(f"  [arXiv] API 调用失败或超时: {e}")
+        print(f"  [arXiv] XML 数据解析失败: {e}")
         
     return tuple(results)
 

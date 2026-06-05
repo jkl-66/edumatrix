@@ -94,6 +94,7 @@ def _profile_card(profile: StudentProfile) -> dict[str, Any]:
         "dimensions": dimensions,
         "concept_mastery": profile.concept_mastery,
         "report": profile.state_report(),
+        "favorites": getattr(profile, "favorites", []) # 👇 修复点：确保后端把收藏夹传给前端
     }
 
 
@@ -193,6 +194,22 @@ class EduMatrixHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        
+        # 👇 新增：处理前端发来的收藏请求 👇
+        if path == "/api/favorite":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8")
+            payload = json.loads(raw)
+            stu_id = payload.get("student_id", "demo-student")
+            profile = swarm.profile_store.get(stu_id)
+            if profile:
+                profile.add_favorite(payload["target"], payload["resource_type"], payload["content"])
+                # 注意：如果你用了 CRUD 保存到 SQLite，可以在这里加一句 save_student_profile(db, profile)
+            self._send_json({"status": "ok", "message": "已加入收藏夹"})
+            return
+        # 👆 新增结束 👆
+
+        # 下面是你原有的 process 逻辑...
         if path != "/api/process":
             self.send_error(404, "Not Found")
             return
@@ -446,6 +463,29 @@ INDEX_HTML = r"""<!doctype html>
       </div>
     </section>
 
+
+    <section class="grid" style="margin-top:18px;">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>📊 知识点掌握进度</h2>
+          <span class="muted">根据对话自动量化</span>
+        </div>
+        <div class="panel-body" id="progress-panel">
+          <span class="muted">提问后将自动更新进度...</span>
+        </div>
+      </div>
+      
+      <div class="panel">
+        <div class="panel-head">
+          <h2>⭐ 我的收藏夹</h2>
+          <span class="muted">沉淀核心讲义与代码</span>
+        </div>
+        <div class="panel-body" id="favorites-panel" style="max-height: 300px; overflow-y: auto;">
+          <span class="muted">暂无收藏。</span>
+        </div>
+      </div>
+    </section>
+
     <section class="panel" style="margin-top:18px;">
       <div class="panel-head">
         <h2>多智能体资源包</h2>
@@ -624,44 +664,125 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
-    function renderStudent(data){
-      $('target').textContent = data.path.join(' -> ');
-      $('align').textContent = data.alignment.passed ? '通过' : '需回滚';
-      $('align').style.color = data.alignment.passed ? '#15803d' : '#b91c1c';
-      $('acc').textContent = Number(data.learning_signal.accuracy).toFixed(2);
-      $('targetKpi').textContent = data.target;
-      const causes = data.profile.causes || [];
-      $('causes').innerHTML = causes.map(c => `
-        <div class="cause">
-          <div style="display:flex;justify-content:space-between;gap:10px;">
-            <strong>${esc(c.label)}</strong><span>${Number(c.percentage).toFixed(1)}%</span>
-          </div>
-          <div class="bar"><span style="width:${Number(c.percentage)}%"></span></div>
-          <div class="muted">${esc((c.evidence_fragments || [])[0] || '暂无证据')}</div>
-        </div>
-      `).join('') || '<span class="muted">暂无画像原因。</span>';
+function renderStudent(data) {
+  $('target').textContent = data.path.join(' -> ');
+  $('align').textContent = data.alignment.passed ? '通过' : '需回滚';
+  $('align').style.color = data.alignment.passed ? '#15803d' : '#b91c1c';
+  $('acc').textContent = Number(data.learning_signal.accuracy).toFixed(2);
+  $('targetKpi').textContent = data.target;
+  const causes = data.profile.causes || [];
+  $('causes').innerHTML = causes.map(c => `
+    <div class="cause">
+      <div style="display:flex;justify-content:space-between;gap:10px;">
+        <strong>${esc(c.label)}</strong><span>${Number(c.percentage).toFixed(1)}%</span>
+      </div>
+      <div class="bar"><span style="width:${Number(c.percentage)}%"></span></div>
+      <div class="muted">${esc((c.evidence_fragments || [])[0] || '暂无证据')}</div>
+    </div>
+  `).join('') || '<span class="muted">暂无画像原因。</span>';
 
-      // 核心：调用 formatContent 解析标签
-      $('resources').innerHTML = data.resources.map(r => `
-        <article class="resource">
-          <h3>${esc(r.agent)} / ${esc(r.type)}</h3>
-          <div class="content-box">${formatContent(r.content)}</div>
-          <div class="muted" style="margin-top: 10px;">证据：${esc((r.citations || []).join(', '))}</div>
-        </article>
-      `).join('');
+  $('resources').innerHTML = data.resources.map(r => `
+    <article class="resource">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>${esc(r.agent)} / ${esc(r.type)} </h3>
+        <button class="secondary" style="padding: 4px 10px; font-size: 12px; color: #b45309; border-color: #f59e0b; background: #fffbeb;"
+                onclick="addFav('${esc(data.target)}', '${esc(r.type)}', \`${esc(r.content).replace(/`/g, "'")}\`, this)">
+          ⭐ 收藏
+        </button>
+      </div>
+      <div class="content-box">${formatContent(r.content)} </div>
+      <div class="muted" style="margin-top: 10px;">证据：${esc((r.citations || []).join(', '))} </div>
+    </article>
+  `).join('');
 
-      // 核心：延迟100ms让DOM生效后，激活渲染引擎
-      setTimeout(renderMathAndMolecules, 100);
+  setTimeout(renderMathAndMolecules, 100);
 
-      const actions = data.strategy_plan?.actions || [];
-      $('strategies').innerHTML = actions.map(a => `
-        <article class="resource">
-          <h3>${esc(a.title)}</h3>
-          <p>${esc(a.description)}</p>
-          <div class="muted">触发原因：${esc(a.trigger)} · 时间：${esc(a.scheduled_after)}</div>
-        </article>
-      `).join('') || '<span class="muted">暂无策略。</span>';
+  const actions = data.strategy_plan?.actions || [];
+  $('strategies').innerHTML = actions.map(a => `
+    <article class="resource">
+      <h3>${esc(a.title)} </h3>
+      <p>${esc(a.description)} </p>
+      <div class="muted">触发原因：${esc(a.trigger)} · 时间：${esc(a.scheduled_after)} </div>
+    </article>
+  `).join('') || '<span class="muted">暂无策略。</span>';
+  
+  // 👇 核心修复点：在这里强制刷新进度条和收藏夹 👇
+  renderProgressAndFavs(data.profile);
+}
+    
+    // 👇 新增：渲染进度条和收藏夹逻辑 👇 
+    function renderProgressAndFavs(profile) { 
+      // 1. 渲染进度条 (读取现有的 concept_mastery) 
+      if (profile.concept_mastery && Object.keys(profile.concept_mastery).length > 0 ) { 
+        $('progress-panel').innerHTML = Object.entries(profile.concept_mastery).map(([concept, score]) =>  { 
+          let pct = (score * 100).toFixed(0 ); 
+          let color = score > 0.7 ? '#15803d' : (score > 0.4 ? '#0f766e' : '#b45309' ); 
+          return ` 
+            <div style="margin-bottom: 12px;"> 
+              <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px;"> 
+                <strong>${esc(concept)}</strong> <span style="color:${color};font-weight:bold;">${pct} %</span> 
+              </div> 
+              <div class="bar" style="height:8px; background:#e2e8f0;"><span style="width:${pct}%; background:${color} ;"></span></div> 
+            </div>` ; 
+        }).join('' ); 
+      } 
+ 
+      // 2. 渲染收藏夹 
+      if (profile.favorites && profile.favorites.length > 0 ) { 
+        // 倒序展示，最新的在上面 
+        let  favs = [...profile.favorites].reverse(); 
+        $('favorites-panel').innerHTML = favs.map(f => ` 
+          <div style="border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 10px;"> 
+            <div style="font-size: 14px; font-weight: bold; color: #0f766e;">📌 ${esc(f.target)} - ${esc(f.resource_type)} </div> 
+            <div class="muted" style="font-size: 12px; margin-top: 4px; line-height:1.4;">${esc(f.content_snippet)} </div> 
+          </div> 
+        `).join('' ); 
+      } else  { 
+        $('favorites-panel').innerHTML = '<span class="muted">暂无收藏。</span>' ; 
+      } 
+    } 
+ 
+    // 处理点击收藏 
+    // 处理点击收藏并立刻刷新界面 
+    async function addFav(target, type, content, btn) { 
+      // 1. 改变按钮状态 
+      btn.textContent = "✅ 已收藏" ; 
+      btn.style.background = "#dcfce7" ; 
+      btn.style.color = "#15803d" ; 
+      btn.disabled = true ; 
+      
+      // 2. 发送数据给后端 
+      await fetch('/api/favorite' , { 
+        method: 'POST' , 
+        headers: {'Content-Type':'application/json' }, 
+        body: JSON .stringify({ 
+          student_id: $('student' ).value, 
+          target : target, 
+          resource_type : type, 
+          content : content 
+        }) 
+      }); 
+
+      // 3. 👇 核心修复：立刻在前端页面上画出这个收藏 👇 
+      let favPanel = $('favorites-panel' ); 
+      // 如果当前是“暂无收藏”，就把它清空 
+      if (favPanel.innerHTML.includes('暂无收藏' )) { 
+        favPanel.innerHTML = '' ; 
+      } 
+      
+      // 生成摘要（前120个字） 
+      let snippet = content.length > 120 ? content.substring(0, 120) + "..."  : content; 
+      
+      // 拼接 HTML 并插入到列表的最前面 
+      let newFavHtml = ` 
+        <div style="border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 10px; animation: fadeIn 0.5s;"> 
+          <div style="font-size: 14px; font-weight: bold; color: #0f766e;">📌 ${esc(target)} - ${esc(type)} </div> 
+          <div class="muted" style="font-size: 12px; margin-top: 4px; line-height:1.4;">${esc(snippet)} </div> 
+        </div> 
+      ` ; 
+      favPanel.insertAdjacentHTML('afterbegin' , newFavHtml); 
     }
+    // 👆 新增结束 👆
 
     // ==========================================
     // 💡 终极展示：一键模拟数理化全能渲染

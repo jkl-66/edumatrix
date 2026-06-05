@@ -270,6 +270,18 @@ class StudentProfile:
     concept_mastery: dict[str, float] = field(default_factory=dict)
     misconception_patterns: dict[str, float] = field(default_factory=dict)
     knowledge_traces: dict[str, KnowledgeTrace] = field(default_factory=dict)
+    favorites: list[dict] = field(default_factory=list)
+
+    def add_favorite(self, target: str, resource_type: str, content: str) -> None:
+        import time
+        self.favorites.append({
+            "id": f"fav_{int(time.time())}_{len(self.favorites)}",
+            "target": target,
+            "resource_type": resource_type,
+            # 只存前 120 个字作为摘要展示，避免撑爆数据库
+            "content_snippet": content[:120] + "...",
+            "timestamp": time.time()
+        })
 
     def update_from_message(self, message: str) -> None:
         self.history.append(message)

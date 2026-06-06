@@ -55,27 +55,50 @@ def _build_conversation_memory(profile: StudentProfile, max_turns: int = 6) -> s
 
 
 class ProfileProbeAgent:
-    def __init__(self, llm: AsyncLLMBackend = DEFAULT_ASYNC_LLM) -> None:
+    def __init__(self, llm: AsyncLLMBackend = DEFAULT_ASYNC_LLM):
         self.llm = llm
-
-    def update(self, profile: StudentProfile, message: str) -> StudentProfile:
-        profile.update_from_message(message)
-        return profile
 
     async def async_update(self, profile: StudentProfile, message: str) -> StudentProfile:
         profile.update_from_message(message)
-        extracted = await self._async_extract_with_llm(message)
+        
+        # 获取当前画像中已有的知识点列表
+        existing_concepts = list(profile.concept_mastery.keys())
+        
+        # 👇 核心升级：提取最近的 3 条历史对话记录（排除当前最新的一条）
+        recent_history = profile.history[-4:-1] if len(profile.history) > 1 else []
+        history_context = " | ".join([h.replace('\n', '')[:100] for h in recent_history])
+        
+        # 将知识点列表和【历史上下文】一起传给大模型
+        extracted = await self._async_extract_with_llm(message, existing_concepts, history_context)
         profile.apply_llm_features(extracted, source_text=message)
         return profile
 
-    async def _async_extract_with_llm(self, message: str) -> dict:
-        system_prompt = (
-            "你是 EduMatrix 的画像抽取器，只能输出 JSON。"
-            "字段包括 course, major, goals, weak_points, preferences, learning_state_causes。"
+    async def _async_extract_with_llm(self, message: str, existing_concepts: list[str] = None, history_context: str = "") -> dict:
+        import re
+        import json
+        
+        # 将已有的知识点拼接成字符串，如果为空就写“暂无”
+        existing_keys_str = ", ".join(existing_concepts) if existing_concepts else "暂无"
+        
+        system_prompt = ( 
+            "你是 EduMatrix 的画像抽取器，只能输出 JSON。\n" 
+            "字段包括 course, major, goals, weak_points(必须是字符串数组), preferences, learning_state_causes, mastery_updates。\n" 
             "learning_state_causes 只能使用 prerequisite_gap, misconception, cognitive_load, "
-            "strategy_gap, metacognitive_mismatch, affective_barrier, interaction_mismatch。"
+            "strategy_gap, metacognitive_mismatch, affective_barrier, interaction_mismatch。\n" 
+            "【核心任务】：深入分析学生的语义倾向和情绪，并在 mastery_updates 中打分（正值代表掌握，负值代表受挫）。\n" 
+            "⚠️ 【极其重要的实体归一化与指代消解规则】：\n" 
+            f"1. 当前系统已追踪的字典为：[{existing_keys_str}]\n" 
+            "2. 🚨【上下文指代消解】：如果学生说“应用场景还是不懂”、“这个怎么算”、“代码怎么写”等带有指代或附属属性的话，你必须结合【历史对话上下文】推断出他们指代的具体是哪个【核心知识点】！\n"
+            "3. 绝对禁止提取出“应用场景”、“这个概念”、“它的代码”等无效附属词汇，必须强行把打分归一化到对应的核心名词上（例如归一化为 \"逻辑回归\"）。\n" 
+            "4. weak_points 和 mastery_updates 里的实体，必须是最精简的名词。\n" 
+            "5. 优先从已追踪字典中选择，只有遇到真正的全新专业名词时，再创建新的精简名词。\n" 
+            "示例输出格式：{\"weak_points\": [\"逻辑回归\", \"Transformer\"], \"mastery_updates\": {\"逻辑回归\": 0.35, \"Transformer\": -0.2}}" 
         )
-        user_prompt = f"固定课程为机器学习导论。请从学生话语中抽取画像特征：{message}"
+        
+        # 👇 把历史记录放进用户的提问前缀里，让大模型联系上下文
+        context_str = f"【最近历史上下文】：{history_context}\n" if history_context else ""
+        user_prompt = f"{context_str}固定课程为机器学习导论。请结合上下文，从学生最新话语中抽取画像特征：{message}"
+        
         try:
             raw = await self.llm.generate(system_prompt, user_prompt, role="画像抽取器")
             match = re.search(r"\{.*\}", raw, flags=re.S)

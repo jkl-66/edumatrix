@@ -278,7 +278,6 @@ class StudentProfile:
             "id": f"fav_{int(time.time())}_{len(self.favorites)}",
             "target": target,
             "resource_type": resource_type,
-            # 只存前 120 个字作为摘要展示，避免撑爆数据库
             "content_snippet": content[:120] + "...",
             "timestamp": time.time()
         })
@@ -350,13 +349,20 @@ class StudentProfile:
             goal_text = str(goal).strip()
             if goal_text and goal_text not in self.learning_goals:
                 self.learning_goals.append(goal_text)
-        for point in payload.get("weak_points", []) or []:
+                
+        # 👇 强大的防御装甲：拦截大模型输出的坏数据
+        raw_weak_points = payload.get("weak_points", [])
+        if isinstance(raw_weak_points, str):
+            raw_weak_points = [raw_weak_points]
+
+        for point in raw_weak_points or []:
             point_text = str(point).strip()
             if point_text and point_text not in self.weak_points:
                 self.weak_points.append(point_text)
             if point_text:
                 self.concept_mastery.setdefault(point_text, 0.44)
                 self.knowledge_traces.setdefault(point_text, KnowledgeTrace(concept=point_text, mastery=0.44))
+                
         feature_values = {
             str(item).strip()
             for item in (payload.get("learning_state_causes", []) or [])
@@ -376,6 +382,24 @@ class StudentProfile:
             preference_text = str(preference).strip()
             if preference_text and preference_text not in self.interaction_preferences:
                 self.interaction_preferences.append(preference_text)
+        
+        # 👇 接收大模型的语义意图打分
+        mastery_updates = payload.get("mastery_updates", {})
+        if isinstance(mastery_updates, dict):
+            for concept, delta_str in mastery_updates.items():
+                concept_text = str(concept).strip()
+                try:
+                    delta = float(delta_str)
+                    current = self.concept_mastery.get(concept_text, 0.48)
+                    self.concept_mastery[concept_text] = _clamp(current + delta)
+                    
+                    self.knowledge_traces.setdefault(
+                        concept_text,
+                        KnowledgeTrace(concept=concept_text, mastery=self.concept_mastery[concept_text])
+                    )
+                except (ValueError, TypeError):
+                    continue
+                    
         self._refresh_dynamic_profile()
 
     def profile_prompt(self) -> str:
@@ -473,22 +497,11 @@ class StudentProfile:
                 self.interaction_preferences.append(preference)
 
     def _update_concepts(self, message: str, features: set[str]) -> None:
+        # 为了演示倍速，这里的增减分被调高了
         known_points = ("池化层", "最大池化", "平均池化", "卷积核", "反向传播", "链式法则", "梯度下降", "特征图")
         known_points += (
-            "机器学习",
-            "监督学习",
-            "数据预处理",
-            "特征工程",
-            "线性回归",
-            "逻辑回归",
-            "决策树",
-            "支持向量机",
-            "朴素贝叶斯",
-            "模型评估",
-            "混淆矩阵",
-            "过拟合",
-            "正则化",
-            "交叉验证",
+            "机器学习", "监督学习", "数据预处理", "特征工程", "线性回归", "逻辑回归", 
+            "决策树", "支持向量机", "朴素贝叶斯", "模型评估", "混淆矩阵", "过拟合", "正则化", "交叉验证"
         )
         for point in known_points:
             if point in message:
@@ -503,9 +516,9 @@ class StudentProfile:
                     self.weak_points.append(point)
                 current = self.concept_mastery.get(point, 0.48)
                 if any(word in message for word in ("懂了", "会了", "明白了", "解决了")):
-                    self.concept_mastery[point] = _clamp(current + 0.12)
+                    self.concept_mastery[point] = _clamp(current + 0.35)
                 elif any(word in message for word in ("不会", "看不懂", "不理解", "混", "错")):
-                    self.concept_mastery[point] = _clamp(current - 0.10)
+                    self.concept_mastery[point] = _clamp(current - 0.25)
                 else:
                     self.concept_mastery.setdefault(point, current)
                 self.knowledge_traces.setdefault(point, KnowledgeTrace(concept=point, mastery=self.concept_mastery.get(point, current)))

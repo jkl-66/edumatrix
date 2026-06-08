@@ -10,13 +10,11 @@ from agent_swarm import EduMatrixSwarm
 from models import DIMENSION_LABELS, StudentProfile
 from observability import TELEMETRY
 
-
+# 👇 这里就是你刚刚丢失的 HOST 和 PORT 变量
 HOST = "127.0.0.1"
 PORT = 8000
 
-
 swarm = EduMatrixSwarm()
-
 
 MACHINE_LEARNING_DATASETS = [
     {
@@ -68,7 +66,8 @@ def _seed_demo_class() -> None:
     }
     for student_id, message in samples.items():
         profile = swarm.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
-        swarm.profile_probe.update(profile, message)
+        if hasattr(swarm.profile_probe, "update"):
+            swarm.profile_probe.update(profile, message)
 
 
 def _profile_card(profile: StudentProfile) -> dict[str, Any]:
@@ -94,7 +93,7 @@ def _profile_card(profile: StudentProfile) -> dict[str, Any]:
         "dimensions": dimensions,
         "concept_mastery": profile.concept_mastery,
         "report": profile.state_report(),
-        "favorites": getattr(profile, "favorites", []) # 👇 修复点：确保后端把收藏夹传给前端
+        "favorites": getattr(profile, "favorites", [])
     }
 
 
@@ -195,21 +194,38 @@ class EduMatrixHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         
-        # 👇 新增：处理前端发来的收藏请求 👇
+        # 处理收藏夹逻辑
         if path == "/api/favorite":
             length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8")
-            payload = json.loads(raw)
-            stu_id = payload.get("student_id", "demo-student")
-            profile = swarm.profile_store.get(stu_id)
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            student_id = str(payload.get("student_id") or "demo-student").strip()
+            profile = swarm.profile_store.get(student_id)
             if profile:
-                profile.add_favorite(payload["target"], payload["resource_type"], payload["content"])
-                # 注意：如果你用了 CRUD 保存到 SQLite，可以在这里加一句 save_student_profile(db, profile)
-            self._send_json({"status": "ok", "message": "已加入收藏夹"})
+                profile.add_favorite(payload["target"], payload["resource_type"], payload["content"], payload.get("note", ""), payload.get("fav_id", ""))
+            self._send_json({"status": "ok", "message": "已成功加入收藏夹"})
             return
-        # 👆 新增结束 👆
 
-        # 下面是你原有的 process 逻辑...
+        if path == "/api/favorite/delete":
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            student_id = str(payload.get("student_id") or "demo-student").strip()
+            profile = swarm.profile_store.get(student_id)
+            if profile:
+                profile.remove_favorite(payload["id"])
+            self._send_json({"status": "ok", "message": "删除成功"})
+            return
+
+        if path == "/api/favorite/note":
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            student_id = str(payload.get("student_id") or "demo-student").strip()
+            profile = swarm.profile_store.get(student_id)
+            if profile:
+                profile.update_favorite_note(payload["id"], payload["note"])
+            self._send_json({"status": "ok", "message": "笔记保存成功"})
+            return
+
+        # 核心多智能体流程处理
         if path != "/api/process":
             self.send_error(404, "Not Found")
             return
@@ -259,9 +275,7 @@ INDEX_HTML = r"""<!doctype html>
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/mhchem.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
-
   <script src="https://unpkg.com/smiles-drawer@1.0.10/dist/smiles-drawer.min.js"></script>
-
   <script src="https://unpkg.com/d3@3/d3.min.js"></script>
   <script src="https://unpkg.com/function-plot@1/dist/function-plot.js"></script>
 
@@ -359,7 +373,6 @@ INDEX_HTML = r"""<!doctype html>
     }
     .resource h3 { margin: 0 0 8px; font-size: 16px; color: #0f766e; }
     
-    /* 专为文本与可视化图表混合排版设计的容器 */
     .content-box { 
       white-space: pre-wrap; 
       word-break: break-word; 
@@ -373,7 +386,6 @@ INDEX_HTML = r"""<!doctype html>
       line-height: 1.6;
     }
     
-    /* 专为渲染引擎提供的白色小黑板背景 */
     .molecule-board {
       background: #ffffff;
       color: #17202a;
@@ -394,6 +406,12 @@ INDEX_HTML = r"""<!doctype html>
     .dataset { border: 1px solid var(--line); border-radius: 8px; padding: 13px; background: #fbfdff; }
     a { color: #1d4ed8; text-decoration: none; font-weight: 700; }
     .loading { opacity: .72; pointer-events: none; }
+    
+    .scrollable-panel::-webkit-scrollbar { width: 6px; }
+    .scrollable-panel::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+    .scrollable-panel::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .scrollable-panel::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
     @media (max-width: 960px) {
       .grid, .row, .dataset-list, .kpis { grid-template-columns: 1fr; }
       header { min-height: 44vh; }
@@ -431,7 +449,7 @@ INDEX_HTML = r"""<!doctype html>
               <select id="preset" onchange="usePreset()">
                 <option value="">选择一个赛题演示场景</option>
                 <option>我是计算机专业，期末要考机器学习。逻辑回归和混淆矩阵总混，accuracy 很高但 recall 低我不知道怎么判断，希望用图和例子一步步讲。</option>
-                <option>我线性回归能看懂公式，但一到项目就不会做数据预处理，只会照着答案改代码，想要代码实操和提示。</option>
+                <option>我线性回归能看懂公式，但一到项目就不会做数据预处理，只会照着答案改代码，想要代码实操 and 提示。</option>
                 <option>我过拟合和正则化分不清，训练集分数高就以为模型好，题干长的时候会漏掉验证集条件。</option>
               </select>
             </div>
@@ -441,7 +459,6 @@ INDEX_HTML = r"""<!doctype html>
           <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
             <button class="primary" style="background:#0f766e;color:white" onclick="runStudent()">生成个性化资源</button>
             <button class="tab" onclick="loadTeacher()">刷新教师端</button>
-            
             <button class="secondary" style="background:#dc2626;color:white;border:none;font-weight:bold;" onclick="triggerAllSTEMDemo()">🚀 一键测试数理化全能渲染</button>
           </div>
         </div>
@@ -463,7 +480,6 @@ INDEX_HTML = r"""<!doctype html>
       </div>
     </section>
 
-
     <section class="grid" style="margin-top:18px;">
       <div class="panel">
         <div class="panel-head">
@@ -478,9 +494,9 @@ INDEX_HTML = r"""<!doctype html>
       <div class="panel">
         <div class="panel-head">
           <h2>⭐ 我的收藏夹</h2>
-          <span class="muted">沉淀核心讲义与代码</span>
+          <span class="muted">点击标题沉浸阅读 / 支持滚动浏览</span>
         </div>
-        <div class="panel-body" id="favorites-panel" style="max-height: 300px; overflow-y: auto;">
+        <div class="panel-body scrollable-panel" id="favorites-panel" style="max-height: 480px; overflow-y: auto; overflow-x: hidden;">
           <span class="muted">暂无收藏。</span>
         </div>
       </div>
@@ -489,7 +505,7 @@ INDEX_HTML = r"""<!doctype html>
     <section class="panel" style="margin-top:18px;">
       <div class="panel-head">
         <h2>多智能体资源包</h2>
-        <span class="muted">智能识别拦截 &lt;smiles&gt;, &lt;plot&gt;, &lt;svg&gt; 等大模型专属渲染标签</span>
+        <span class="muted">智能排版渲染引擎加载区</span>
       </div>
       <div class="panel-body" id="resources">
         <span class="muted">点击上方按钮生成，或点击【一键测试数理化全能渲染】体验震撼效果。</span>
@@ -546,62 +562,84 @@ INDEX_HTML = r"""<!doctype html>
     </section>
   </main>
 
+  <div id="fav-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; justify-content:center; align-items:center;">
+    <div style="background:var(--panel); width:85%; max-width:900px; max-height:85vh; border-radius:12px; display:flex; flex-direction:column; overflow:hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.3); border:1px solid var(--line);">
+      <div style="padding:16px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; background:white;">
+        <h3 id="fav-modal-title" style="margin:0; color:#0f766e; font-size:18px;"></h3>
+        <button onclick="closeFavModal()" style="background:transparent; border:none; font-size:24px; cursor:pointer; color:var(--muted);">&times;</button>
+      </div>
+      <div id="fav-modal-content" class="content-box scrollable-panel" style="padding:24px; overflow-y:auto; flex:1; background:#0f172a; color:#e2e8f0; font-size:15px; border-radius:0;"></div>
+    </div>
+  </div>
+
   <script>
     const $ = (id) => document.getElementById(id);
     function scrollToApp(){ $('app').scrollIntoView({behavior:'smooth'}); }
     function usePreset(){ if ($('preset').value) $('message').value = $('preset').value; }
     function esc(s){ return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
 
-    // ==========================================
-    // 🧠 核心：理科全能标签解析拦截器
-    // ==========================================
+    window.currentFavs = []; 
+    window.lastRealProfile = null;
+
+    function triggerAllSTEMDemo() {
+      const demoData = {
+        path: ["理科基础", "多模态可视化", "智能体排版"],
+        alignment: { passed: true },
+        learning_signal: { accuracy: 0.99 },
+        target: "理科可视化引擎验收",
+        profile: { 
+            causes: [], 
+            concept_mastery: window.lastRealProfile ? window.lastRealProfile.concept_mastery : {}, 
+            favorites: window.currentFavs || [] 
+        },
+        resources: [
+          {
+            agent: "理论教授 (Agent 5)",
+            type: "深度讲义 (物理篇)",
+            citations: ["基础物理学"],
+            content: `这道题我们首先进行受力分析。假设一个蓝色物块静止在粗糙的斜面上，它受到重力(G)向下，以及斜面的支持力(N)和摩擦力(f)。\n大模型在遇到物理题时，可以通过直接生成 SVG 代码来代替干巴巴的语言描述：\n\n<svg width="300" height="200" viewBox="0 0 300 200">\n  <polygon points="50,180 250,180 250,100" fill="#e2e8f0" stroke="#64748b" stroke-width="2"/>\n  <rect x="130" y="110" width="40" height="40" transform="rotate(22 150 130)" fill="#3b82f6" opacity="0.8"/>\n  <line x1="150" y1="130" x2="150" y2="190" stroke="#ef4444" stroke-width="3" />\n  <polygon points="145,185 155,185 150,195" fill="#ef4444" />\n  <text x="160" y="180" fill="#ef4444" font-weight="bold">G</text>\n  <line x1="150" y1="130" x2="135" y2="70" stroke="#22c55e" stroke-width="3" />\n  <polygon points="130,75 140,73 133,63" fill="#22c55e" />\n  <text x="115" y="70" fill="#22c55e" font-weight="bold">N</text>\n</svg>`
+          },
+          {
+            agent: "逻辑画师 (Agent 6)",
+            type: "数学公式推演 (数学篇)",
+            citations: ["微积分与代数"],
+            content: `在机器学习中，我们常常需要对比平滑的函数与产生过拟合抖动的函数。\n比如最简单的二次函数 $y=x^2$，和带有高频噪声的函数 $y=x^2 + \\sin(8x)$。\n\n系统通过拦截特定的 \`<plot>\` 标签，可以直接召唤出一个可以**用鼠标拖拽和滚轮缩放**的坐标系：\n<plot>x^2, x^2 + sin(8*x)</plot>\n你可以把鼠标放上去，观察它是如何显示每个点的精确坐标的。`
+          },
+          {
+            agent: "极客助教 (Agent 7)",
+            type: "分子与方程式 (化学篇)",
+            citations: ["有机化学基础"],
+            content: `最后来看看化学能力。通过 KaTeX 的 mhchem 扩展，化学方程式的排版极其优雅（注意下标和反应条件）：\n$$ \\ce{C7H6O3 + C4H6O3 ->[H+] C9H8O4 + C2H4O2} $$\n\n纯文字往往无法传达有机物的立体结构。现在，只要大模型输出一行 SMILES 码，前端就能瞬间绘制出阿司匹林（Aspirin）的分子图谱：\n<smiles>CC(=O)OC1=CC=CC=C1C(=O)O</smiles>\n\n这一切，都完美地无缝嵌在了一个对话资源包中！`
+          }
+        ]
+      };
+      renderStudent(demoData);
+      setTimeout(() => {
+         document.getElementById('resources').scrollIntoView({behavior:'smooth', block: 'start'});
+      }, 200);
+    }
+
     function formatContent(text) {
       let safeText = esc(text);
-
-      // 1. 拦截 SVG (物理图解)，将转义后的标签还原
       safeText = safeText.replace(/&lt;svg([\s\S]*?)&lt;\/svg&gt;/g, function(match, inner) {
         let svgCode = "<svg" + inner + "</svg>";
         svgCode = svgCode.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&amp;/g, '&');
-        return `
-          <div class="molecule-board" style="background:#f1f5f9;">
-            <div style="font-weight:bold; color:#0f766e; margin-bottom:8px;">📐 物理/几何矢量分析图</div>
-            ${svgCode}
-          </div>
-        `;
+        return `<div class="molecule-board" style="background:#f1f5f9;"><div style="font-weight:bold; color:#0f766e; margin-bottom:8px;">📐 物理/几何矢量分析图</div>${svgCode}</div>`;
       });
-
-      // 2. 拦截 <smiles> (化学结构)
       safeText = safeText.replace(/&lt;smiles&gt;(.*?)&lt;\/smiles&gt;/g, function(match, smilesCode) {
-        return `
-          <div class="molecule-board">
-            <div style="font-weight:bold; color:#0f766e; margin-bottom:8px;">🧪 化学结构实时渲染</div>
-            <canvas class="smiles-canvas" data-smiles="${smilesCode}"></canvas>
-            <div style="color: #64748b; font-size: 12px; margin-top: 8px;">SMILES: ${smilesCode}</div>
-          </div>
-        `;
+        return `<div class="molecule-board"><div style="font-weight:bold; color:#0f766e; margin-bottom:8px;">🧪 化学结构实时渲染</div><canvas class="smiles-canvas" data-smiles="${smilesCode}"></canvas><div style="color: #64748b; font-size: 12px; margin-top: 8px;">SMILES: ${smilesCode}</div></div>`;
       });
-
-      // 3. 拦截 <plot> (数学交互函数)
       safeText = safeText.replace(/&lt;plot&gt;(.*?)&lt;\/plot&gt;/g, function(match, functions) {
         let plotId = 'plot-' + Math.random().toString(36).substr(2, 9);
-        return `
-          <div class="molecule-board" style="padding:10px;">
-            <div style="font-weight:bold; color:#0f766e; margin-bottom:8px;">📈 可交互数学函数 (支持鼠标拖拽缩放)</div>
-            <div id="${plotId}" class="math-plot" data-funcs="${esc(functions)}" style="display:flex; justify-content:center;"></div>
-          </div>
-        `;
+        let rawFuncs = functions.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#039;/g, "'");
+        return `<div class="molecule-board" style="padding:10px;"><div style="font-weight:bold; color:#0f766e; margin-bottom:8px;">📈 可交互数学函数</div><div id="${plotId}" class="math-plot" data-funcs="${esc(rawFuncs)}" style="display:flex; justify-content:center;"></div></div>`;
       });
-
       return safeText;
     }
 
-    // ==========================================
-    // 🚀 触发第三方引擎接管渲染
-    // ==========================================
     function renderMathAndMolecules() {
-      // 1. KaTeX 渲染数学和化学式 (寻找 $$ 和 \ce)
       if (window.renderMathInElement) {
-        renderMathInElement(document.getElementById('resources'), {
+        renderMathInElement(document.body, {
           delimiters: [
             {left: '$$', right: '$$', display: true},
             {left: '$', right: '$', display: false},
@@ -611,8 +649,6 @@ INDEX_HTML = r"""<!doctype html>
           throwOnError: false
         });
       }
-      
-      // 2. SmilesDrawer 渲染有机化学分子
       if (window.SmilesDrawer) {
         let smilesDrawer = new SmilesDrawer.Drawer({ width: 400, height: 300, bondThickness: 1.5 });
         document.querySelectorAll('.smiles-canvas').forEach(canvas => {
@@ -622,32 +658,22 @@ INDEX_HTML = r"""<!doctype html>
           }, function(err) { console.error("分子绘制失败:", err); });
         });
       }
-
-      // 3. function-plot 渲染可交互数学坐标系
       if (window.functionPlot) {
         document.querySelectorAll('.math-plot').forEach(container => {
           if(container.innerHTML !== "") return; 
           let funcsStr = container.getAttribute('data-funcs');
-          // 允许多函数同时渲染，用逗号分隔
-          let dataArray = funcsStr.split(',').map(f => ({ fn: f.trim() }));
+          let dataArray = funcsStr.split(',').map(f => {
+              return { fn: f.replace(/[\u4e00-\u9fa5:：]/g, '').trim() };
+          }).filter(d => d.fn.length > 0);
           try {
-            functionPlot({
-              target: '#' + container.id,
-              width: 500,
-              height: 300,
-              grid: true,
-              data: dataArray
-            });
+            functionPlot({ target: '#' + container.id, width: 500, height: 300, grid: true, data: dataArray });
           } catch (err) {
-            container.innerHTML = `<span style="color:red">函数解析错误: ${err.message}</span>`;
+            container.innerHTML = `<span style="color:#b45309;font-size:13px;">⚠️ 函数图表加载拦截：大模型输出了不支持的格式 (${esc(funcsStr)})</span>`;
           }
         });
       }
     }
 
-    // ==========================================
-    // 流程控制器
-    // ==========================================
     async function runStudent(){
       document.body.classList.add('loading');
       try {
@@ -657,6 +683,7 @@ INDEX_HTML = r"""<!doctype html>
           body: JSON.stringify({student_id: $('student').value, message: $('message').value})
         });
         const data = await res.json();
+        window.lastRealProfile = data.profile; 
         renderStudent(data);
         await loadTeacher();
       } finally {
@@ -664,189 +691,172 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
-function renderStudent(data) {
-  $('target').textContent = data.path.join(' -> ');
-  $('align').textContent = data.alignment.passed ? '通过' : '需回滚';
-  $('align').style.color = data.alignment.passed ? '#15803d' : '#b91c1c';
-  $('acc').textContent = Number(data.learning_signal.accuracy).toFixed(2);
-  $('targetKpi').textContent = data.target;
-  const causes = data.profile.causes || [];
-  $('causes').innerHTML = causes.map(c => `
-    <div class="cause">
-      <div style="display:flex;justify-content:space-between;gap:10px;">
-        <strong>${esc(c.label)}</strong><span>${Number(c.percentage).toFixed(1)}%</span>
-      </div>
-      <div class="bar"><span style="width:${Number(c.percentage)}%"></span></div>
-      <div class="muted">${esc((c.evidence_fragments || [])[0] || '暂无证据')}</div>
-    </div>
-  `).join('') || '<span class="muted">暂无画像原因。</span>';
+    function renderStudent(data) {
+      $('target').textContent = data.path.join(' -> ');
+      $('align').textContent = data.alignment.passed ? '通过' : '需回滚';
+      $('align').style.color = data.alignment.passed ? '#15803d' : '#b91c1c';
+      $('acc').textContent = Number(data.learning_signal.accuracy).toFixed(2);
+      $('targetKpi').textContent = data.target;
+      
+      const causes = data.profile.causes || [];
+      $('causes').innerHTML = causes.map(c => `
+        <div class="cause">
+          <div style="display:flex;justify-content:space-between;gap:10px;"><strong>${esc(c.label)}</strong><span>${Number(c.percentage).toFixed(1)}%</span></div>
+          <div class="bar"><span style="width:${Number(c.percentage)}%"></span></div>
+          <div class="muted">${esc((c.evidence_fragments || [])[0] || '暂无证据')}</div>
+        </div>
+      `).join('') || '<span class="muted">暂无画像原因。</span>';
 
-  $('resources').innerHTML = data.resources.map(r => `
-    <article class="resource">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h3>${esc(r.agent)} / ${esc(r.type)} </h3>
-        <button class="secondary" style="padding: 4px 10px; font-size: 12px; color: #b45309; border-color: #f59e0b; background: #fffbeb;"
-                onclick="addFav('${esc(data.target)}', '${esc(r.type)}', \`${esc(r.content).replace(/`/g, "'")}\`, this)">
-          ⭐ 收藏
-        </button>
-      </div>
-      <div class="content-box">${formatContent(r.content)} </div>
-      <div class="muted" style="margin-top: 10px;">证据：${esc((r.citations || []).join(', '))} </div>
-    </article>
-  `).join('');
+      $('resources').innerHTML = data.resources.map((r, idx) => {
+        const favKey = esc(data.target) + '|' + esc(r.type);
+        return `
+        <article class="resource">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+            <h3>${esc(r.agent)} / ${esc(r.type)}</h3>
+            <div style="display:flex; gap:8px; align-items:center;">
+               <input id="pre-note-${idx}" type="text" placeholder="在这输入收藏笔记..." style="font-size:12px; padding:5px 8px; width:160px; border:1px solid #cbd5e1; border-radius:6px;">
+               <button class="secondary fav-btn" data-fav-key="${favKey}" style="padding: 5px 12px; font-size: 12px; color: white; background: #0f766e; border:none; cursor:pointer;"
+                       onclick="toggleFav('${esc(data.target)}', '${esc(r.type)}', \`${esc(r.content).replace(/`/g, "'")}\`, 'pre-note-${idx}', this)">
+                 ⭐ 收藏
+               </button>
+            </div>
+          </div>
+          <div class="content-box">${formatContent(r.content)}</div>
+          <div class="muted" style="margin-top: 10px;">证据：${esc((r.citations || []).join(', '))}</div>
+        </article>
+      `}).join('');
 
-  setTimeout(renderMathAndMolecules, 100);
+      setTimeout(renderMathAndMolecules, 100);
 
-  const actions = data.strategy_plan?.actions || [];
-  $('strategies').innerHTML = actions.map(a => `
-    <article class="resource">
-      <h3>${esc(a.title)} </h3>
-      <p>${esc(a.description)} </p>
-      <div class="muted">触发原因：${esc(a.trigger)} · 时间：${esc(a.scheduled_after)} </div>
-    </article>
-  `).join('') || '<span class="muted">暂无策略。</span>';
-  
-  // 👇 核心修复点：在这里强制刷新进度条和收藏夹 👇
-  renderProgressAndFavs(data.profile);
-}
+      const actions = data.strategy_plan?.actions || [];
+      $('strategies').innerHTML = actions.map(a => `
+        <article class="resource">
+          <h3>${esc(a.title)}</h3>
+          <p>${esc(a.description)}</p>
+          <div class="muted">触发原因：${esc(a.trigger)} · 时间：${esc(a.scheduled_after)}</div>
+        </article>
+      `).join('') || '<span class="muted">暂无策略。</span>';
+      
+      renderProgress(data.profile);
+      
+      window.currentFavs = data.profile.favorites || window.currentFavs || [];
+      renderFavoritesPanel();
+    }
     
-    // 👇 新增：渲染进度条和收藏夹逻辑 👇 
-    function renderProgressAndFavs(profile) { 
-      // 1. 渲染进度条 (读取现有的 concept_mastery) 
-      if (profile.concept_mastery && Object.keys(profile.concept_mastery).length > 0 ) { 
-        $('progress-panel').innerHTML = Object.entries(profile.concept_mastery).map(([concept, score]) =>  { 
-          let pct = (score * 100).toFixed(0 ); 
-          let color = score > 0.7 ? '#15803d' : (score > 0.4 ? '#0f766e' : '#b45309' ); 
-          return ` 
-            <div style="margin-bottom: 12px;"> 
-              <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px;"> 
-                <strong>${esc(concept)}</strong> <span style="color:${color};font-weight:bold;">${pct} %</span> 
-              </div> 
-              <div class="bar" style="height:8px; background:#e2e8f0;"><span style="width:${pct}%; background:${color} ;"></span></div> 
-            </div>` ; 
-        }).join('' ); 
-      } 
- 
-      // 2. 渲染收藏夹 
-      if (profile.favorites && profile.favorites.length > 0 ) { 
-        // 倒序展示，最新的在上面 
-        let  favs = [...profile.favorites].reverse(); 
-        $('favorites-panel').innerHTML = favs.map(f => ` 
-          <div style="border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 10px;"> 
-            <div style="font-size: 14px; font-weight: bold; color: #0f766e;">📌 ${esc(f.target)} - ${esc(f.resource_type)} </div> 
-            <div class="muted" style="font-size: 12px; margin-top: 4px; line-height:1.4;">${esc(f.content_snippet)} </div> 
-          </div> 
-        `).join('' ); 
-      } else  { 
-        $('favorites-panel').innerHTML = '<span class="muted">暂无收藏。</span>' ; 
-      } 
+    function renderProgress(profile) { 
+      if (profile.concept_mastery && Object.keys(profile.concept_mastery).length > 0) { 
+        $('progress-panel').innerHTML = Object.entries(profile.concept_mastery).map(([concept, score]) => { 
+          let pct = (score * 100).toFixed(0); 
+          let color = score > 0.7 ? '#15803d' : (score > 0.4 ? '#0f766e' : '#b45309'); 
+          return `<div style="margin-bottom: 12px;"> 
+              <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px;"><strong>${esc(concept)}</strong> <span style="color:${color};font-weight:bold;">${pct}%</span></div> 
+              <div class="bar" style="height:8px; background:#e2e8f0;"><span style="width:${pct}%; background:${color};"></span></div> 
+            </div>`; 
+        }).join(''); 
+      } else {
+        $('progress-panel').innerHTML = '<span class="muted">提问后将自动更新进度...</span>'; 
+      }
     } 
- 
-    // 处理点击收藏 
-    // 处理点击收藏并立刻刷新界面 
-    async function addFav(target, type, content, btn) { 
-      // 1. 改变按钮状态 
-      btn.textContent = "✅ 已收藏" ; 
-      btn.style.background = "#dcfce7" ; 
-      btn.style.color = "#15803d" ; 
-      btn.disabled = true ; 
+
+    function renderFavoritesPanel() {
+      let favPanel = $('favorites-panel');
+      if (!window.currentFavs || window.currentFavs.length === 0) { 
+        favPanel.innerHTML = '<span class="muted">暂无收藏。</span>'; 
+      } else {
+        let favs = [...window.currentFavs].reverse(); 
+        favPanel.innerHTML = favs.map(f => ` 
+          <div class="fav-item" style="border-bottom: 1px solid var(--line); padding-bottom: 14px; margin-bottom: 14px; animation: fadeIn 0.3s;"> 
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+              <div style="font-size: 14px; font-weight: bold; color: #0f766e; cursor: pointer; text-decoration: underline;" onclick="openFavModal('${f.id}')" title="点击看大图和公式详情">📌 ${esc(f.target)} - ${esc(f.resource_type)}</div> 
+              <button onclick="deleteFav('${f.id}')" style="background:transparent; border:none; cursor:pointer; font-size:14px;" title="取消此收藏">🗑️</button>
+            </div>
+            <div class="muted" style="font-size: 12px; margin-top: 6px; line-height:1.5;">${esc(f.content_snippet)}</div> 
+            <div style="margin-top: 10px; display:flex; gap:8px;">
+               <input id="note-${f.id}" type="text" value="${esc(f.note || '')}" placeholder="随时修改个人笔记..." style="flex:1; font-size:12px; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; background:#f8fafc;">
+               <button onclick="saveNote('${f.id}')" style="padding:6px 12px; font-size:12px; background:#e2e8f0; color:#334155; border-radius:6px; border:none; cursor:pointer; font-weight:bold;">保存</button>
+            </div>
+          </div> 
+        `).join(''); 
+      }
       
-      // 2. 发送数据给后端 
-      await fetch('/api/favorite' , { 
-        method: 'POST' , 
-        headers: {'Content-Type':'application/json' }, 
-        body: JSON .stringify({ 
-          student_id: $('student' ).value, 
-          target : target, 
-          resource_type : type, 
-          content : content 
-        }) 
-      }); 
-
-      // 3. 👇 核心修复：立刻在前端页面上画出这个收藏 👇 
-      let favPanel = $('favorites-panel' ); 
-      // 如果当前是“暂无收藏”，就把它清空 
-      if (favPanel.innerHTML.includes('暂无收藏' )) { 
-        favPanel.innerHTML = '' ; 
-      } 
-      
-      // 生成摘要（前120个字） 
-      let snippet = content.length > 120 ? content.substring(0, 120) + "..."  : content; 
-      
-      // 拼接 HTML 并插入到列表的最前面 
-      let newFavHtml = ` 
-        <div style="border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 10px; animation: fadeIn 0.5s;"> 
-          <div style="font-size: 14px; font-weight: bold; color: #0f766e;">📌 ${esc(target)} - ${esc(type)} </div> 
-          <div class="muted" style="font-size: 12px; margin-top: 4px; line-height:1.4;">${esc(snippet)} </div> 
-        </div> 
-      ` ; 
-      favPanel.insertAdjacentHTML('afterbegin' , newFavHtml); 
-    }
-    // 👆 新增结束 👆
-
-    // ==========================================
-    // 💡 终极展示：一键模拟数理化全能渲染
-    // ==========================================
-    function triggerAllSTEMDemo() {
-      const demoData = {
-        path: ["理科基础", "多模态可视化", "智能体排版"],
-        alignment: { passed: true },
-        learning_signal: { accuracy: 0.99 },
-        target: "理科可视化引擎验收",
-        profile: { causes: [] },
-        resources: [
-          {
-            agent: "理论教授 (Agent 5)",
-            type: "深度讲义 (物理篇)",
-            citations: ["基础物理学"],
-            content: `这道题我们首先进行受力分析。假设一个蓝色物块静止在粗糙的斜面上，它受到重力(G)向下，以及斜面的支持力(N)和摩擦力(f)。
-大模型在遇到物理题时，可以通过直接生成 SVG 代码来代替干巴巴的语言描述：
-
-<svg width="300" height="200" viewBox="0 0 300 200">
-  <polygon points="50,180 250,180 250,100" fill="#e2e8f0" stroke="#64748b" stroke-width="2"/>
-  <rect x="130" y="110" width="40" height="40" transform="rotate(22 150 130)" fill="#3b82f6" opacity="0.8"/>
-  <line x1="150" y1="130" x2="150" y2="190" stroke="#ef4444" stroke-width="3" />
-  <polygon points="145,185 155,185 150,195" fill="#ef4444" />
-  <text x="160" y="180" fill="#ef4444" font-weight="bold">G</text>
-  <line x1="150" y1="130" x2="135" y2="70" stroke="#22c55e" stroke-width="3" />
-  <polygon points="130,75 140,73 133,63" fill="#22c55e" />
-  <text x="115" y="70" fill="#22c55e" font-weight="bold">N</text>
-</svg>`
-          },
-          {
-            agent: "逻辑画师 (Agent 6)",
-            type: "数学公式推演 (数学篇)",
-            citations: ["微积分与代数"],
-            content: `在机器学习中，我们常常需要对比平滑的函数与产生过拟合抖动的函数。
-比如最简单的二次函数 $y=x^2$，和带有高频噪声的函数 $y=x^2 + \sin(8x)$。
-
-系统通过拦截特定的 \`<plot>\` 标签，可以直接召唤出一个可以**用鼠标拖拽和滚轮缩放**的坐标系：
-<plot>x^2, x^2 + sin(8*x)</plot>
-你可以把鼠标放上去，观察它是如何显示每个点的精确坐标的。`
-          },
-          {
-            agent: "极客助教 (Agent 7)",
-            type: "分子与方程式 (化学篇)",
-            citations: ["有机化学基础"],
-            content: `最后来看看化学能力。通过 KaTeX 的 mhchem 扩展，化学方程式的排版极其优雅（注意下标和反应条件）：
-$$ \\ce{C7H6O3 + C4H6O3 ->[H+] C9H8O4 + C2H4O2} $$
-
-纯文字往往无法传达有机物的立体结构。现在，只要大模型输出一行 SMILES 码，前端就能瞬间绘制出阿司匹林（Aspirin）的分子图谱：
-<smiles>CC(=O)OC1=CC=CC=C1C(=O)O</smiles>
-
-这一切，都完美地无缝嵌在了一个对话资源包中！`
-          }
-        ]
-      };
-      renderStudent(demoData);
       setTimeout(() => {
-         $('resources').scrollIntoView({behavior:'smooth', block: 'start'});
-      }, 200);
+          document.querySelectorAll('.fav-btn').forEach(btn => {
+              const key = btn.getAttribute('data-fav-key');
+              const isFav = window.currentFavs.some(f => (f.target + '|' + f.resource_type) === key);
+              if (isFav) {
+                  btn.textContent = "✅ 已收藏";
+                  btn.style.background = "#dcfce7";
+                  btn.style.color = "#15803d";
+              } else {
+                  btn.textContent = "⭐ 收藏";
+                  btn.style.background = "#0f766e";
+                  btn.style.color = "white";
+              }
+          });
+      }, 50);
+    }
+ 
+    async function toggleFav(target, type, content, noteInputId, btn) { 
+      const existingFav = window.currentFavs.find(f => f.target === target && f.resource_type === type);
+      
+      if (existingFav) {
+          await deleteFav(existingFav.id);
+          return;
+      }
+
+      let noteValue = $(noteInputId) ? $(noteInputId).value : '';
+      let tempId = 'fav_' + Date.now();
+      
+      await fetch('/api/favorite', { 
+        method: 'POST', 
+        headers: {'Content-Type':'application/json'}, 
+        body: JSON.stringify({ student_id: $('student').value, fav_id: tempId, target: target, resource_type: type, content: content, note: noteValue }) 
+      }); 
+      
+      let snippet = content.length > 120 ? content.substring(0, 120) + "..." : content; 
+      window.currentFavs.push({ id: tempId, target: target, resource_type: type, content: content, note: noteValue, content_snippet: snippet });
+      
+      renderFavoritesPanel();
+      if($(noteInputId)) $(noteInputId).value = ''; 
     }
 
-    // ==========================================
-    // 学术探索与后端数据拉取
-    // ==========================================
+    async function deleteFav(id) {
+      if(!confirm("确定要取消/删除这条收藏吗？")) return;
+      
+      await fetch('/api/favorite/delete', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ student_id: $('student').value, id: id })
+      });
+      
+      window.currentFavs = window.currentFavs.filter(f => f.id !== id);
+      renderFavoritesPanel();
+    }
+
+    async function saveNote(id) {
+      let noteContent = document.getElementById('note-' + id).value;
+      await fetch('/api/favorite/note', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ student_id: $('student').value, id: id, note: noteContent })
+      });
+      let fav = window.currentFavs.find(f => f.id === id);
+      if(fav) fav.note = noteContent;
+      alert("✅ 笔记已妥善保存！");
+    }
+
+    function openFavModal(id) {
+      let fav = window.currentFavs.find(f => f.id === id);
+      if(!fav) return;
+      document.getElementById('fav-modal-title').innerText = fav.target + ' - ' + fav.resource_type;
+      document.getElementById('fav-modal-content').innerHTML = formatContent(fav.content);
+      document.getElementById('fav-modal').style.display = 'flex';
+      setTimeout(renderMathAndMolecules, 100); 
+    }
+
+    function closeFavModal() {
+      document.getElementById('fav-modal').style.display = 'none';
+      document.getElementById('fav-modal-content').innerHTML = '';
+    }
+
     async function searchArxiv() {
       const query = $('arxiv-query').value.trim();
       if (!query) return;
@@ -859,12 +869,8 @@ $$ \\ce{C7H6O3 + C4H6O3 ->[H+] C9H8O4 + C2H4O2} $$
             <article class="resource" style="background:#f8fafc; border-left: 4px solid #2563eb; text-align: left;">
               <h3 style="color:#1e293b; margin: 0 0 4px; font-size: 15px;">${esc(p.title)}</h3>
               <div class="muted" style="font-size:12px; margin-bottom: 8px;">👨‍🔬 作者: ${esc(p.authors.join(', '))}</div>
-              <p style="font-size:13px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:10px; text-align: justify;">
-                ${esc(p.abstract)}
-              </p>
-              <a href="${esc(p.pdf_url)}" target="_blank" rel="noreferrer" style="color:#2563eb; background:#dbeafe; padding:6px 10px; border-radius:4px; font-size:12px; display:inline-block;">
-                📄 阅读 PDF 原文
-              </a>
+              <p style="font-size:13px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:10px; text-align: justify;">${esc(p.abstract)}</p>
+              <a href="${esc(p.pdf_url)}" target="_blank" rel="noreferrer" style="color:#2563eb; background:#dbeafe; padding:6px 10px; border-radius:4px; font-size:12px; display:inline-block;">📄 阅读 PDF 原文</a>
             </article>
           `).join('');
         } else {
@@ -901,19 +907,6 @@ $$ \\ce{C7H6O3 + C4H6O3 ->[H+] C9H8O4 + C2H4O2} $$
           <div class="resource"><h3>高频误概念排行</h3><ol>${misconceptions}</ol></div>
           <div class="resource"><h3>教师干预建议</h3><ol>${interventions}</ol></div>
         </div>`;
-    }
-
-    async function loadDatasets(){
-      const res = await fetch('/api/datasets');
-      const data = await res.json();
-      $('datasets').innerHTML = data.datasets.map(d => `
-        <article class="dataset">
-          <strong>${esc(d.name)}</strong>
-          <p class="muted">${esc(d.task)}</p>
-          <p>${esc(d.note)}</p>
-          <a href="${esc(d.url)}" target="_blank" rel="noreferrer">数据集 URL</a>
-        </article>
-      `).join('');
     }
 
     loadDatasets();

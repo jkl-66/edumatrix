@@ -272,15 +272,31 @@ class StudentProfile:
     knowledge_traces: dict[str, KnowledgeTrace] = field(default_factory=dict)
     favorites: list[dict] = field(default_factory=list)
 
-    def add_favorite(self, target: str, resource_type: str, content: str) -> None:
+    # === 替换 models.py 中的 add_favorite 方法 ===
+    def add_favorite(self, target: str, resource_type: str, content: str, note: str = "", fav_id: str = "") -> None:
         import time
+        # 如果前端传了 ID 就用前端的，否则后端生成
+        fid = fav_id if fav_id else f"fav_{int(time.time())}_{len(self.favorites)}"
         self.favorites.append({
-            "id": f"fav_{int(time.time())}_{len(self.favorites)}",
+            "id": fid,
             "target": target,
             "resource_type": resource_type,
             "content_snippet": content[:120] + "...",
+            "content": content,
+            "note": note,
             "timestamp": time.time()
         })
+
+    def remove_favorite(self, fav_id: str) -> None:
+        """根据 ID 移除收藏项"""
+        self.favorites = [f for f in self.favorites if f.get("id") != fav_id]
+
+    def update_favorite_note(self, fav_id: str, note: str) -> None:
+        """更新已有收藏的笔记"""
+        for f in self.favorites:
+            if f.get("id") == fav_id:
+                f["note"] = note
+                break
 
     def update_from_message(self, message: str) -> None:
         self.history.append(message)

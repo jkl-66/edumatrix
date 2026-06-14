@@ -1,3 +1,7 @@
+import os
+os.environ["EDUMATRIX_LLM_PROVIDER"] = "mock"
+os.environ["EDUMATRIX_EMBEDDING_PROVIDER"] = "hash"
+
 import unittest
 
 from agent_swarm import EduMatrixSwarm

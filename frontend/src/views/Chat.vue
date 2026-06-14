@@ -12,13 +12,15 @@ import {
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles,
 } from '@lucide/vue'
+import { useChatStore } from '../stores/chat'
 
 const props = defineProps({ studentId: String })
+const chatStore = useChatStore()
 
 // --- Chat State ---
-const messages = ref([])
+const messages = computed(() => chatStore.messages)
+const sending = computed(() => chatStore.sending)
 const input = ref('')
-const sending = ref(false)
 const showResources = ref(new Set())
 const activeTab = ref('chat') // chat | quiz | code | websearch
 
@@ -72,30 +74,12 @@ async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
   input.value = ''
-  sending.value = true
-
-  messages.value.push({ role: 'user', content: text })
+  
   await nextTick()
-
   try {
-    const data = await processMessage(text, props.studentId)
-    const agentOutputs = data.resources || []
-    const alignment = data.alignment || {}
-
-    messages.value.push({
-      role: 'assistant',
-      content: `## 学习目标：${data.target || '未识别'}\n\n` +
-        (alignment.passed ? '内容一致性校验通过' : `需优化: ${alignment.advice || ''}`) +
-        (data.strategy_plan?.actions?.length ? `\n\n**推荐策略：**\n${data.strategy_plan.actions.map((a, i) => `${i+1}. ${a.description || a}`).join('\n')}` : ''),
-      resources: agentOutputs,
-      alignment,
-      profile: data.profile,
-      strategy: data.strategy_plan,
-    })
+    await chatStore.sendChatMessage(text, props.studentId)
   } catch (e) {
-    messages.value.push({ role: 'assistant', content: `请求失败：${e.message || '请检查后端服务'}`, error: true })
-  } finally {
-    sending.value = false
+    console.error('Streaming failed:', e)
   }
 }
 
@@ -345,12 +329,34 @@ async function doLoadUrl() {
             </div>
           </div>
 
-          <div v-if="sending" class="flex items-start gap-3 mb-4">
-            <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shrink-0">
-              <Bot :size="16" class="text-white" />
+          <div v-if="sending" class="card mb-4 bg-gradient-to-r from-blue-50/50 to-purple-50/50 border border-blue-100 p-4">
+            <div class="flex items-center gap-3 mb-3">
+              <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shrink-0 animate-pulse">
+                <BrainCircuit :size="16" class="text-white" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="text-xs font-semibold text-gray-700">{{ chatStore.streamingStatus }}</p>
+                <div class="flex items-center gap-2 mt-1.5">
+                  <div class="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                    <div class="h-full bg-gradient-to-r from-blue-500 to-purple-600 rounded-full transition-all duration-300" :style="{ width: chatStore.streamingProgress + '%' }" />
+                  </div>
+                  <span class="text-[10px] font-bold text-blue-600 w-8 text-right">{{ chatStore.streamingProgress }}%</span>
+                </div>
+              </div>
             </div>
-            <div class="flex items-center gap-2 text-gray-400 text-sm">
-              <Loader2 :size="16" class="animate-spin" /> 正在生成资源...
+            
+            <!-- 5大智能体并行状态墙 -->
+            <div class="grid grid-cols-5 gap-2 mt-3 pt-3 border-t border-gray-100">
+              <div v-for="agent in ['理论教授', '逻辑画师', '极客助教', '考官智能体', '虚拟导演']" :key="agent"
+                class="flex flex-col items-center p-2 rounded-lg bg-white border border-gray-100 text-center"
+                :class="{ 'border-blue-200 bg-blue-50/30': chatStore.streamingAgents[agent]?.done }">
+                <div class="w-5 h-5 rounded-full flex items-center justify-center mb-1 text-[10px]"
+                  :class="chatStore.streamingAgents[agent]?.done ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400 animate-pulse'">
+                  <CheckCircle2 v-if="chatStore.streamingAgents[agent]?.done" :size="10" />
+                  <Loader2 v-else :size="10" class="animate-spin" />
+                </div>
+                <span class="text-[9px] font-medium text-gray-600">{{ agent }}</span>
+              </div>
             </div>
           </div>
         </div>

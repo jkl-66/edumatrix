@@ -144,6 +144,183 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertIn("alignment.rollback_count", metric_names)
         self.assertIn("swarm.process", span_names)
 
+    def test_database_pool_wash_with_postgres_mock(self):
+        from unittest.mock import MagicMock
+        from app.database import before_cursor_execute, on_connection_checkin, set_tenant, tenant_context
+        
+        # 1. 测试租户上下文切换
+        self.assertEqual(tenant_context.get(), "public")
+        with set_tenant("tenant_abc"):
+            self.assertEqual(tenant_context.get(), "tenant_abc")
+        self.assertEqual(tenant_context.get(), "public")
+        
+        # 2. 测试 before_cursor_execute 在 PostgreSQL 方言下的设置
+        mock_conn = MagicMock()
+        mock_conn.dialect.name = "postgresql"
+        mock_cursor = MagicMock()
+        
+        with set_tenant("tenant_123"):
+            before_cursor_execute(mock_conn, mock_cursor, "SELECT 1", {}, None, False)
+            mock_cursor.execute.assert_called_with("SET search_path TO tenant_123;")
+            
+        # 3. 测试为 public 时不设置
+        mock_cursor.reset_mock()
+        before_cursor_execute(mock_conn, mock_cursor, "SELECT 1", {}, None, False)
+        mock_cursor.execute.assert_not_called()
+        
+        # 4. 测试在 SQLite 下不起作用（防止本地开发环境报错）
+        mock_conn.dialect.name = "sqlite"
+        mock_cursor.reset_mock()
+        with set_tenant("tenant_123"):
+            before_cursor_execute(mock_conn, mock_cursor, "SELECT 1", {}, None, False)
+            mock_cursor.execute.assert_not_called()
+
+        # 5. 测试归还连接池时执行洗白 SQL
+        mock_dbapi_conn = MagicMock()
+        mock_dbapi_conn.__class__.__module__ = "psycopg2.extensions"
+        mock_dbapi_cursor = MagicMock()
+        mock_dbapi_conn.cursor.return_value = mock_dbapi_cursor
+        
+        on_connection_checkin(mock_dbapi_conn, None)
+        mock_dbapi_cursor.execute.assert_called_with("SET search_path TO public;")
+        mock_dbapi_cursor.close.assert_called_once()
+
+    def test_stream_disconnect_handling(self):
+        import asyncio
+        from unittest.mock import MagicMock
+        from fastapi import Request
+        from stream_api import stream_chat
+
+        mock_request = MagicMock(spec=Request)
+        
+        # 模拟 is_disconnected 最初返回 False，之后返回 True
+        disconnect_calls = [False, False, True]
+        async def mock_is_disconnected():
+            if disconnect_calls:
+                return disconnect_calls.pop(0)
+            return True
+        mock_request.is_disconnected = mock_is_disconnected
+        mock_request.headers = {}
+        
+        async def mock_json():
+            return {"message": "我看不懂池化层", "student_id": "test-student"}
+        mock_request.json = mock_json
+
+        # 执行 stream_chat 并消费其返回的流
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        async def run_test():
+            response = await stream_chat(mock_request)
+            async for chunk in response.body_iterator:
+                pass
+
+        with self.assertRaises(asyncio.CancelledError):
+            if loop.is_running():
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(asyncio.run, run_test())
+                    future.result()
+            else:
+                loop.run_until_complete(run_test())
+
+    def test_guided_decoding_self_healing(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from app.agents.coder import async_refine_code_agent, PyTorchPoolCodeSchema
+
+        lecture = "我们要学习最大池化层，最大池化非常重要。"
+        code = "import torch\nimport torch.nn as nn\nclass Model(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.pool = nn.AvgPool2d(kernel_size=2, stride=2)"
+        
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        async def run_healing():
+            return await async_refine_code_agent(lecture, code, "平均池化不符合最大池化讲义")
+            
+        if loop.is_running():
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, run_healing())
+                healed_code = future.result()
+        else:
+            healed_code = loop.run_until_complete(run_healing())
+            
+        self.assertIn("nn.MaxPool2d", healed_code)
+        self.assertNotIn("nn.AvgPool2d", healed_code)
+
+        mock_schema = PyTorchPoolCodeSchema(
+            import_blocks="import torch\nimport torch.nn as nn",
+            tensor_init="x = torch.randn(1, 1, 4, 4)",
+            pool_layer_api="pool = nn.MaxPool2d(2, 2)",
+            forward_and_print="print(pool(x))"
+        )
+        
+        async def run_success():
+            with patch("instructor.patch") as mock_patch:
+                mock_client = AsyncMock()
+                mock_create = AsyncMock(return_value=mock_schema)
+                mock_client.chat.completions.create = mock_create
+                mock_patch.return_value = mock_client
+                
+                return await async_refine_code_agent(lecture, code, "对齐纠偏")
+
+        if loop.is_running():
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, run_success())
+                res_code = future.result()
+        else:
+            res_code = loop.run_until_complete(run_success())
+            
+        self.assertIn("x = torch.randn(1, 1, 4, 4)", res_code)
+        self.assertIn("pool = nn.MaxPool2d(2, 2)", res_code)
+
+    def test_sandbox_resource_limits_and_timeout(self):
+        import asyncio
+        from code_exec_api import SANDBOX_RUNNER
+        
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        async def run_normal():
+            return await SANDBOX_RUNNER.run("print('hello sandbox')")
+            
+        if loop.is_running():
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, run_normal())
+                stdout, stderr, elapsed = future.result()
+        else:
+            stdout, stderr, elapsed = loop.run_until_complete(run_normal())
+            
+        self.assertIn("hello sandbox", stdout)
+        self.assertEqual(stderr, "")
+        
+        async def run_timeout():
+            return await SANDBOX_RUNNER.run("import time; time.sleep(5)")
+            
+        if loop.is_running():
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, run_timeout())
+                stdout, stderr, elapsed = future.result()
+        else:
+            stdout, stderr, elapsed = loop.run_until_complete(run_timeout())
+            
+        self.assertEqual(stdout, "")
+        self.assertIn("超时", stderr)
+        self.assertLessEqual(elapsed, 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()

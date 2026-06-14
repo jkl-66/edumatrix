@@ -41,3 +41,40 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# oh-my-agent runtime (local artifacts — do not commit)
+.antigravitycli/
+.agents/results/
+.agents/state/
+.agents/backup/
+.migration-backup/
+.serena/
+
+# Local IDE & AI Caches
+.gemini/
+.qwen/
+.grok/
+.cursor/
+
+# Local AI bypasses and proxies (billing bypass)
+claude_bypass.bat
+scripts/claude_proxy.py
+
+# Local workspace directories (private files)
+lzz工作目标/
+赛题/
+scratch/
+lzz每天看的工作时间表.md
+WORKSPACE_STATE.md
+
+
+
+# Local agent orchestration tools & workspace environments
+.agents/
+.claude/
+.codex/
+.github/
+.mcp.json
+CLAUDE.md
+plan.md
+

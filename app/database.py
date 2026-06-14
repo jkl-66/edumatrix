@@ -5,6 +5,34 @@ from sqlalchemy import create_engine, Column, String, Float, Integer, Text, Date
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
+from contextvars import ContextVar
+from contextlib import contextmanager
+from sqlalchemy.pool import Pool
+
+# 锁定租户上下文 ContextVar，默认值为公共(public)命名空间
+tenant_context: ContextVar[str] = ContextVar("tenant_context", default="public")
+
+@contextmanager
+def set_tenant(tenant_name: str):
+    """上下文管理器，用于安全地切换和恢复当前协程的租户上下文"""
+    token = tenant_context.set(tenant_name)
+    try:
+        yield
+    finally:
+        tenant_context.reset(token)
+
+# 物理连接池归还时拦截拦截：彻底物理洗白连接状态
+@event.listens_for(Pool, "checkin")
+def on_connection_checkin(dbapi_connection, connection_record):
+    module_name = dbapi_connection.__class__.__module__
+    if "psycopg" in module_name or "pg" in module_name or "postgres" in module_name:
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("SET search_path TO public;")
+            cursor.close()
+        except Exception:
+            pass
+
 # 锁定本地 SQLite 单文件物理路径
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "edumatrix.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
@@ -23,6 +51,16 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.close()
+
+# 每次执行 SQL 前拦截：对于 PostgreSQL，若有租户上下文，则动态设置 search_path
+@event.listens_for(engine, "before_cursor_execute")
+def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    if conn.dialect.name == "postgresql":
+        tenant = tenant_context.get()
+        if tenant and tenant != "public":
+            clean_tenant = "".join(c for c in tenant if c.isalnum() or c == "_")
+            if clean_tenant:
+                cursor.execute(f"SET search_path TO {clean_tenant};")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -51,6 +89,16 @@ class DBStudentProfile(Base):
     
     history_logs = Column(Text, default="")              # 提问历史（以换行符或JSON数组隔开）
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class DBUser(Base):
+    """用户表：存储登录凭证"""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), unique=True, index=True, nullable=False) # 通常与 student_id 一致
+    hashed_password = Column(String(128), nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class DBAlignmentLog(Base):
     __tablename__ = "alignment_logs"

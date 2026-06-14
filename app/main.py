@@ -65,19 +65,24 @@ app.add_middleware(
 async def startup():
     global _worker_pool
     from config import CONFIG
+    from code_exec_api import SANDBOX_RUNNER
     _worker_pool = AsyncWorkerPool(max_workers=CONFIG.max_concurrent_llm)
     await _worker_pool.start()
     print(f"  [EduMatrix] AsyncWorkerPool started: {CONFIG.max_concurrent_llm} workers")
     print(f"  [EduMatrix] LLM: {CONFIG.llm_provider} @ {CONFIG.llm_endpoint} model={CONFIG.llm_model}")
     print(f"  [EduMatrix] Rate limit: {CONFIG.llm_rate_limit_rpm} RPM / {CONFIG.llm_rate_limit_tpm} TPM")
+    await SANDBOX_RUNNER.start()
 
 
 @app.on_event("shutdown")
 async def shutdown():
     global _worker_pool
+    from code_exec_api import SANDBOX_RUNNER
     if _worker_pool is not None:
         await _worker_pool.stop()
         print("  [EduMatrix] AsyncWorkerPool stopped")
+    await SANDBOX_RUNNER.shutdown()
+    print("  [EduMatrix] Sandbox runner stopped")
 
 # 静态课程数据集（来自 web_demo.py）
 MACHINE_LEARNING_DATASETS = [

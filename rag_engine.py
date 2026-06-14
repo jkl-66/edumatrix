@@ -356,11 +356,31 @@ class HybridRAGPipeline:
                 if existing is None or item.score > existing.score:
                     dedup[item.id] = item
             ranked = sorted(dedup.values(), key=lambda item: item.score, reverse=True)
+
+            # 确保在有图像匹配时，保底保留高评分的图像证据，防止被学术文献或纯文本切片淹没
+            from models import EvidenceModality
+            images = [item for item in ranked if item.modality == EvidenceModality.IMAGE]
+            
+            final_evidence = []
+            if images:
+                final_evidence.append(images[0])
+                if len(images) > 1 and top_k > 4:
+                    final_evidence.append(images[1])
+                    
+            for item in ranked:
+                if len(final_evidence) >= top_k:
+                    break
+                if item not in final_evidence:
+                    final_evidence.append(item)
+                    
+            # 按检索相关度得分重新排序
+            final_evidence.sort(key=lambda item: item.score, reverse=True)
+
             result = RetrievalBundle(
                 query=query,
                 target=graph_context.target,
                 graph_context=graph_context,
-                evidence=tuple(ranked[:top_k]),
+                evidence=tuple(final_evidence),
             )
             TELEMETRY.record_metric("retrieval.evidence_count", len(result.evidence), target=result.target)
             TELEMETRY.record_metric(

@@ -58,6 +58,10 @@ class ProfileProbeAgent:
     def __init__(self, llm: AsyncLLMBackend = DEFAULT_ASYNC_LLM):
         self.llm = llm
 
+    def update(self, profile: StudentProfile, message: str) -> StudentProfile:
+        profile.update_from_message(message)
+        return profile
+
     async def async_update(self, profile: StudentProfile, message: str) -> StudentProfile:
         profile.update_from_message(message)
         
@@ -194,10 +198,26 @@ class AsyncResourceFactory:
         profile: StudentProfile,
         correction: str = "",
         conversation_memory: str = "",
+        previous_resources: tuple[AgentOutput, ...] | None = None,
+        alignment_advice: str = "",
     ) -> tuple[AgentOutput, ...]:
         import asyncio
 
         async def _generate_one(role: str, resource_type: str) -> AgentOutput:
+            if role == "极客助教" and previous_resources:
+                prev_lecture = next((r.content for r in previous_resources if r.resource_type == "专业讲义"), "")
+                prev_code = next((r.content for r in previous_resources if r.resource_type == "代码实操案例"), "")
+                if prev_lecture and prev_code:
+                    from app.agents.coder import async_refine_code_agent
+                    refined_code = await async_refine_code_agent(prev_lecture, prev_code, alignment_advice)
+                    prev_citations = next((r.citations for r in previous_resources if r.resource_type == "代码实操案例"), ())
+                    return AgentOutput(
+                        agent=role,
+                        resource_type=resource_type,
+                        content=refined_code,
+                        citations=prev_citations,
+                        private_rationale=f"通过 async_refine_code_agent 重构代码成功。对齐纠偏提示：{alignment_advice}",
+                    )
             return await self.generator.generate(
                 role=role,
                 resource_type=resource_type,
@@ -276,6 +296,7 @@ class EduMatrixSwarm:
             resources: tuple[AgentOutput, ...] = ()
             alignment_report = None
             rollback_count = 0
+            previous_resources = None
             for attempt in range(CONFIG.rollback_limit + 1):
                 resources = await self.factory.generate_all(
                     query=user_input,
@@ -284,11 +305,14 @@ class EduMatrixSwarm:
                     profile=profile,
                     correction=correction,
                     conversation_memory=conversation_memory,
+                    previous_resources=previous_resources,
+                    alignment_advice=correction,
                 )
                 alignment_report = self.alignment.verify(resources)
                 if alignment_report.passed:
                     break
                 rollback_count += 1
+                previous_resources = resources
                 correction = (
                     f"第 {attempt + 1} 次对齐失败：{alignment_report.advice} "
                     "重写时必须统一池化类型、变量名和图示节点。"

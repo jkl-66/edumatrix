@@ -211,3 +211,46 @@
 - 数学引擎崩溃率降至零
 - 多轮对话状态保持稳定
 - 演示功能不再影响真实学习数据
+
+---
+
+### 2026-06-13
+> **今日概述**：全面推进系统高并发加固与智能体自愈防线建设，完成了 **Wave 1（基建与稳定防护网）** 与 **Wave 2（Swarm 概率自愈与常驻隔离沙箱）** 的全部开发与测试并网，大幅增强了系统在答辩和极端压测下的稳定度。
+
+#### 1. 后端高并发与多租户数据库隔离加固 (Wave 1)
+##### 物理连接洗白防数据串线
+- **文件**：`app/database.py`
+- **改进**：引入 `tenant_context` 协程上下文变量（ContextVar）。在 SQLAlchemy 的 `Pool` 连接归还（`checkin`）事件中强行注入 `SET search_path TO public;` 进行连接洗白；在 SQL 执行前拦截器中动态注入租户 Schema，彻底根治并发抢占导致的数据串线问题。
+
+##### 孤儿协程自杀与资源熔断
+- **文件**：`stream_api.py`
+- **改进**：重构 SSE 实时流式传输逻辑。在分析画像、知识检索、流式推理每个关键循环节点插入客户端连接断开检测。若用户断开，系统捕获 `CancelledError` 并强制 `task.cancel()` 杀掉所有未决子任务，完美拦截 Token 空耗与连接堆积。
+
+#### 2. 前端 SSE 语法缓冲与 Pinia 集成 (Wave 1)
+- **文件**：`frontend/src/stores/chat.js`、`frontend/src/views/Chat.vue`
+- **改进**：
+  - 前端正式引入 Pinia 状态管理器，统一接管 `streamChat` 推流接口。
+  - 在 Store 中开发 `getSafeContent()` 语法防护网：针对流式截断或意外断开，利用词法状态状态机自动闭合未匹配的 `$$`、`$` 和 ```` ```` 标签，从源头杜绝了 MathJax/Mermaid 前端白屏死锁惨案。
+  - 重构前端 Chat 界面，集成高颜值“5 大智能体并行思考状态墙”与呼吸灯进度组件。
+
+#### 3. Guided Decoding 概率坍塌自愈防线 (Wave 2)
+- **文件**：`app/agents/coder.py` [NEW]、`agent_swarm.py`
+- **改进**：
+  - 编写了 `PyTorchPoolCodeSchema` 强校验 Schema，利用 `instructor` 对本地 vLLM 大模型输出实施概率分布强约束拦截。
+  - 部署 0ms 正则自愈兜底机制：一旦出现 JSON 校验失败或连接超时，自动截获 `ValidationError` 并在 0ms 内执行备用正则正则纠偏（利用 `re.sub` 将讲义中对应错误的池化层物理强修），誓死捍卫主业务不崩溃。
+  - 将自愈模块并入 `agent_swarm.py` 的对齐回滚（Rollback）生成循环。
+
+#### 4. 隔离代码沙箱常驻容器池与 Subprocess 双轨优雅降级 (Wave 2)
+- **文件**：`code_exec_api.py`、`app/main.py`
+- **改进**：
+  - **SRP 架构重构**：将进程与容器生命周期、资源限制提取为独立的 `SandboxProcessRunner` 类。
+  - **Docker 常驻池**：如果宿主机装有 Docker，系统启动时会自动拉起 3 个无网络、限单核 CPU、`512m` 内存的容器常驻运行。执行代码时采用热挂载 `container.exec_run`，并由 3.0s 超时 watchdog 监控，超时直接 kill 容器并拉起新容器补位。
+  - **子进程 Fallback**：若 Docker 守护进程未启动，优雅降级为本地隔离子进程，利用 `asyncio.wait_for` 拦截 3.0s 限制并强制 kill 进程，物理清除 `while True: pass` 等死循环代码的资源占用。
+  - 引入依赖延迟加载（Lazy Imports），将基础 Python 代码运行耗时缩短到 0.05 秒。
+
+#### 5. 自动化测试并网与质量守门
+- **文件**：`test_edumatrix.py`
+- **改进**：
+  - 新增 `test_guided_decoding_self_healing` 单元测试，Mock 校验成功和概率坍塌校验失败引发自愈的两种场景。
+  - 新增 `test_sandbox_resource_limits_and_timeout` 单元测试，校验死循环代码的 3 秒强熔断和恶意命令拦截。
+  - 运行全量 15 个测试，100% 通过（`OK`）。

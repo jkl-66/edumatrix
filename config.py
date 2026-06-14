@@ -48,5 +48,10 @@ class EduMatrixConfig:
     llm_retry_max_attempts: int = int(os.getenv("EDUMATRIX_RETRY_MAX_ATTEMPTS", "3"))
     llm_request_queue_size: int = int(os.getenv("EDUMATRIX_REQUEST_QUEUE_SIZE", "200"))
 
+    # Auth Settings
+    auth_secret_key: str = os.getenv("EDUMATRIX_AUTH_SECRET_KEY", "edumatrix_super_secret_v1_2026")
+    auth_algorithm: str = os.getenv("EDUMATRIX_AUTH_ALGORITHM", "HS256")
+    auth_access_token_expire_minutes: int = int(os.getenv("EDUMATRIX_AUTH_TOKEN_EXPIRE_MINS", "1440")) # Default 24 hours
+
 
 CONFIG = EduMatrixConfig()

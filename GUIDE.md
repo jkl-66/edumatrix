@@ -28,11 +28,11 @@
 
 | 角色 | 负责模型 | 接入方式 | 选用理由 | 推荐绑定 Skill |
 | :--- | :--- | :--- | :--- | :--- |
-| **🧠 总指挥 / 计划制定 (Sisyphus)** | **Claude Opus 4.6/4.7** | Antigravity 内置 / 向量引擎 | 顶级战略推理、1M 超长上下文，极其稳定的任务拆解与 Agent 团队调度能力 | `solution-architect` |
-| **⚙️ 后端 / 核心算法** | **GLM-5.1** | CCSwitch → oh-my-ag | 8 小时自主工作、SWE-Bench Pro 第一、对中文教研概念理解深厚且成本极低 | `backend-api`, `database-design` |
-| **🎨 前端 / 视觉开发** | **Gemini 3.5 Flash (High)** | Antigravity 内置 (免费) | 绝佳的多模态视觉理解与实时渲染，快速缩短“设计到代码”的迭代循环 | `frontend-design`, `ui-ux-pro-max-skill` |
-| **📄 文档与注释** | **混合**：日常 Gemini，终稿 Opus | 内置接口 / 向量引擎 | 日常轻量日志快速低成本，最终报告高一致性与专业规范度 | `doc-coauthoring` |
-| **🔍 代码审查 / 安全审计** | **Claude Opus 4.6/4.7** | **向量引擎 API 中转 → Claude Code** | 顶级批判性思维，专门用于拦截跨文件异步死锁、SQL 注入与逻辑越权防御 | `code-reviewer`, `security-auditor` |
+| **🧠 总指挥 / 编排调度 (Sisyphus)** | **Gemini 3.5 Flash** | Antigravity 内置 (免费) | 免费、超大上下文，极速完成主脑流程交互与分发，Token 零消耗 | `solution-architect` |
+| **⚙️ 后端 / 核心算法** | **GLM-5.1** | CCSwitch → oh-my-ag | 编写常规业务 API 与 CRUD，效率极高且算力成本极低 | `backend-api`, `database-design` |
+| **🎨 前端 / 视觉开发** | **Gemini 3.5 Flash** | Antigravity 内置 (免费) | 多模态视觉理解，快速实现 Wow 级深色美学界面 | `frontend-design`, `ui-ux-pro-max-skill` |
+| **📋 规划 / 答题 / 调试 (pm/qa/debug)** | **Claude 3.5 Sonnet** | 向量引擎中转 → Claude Code | 跨文件 Bug 排查、逻辑纠错及安全审计，成本仅 Opus 的 1/5，性价比极高 | `code-reviewer`, `security-auditor` |
+| **🔍 架构决策 (architecture)** | **Claude Opus 4.7** | 向量引擎中转 (thinking) | 顶尖深度推理，用于系统高难重构、数学建模与 ADR 决策 | `solution-architect` |
 
 ---
 
@@ -107,12 +107,12 @@ Skill 是为 AI 预设的专业工作流程包，能让 AI 从“通用助手”
 
 | 任务下达方式 (你对 Sisyphus 说什么) | 对应执行模型 | 本地接入方式 | 核心赛题用途与场景职责 | 推荐绑定本地 Skill |
 | :--- | :--- | :--- | :--- | :--- |
-| **顶层规划与战略下达**：<br>在 `oma` 对话中直接对 Sisyphus 下达顶层战略与任务分解 | **Claude Opus 4.6/4.7** | Antigravity 内置 / 向量引擎 | 顶层规划、任务编排、计划跟踪，保障多智能体全局逻辑闭环。 | `solution-architect` |
+| **顶层规划与任务编排**：<br>在 `oma` 对话中对 Sisyphus 下达战略与任务分解 | **Gemini 3.5 Flash** 或 **Claude Sonnet** | Antigravity 内置 / 向量引擎 | 顶层规划、任务编排、计划跟踪，保障多智能体全局逻辑闭环。 | `solution-architect` |
 | **后端/核心算法默认配置**：<br>告诉 Sisyphus：*“后端/算法任务默认使用 GLM-5.1”* | **GLM-5.1** | CCSwitch → oh-my-ag | 常规业务 API 编写、SQL 映射、基础 CRUD 逻辑的高效实现。 | `backend-api`<br>`database-design` |
-| **前端/视觉任务默认配置**：<br>告诉 Sisyphus：*“前端/视觉任务默认使用 Gemini”* | **Gemini 3.5 Flash (High)** | Antigravity 内置 (免费) | 视网膜 UI 界面绘制、现代组件开发、视觉审美打磨，实现 Wow 质感。 | `frontend-design`<br>`ui-ux-pro-max-skill` |
-| **安全审计与高难重构攻坚**：<br>对 Sisyphus 说：*“用 Opus 审查最新的代码安全性”* | **Claude Opus 4.6/4.7** | 向量引擎中转 → Claude Code | 高并发协程死锁拦截、多租户安全审计、复杂算法攻坚与自愈重构。 | `code-reviewer`<br>`security-auditor` |
-| **日常注释与日志更新**：<br>日常更新：*“@gemini-agent 补充当前接口注释”* | **Gemini 3.5 Flash (High)** | Antigravity 内置 (免费) | API 注释生成、日常 CHANGELOG 日志更新与轻量级更新跟踪。 | `doc-coauthoring` |
-| **最终参赛技术报告输出**：<br>终稿生成：*“请 Claude Opus 整合生成最终参赛技术报告”* | **Claude Opus 4.6/4.7** | 内置接口 / 向量引擎 | 整合生成最终高学术质量参赛技术报告、系统概要设计及答辩 PPT 演示大纲。 | `doc-coauthoring` |
+| **前端/视觉任务默认配置**：<br>告诉 Sisyphus：*“前端/视觉任务默认使用 Gemini”* | **Gemini 3.5 Flash** | Antigravity 内置 (免费) | 视网膜 UI 界面绘制、现代组件开发、视觉审美打磨，实现 Wow 质感。 | `frontend-design`<br>`ui-ux-pro-max-skill` |
+| **安全审计与故障排雷**：<br>对 Sisyphus 说：*“调用 Sonnet 审计或排查当前报错”* | **Claude 3.5 Sonnet** | 向量引擎中转 → Claude Code | 故障定位、跨文件 Bug 重构、并发死锁拦截与容器沙箱安全审计。 | `code-reviewer`<br>`security-auditor` |
+| **日常注释与日志更新**：<br>日常更新：*“@gemini-agent 补充当前接口注释”* | **Gemini 3.5 Flash** | Antigravity 内置 (免费) | API 注释生成、日常 CHANGELOG 日志更新与轻量级更新跟踪。 | `doc-coauthoring` |
+| **最终参赛技术报告输出**：<br>终稿生成：*“请 Claude Opus 整合生成最终参赛技术报告”* | **Claude Opus 4.7** | 内置接口 / 向量引擎 | 整合生成最终高学术质量参赛技术报告、系统概要设计及答辩 PPT 演示大纲。 | `doc-coauthoring` |
 
 #### E. 本地智能体自动触发匹配规则 (JIT Auto-Trigger Rules)
 为了节省 Token 且不牺牲开发专业度，智能体（包含 Antigravity 本身与 Claude Code）配备了**即时自动唤醒规则（Just-In-Time Rules）**。当你开启特定任务或打开特定文件时，智能体会根据下表**自动匹配并加载**对应技能：
@@ -250,18 +250,18 @@ EDUMATRIX_LLM_MODEL=gpt-4o-mini
 
 | 任务下达方式 | 对应模型 | 接入方式 | 核心赛题用途 | 推荐绑定 Skill |
 | :--- | :--- | :--- | :--- | :--- |
-| **在 oma 对话中直接对 Sisyphus 下达顶层战略与任务分解** | **Claude Opus 4.6/4.7** | Antigravity 内置 / 向量引擎 | 顶层规划、任务编排、计划跟踪 | `solution-architect` |
+| **在 oma 对话中直接对 Sisyphus 下达战略与任务分解** | **Gemini 3.5 Flash** 或 **Claude Sonnet** | Antigravity 内置 / 向量引擎 | 顶层规划、任务编排、计划跟踪 | `solution-architect` |
 | **告诉 Sisyphus：“后端/算法任务默认使用 GLM-5.1”** | **GLM-5.1** | CCSwitch → oh-my-ag | 常规业务 API 编写、SQL 映射、基础 CRUD 逻辑 | `backend-api`, `database-design` |
-| **告诉 Sisyphus：“前端/视觉任务默认使用 Gemini”** | **Gemini 3.1 Pro** | Antigravity 内置 (免费) | 视网膜 UI 界面绘制、现代组件开发、视觉审美打磨 | `frontend-design`, `ui-ux-pro-max-skill` |
-| **对 Sisyphus 说：“用 Opus 审查最新的代码安全性”** | **Claude Opus 4.6/4.7** | **向量引擎中转 → Claude Code** | 高并发协程死锁拦截、多租户安全审计、复杂算法攻坚 | `code-reviewer`, `security-auditor` |
-| **日常更新：“@gemini-agent 补充当前接口注释”** | **Gemini 3.1 Pro** | Antigravity 内置 (免费) | API 注释生成、日常 CHANGELOG 日志更新 | `doc-coauthoring` |
-| **终稿生成：“请 Claude Opus 整合生成最终参赛技术报告”** | **Claude Opus 4.6/4.7** | 内置接口 / 向量引擎 | 最终高学术质量参赛技术报告、系统概要设计导出 | `doc-coauthoring` |
+| **告诉 Sisyphus：“前端/视觉任务默认使用 Gemini”** | **Gemini 3.5 Flash** | Antigravity 内置 (免费) | 视网膜 UI 界面绘制、现代组件开发、视觉审美打磨 | `frontend-design`, `ui-ux-pro-max-skill` |
+| **对 Sisyphus 说：“用 Sonnet 审查/排查当前代码问题”** | **Claude 3.5 Sonnet** | **向量引擎中转 → Claude Code** | 高并发协程死锁拦截、多租户安全审计、故障分析与回归测试 | `code-reviewer`, `security-auditor` |
+| **日常更新：“@gemini-agent 补充当前接口注释”** | **Gemini 3.5 Flash** | Antigravity 内置 (免费) | API 注释生成、日常 CHANGELOG 日志更新 | `doc-coauthoring` |
+| **终稿生成：“请 Claude Opus 整合生成最终参赛技术报告”** | **Claude Opus 4.7** | 内置接口 / 向量引擎 | 最终高学术质量参赛技术报告、系统概要设计导出 | `doc-coauthoring` |
 
 ---
 
 ## 八、 费用与成本预算控制
 
-* **Sisyphus 总指挥内置模型**：使用免费的内置 Gemini 3.1 Pro，或者根据需要订阅 Google AI Pro（约 $20/月）。
+* **Sisyphus 总指挥内置模型**：使用免费的内置 Gemini 3.5 Flash，或者根据需要订阅 Google AI Pro（约 $20/月）。
 * **向量引擎 API 用量**：按实际消耗 Token 付费，团队开发初期充值 **¥50 - ¥100 即可完全满足一个月超高频的 Claude Code 深度审计与算法攻坚**。
 * **GLM-5.1 API 费用**：智谱开放平台 API 价格极低，且针对比赛项目通常有充足的免费赠送额度，开发成本几乎可以忽略不计。
 * **辅助工具**：Antigravity IDE、oh-my-ag、awesome-skills、start.bat 等全部免费开源。

@@ -399,6 +399,14 @@ Sisyphus 在解析 `plan.md` 中的每个开发任务时，必须先将其分类
    * **高低配协作**：正方（提方案）指派高智能的 `Claude Opus/Sonnet`，反方（挑刺找茬）指派完全免费的 `Gemini 3.5 Flash (High)`，最大化砍掉 80% Token 成本。
 3. **成果自动双写**：辩论收敛出的最终决策，必须由 `doc-coauthoring` 自动转化为精简的 Markdown 追加到 `DEVELOPMENT_TRACE.md` 日志中，作为工程演进铁证。
 
+### 6. 主控协调官核心铁律 (Strict Rules for Coordinator in IDE)
+
+当 IDE AI 智能体（如 Antigravity）作为主脑协调官（Sisyphus）与用户在对话框中交流时，必须遵循以下元认知与操作规范：
+1. **零代码实现 (Zero Code Implementation)**：主控只负责拆解任务、调度角色和同步状态，绝对不能亲自动手在对话中生成、修改或重构任何业务代码（包括 Python 后端、SQLite 数据库或 Vue 前端）。
+2. **零源码阅读 (Zero Source Reading)**：主控除非被用户明确指示，否则不应主动对业务源文件执行全盘读取（Read File）或全局过滤（Grep Search）。仅通过读取 `plan.md` 确定进度与验收标准，利用配置文件与技能规范指派具体任务。
+3. **任务派发 (Delegate via CLI)**：所有实际编码任务必须通过终端工具 `run_command` 并运行 `oma agent:spawn <agent-id> "<prompt>" <session-id>` 来指派给最合适的专业子智能体。
+4. **强制提示 /compact**：在每次成功派发子智能体指令后，主脑应在回答末尾明确提示用户在编辑器命令行中运行 `/compact` 以清理上下文，锁死 Token 费用，绝不产生无谓的额度消耗。
+
 ---
 
 ## 十一、 配置参考 (.env 核心环境变量)

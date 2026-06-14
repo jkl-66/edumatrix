@@ -48,6 +48,17 @@ class EduMatrixConfig:
     llm_retry_max_attempts: int = int(os.getenv("EDUMATRIX_RETRY_MAX_ATTEMPTS", "3"))
     llm_request_queue_size: int = int(os.getenv("EDUMATRIX_REQUEST_QUEUE_SIZE", "200"))
 
+    # Neo4j Graph Database
+    neo4j_uri: str = os.getenv("EDUMATRIX_NEO4J_URI", "")
+    neo4j_user: str = os.getenv("EDUMATRIX_NEO4J_USER", "neo4j")
+    neo4j_password: str = os.getenv("EDUMATRIX_NEO4J_PASSWORD", "")
+    neo4j_database: str = os.getenv("EDUMATRIX_NEO4J_DATABASE", "neo4j")
+
+    # ChromaDB Vector Store
+    use_chromadb: bool = os.getenv("EDUMATRIX_USE_CHROMADB", "0") == "1"
+    chroma_persist_dir: str = os.getenv("EDUMATRIX_CHROMA_DIR", "data/chroma_db")
+    chroma_collection_formulas: str = os.getenv("EDUMATRIX_CHROMA_FORMULAS", "edumatrix_formulas")
+
     # Auth Settings
     auth_secret_key: str = os.getenv("EDUMATRIX_AUTH_SECRET_KEY", "edumatrix_super_secret_v1_2026")
     auth_algorithm: str = os.getenv("EDUMATRIX_AUTH_ALGORITHM", "HS256")

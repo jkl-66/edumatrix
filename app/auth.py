@@ -57,3 +57,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         raise HTTPException(status_code=400, detail="Inactive user")
     
     return user
+
+def authenticate_user(db: Session, username: str, password: str) -> Optional[DBUser]:
+    """验证用户凭据并返回用户对象"""
+    user = db.query(DBUser).filter(DBUser.username == username).first()
+    if not user:
+        return None
+    if not verify_password(password, user.hashed_password):
+        return None
+    return user

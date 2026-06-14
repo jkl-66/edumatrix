@@ -1,11 +1,15 @@
 import sys
 import os
+import uuid
+import time
+from datetime import timedelta
 from dataclasses import asdict
 from typing import Any
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 # 允许 app 导入 root 目录下的模块
@@ -13,7 +17,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from concurrency import AsyncWorkerPool, TokenBucket
 from models import DIMENSION_LABELS, StudentProfile
-from app.database import init_db, get_db, DBStudentProfile
+from app.database import init_db, get_db, DBStudentProfile, DBUser
 from app.crud import (
     load_student_profile,
     save_student_profile,
@@ -26,6 +30,7 @@ from app.crud import (
     record_conversation,
     get_conversation_history,
 )
+from app.auth import authenticate_user, create_access_token, get_current_user, get_password_hash
 from knowledge_api import router as knowledge_router
 from quiz_api import router as quiz_router
 from web_search_api import router as web_search_router
@@ -59,6 +64,54 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.perf_counter()
+    trace_id = str(uuid.uuid4())
+    request.state.trace_id = trace_id
+    
+    response = await call_next(request)
+    
+    process_time = time.perf_counter() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    response.headers["X-Trace-ID"] = trace_id
+    
+    # 写入标准化日志
+    TELEMETRY.record_span(
+        name="http_request",
+        duration_ms=process_time * 1000,
+        path=request.url.path,
+        method=request.method,
+        trace_id=trace_id,
+        status_code=response.status_code
+    )
+    return response
+
+
+@app.post("/api/auth/login")
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """JWT 登录接口，获取访问令牌 (Task 2.2)"""
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        # 如果是首次演示，且数据库为空，自动创建 demo 用户
+        if form_data.username == "demo-student" and form_data.password == "demo-password":
+            user = DBUser(username="demo-student", hashed_password=get_password_hash("demo-password"))
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    
+    access_token_expires = timedelta(minutes=CONFIG.auth_access_token_expire_minutes)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 
 @app.on_event("startup")
@@ -199,8 +252,11 @@ async def read_index():
     return INDEX_HTML
 
 @app.get("/api/teacher")
-async def get_teacher_dashboard(db: Session = Depends(get_db)):
-    """获取教师端诊断看板（直接从本地 SQLite 数据库中读取，实现实时持久化）"""
+async def get_teacher_dashboard(
+    db: Session = Depends(get_db),
+    current_user: DBUser = Depends(get_current_user)
+):
+    """获取教师端诊断看板（直接从本地 SQLite 数据库中读取，实现实时持久化，受 JWT 保护）"""
     _seed_demo_class(db)
     db_profiles = db.query(DBStudentProfile).all()
     profiles = [load_student_profile(db, db_prof.student_id) for db_prof in db_profiles]
@@ -245,8 +301,12 @@ async def get_datasets():
     return {"course": "机器学习导论", "datasets": MACHINE_LEARNING_DATASETS}
 
 @app.post("/api/process")
-async def process_student_message(request: Request, db: Session = Depends(get_db)):
-    """核心画像提取与多智能体资源生成接口（SQLite 与 Swarm 双轨并网）"""
+async def process_student_message(
+    request: Request, 
+    db: Session = Depends(get_db),
+    current_user: DBUser = Depends(get_current_user)
+):
+    """核心画像提取与多智能体资源生成接口（SQLite 与 Swarm 双轨并网，受 JWT 保护）"""
     try:
         payload = await request.json()
     except Exception:

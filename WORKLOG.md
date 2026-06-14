@@ -47,7 +47,7 @@
 
 ---
 
-### 2026-06-02 (待更新)
+### 2026-06-02
 > **今日概述**：简要说明今日工作重点。
 
 #### 1. 计划/完成工作
@@ -68,7 +68,7 @@
 
 ---
 
-### 2026-06-04/2026-06-05 (待更新)
+### 2026-06-04/2026-06-05
 > **今日概述**：支持讲义生成数学物理化学图，但讲义教授无需生成图表时似乎会显示无内容，明天再改。
 
 #### 1. 计划/完成工作
@@ -253,4 +253,29 @@
 - **改进**：
   - 新增 `test_guided_decoding_self_healing` 单元测试，Mock 校验成功和概率坍塌校验失败引发自愈的两种场景。
   - 新增 `test_sandbox_resource_limits_and_timeout` 单元测试，校验死循环代码的 3 秒强熔断和恶意命令拦截。
-  - 运行全量 15 个测试，100% 通过（`OK`）。
+  - 运行全量 15 个测试，100% 通过（`OK`）。
+
+---
+
+### 2026-06-14
+> **今日概述**：全面推进并完成了 **Wave 3（RAG 引擎与多模态知识图谱）** 的 Task 2.1 与 Task 2.2 核心开发与验证。实现动态三元组知识图谱构建与 Neo4j 拓扑并网，及 Layout 分析与公式 LaTeX 双轨增强检索，通过 34 个新增专项测试与 15 个系统核心集成测试，系统在高可用 Fallback 与混合多模态检索表现上均达到极佳状态。
+
+#### 1. 动态三元组抽取与 Neo4j 拓扑图谱并网 (Task 2.1)
+- **文件**：`app/utils/graph_builder.py` [NEW]
+- **改进**：
+  - 编写了 `graph_builder.py`，负责在文档摄入或多轮对话中动态抽取 (Subject, Predicate, Object) 实体知识图谱。
+  - 实现了 `Neo4jGraphRepository` 与 Neo4j 图数据库的连接、事务管理、节点/关系动态合并和实体相似度匹配，并配置了 `InMemoryGraphRepository` 作为本地进程级缓存 Fallback，完美规避无可用外部 Neo4j 连接时发生闪退，实现了无缝优雅降级。
+
+#### 2. PDF Layout 分析与公式 LaTeX 双轨增强检索 (Task 2.2)
+- **文件**：`app/utils/formula_extractor.py` [NEW], `app/utils/formula_rag.py` [NEW]
+- **改进**：
+  - **公式提取**：在 `formula_extractor.py` 中，使用 PyMuPDF 对多模态文档实施细粒度版面 Layout 分析，结合启发式特征提取与正则公式匹配，支持行内 (inline) 和块级 (block) LaTeX 公式的自动定位与切片。
+  - **增强检索**：在 `formula_rag.py` 中，实现双轨公式 RAG，利用 ChromaDB 向量库对提取出的公式及上下文描述进行混合嵌入及相似度排序检索，并配有 `InMemoryFormulaStore` 内存级持久化 Fallback 机制。
+  - **配置参数**：在 `config.py` 中新增并集成了 Neo4j（URI、账号密码、默认数据库）和 ChromaDB（持久化路径、公式 Collection）的环境配置定义。
+
+#### 3. 自动化专项测试与核心集成测试校验
+- **文件**：`tests/test_graph_builder.py` [NEW], `test_edumatrix.py`
+- **改进**：
+  - 编写了 `tests/test_graph_builder.py` 的 34 个专项测试，覆盖三元组动态解析、Neo4j/InMemory 合并操作、相似度对齐计算、PDF Layout 扫描、LaTex 公式切片与 ChromaDB 语义混合检索等。
+  - 运行 `python -m pytest tests/test_graph_builder.py -v` ➡️ 34 passed (100% 成功)。
+  - 运行 `python -m pytest test_edumatrix.py -v` ➡️ 15 passed (100% 成功)。

@@ -10,11 +10,15 @@ import random
 import re
 import ssl
 import time
+import pybreaker
 from typing import Any, Protocol
 from urllib.parse import urlencode, urlparse
 
 from config import CONFIG, EduMatrixConfig
 from concurrency import APIRateLimiter, CircuitBreaker, retry_with_backoff
+
+# 声明星火专用熔断器（Task 2.2: fail_max=3, reset_timeout=30.0）
+spark_breaker = pybreaker.CircuitBreaker(fail_max=3, reset_timeout=30.0)
 
 
 class LLMBackend(Protocol):
@@ -248,6 +252,109 @@ class SparkClient:
         return "".join(result).strip()
 
 
+@dataclass
+class AsyncSparkClient:
+    app_id: str
+    api_key: str
+    api_secret: str
+    spark_url: str = CONFIG.spark_url
+    domain: str = CONFIG.spark_domain
+    timeout_seconds: int = 45
+
+    def _create_url(self) -> str:
+        parsed = urlparse(self.spark_url)
+        host = parsed.netloc
+        path = parsed.path or "/v3.5/chat"
+        now = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+        signature_origin = f"host: {host}\ndate: {now}\nGET {path} HTTP/1.1"
+        digest = hmac.new(
+            self.api_secret.encode("utf-8"),
+            signature_origin.encode("utf-8"),
+            digestmod=hashlib.sha256,
+        ).digest()
+        signature = base64.b64encode(digest).decode("utf-8")
+        authorization_origin = (
+            f'api_key="{self.api_key}", algorithm="hmac-sha256", '
+            f'headers="host date request-line", signature="{signature}"'
+        )
+        authorization = base64.b64encode(authorization_origin.encode("utf-8")).decode("utf-8")
+        return self.spark_url + "?" + urlencode({"authorization": authorization, "date": now, "host": host})
+
+    def _sync_generate(self, system_prompt: str, user_prompt: str) -> str:
+        try:
+            import websocket
+        except ImportError as exc:
+            raise RuntimeError("缺少 websocket-client；请安装后再启用远程星火模式。") from exc
+
+        result: list[str] = []
+        errors: list[str] = []
+        url = self._create_url()
+        payload = {
+            "header": {"app_id": self.app_id},
+            "parameter": {
+                "chat": {
+                    "domain": self.domain,
+                    "temperature": 0.25,
+                    "max_tokens": 4096,
+                }
+            },
+            "payload": {
+                "message": {
+                    "text": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ]
+                }
+            },
+        }
+
+        def on_open(ws):
+            ws.send(json.dumps(payload, ensure_ascii=False))
+
+        def on_error(_ws, error):
+            errors.append(str(error))
+
+        def on_message(ws, message):
+            data = json.loads(message)
+            code = data.get("header", {}).get("code", 0)
+            if code != 0:
+                errors.append(json.dumps(data, ensure_ascii=False))
+                ws.close()
+                return
+            choices = data["payload"]["choices"]
+            result.append(choices["text"][0]["content"])
+            if choices["status"] == 2:
+                ws.close()
+
+        ws = websocket.WebSocketApp(url, on_open=on_open, on_error=on_error, on_message=on_message)
+        ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE}, ping_timeout=self.timeout_seconds)
+        if errors:
+            raise RuntimeError(f"星火 API 调用失败: {' | '.join(errors)}")
+        return "".join(result).strip()
+
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        # 定义本地 vLLM 备份节点 (Task 2.2)
+        local_backup = AsyncOpenAIChatLLM(
+            endpoint="http://localhost:8000/v1/chat/completions",
+            api_key="local-vllm-key",
+            model="Qwen2.5-Coder-32B-Instruct"
+        )
+        
+        try:
+            # 使用 pybreaker 包装同步方法并运行在线程池中
+            return await self._generate_with_breaker(system_prompt, user_prompt)
+        except (pybreaker.CircuitBreakerError, Exception) as e:
+            print(f"  [EduMatrix] 星火 API 熔断或异常: {e}。自动无缝切换至本地 vLLM 备用节点。")
+            return await local_backup.generate(system_prompt, user_prompt, role=role)
+
+    @spark_breaker
+    async def _generate_with_breaker(self, system_prompt: str, user_prompt: str) -> str:
+        import asyncio
+        import functools
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, functools.partial(self._sync_generate, system_prompt, user_prompt))
+
+
 class DeterministicEducationLLM:
     def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
         if "画像抽取器" in role:
@@ -296,15 +403,29 @@ def build_llm(config: EduMatrixConfig = CONFIG) -> LLMBackend:
     return DeterministicEducationLLM()
 
 
-def build_async_llm(config: EduMatrixConfig = CONFIG) -> AsyncLLMBackend:
-    provider = config.llm_provider.lower().strip()
-    if provider == "openai" and config.llm_api_key:
+def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBackend:
+    # 支持动态覆盖配置（用于 swarm_factory）
+    provider = overrides.get("provider", config.llm_provider).lower().strip()
+    api_key = overrides.get("api_key", config.llm_api_key)
+    endpoint = overrides.get("endpoint", config.llm_endpoint)
+    model = overrides.get("model", config.llm_model)
+    
+    if provider == "spark" or (config.spark_app_id and config.spark_api_key):
+        return AsyncSparkClient(
+            app_id=config.spark_app_id,
+            api_key=config.spark_api_key,
+            api_secret=config.spark_api_secret,
+            spark_url=config.spark_url,
+            domain=config.spark_domain,
+        )
+        
+    if (provider == "openai" or provider == "vllm") and api_key:
         return AsyncOpenAIChatLLM(
-            endpoint=config.llm_endpoint,
-            api_key=config.llm_api_key,
-            model=config.llm_model,
-            temperature=config.llm_temperature,
-            max_tokens=config.llm_max_tokens,
+            endpoint=endpoint,
+            api_key=api_key,
+            model=model,
+            temperature=overrides.get("temperature", config.llm_temperature),
+            max_tokens=overrides.get("max_tokens", config.llm_max_tokens),
             timeout_seconds=config.llm_timeout,
         )
     return AsyncDeterministicEducationLLM()

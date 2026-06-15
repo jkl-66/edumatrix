@@ -73,6 +73,20 @@
 
 ---
 
+### [2026-06-15] - RAG 健壮性与 SQLite 高并发锁及前端 Session 恢复优化
+- **任务编号**：`TASK_QA_001`
+- **对应智能体**：`debug-investigator (gemini-3.5-flash)`
+- **绑定 Skill**：`oma-debug`, `oma-qa`
+- **开发场景**：`rag_engine.py` (arXiv 检索异常捕获)、`app/database.py` (SQLite timeout: 30.0 锁超时)、`frontend/src/App.vue` (localStorage 持久化 studentId 防止 Session 丢失)。
+- **自愈重试记录**：
+  * 无报错，首次开发即完美绿灯跑通。
+- **测试验证结果**：
+  * `python -m pytest test_edumatrix.py tests/test_graph_builder.py -v` ➡️ 49 passed (100% 成功，单元与集成测试运行时间由 193s 大幅缩减至 24.71s)。
+- **Token 消耗估计**：约 2,000 Input / 500 Output
+- **架构师（用户）终审反馈**：Pending
+
+---
+
 ## 📝 智能体日志双写规范 (Agent Logging Protocol)
 当智能体完工后，必须按照以下标准 Markdown 格式，在文件底部追加日志：
 

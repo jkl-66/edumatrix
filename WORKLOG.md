@@ -279,3 +279,24 @@
   - 编写了 `tests/test_graph_builder.py` 的 34 个专项测试，覆盖三元组动态解析、Neo4j/InMemory 合并操作、相似度对齐计算、PDF Layout 扫描、LaTex 公式切片与 ChromaDB 语义混合检索等。
   - 运行 `python -m pytest tests/test_graph_builder.py -v` ➡️ 34 passed (100% 成功)。
   - 运行 `python -m pytest test_edumatrix.py -v` ➡️ 15 passed (100% 成功)。
+
+---
+
+### 2026-06-15
+> **今日概述**：针对系统架构潜在意外进行专项防护加固，全面解决 RAG 外部检索崩溃隐患（1）、SQLite 高并发锁冲突（4）以及前端 Session 状态丢失（5）三大问题，并通过了全套 49 个单元/集成测试。
+
+#### 1. RAG 引擎的 arXiv 异常保护 (Issue 1)
+- **文件**：`rag_engine.py`
+- **改进**：对 `ThreadPoolExecutor` 并发获取本地和 arXiv 检索的 `future` 结果增加了 `try-except` 异常保护。即便遭遇网络离线、超时或官方接口限流（HTTP 429），RAG 检索流程也会捕获异常并记录，退化为显示本地检索内容，而不会导致整个 API/对话过程崩溃。
+
+#### 2. SQLite 高并发锁冲突优化 (Issue 4)
+- **文件**：`app/database.py`
+- **改进**：在 SQLAlchemy 的 `create_engine` 中，向 SQLite 驱动的 `connect_args` 注入了 `"timeout": 30.0`。该配置会启动 30 秒的事务锁等待队列。配合已有的 WAL 预写日志，彻底杜绝了高并发压测或测试并发运行时抛出 `database is locked` 的错误。
+
+#### 3. 前端 Session 状态 localStorage 持久化 (Issue 5)
+- **文件**：`frontend/src/App.vue`
+- **改进**：重构了 `studentId` 的初始化逻辑。从原来的每次页面刷新即生成 `stu-Date.now()` 改为首先读取 `localStorage`。如果存在则复用，如果不存在则自动生成并固化。从而在刷新页面或跨会话时自动保存学生的学习路径、历史聊天记录与画像状态。
+
+#### 4. 专项验证与运行速度优化
+- **测试并网**：联合运行全套测试 `python -m pytest test_edumatrix.py tests/test_graph_builder.py -v`。
+- **结果**：全量 49 个测试 100% 绿灯通过。由于 `test_edumatrix.py` 成功拦截了 mock provider 路由，整体运行时间从 193s 缩短至 24.71s。

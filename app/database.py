@@ -40,7 +40,7 @@ DATABASE_URL = f"sqlite:///{DB_PATH}"
 # 初始化引擎并锁定 WAL 模式提高并发性能
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False}, # 允许 FastAPI 多线程访问
+    connect_args={"check_same_thread": False, "timeout": 30.0}, # 允许 FastAPI 多线程访问并提供 30 秒超时锁队列
     echo=False
 )
 

@@ -6,7 +6,15 @@ import { BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar, Present
 const route = useRoute()
 const router = useRouter()
 
-const studentId = ref('stu-' + Date.now())
+const getOrInitStudentId = () => {
+  let id = localStorage.getItem('edumatrix_student_id')
+  if (!id) {
+    id = 'stu-' + Date.now()
+    localStorage.setItem('edumatrix_student_id', id)
+  }
+  return id
+}
+const studentId = ref(getOrInitStudentId())
 const sidebarCollapsed = ref(false)
 
 const navItems = [

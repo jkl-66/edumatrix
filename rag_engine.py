@@ -343,8 +343,15 @@ class HybridRAGPipeline:
                 future_arxiv = executor.submit(search_arxiv, query, 2) 
 
                 # 收集结果
-                candidates.extend(future_local.result())
-                candidates.extend(future_arxiv.result())
+                try:
+                    candidates.extend(future_local.result())
+                except Exception as e:
+                    print(f"  [RAG] Local search failed: {e}")
+                
+                try:
+                    candidates.extend(future_arxiv.result())
+                except Exception as e:
+                    print(f"  [RAG] arXiv search failed: {e}")
             # === 修改区结束 ===
 
             user_results = self.user_index.search(query_with_graph, top_k=top_k)

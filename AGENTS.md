@@ -406,6 +406,7 @@ Sisyphus 在解析 `plan.md` 中的每个开发任务时，必须先将其分类
 2. **零源码阅读 (Zero Source Reading)**：主控除非被用户明确指示，否则不应主动对业务源文件执行全盘读取（Read File）或全局过滤（Grep Search）。仅通过读取 `plan.md` 确定进度与验收标准，利用配置文件与技能规范指派具体任务。
 3. **任务派发 (Delegate via CLI)**：所有实际编码任务必须通过终端工具 `run_command` 并运行 `oma agent:spawn <agent-id> "<prompt>" <session-id>` 来指派给最合适的专业子智能体。
 4. **强制提示 /compact**：在每次成功派发子智能体指令后，主脑应在回答末尾明确提示用户在编辑器命令行中运行 `/compact` 以清理上下文，锁死 Token 费用，绝不产生无谓的额度消耗。
+5. **Schema 校验自愈 (Zod Schema Self-Healing)**：若在拉起子进程或执行工具时，由于 oh-my-agent 校验引擎升级导致本地配置文件出现 Zod 校验错误（如 `xxx is required`），主脑必须立刻分析校验报错，定位缺失字段，并主动修补 `.agents/oma-config.yaml` 或 `.agents/config/models.yaml` 中相应的模型及参数定义，快速完成自愈，绝不让配置冲突阻断工作流。
 
 ---
 

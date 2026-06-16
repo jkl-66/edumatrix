@@ -14,6 +14,9 @@ from rag_engine import hybrid_rag
 from retrieval_evaluation import RetrievalEvalCase, evaluate_retrieval
 from vector_store import InMemoryVectorIndex
 from web_demo import _teacher_dashboard
+from app.database import init_db
+init_db()
+
 
 
 class EduMatrixPipelineTests(unittest.TestCase):
@@ -324,6 +327,84 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertEqual(stdout, "")
         self.assertIn("超时", stderr)
         self.assertLessEqual(elapsed, 5.0)
+
+    def test_database_cascade_deletes(self):
+        from app.database import SessionLocal, DBStudentProfile, DBNote, DBReviewPlan, DBQuizRecord, DBWrongQuestion, DBConversationHistory
+        from app.crud import save_student_profile
+        from models import StudentProfile
+        import uuid
+        
+        student_id = f"test-cascade-{uuid.uuid4().hex[:8]}"
+        
+        # 1. Create student profile
+        profile = StudentProfile(student_id=student_id)
+        profile.major = "AI"
+        
+        session = SessionLocal()
+        try:
+            save_student_profile(session, profile)
+            
+            # 2. Add child rows
+            note = DBNote(id=f"n-{student_id}", student_id=student_id, content="test note")
+            plan = DBReviewPlan(student_id=student_id, concept="CNN", mastery=0.5)
+            quiz = DBQuizRecord(id=f"q-{student_id}", student_id=student_id, question="Q?", correct_answer="A")
+            session.add_all([note, plan, quiz])
+            session.commit()
+            
+            wrong = DBWrongQuestion(student_id=student_id, quiz_record_id=quiz.id, concept_name="CNN", wrong_reason_category="misconception")
+            session.add(wrong)
+            session.commit()
+            
+            # 3. Verify they exist
+            self.assertIsNotNone(session.query(DBNote).filter_by(student_id=student_id).first())
+            self.assertIsNotNone(session.query(DBReviewPlan).filter_by(student_id=student_id).first())
+            self.assertIsNotNone(session.query(DBQuizRecord).filter_by(student_id=student_id).first())
+            self.assertIsNotNone(session.query(DBWrongQuestion).filter_by(student_id=student_id).first())
+            
+            # 4. Delete student profile
+            db_prof = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            session.delete(db_prof)
+            session.commit()
+            
+            # 5. Verify they are gone!
+            self.assertIsNone(session.query(DBNote).filter_by(student_id=student_id).first())
+            self.assertIsNone(session.query(DBReviewPlan).filter_by(student_id=student_id).first())
+            self.assertIsNone(session.query(DBQuizRecord).filter_by(student_id=student_id).first())
+            self.assertIsNone(session.query(DBWrongQuestion).filter_by(student_id=student_id).first())
+        finally:
+            session.close()
+
+    def test_database_concurrency_writes(self):
+        import concurrent.futures
+        from app.database import SessionLocal
+        from app.crud import load_student_profile, save_student_profile
+        import uuid
+        
+        student_id = f"test-con-{uuid.uuid4().hex[:8]}"
+        
+        def run_write():
+            session = SessionLocal()
+            try:
+                prof = load_student_profile(session, student_id)
+                prof.cognitive_load = 0.9
+                save_student_profile(session, prof)
+            finally:
+                session.close()
+                
+        # Run 10 concurrent writes in parallel threads
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(run_write) for _ in range(10)]
+            for f in futures:
+                # Should not raise "database is locked"
+                f.result()
+                
+        # Verify write succeeded
+        session = SessionLocal()
+        try:
+            prof = load_student_profile(session, student_id)
+            self.assertEqual(prof.cognitive_load, 0.9)
+        finally:
+            session.close()
 
 
 if __name__ == "__main__":

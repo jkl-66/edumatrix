@@ -10,10 +10,9 @@ import asyncio
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException
 
-from app.database import DBCodeExecution, get_db
+from app.database import DBCodeExecution, run_db_op
 
 router = APIRouter(prefix="/api/code", tags=["code_execution"])
 
@@ -55,7 +54,8 @@ class SandboxProcessRunner:
         for i in range(self.pool_size):
             try:
                 container = await loop.run_in_executor(self.executor, self._create_container)
-                self.containers.append(container)
+                async with self._lock:
+                    self.containers.append(container)
                 print(f"  [Sandbox] Container {i+1} pre-warmed: {container.short_id}")
             except Exception as ce:
                 print(f"  [Sandbox] Failed to pre-warm container {i+1}: {ce}")
@@ -314,7 +314,6 @@ def _generate_id() -> str:
 @router.post("/run")
 async def run_code(
     payload: dict[str, Any],
-    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     code = str(payload.get("code", "")).strip()
     language = str(payload.get("language", "python")).strip().lower()
@@ -351,8 +350,12 @@ async def run_code(
         error=error[:5000] if error else "",
         execution_time_ms=int(exec_time * 1000),
     )
-    db.add(db_exec)
-    db.commit()
+    
+    def save_exec(session):
+        session.add(db_exec)
+        session.commit()
+        
+    await run_db_op(save_exec)
 
     return {
         "exec_id": exec_id,
@@ -371,15 +374,17 @@ async def _execute_python(code: str) -> tuple[str, str, float]:
 async def get_code_history(
     student_id: str,
     limit: int = 20,
-    db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    records = (
-        db.query(DBCodeExecution)
-        .filter(DBCodeExecution.student_id == student_id)
-        .order_by(DBCodeExecution.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    def fetch_history(session):
+        return (
+            session.query(DBCodeExecution)
+            .filter(DBCodeExecution.student_id == student_id)
+            .order_by(DBCodeExecution.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        
+    records = await run_db_op(fetch_history)
     return [
         {
             "id": r.id,

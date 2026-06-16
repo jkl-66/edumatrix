@@ -8,9 +8,8 @@ from typing import Any
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
 
-from app.database import DBQuizRecord, DBStudentProfile, get_db
+from app.database import DBQuizRecord, DBStudentProfile, run_db_op
 from app.crud import load_student_profile, save_student_profile
 from swarm_factory import build_swarm_from_headers
 
@@ -29,14 +28,13 @@ def _generate_quiz_id() -> str:
 @router.post("/generate")
 async def generate_quiz(
     request: Request,
-    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     payload = await request.json()
     student_id = str(payload.get("student_id", "default"))
     target_concept = str(payload.get("target_concept", "")).strip()
     difficulty = str(payload.get("difficulty", "medium"))
 
-    profile = load_student_profile(db, student_id)
+    profile = await run_db_op(load_student_profile, student_id)
     if not target_concept:
         if profile.weak_points:
             target_concept = profile.weak_points[0]
@@ -81,7 +79,8 @@ async def generate_quiz(
         }
 
     quiz_id = _generate_quiz_id()
-    # Store quiz record
+    
+    # Store quiz record using run_db_op
     db_quiz = DBQuizRecord(
         id=quiz_id,
         student_id=student_id,
@@ -95,8 +94,12 @@ async def generate_quiz(
         attempt_number=1,
         session_id=payload.get("session_id", ""),
     )
-    db.add(db_quiz)
-    db.commit()
+    
+    def save_quiz(session):
+        session.add(db_quiz)
+        session.commit()
+        
+    await run_db_op(save_quiz)
 
     return {
         "quiz_id": quiz_id,
@@ -112,7 +115,6 @@ async def generate_quiz(
 @router.post("/evaluate")
 async def evaluate_answer(
     request: Request,
-    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     payload = await request.json()
     quiz_id = str(payload.get("quiz_id", "")).strip()
@@ -124,11 +126,13 @@ async def evaluate_answer(
     if not student_answer:
         raise HTTPException(status_code=400, detail="答案不能为空")
 
-    quiz_record = db.query(DBQuizRecord).filter(
-        DBQuizRecord.id == quiz_id,
-        DBQuizRecord.student_id == student_id,
-    ).first()
+    def fetch_record(session):
+        return session.query(DBQuizRecord).filter(
+            DBQuizRecord.id == quiz_id,
+            DBQuizRecord.student_id == student_id,
+        ).first()
 
+    quiz_record = await run_db_op(fetch_record)
     if not quiz_record:
         raise HTTPException(status_code=404, detail="测验记录未找到")
 
@@ -168,23 +172,32 @@ async def evaluate_answer(
     accuracy_score = float(result.get("accuracy_score", 0.5))
     ai_confidence = float(result.get("ai_confidence", 0.6))
 
-    profile = load_student_profile(db, student_id)
-    profile.update_from_feedback(
-        feedback=student_answer,
-        accuracy=accuracy_score,
-        self_confidence=student_confidence,
-        hint_count=0,
-    )
-    save_student_profile(db, profile)
+    # Perform updates in a single thread-safe db transaction
+    def perform_eval_updates(session):
+        # 重新获取 record 以绑定到当前 session
+        local_record = session.query(DBQuizRecord).filter(DBQuizRecord.id == quiz_id).first()
+        profile = load_student_profile(session, student_id)
+        profile.update_from_feedback(
+            feedback=student_answer,
+            accuracy=accuracy_score,
+            self_confidence=student_confidence,
+            hint_count=0,
+        )
+        save_student_profile(session, profile)
 
-    quiz_record.student_answer = student_answer
-    quiz_record.student_confidence = student_confidence
-    quiz_record.ai_confidence = ai_confidence
-    quiz_record.accuracy_score = accuracy_score
-    quiz_record.feedback = result.get("feedback", "")
-    quiz_record.next_action = result.get("next_action", "practice")
-    quiz_record.attempt_number = attempt_number
-    db.commit()
+        if local_record:
+            local_record.student_answer = student_answer
+            local_record.student_confidence = student_confidence
+            local_record.ai_confidence = ai_confidence
+            local_record.accuracy_score = accuracy_score
+            local_record.feedback = result.get("feedback", "")
+            local_record.next_action = result.get("next_action", "practice")
+            local_record.attempt_number = attempt_number
+            session.commit()
+            
+        return profile.concept_mastery.get(local_record.target_concept if local_record else "", 0.5)
+
+    concept_mastery_updated = await run_db_op(perform_eval_updates)
 
     return {
         "quiz_id": quiz_id,
@@ -193,7 +206,7 @@ async def evaluate_answer(
         "feedback": result.get("feedback", ""),
         "next_action": result.get("next_action", "practice"),
         "metacognitive_gap": result.get("metacognitive_gap", ""),
-        "concept_mastery_updated": profile.concept_mastery.get(quiz_record.target_concept, 0.5),
+        "concept_mastery_updated": concept_mastery_updated,
         "student_confidence": student_confidence,
         "confidence_calibration": abs(student_confidence - accuracy_score),
     }
@@ -202,14 +215,13 @@ async def evaluate_answer(
 @router.post("/adapt")
 async def adapt_quiz(
     request: Request,
-    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     payload = await request.json()
     student_id = str(payload.get("student_id", "default"))
     quiz_id = str(payload.get("quiz_id", "")).strip()
     previous_action = str(payload.get("next_action", "practice"))
 
-    profile = load_student_profile(db, student_id)
+    profile = await run_db_op(load_student_profile, student_id)
 
     if previous_action == "advance":
         weak_points = [w for w in profile.weak_points if w not in payload.get("mastered_concepts", [])]
@@ -270,8 +282,12 @@ async def adapt_quiz(
         attempt_number=int(payload.get("attempt_number", 1)) + 1,
         session_id=payload.get("session_id", ""),
     )
-    db.add(db_quiz)
-    db.commit()
+    
+    def save_adapted_quiz(session):
+        session.add(db_quiz)
+        session.commit()
+        
+    await run_db_op(save_adapted_quiz)
 
     return {
         "quiz_id": new_quiz_id,
@@ -288,15 +304,17 @@ async def adapt_quiz(
 async def get_quiz_history(
     student_id: str,
     limit: int = 20,
-    db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    records = (
-        db.query(DBQuizRecord)
-        .filter(DBQuizRecord.student_id == student_id)
-        .order_by(DBQuizRecord.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    def fetch_history(session):
+        return (
+            session.query(DBQuizRecord)
+            .filter(DBQuizRecord.student_id == student_id)
+            .order_by(DBQuizRecord.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        
+    records = await run_db_op(fetch_history)
     return [
         {
             "id": r.id,

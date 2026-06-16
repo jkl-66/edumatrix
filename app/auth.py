@@ -5,10 +5,9 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
 
 from config import CONFIG
-from app.database import get_db, DBUser
+from app.database import DBUser, run_db_op
 
 # 密码哈希配置
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -35,7 +34,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, CONFIG.auth_secret_key, algorithm=CONFIG.auth_algorithm)
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> DBUser:
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> DBUser:
     """获取当前已认证用户的依赖项"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -50,7 +49,10 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     except JWTError:
         raise credentials_exception
     
-    user = db.query(DBUser).filter(DBUser.username == username).first()
+    def fetch_user(session):
+        return session.query(DBUser).filter(DBUser.username == username).first()
+
+    user = await run_db_op(fetch_user)
     if user is None:
         raise credentials_exception
     if not user.is_active:
@@ -58,7 +60,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     
     return user
 
-def authenticate_user(db: Session, username: str, password: str) -> Optional[DBUser]:
+def authenticate_user(db, username: str, password: str) -> Optional[DBUser]:
     """验证用户凭据并返回用户对象"""
     user = db.query(DBUser).filter(DBUser.username == username).first()
     if not user:

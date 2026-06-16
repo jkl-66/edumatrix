@@ -115,6 +115,19 @@ class ProfileProbeAgent:
 
 
 class ZPDPlannerAgent:
+    async def plan_async(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile):
+        if "最大池化与平均池化混淆" in profile.misconception_patterns:
+            target = "池化层"
+        elif profile.weak_points:
+            target = profile.weak_points[-1]
+            for point in ("池化层", "逻辑回归", "过拟合", "反向传播", "链式法则"):
+                if point in profile.weak_points:
+                    target = point
+                    break
+        else:
+            target = None
+        return await rag.retrieve_async(query, target=target)
+
     def plan(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile):
         if "最大池化与平均池化混淆" in profile.misconception_patterns:
             target = "池化层"
@@ -282,7 +295,7 @@ class EduMatrixSwarm:
             profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
             profile = await self.profile_probe.async_update(profile, user_input)
 
-            retrieval = self.planner.plan(self.rag, user_input, profile)
+            retrieval = await self.planner.plan_async(self.rag, user_input, profile)
             debate_result = self.debate.clean(retrieval)
             TELEMETRY.record_metric(
                 "debate.keep_rate",

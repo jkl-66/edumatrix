@@ -62,7 +62,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
             yield _sse("progress", {"step": "rag", "message": "正在检索知识库...", "progress": 25})
 
             try:
-                retrieval = swarm.planner.plan(swarm.rag, message, swarm.profile_store.get(student_id))
+                retrieval = await swarm.planner.plan_async(swarm.rag, message, swarm.profile_store.get(student_id))
                 debate_result = swarm.debate.clean(retrieval)
                 await check_disconnection()
                 yield _sse("progress", {"step": "debate", "message": f"证据清洗完成 ({len(debate_result.clean_evidence)} 条证据保留)", "progress": 40})

@@ -297,6 +297,47 @@
 - **文件**：`frontend/src/App.vue`
 - **改进**：重构了 `studentId` 的初始化逻辑。从原来的每次页面刷新即生成 `stu-Date.now()` 改为首先读取 `localStorage`。如果存在则复用，如果不存在则自动生成并固化。从而在刷新页面或跨会话时自动保存学生的学习路径、历史聊天记录与画像状态。
 
-#### 4. 专项验证与运行速度优化
+#### 4. 前端轨迹展示与掌握度大屏 (Wave 4 - Task 4.2)
+- **文件**：`frontend/src/components/MasteryRadar.vue` [NEW], `frontend/src/components/AgentTimeline.vue` [NEW], `frontend/src/views/Chat.vue`
+- **改进**：
+  - 引入并集成了 `echarts` 数据可视化库。
+  - 实现了 `MasteryRadar.vue` 雷达图组件，展现灰色“初始学情”与科技蓝“最新学情”双圈对比，并在回答完毕后动态向外滑动外扩。
+  - 实现了 `AgentTimeline.vue` 垂直时间轴组件，通过 `animate-pulse` 呼吸灯效果流式展示 Coordinator, Diagnostician, Planner 等多智能体协作状态。
+  - 完美挂载到 `Chat.vue` 右侧的可视化侧边栏中。
+
+#### 5. 讯飞流式 TTS 接入与嘴形低通滤波 (Wave 5 - Task 5.1 & 5.2)
+- **文件**：`frontend/src/components/AvatarSpeech.vue` [NEW], `frontend/src/views/Settings.vue`
+- **改进**：
+  - 新建 `AvatarSpeech.vue` 并接入科大讯飞流式 TTS WebSocket 接口，利用 Web Audio API 的 `AudioContext` 实现二进制音频 PCM 流式“边合成边播放”的零延迟体验。
+  - 引入音频 `AnalyserNode` 获取实时音频振幅，在嘴形 Canvas 中应用一阶低通指数平滑滤波器（平滑系数 $\alpha = 0.25$：`SmoothScale = 0.25 * TargetScale + 0.75 * LastScale`）消除了高频电噪声和爆破音抖动。
+  - 在 `Settings.vue` 页面中增加了科大讯飞 `APPID`、`API Key` 和 `API Secret` 的配置项，支持从 UI 自主配置。
+
+#### 6. 验证与构建测试
+- **改进**：在 `frontend` 目录运行 `npm run build` 成功完成打包构建，生成无警告与错误的生产 dist。
+
+#### 7. 专项验证与运行速度优化
 - **测试并网**：联合运行全套测试 `python -m pytest test_edumatrix.py tests/test_graph_builder.py -v`。
 - **结果**：全量 49 个测试 100% 绿灯通过。由于 `test_edumatrix.py` 成功拦截了 mock provider 路由，整体运行时间从 193s 缩短至 24.71s。
+
+---
+
+### 2026-06-16
+> **今日概述**：全面推进并完成了 **Wave 6（底层高可用与数据持久化加固）** 中 Task 6.1、Task 6.2 与 Task 6.3 的核心开发与并网验证。优化了 FastAPI 的数据库高并发性能，实现了 RAG 异步非阻塞检索改造，扩充了数据库画像持久化字段并新增错题物理表支持，并对沙箱容器预热池加装互斥锁，成功通过了包含高并发写锁与级联物理删除在内的全部 17 个系统核心单元测试。
+
+#### 1. FastAPI 与 RAG 异步非阻塞化改造 (Task 6.1)
+- **异步 RAG 检索**：在 `rag_engine.py` 中新增 `retrieve_async` 异步方法，采用 `loop.run_in_executor` 结合 `asyncio.gather` 并发调度本地向量库、arXiv 联网检索和用户文档检索，彻底消除了原本同步阻塞 IO 引起的主线程事件循环锁死隐患。
+- **Swarm 调度异步改造**：重构 `ZPDPlannerAgent` 提供 `plan_async` 方法，在 `agent_swarm.py` 中将 Swarm 控制流的路径规划更改为 `await self.planner.plan_async(...)`。
+- **高并发 DB 线程池隔离**：在 `app/database.py` 中编写 `run_db_op` 辅助方法，使用 `loop.run_in_executor` 在独立子线程中为数据库事务分配和回收局部 Local Session。
+- **全路由异步并网**：将 `app/main.py` 和 `app/auth.py` 中的同步 CRUD 数据库阻塞接口全部重构为 `await run_db_op(...)` 非阻塞调用。
+
+#### 2. 数据库画像扩充与级联物理删除加固 (Task 6.2)
+- **持久化字段扩充**：在 `DBStudentProfile` 中新增 `major`、`favorites`、`knowledge_traces` 和 `profile_evidence` 物理字段，在 `app/crud.py` 的加载与保存函数中添加对这些复杂嵌套 JSON 数据的反序列化及还原。
+- **错题物理表与 CASCADE**：定义了物理表 `DBWrongQuestion` 并为各子关联表（如错题表、计划表、会话历史等）的 `student_id` 配置 `ondelete="CASCADE"` 约束。
+- **SQLite 级联开启**：在 `app/database.py` 中挂载 SQLAlchemy event listener，一旦与 SQLite 建立物理连接，强制执行 `PRAGMA foreign_keys=ON` 以在物理层激活 CASCADE 级联删除。
+
+#### 3. 隔离代码沙箱常驻容器池并发安全 (Task 6.3)
+- **并发互斥锁**：在 `SandboxProcessRunner` 中初始化 `asyncio.Lock()`，并在 `_prewarm_pool` 启动预热、Docker 容器分配、以及容器回收等操作中应用 `async with self._lock`，从根本上杜绝了多协程并发运行代码时对 `self.containers` 列表修改产生的竞态冲突。
+
+#### 4. 自动化测试并网与环境自愈
+- **测试环境自愈**：修复了在 Windows 平台测试时由于文件夹权限受阻导致的 `PermissionError`，通过 `icacls` 命令赋予了用户完全控制权限；并在 `test_edumatrix.py` 中注入 `init_db()` 自愈依赖，解决了在空库跑测试时 `no such table: student_profiles` 的闪退问题。
+- **测试结果**：成功运行 `python -m pytest test_edumatrix.py`，全量 17 个测试（包括新增的级联物理删除测试 `test_database_cascade_deletes` 与多线程高并发写压测 `test_database_concurrency_writes`）全部 100% 顺利绿灯通过。

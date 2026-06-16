@@ -320,6 +320,110 @@ class HybridRAGPipeline:
         if removed > 0:
             TELEMETRY.record_metric("user_index.documents_removed", removed)
 
+    async def retrieve_async(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k) -> RetrievalBundle:
+        # === 关键修复：延迟加载，打破循环导入 ===
+        from web_search_api import search_arxiv
+        import asyncio
+        
+        loop = asyncio.get_running_loop()
+        
+        with timed_span(TELEMETRY, "hybrid_rag.retrieve_async", top_k=top_k):
+            target = target or self._infer_target(query)
+            graph_context = self.graph.get_context(target)
+            query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
+
+            # Run visual search in executor
+            candidates_task = loop.run_in_executor(
+                None, self.visual_index.search_evidence, query_with_graph, top_k
+            )
+
+            # Local search task
+            if self.faiss_indexes is not None:
+                local_task = loop.run_in_executor(
+                    None, self.faiss_indexes.search, query_with_graph, top_k
+                )
+            else:
+                local_task = loop.run_in_executor(
+                    None, self.text_index.search, query_with_graph, top_k
+                )
+
+            # arXiv search task
+            arxiv_task = loop.run_in_executor(
+                None, search_arxiv, query, 2
+            )
+
+            # User index search task
+            user_task = loop.run_in_executor(
+                None, self.user_index.search, query_with_graph, top_k
+            )
+
+            # Await all concurrently!
+            results = await asyncio.gather(candidates_task, local_task, arxiv_task, user_task, return_exceptions=True)
+            
+            candidates = []
+            
+            # candidates_task (visual)
+            if not isinstance(results[0], Exception):
+                candidates.extend(results[0])
+            else:
+                print(f"  [RAG] Visual search failed: {results[0]}")
+                
+            # local_task
+            if not isinstance(results[1], Exception):
+                candidates.extend(results[1])
+            else:
+                print(f"  [RAG] Local search failed: {results[1]}")
+                
+            # arxiv_task
+            if not isinstance(results[2], Exception):
+                candidates.extend(results[2])
+            else:
+                print(f"  [RAG] arXiv search failed: {results[2]}")
+                
+            # user_task
+            if not isinstance(results[3], Exception):
+                candidates.extend(results[3])
+            else:
+                print(f"  [RAG] User search failed: {results[3]}")
+
+            dedup: dict[str, Evidence] = {}
+            for item in candidates:
+                existing = dedup.get(item.id)
+                if existing is None or item.score > existing.score:
+                    dedup[item.id] = item
+            ranked = sorted(dedup.values(), key=lambda item: item.score, reverse=True)
+
+            from models import EvidenceModality
+            images = [item for item in ranked if item.modality == EvidenceModality.IMAGE]
+            
+            final_evidence = []
+            if images:
+                final_evidence.append(images[0])
+                if len(images) > 1 and top_k > 4:
+                    final_evidence.append(images[1])
+                    
+            for item in ranked:
+                if len(final_evidence) >= top_k:
+                    break
+                if item not in final_evidence:
+                    final_evidence.append(item)
+                    
+            final_evidence.sort(key=lambda item: item.score, reverse=True)
+
+            result = RetrievalBundle(
+                query=query,
+                target=graph_context.target,
+                graph_context=graph_context,
+                evidence=tuple(final_evidence),
+            )
+            TELEMETRY.record_metric("retrieval.evidence_count", len(result.evidence), target=result.target)
+            TELEMETRY.record_metric(
+                "retrieval.image_count",
+                sum(1 for item in result.evidence if item.modality == EvidenceModality.IMAGE),
+                target=result.target,
+            )
+            return result
+
     def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k) -> RetrievalBundle:
         # === 关键修复：延迟加载，打破循环导入 ===
         from web_search_api import search_arxiv

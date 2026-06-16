@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { Settings, Save, Key, Globe, Cpu, Thermometer, Eye, EyeOff, CheckCircle2 } from '@lucide/vue'
+import { Settings, Save, Key, Globe, Cpu, Thermometer, Eye, EyeOff, CheckCircle2, Sparkles } from '@lucide/vue'
 
 const showKey = ref(false)
 const saved = ref(false)
@@ -11,6 +11,9 @@ const config = ref({
   model: 'doubao-1-5-pro-32k-250115',
   temperature: 0.3,
   maxTokens: 4096,
+  xfAppId: '',
+  xfApiKey: '',
+  xfApiSecret: '',
 })
 
 function load() {
@@ -30,6 +33,9 @@ function save() {
     model: config.value.model,
     temperature: config.value.temperature,
     maxTokens: config.value.maxTokens,
+    xfAppId: config.value.xfAppId,
+    xfApiKey: config.value.xfApiKey,
+    xfApiSecret: config.value.xfApiSecret,
   }))
   saved.value = true
   setTimeout(() => { saved.value = false }, 3000)
@@ -121,6 +127,28 @@ onMounted(load)
       <div>
         <label class="text-sm font-medium text-gray-700 mb-1.5 block">Max Tokens ({{ config.maxTokens }})</label>
         <input v-model.number="config.maxTokens" type="range" min="512" max="8192" step="512" class="w-full" />
+      </div>
+
+      <div class="border-t border-gray-100 pt-5">
+        <h3 class="text-sm font-bold text-gray-800 mb-4 flex items-center gap-2">
+          <Sparkles :size="16" class="text-blue-500" />
+          科大讯飞 TTS 设置
+        </h3>
+        
+        <div class="space-y-4">
+          <div>
+            <label class="text-xs font-medium text-gray-600 mb-1.5 block">APPID</label>
+            <input v-model="config.xfAppId" class="input text-sm" placeholder="讯飞控制台获取的 APPID" />
+          </div>
+          <div>
+            <label class="text-xs font-medium text-gray-600 mb-1.5 block">API Key</label>
+            <input v-model="config.xfApiKey" class="input text-sm" placeholder="讯飞控制台获取的 API Key" />
+          </div>
+          <div>
+            <label class="text-xs font-medium text-gray-600 mb-1.5 block">API Secret</label>
+            <input v-model="config.xfApiSecret" type="password" class="input text-sm" placeholder="讯飞控制台获取的 API Secret" />
+          </div>
+        </div>
       </div>
 
       <div class="pt-2">

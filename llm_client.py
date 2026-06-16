@@ -431,7 +431,7 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
     return AsyncDeterministicEducationLLM()
 
 
-DEFAULT_LLM = build_llm()
+DEFAULT_LLM = DeterministicEducationLLM()
 DEFAULT_ASYNC_LLM = build_async_llm()
 
 

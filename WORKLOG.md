@@ -341,3 +341,17 @@
 #### 4. 自动化测试并网与环境自愈
 - **测试环境自愈**：修复了在 Windows 平台测试时由于文件夹权限受阻导致的 `PermissionError`，通过 `icacls` 命令赋予了用户完全控制权限；并在 `test_edumatrix.py` 中注入 `init_db()` 自愈依赖，解决了在空库跑测试时 `no such table: student_profiles` 的闪退问题。
 - **测试结果**：成功运行 `python -m pytest test_edumatrix.py`，全量 17 个测试（包括新增的级联物理删除测试 `test_database_cascade_deletes` 与多线程高并发写压测 `test_database_concurrency_writes`）全部 100% 顺利绿灯通过。
+
+#### 5. VisRAG 内置学术图片生成与并网 (Task 10.3)
+- **文件**：`data/patches/`下的 7 张 VisRAG 预生成图表，`rag_engine.py`
+- **改进**：
+  - 手动或通过脚本验证 VisRAG 依赖的 7 张学术规范图片资源物理生成，保存在指定的本地补丁存储区。
+  - 在混合检索管道中更新对这些静态图片的索引及多模态文档展示引用，成功实现 VisRAG 内置图片跟本地学术规范并网。
+
+#### 6. Codex 与 CCSwitch 协议冲突系统性诊断与挂起 (Task 2.3)
+- **文件**：`C:\Users\iray\.codex\config.toml`、`C:\Users\iray\.codex\auth.json`
+- **诊断详情**：
+  - 启动子代理测试时，Codex 强制运行在 `responses` 传输协议上，该协议强制使用 Vercel 专有的 `/v1/responses` 端点。
+  - 本地 CCSwitch 拦截代理及 GLM 官方 API 对 `/v1/responses` 访问皆返回超时或 404 错误（因为它们仅支持标准的 Chat Completions `/v1/chat/completions` API）。
+  - 尝试将 Codex `wire_api` 字段更改为 `chat_completions` 会导致 CLI 解析配置直接闪退；直连 GLM 官方也因其不支持该专有端点而报错。
+  - **恢复环境**：为确保本地工作区无污染，已将 `config.toml` 与 `auth.json` 中被临时改动的配置项 100% 物理还原为初始的 CCSwitch 代理状态。目前 Task 2.3 因协议级不兼容暂时挂起。

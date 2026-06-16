@@ -117,6 +117,22 @@
 
 ---
 
+### [2026-06-16] - VisRAG 学术图片生成与 Codex-CCSwitch 协议层诊断 (Wave 7 / Layer 2)
+- **任务编号**：`TASK_WAVE7_001`
+- **对应智能体**：`orchestrator (gemini-3.5-flash)` & `debug-investigator (gemini-3.5-flash)`
+- **绑定 Skill**：`oma-debug`, `oma-qa`, `oma-backend`
+- **开发场景**：生成 VisRAG 所需的 7 张内置学术规范图片资产，放入 `data/patches/` 目录并在 `rag_engine.py` 中完美并网。同时对 Codex、CCSwitch 以及 GLM 官方 API 的协议适配能力进行系统级深度联通性诊断。
+- **自愈重试记录**：
+  1. *第一次报错*：尝试使用 `oma agent:spawn` 唤醒 Codex (GLM-5.1) 时，CLI 运行超时并挂起在 stdin。
+  2. *自愈与修复*：通过手动测试发现，Codex 强制使用 Vercel 专有的 `Responses API` (`/v1/responses`) 作为其 wire 协议，而本地代理 CCSwitch 和智谱 GLM 官方 API 目前均不支持该协议，导致请求堵塞。我们测试了 `wire_api = "chat_completions"` 配置，但 Codex CLI 会校验该字段并直接闪退。由于此为工具协议不兼容的物理硬限制，最终将 Codex 相关的全部改动（`config.toml` 与 `auth.json`）恢复为初始状态，挂起 Task 2.3 开发，等待下一步决策。
+- **测试验证结果**：
+  * 验证了 `data/patches/` 下的 7 张图片资源物理存在。
+  * `config.toml` 与 `auth.json` 完美还原，CCSwitch 本地代理和 GLM 官方的 `/v1/chat/completions` 通信完好。
+- **Token 消耗估计**：约 22,000 Input / 1,800 Output
+- **架构师（用户）终审反馈**：Pending
+
+---
+
 ## 📝 智能体日志双写规范 (Agent Logging Protocol)
 当智能体完工后，必须按照以下标准 Markdown 格式，在文件底部追加日志：
 

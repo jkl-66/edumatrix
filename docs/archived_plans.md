@@ -170,6 +170,38 @@ This file contains the detailed specifications and requirements for modules and 
 
 ---
 
+### Task 10.4: GraphRAG 领域锁死修复与非 ML 学科降级机制
+*   **状态**: [x] 已完成且通过测试验证
+*   **优先级**: High (P0)
+*   **对应角色**: backend-engineer (GLM-5.1)
+*   **修改文件**: [rag_engine.py](file:///d:/project-edumatrix/edumatrix-main/rag_engine.py)
+*   **核心意图**: 当用户输入非机器学习概念时，系统自动优雅降级，防止锁死在默认的“池化层”节点。
+*   **输入 (Input)**:
+    *   用户输入的非 ML 领域查询（如 “李白”）。
+*   **输出 (Output)**:
+    *   跳过 GraphRAG 推理，构建无图谱上下文的检索包。
+    *   在生成的“专业讲义”底部追加无图谱 fallback 提示："EduMatrix 标准学科大纲知识图谱暂未涵盖该领域，系统已自动切换至多模态混合文本检索与实时互联网检索模式进行解答，您可以上传相关课件以扩充图谱。"
+*   **验收标准 (Acceptance Criteria)**:
+    *   测试案例验证非 ML 领域问题正常降级且无 GraphRAG 锁死，并且回答中包含降级说明。
+
+---
+
+### Task 10.5: RAG 检索低置信度防幻觉回滚拦截机制
+*   **状态**: [x] 已完成且通过测试验证
+*   **优先级**: High (P0)
+*   **对应角色**: backend-engineer (GLM-5.1)
+*   **修改文件**: [rag_engine.py](file:///d:/project-edumatrix/edumatrix-main/rag_engine.py), [drag_debate.py](file:///d:/project-edumatrix/edumatrix-main/drag_debate.py), [agent_swarm.py](file:///d:/project-edumatrix/edumatrix-main/agent_swarm.py)
+*   **核心意图**: 当 RAG 检索到的证据相似度极低时，触发防幻觉熔断拦截，避免模型幻觉。
+*   **输入 (Input)**:
+    *   Rerank 后的证据得分。
+*   **输出 (Output)**:
+    *   若最高相似度分数低于 0.20，判定为低置信度，设置 `low_confidence = True`。
+    *   在 Swarm 主控中检测到低置信度时直接拦截熔断，并返回统一兜底话术："抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉，建议您在‘课件管理’页面中上传包含该概念的教学资料。"
+*   **验收标准 (Acceptance Criteria)**:
+    *   测试案例输入不相关词汇（如 “xyz123”）能够正确触发低置信度拦截并返回兜底响应。
+
+---
+
 ## oh-my-agent
 
 ## Rules

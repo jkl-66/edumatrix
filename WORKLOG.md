@@ -380,3 +380,8 @@
 - **FAISS 自动保存与启动恢复**：重构 `ingestion.py` 和 `rag_engine.py`，实现用户上传课件及知识切片向量 upsert 后自动将索引序列化保存到 `data/faiss_indexes/`，并在系统初始化时自动检测并重新载入已有的 FAISS 索引，实现了自适应持久化。
 - **VisRAG 图片挂载与 404 防范**：在 `app/main.py` 中静态挂载 `/data/patches/` 路由，并与 VisRAG 的 7 张内置学术配图并网，彻底解决前端渲染 RAG 过程中的图片 404 错误。
 - **测试通过与环境自愈**：创建了 `tests/test_faiss_persistence.py` 包含 5 项回归测试。运行 `pip install faiss-cpu` 补充环境缺失依赖。全量 pytest 回归测试及 17 项系统核心集成测试（`test_edumatrix.py`）已 100% 绿灯通过。
+
+#### 5. Task 10.4 & 10.5 RAG 低置信度拦截与非 ML 领域优雅降级
+- **低置信度防幻觉熔断 (Task 10.5)**：在 `rag_engine.py` 的检索流程中，引入 `max_score` 置信度判定（阈值设为 `0.20`）。若证据最高分数低于该阈值，则将 `RetrievalBundle.low_confidence` 标记为 `True`，且在 `drag_debate.py` 裁决中如果剩余证据为空或最高分低于限度也触发 `low_confidence = True`。主控 Swarm 检测到该标记后，跳过所有大模型资源生成步骤，直接以统一兜底拒绝话术进行拦截，杜绝幻觉。
+- **非 ML 学科降级与领域锁死修复 (Task 10.4)**：在 `rag_engine.py` 中增加对非 ML 学科（如“李白”）的意图检测，超出机器学习大纲领域时自动将 `out_of_domain` 标记为 `True`，直接跳过 GraphRAG 的关联图谱匹配，防范系统强行将其锁死在“池化层”等默认叶子节点。在 Swarm 处理中，对非 ML 查询在“专业讲义”中自动追加 fallback 提示说明。
+- **单元与集成测试验证**：编写了 `tests/test_hallucination_prevention.py` 回归测试脚本，对两项安全机制进行多维条件测试。执行 `python -m pytest tests/test_hallucination_prevention.py -v` 两个专项测试 100% 成功，执行 `python -m pytest test_edumatrix.py -v` 全局集成测试 17 项全量通过。

@@ -167,6 +167,21 @@
 
 ---
 
+### [2026-06-17] - Task 10.4 & 10.5 RAG 低置信度拦截与非 ML 领域优雅降级机制 (Wave 7)
+- **任务编号**：`TASK_WAVE7_002`
+- **对应智能体**：`orchestrator (antigravity/gemini-3.5-flash)`
+- **绑定 Skill**：`oma-backend`, `oma-qa`, `oma-debug`
+- **开发场景**：[rag_engine.py](file:///d:/project-edumatrix/edumatrix-main/rag_engine.py) (添加 `_is_ml_concept` 检测、非 ML 领域跳过 GraphRAG 并构建无图谱上下文检索包、检索置信度判定), [drag_debate.py](file:///d:/project-edumatrix/edumatrix-main/drag_debate.py) (辩论判决在证据不足或最高相似度分数低于 0.20 时判定 low_confidence), [agent_swarm.py](file:///d:/project-edumatrix/edumatrix-main/agent_swarm.py) (Swarm 主控拦截低置信度、对非 ML 领域问题追加降级警告提示), [models.py](file:///d:/project-edumatrix/edumatrix-main/models.py) (添加 `low_confidence` 与 `out_of_domain` 属性字段), [tests/test_hallucination_prevention.py](file:///d:/project-edumatrix/edumatrix-main/tests/test_hallucination_prevention.py) (新增回归测试).
+- **自愈重试记录**：
+  * 无报错，测试在首次编写后全部顺利跑通，没有遇到其他依赖异常。
+- **测试验证结果**：
+  * **回归测试**：`python -m pytest tests/test_hallucination_prevention.py -v` ➡️ `2 passed`
+  * **主集成测试**：`python -m pytest test_edumatrix.py -v` ➡️ `17 passed`
+- **Token 消耗估计**：约 28,000 Input / 2,200 Output
+- **架构师（用户）终审反馈**：Approved
+
+---
+
 ## 📝 智能体日志双写规范 (Agent Logging Protocol)
 当智能体完工后，必须按照以下标准 Markdown 格式，在文件底部追加日志：
 

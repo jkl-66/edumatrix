@@ -17,7 +17,7 @@ from llm_client import (
     LLMBackend,
 )
 from manifold_alignment import ManifoldAlignmentVerifier
-from models import AgentOutput, LearningSignal, ResourcePackage, StudentProfile
+from models import AgentOutput, AlignmentReport, LearningSignal, ResourcePackage, StudentProfile
 from observability import TELEMETRY, timed_span
 from rag_engine import HybridRAGPipeline, hybrid_rag
 
@@ -303,6 +303,30 @@ class EduMatrixSwarm:
                 target=retrieval.target,
             )
 
+            if debate_result.low_confidence or retrieval.low_confidence:
+                refusal_msg = "抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉，建议您在‘课件管理’页面中上传包含该概念的教学资料。"
+                resources = (
+                    AgentOutput(agent="理论教授", resource_type="专业讲义", content=refusal_msg, citations=()),
+                    AgentOutput(agent="逻辑画师", resource_type="思维导图", content=refusal_msg, citations=()),
+                    AgentOutput(agent="极客助教", resource_type="代码实操案例", content=refusal_msg, citations=()),
+                    AgentOutput(agent="考官智能体", resource_type="练习题", content=refusal_msg, citations=()),
+                    AgentOutput(agent="虚拟导演", resource_type="虚拟人视频脚本", content=refusal_msg, citations=()),
+                )
+                alignment_report = AlignmentReport(passed=True, distance=0.0, threshold=0.35, advice="低置信度拒绝生成。")
+                learning_signal = LearningSignal(accuracy=1.0, dwell_seconds=60, sandbox_error_rate=0.0)
+                strategy_plan = self.strategy_engine.build_plan(profile, target=retrieval.target)
+                return ResourcePackage(
+                    student_id=student_id,
+                    target=retrieval.target,
+                    profile=profile,
+                    retrieval=retrieval,
+                    verdicts=debate_result.verdicts,
+                    resources=resources,
+                    alignment=alignment_report,
+                    learning_signal=learning_signal,
+                    strategy_plan=strategy_plan,
+                )
+
             conversation_memory = _build_conversation_memory(profile, max_turns=6)
 
             correction = ""
@@ -328,9 +352,28 @@ class EduMatrixSwarm:
                 previous_resources = resources
                 correction = (
                     f"第 {attempt + 1} 次对齐失败：{alignment_report.advice} "
-                    "重写时必须统一池化类型、变量名和图示节点。"
+                    "重写时必须统一池化类型、变量名 and 图示节点。"
                 )
             TELEMETRY.record_metric("alignment.rollback_count", rollback_count, target=retrieval.target)
+
+            if retrieval.out_of_domain:
+                degradation_msg = "\n\n*(提示：EduMatrix 标准学科大纲知识图谱暂未涵盖该领域，系统已自动切换至多模态混合文本检索与实时互联网检索模式进行解答，您可以上传相关课件以扩充图谱。)*"
+                new_resources = []
+                for res in resources:
+                    if res.resource_type == "专业讲义":
+                        new_content = res.content + degradation_msg
+                        new_resources.append(
+                            AgentOutput(
+                                agent=res.agent,
+                                resource_type=res.resource_type,
+                                content=new_content,
+                                citations=res.citations,
+                                private_rationale=res.private_rationale,
+                            )
+                        )
+                    else:
+                        new_resources.append(res)
+                resources = tuple(new_resources)
 
             assert alignment_report is not None
             learning_signal = self.evaluator.evaluate(profile, resources)

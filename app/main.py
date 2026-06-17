@@ -544,6 +544,11 @@ async def update_review(student_id: str, request: Request):
 # ============================================================
 # SPA static file serving (for Docker/production)
 # ============================================================
+# Serve VisRAG patch images to prevent 404s
+PATCHES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "patches")
+if os.path.isdir(PATCHES_DIR):
+    app.mount("/data/patches", StaticFiles(directory=PATCHES_DIR), name="patches")
+
 if os.path.isdir(FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 

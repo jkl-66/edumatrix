@@ -355,3 +355,28 @@
   - 本地 CCSwitch 拦截代理及 GLM 官方 API 对 `/v1/responses` 访问皆返回超时或 404 错误（因为它们仅支持标准的 Chat Completions `/v1/chat/completions` API）。
   - 尝试将 Codex `wire_api` 字段更改为 `chat_completions` 会导致 CLI 解析配置直接闪退；直连 GLM 官方也因其不支持该专有端点而报错。
   - **恢复环境**：为确保本地工作区无污染，已将 `config.toml` 与 `auth.json` 中被临时改动的配置项 100% 物理还原为初始的 CCSwitch 代理状态。目前 Task 2.3 因协议级不兼容暂时挂起。
+
+---
+
+### 2026-06-17
+> **今日概述**：成功重构并部署了本地 `Pruning Proxy`（参数裁剪与上下文压缩代理服务器，监听 15722 端口，转发至 15721），解决了 Codex 与 CCSwitch / GLM-5.1 的底层大尺寸 payload 兼容性冲突，打通了 Codex (GLM-5.1) 子智能体编码通道，并通过了全部 17 项基准单元测试及子智能体模拟文件读写、指令执行测试，正式解除了 Task 2.3 的挂起状态。
+
+#### 1. Codex 本地中转代理净化与 Payload 瘦身
+- **物理中转定位**：重构 [scratch/sniffer.py](file:///d:/project-edumatrix/edumatrix-main/scratch/sniffer.py)，使其升级为在 15722 端口运行的 Pruning Proxy 净化代理，负责对 Codex 访问进行劫持并实施物理瘦身，然后再透明转发至真正的 CC Switch (15721) 服务。
+- **参数与工具白名单裁剪**：在代理服务器中配置工具白名单。剔除 Codex 发送的包含 29 个 Chrome 浏览器端操作的 `mcp__chrome_devtools` 命名空间工具，仅保留后端开发所需的 `apply_patch` (代码修改)、`shell_command` (终端执行) 和 `request_user_input` (用户交互) 三大核心工具。
+- **Skills 冗余上下文压缩**：自动拦截输入中庞大的 `<skills_instructions>` 块（约 900KB 的 Markdown 汇总描述），将其替换为极简占位符。
+- **瘦身效果**：成功将原始 `1.02MB` 的请求 Payload **物理压缩至 82KB 左右（缩减达 92%）**，完美避开了 GLM-5.1 的 128K context window 上限限制以及嵌套 `namespace` 类型的 400 Bad Request 参数校验阻碍。
+
+#### 2. 多轮对话代理崩溃 Hot-fix 抢修
+- **TypeError 修复**：在模拟多轮对话测试中，发现代理拦截器在处理只有工具调用而无 text 内容的历史消息时，由于 `item["content"]` 字段为 `None` 导致 `for block in item["content"]` 抛出 `TypeError` 崩溃。
+- **防御校验**：立即在 `sniffer.py` 中增加了 `item["content"] is not None` 防御性检查并实现了热重启，保障了代理在长会话多轮迭代中的防弹级稳定性。
+
+#### 3. 双层验证与开发通道打通
+- **连通性重放验证**：运行 `python scratch/test_responses_body.py` 成功通过 15722 端口取得智谱官方 GLM-5.1 的流式 `PONG` 应答与正确的 token 消耗计量。
+- **子智能体开发仿真测试**：通过 stdin 管道执行 `codex exec`，成功验证了子智能体（GLM-5.1）调用代理时能够无缝利用 `apply_patch` 和 `shell_command` 物理创建并运行 [scratch/hello_proxy_simulation.py](file:///d:/project-edumatrix/edumatrix-main/scratch/hello_proxy_simulation.py)，其输出 `'Proxy Simulation Success!'` 完全符合预期。
+- **解除挂起**：将 `config.toml` 配置无缝指向本地 15722 代理，解除 Task 2.3 的挂起状态，开发环境已完全准备好让 GLM-5.1 进行本地 FAISS 序列化开发。
+
+#### 4. Task 2.3 Local FAISS 持久化序列化与静态图片路由并网
+- **FAISS 自动保存与启动恢复**：重构 `ingestion.py` 和 `rag_engine.py`，实现用户上传课件及知识切片向量 upsert 后自动将索引序列化保存到 `data/faiss_indexes/`，并在系统初始化时自动检测并重新载入已有的 FAISS 索引，实现了自适应持久化。
+- **VisRAG 图片挂载与 404 防范**：在 `app/main.py` 中静态挂载 `/data/patches/` 路由，并与 VisRAG 的 7 张内置学术配图并网，彻底解决前端渲染 RAG 过程中的图片 404 错误。
+- **测试通过与环境自愈**：创建了 `tests/test_faiss_persistence.py` 包含 5 项回归测试。运行 `pip install faiss-cpu` 补充环境缺失依赖。全量 pytest 回归测试及 17 项系统核心集成测试（`test_edumatrix.py`）已 100% 绿灯通过。

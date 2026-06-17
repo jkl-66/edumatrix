@@ -10,6 +10,7 @@ from models import DebateVerdict, Evidence, RetrievalBundle
 class DebateResult:
     clean_evidence: tuple[Evidence, ...]
     verdicts: tuple[DebateVerdict, ...]
+    low_confidence: bool = False
 
 
 class DebateAugmentedRAG:
@@ -58,7 +59,17 @@ class DebateAugmentedRAG:
                     reason="兜底保留最高分证据，避免生成器空上下文回答。",
                 )
             )
-        return DebateResult(clean_evidence=tuple(clean), verdicts=tuple(verdicts))
+        
+        # Determine low_confidence status
+        is_low = bundle.low_confidence
+        if not clean:
+            is_low = True
+        else:
+            max_clean_score = max(item.score for item in clean)
+            if max_clean_score < 0.20:
+                is_low = True
+
+        return DebateResult(clean_evidence=tuple(clean), verdicts=tuple(verdicts), low_confidence=is_low)
 
     def _prover(self, query: str, target: str, item: Evidence) -> float:
         text = " ".join((item.title, item.content, " ".join(item.tags), " ".join(item.anchors)))

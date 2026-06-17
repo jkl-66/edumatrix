@@ -1,3 +1,4 @@
+# ingestion.py - COMPLETE REPLACEMENT
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,6 +6,7 @@ from pathlib import Path
 import hashlib
 import re
 
+from config import CONFIG
 from models import Evidence, EvidenceModality
 from vector_store import VectorIndex
 
@@ -16,6 +18,8 @@ class IngestionReport:
     text_chunks: int
     image_patches: int
     target_index: str
+    persisted: bool = False
+    persist_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -51,23 +55,40 @@ class DocumentIngestionPipeline:
     Real PDF rendering/OCR can be plugged into `chunk_document`; the current
     implementation supports plain text and Markdown so teams can validate the
     indexing contract before the final dataset arrives.
+
+    When a FaissVectorIndex is used, the pipeline automatically persists the
+    index to ``data/faiss_indexes/<index_name>`` after each ingest call so
+    that the FAISS data survives server restarts.
     """
 
-    def __init__(self, index: VectorIndex, *, chunk_size: int = 520, overlap: int = 80) -> None:
+    def __init__(
+        self,
+        index: VectorIndex,
+        *,
+        chunk_size: int = 520,
+        overlap: int = 80,
+        faiss_index_dir: str | Path | None = None,
+    ) -> None:
         self.index = index
         self.chunk_size = chunk_size
         self.overlap = overlap
+        self._faiss_index_dir = Path(faiss_index_dir or CONFIG.faiss_index_dir)
+        if not self._faiss_index_dir.is_absolute():
+            self._faiss_index_dir = Path(__file__).resolve().parent / self._faiss_index_dir
 
     def ingest_text(self, text: str, *, source: str, title: str = "course-material") -> IngestionReport:
         chunks = self.chunk_text(text, source=source, title=title)
         evidence = tuple(chunk.to_evidence() for chunk in chunks)
         self.index.upsert(evidence)
+        persisted, persist_path = self._maybe_persist()
         return IngestionReport(
             source=source,
             chunks=len(chunks),
             text_chunks=len(chunks),
             image_patches=0,
             target_index=self.index.name,
+            persisted=persisted,
+            persist_path=persist_path,
         )
 
     def ingest_file(self, path: str | Path) -> IngestionReport:
@@ -103,6 +124,20 @@ class DocumentIngestionPipeline:
             index += 1
         return tuple(chunks)
 
+    def _maybe_persist(self) -> tuple[bool, str]:
+        """Persist the underlying index to disk if it is a FaissVectorIndex."""
+        from vector_store_faiss import FaissVectorIndex
+
+        if not isinstance(self.index, FaissVectorIndex):
+            return False, ""
+
+        save_path = self._faiss_index_dir / f"{self.index.name}_index"
+        try:
+            self.index.save(save_path)
+            return True, str(save_path)
+        except Exception:
+            return False, ""
+
 
 def _stable_chunk_id(source: str, index: int, content: str) -> str:
     digest = hashlib.sha1(f"{source}:{index}:{content}".encode("utf-8")).hexdigest()[:12]
@@ -111,16 +146,16 @@ def _stable_chunk_id(source: str, index: int, content: str) -> str:
 
 def _infer_tags(text: str) -> tuple[str, ...]:
     concepts = (
-        "机器学习",
-        "监督学习",
-        "逻辑回归",
-        "混淆矩阵",
-        "过拟合",
-        "正则化",
-        "卷积核",
-        "池化层",
-        "最大池化",
-        "平均池化",
+        "\u673a\u5668\u5b66\u4e60",
+        "\u76d1\u7763\u5b66\u4e60",
+        "\u903b\u8f91\u56de\u5f52",
+        "\u6df7\u6dc6\u77e9\u9635",
+        "\u8fc7\u62df\u5408",
+        "\u6b63\u5219\u5316",
+        "\u5377\u79ef\u6838",
+        "\u6c60\u5316\u5c42",
+        "\u6700\u5927\u6c60\u5316",
+        "\u5e73\u5747\u6c60\u5316",
     )
     return tuple(concept for concept in concepts if concept in text)
 

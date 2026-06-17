@@ -320,6 +320,19 @@ class HybridRAGPipeline:
         if removed > 0:
             TELEMETRY.record_metric("user_index.documents_removed", removed)
 
+    def _is_ml_concept(self, query: str) -> bool:
+        # Check standard ML terms from the graph and common aliases
+        ml_keywords = list(self.graph.nodes) + [
+            "机器学习", "machine learning", "ml", "pooling", "池化", "cnn", "relu", 
+            "feature map", "linear regression", "logistic regression", "neural network",
+            "深度学习", "deep learning", "神经网络", "人工智能", "ai"
+        ]
+        query_lower = query.lower()
+        for kw in ml_keywords:
+            if kw.lower() in query_lower:
+                return True
+        return False
+
     async def retrieve_async(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k) -> RetrievalBundle:
         # === 关键修复：延迟加载，打破循环导入 ===
         from web_search_api import search_arxiv
@@ -328,9 +341,19 @@ class HybridRAGPipeline:
         loop = asyncio.get_running_loop()
         
         with timed_span(TELEMETRY, "hybrid_rag.retrieve_async", top_k=top_k):
-            target = target or self._infer_target(query)
-            graph_context = self.graph.get_context(target)
-            query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
+            out_of_domain = not self._is_ml_concept(query)
+            if out_of_domain:
+                graph_context = GraphContext(
+                    target=query,
+                    learning_path=(),
+                    prerequisite_edges=(),
+                    downstream_edges=(),
+                )
+                query_with_graph = query
+            else:
+                target = target or self._infer_target(query)
+                graph_context = self.graph.get_context(target)
+                query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
 
             # Run visual search in executor
             candidates_task = loop.run_in_executor(
@@ -410,11 +433,16 @@ class HybridRAGPipeline:
                     
             final_evidence.sort(key=lambda item: item.score, reverse=True)
 
+            max_score = max((item.score for item in final_evidence), default=0.0)
+            low_confidence = max_score < 0.20
+
             result = RetrievalBundle(
                 query=query,
                 target=graph_context.target,
                 graph_context=graph_context,
                 evidence=tuple(final_evidence),
+                low_confidence=low_confidence,
+                out_of_domain=out_of_domain,
             )
             TELEMETRY.record_metric("retrieval.evidence_count", len(result.evidence), target=result.target)
             TELEMETRY.record_metric(
@@ -429,9 +457,19 @@ class HybridRAGPipeline:
         from web_search_api import search_arxiv
         
         with timed_span(TELEMETRY, "hybrid_rag.retrieve", top_k=top_k):
-            target = target or self._infer_target(query)
-            graph_context = self.graph.get_context(target)
-            query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
+            out_of_domain = not self._is_ml_concept(query)
+            if out_of_domain:
+                graph_context = GraphContext(
+                    target=query,
+                    learning_path=(),
+                    prerequisite_edges=(),
+                    downstream_edges=(),
+                )
+                query_with_graph = query
+            else:
+                target = target or self._infer_target(query)
+                graph_context = self.graph.get_context(target)
+                query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
 
             candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
 
@@ -487,11 +525,16 @@ class HybridRAGPipeline:
             # 按检索相关度得分重新排序
             final_evidence.sort(key=lambda item: item.score, reverse=True)
 
+            max_score = max((item.score for item in final_evidence), default=0.0)
+            low_confidence = max_score < 0.20
+
             result = RetrievalBundle(
                 query=query,
                 target=graph_context.target,
                 graph_context=graph_context,
                 evidence=tuple(final_evidence),
+                low_confidence=low_confidence,
+                out_of_domain=out_of_domain,
             )
             TELEMETRY.record_metric("retrieval.evidence_count", len(result.evidence), target=result.target)
             TELEMETRY.record_metric(

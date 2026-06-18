@@ -36,6 +36,16 @@ export async function getTeacherDashboard() {
   return r.data
 }
 
+// 任务 7.6: 一键导出学情诊断 PDF
+export async function exportProfilePDF(studentId) {
+  const r = await api.get('/v1/profile/export', {
+    params: { student_id: studentId },
+    headers: { ...buildHeaders(), Accept: 'application/pdf' },
+    responseType: 'blob',
+  })
+  return r.data
+}
+
 export async function getDatasets() {
   const r = await api.get('/datasets', { headers: buildHeaders() })
   return r.data
@@ -187,9 +197,32 @@ export async function getCodeHistory(studentId) {
   return r.data
 }
 
-// --- Streaming Chat API ---
+// --- Streaming Chat API (任务 8.2: AbortController + 内存泄漏修复) ---
+const _activeStreamControllers = new Map()  // studentId -> AbortController
+
+export function abortStream(studentId) {
+  const ctrl = _activeStreamControllers.get(studentId)
+  if (ctrl) {
+    ctrl.abort()
+    _activeStreamControllers.delete(studentId)
+  }
+}
+
+export function abortAllStreams() {
+  for (const [sid, ctrl] of _activeStreamControllers) {
+    ctrl.abort()
+  }
+  _activeStreamControllers.clear()
+}
+
 export function streamChat(message, studentId, onEvent, onError) {
-  const cfg = getLLMConfig()
+  // 强制终止该学生的旧连接，防止并发泄漏
+  abortStream(studentId)
+
+  const controller = new AbortController()
+  _activeStreamControllers.set(studentId, controller)
+  const { signal } = controller
+
   const headers = buildHeaders()
   const url = '/api/stream/chat'
 
@@ -197,8 +230,10 @@ export function streamChat(message, studentId, onEvent, onError) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify({ message, student_id: studentId }),
+    signal,  // 绑定 AbortSignal
   }).then(response => {
     if (!response.ok) {
+      if (signal.aborted) return  // 被主动中止，不报错
       onError?.(new Error(`HTTP ${response.status}`))
       return
     }
@@ -207,8 +242,16 @@ export function streamChat(message, studentId, onEvent, onError) {
     let buffer = ''
 
     function read() {
+      if (signal.aborted) {
+        reader.cancel().catch(() => {})
+        return
+      }
       reader.read().then(({ done, value }) => {
-        if (done) return
+        if (signal.aborted) return
+        if (done) {
+          _activeStreamControllers.delete(studentId)
+          return
+        }
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
         buffer = lines.pop() || ''
@@ -224,10 +267,19 @@ export function streamChat(message, studentId, onEvent, onError) {
           }
         }
         read()
-      }).catch(err => onError?.(err))
+      }).catch(err => {
+        if (err.name === 'AbortError') return
+        onError?.(err)
+      })
     }
     read()
-  }).catch(err => onError?.(err))
+  }).catch(err => {
+    if (err.name === 'AbortError') return
+    onError?.(err)
+  })
+
+  // 返回 abort 函数供组件销毁时调用
+  return () => abortStream(studentId)
 }
 
 // --- Profile API ---

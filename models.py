@@ -211,6 +211,26 @@ class CauseBreakdown:
     recommended_interventions: list[str] = field(default_factory=list)
 
 
+# === P2-1 Bloom 认知层级 ===
+class BloomLevel(str, Enum):
+    REMEMBER = "记忆"
+    UNDERSTAND = "理解"
+    APPLY = "应用"
+    ANALYZE = "分析"
+    EVALUATE = "评价"
+    CREATE = "创造"
+
+
+BLOOM_LEVEL_ORDER: dict[str, int] = {
+    BloomLevel.REMEMBER.value: 1,
+    BloomLevel.UNDERSTAND.value: 2,
+    BloomLevel.APPLY.value: 3,
+    BloomLevel.ANALYZE.value: 4,
+    BloomLevel.EVALUATE.value: 5,
+    BloomLevel.CREATE.value: 6,
+}
+
+
 @dataclass
 class KnowledgeTrace:
     concept: str
@@ -272,6 +292,22 @@ class StudentProfile:
     knowledge_traces: dict[str, KnowledgeTrace] = field(default_factory=dict)
     favorites: list[dict] = field(default_factory=list)
 
+    # === P1-1 情感与动机维度 ===
+    frustration_index: float = 0.0         # 挫败感指数 0~1
+    engagement_level: float = 0.72         # 参与度 0~1
+    motivation_type: str = "未诊断"        # "内在动机" / "外在动机" / "无动机" / "未诊断"
+    consecutive_errors: int = 0            # 连续错误次数
+    session_interactions: int = 0          # 本轮会话交互次数
+
+    # === P2-1 Bloom 认知层级追踪 ===
+    bloom_levels: dict[str, str] = field(default_factory=dict)  # concept -> "记忆/理解/应用/分析/评价/创造"
+
+    # === 任务 7.2: 行为信号 + Ebbinghaus 衰减 ===
+    recent_quiz_accuracy: dict[str, list[float]] = field(default_factory=dict)  # concept -> [最近3次正确率]
+    metacognitive_mismatch: float = 0.0  # 元认知偏差指标 0~1
+    last_update_timestamp: str = field(default_factory=_utc_now)  # 画像最后更新时间（用于遗忘衰减）
+    bkt_states: dict[str, dict] = field(default_factory=dict)  # BKT 状态快照: concept -> {p_mastered, history...}
+
     # === 替换 models.py 中的 add_favorite 方法 ===
     def add_favorite(self, target: str, resource_type: str, content: str, note: str = "", fav_id: str = "") -> None:
         import time
@@ -300,6 +336,7 @@ class StudentProfile:
 
     def update_from_message(self, message: str) -> None:
         self.history.append(message)
+        self.session_interactions += 1
         features = self._extract_features(message)
         if features:
             self.profile_evidence.append(
@@ -314,6 +351,8 @@ class StudentProfile:
         self._update_context(message)
         self._update_legacy_fields(message)
         self._update_concepts(message, features)
+        # === P1-1 情感推断：每次消息后更新情感状态 ===
+        self._update_emotional_state(message)
         self._refresh_dynamic_profile()
 
     def update_from_feedback(
@@ -433,10 +472,13 @@ class StudentProfile:
         )
         goals = "、".join(self.learning_goals) or "未显式说明"
         preferences = "、".join(self.interaction_preferences) or self.cognitive_style
+        # === P1-1 情感信息注入 ===
+        affect_info = f"挫败感={self.frustration_index:.2f}；参与度={self.engagement_level:.2f}；动机类型={self.motivation_type}"
         return (
             f"课程={self.target_course}；专业/方向={self.major or self.major_preference}；学习目标={goals}；"
             f"偏好支持={preferences}；薄弱点={','.join(self.weak_points) or '待诊断'}；"
-            f"动态维度={dimensions or '待初始化'}；不会原因占比={causes or '待诊断'}"
+            f"动态维度={dimensions or '待初始化'}；不会原因占比={causes or '待诊断'}；"
+            f"情感状态={affect_info}"
         )
 
     def state_report(self) -> str:
@@ -512,6 +554,62 @@ class StudentProfile:
             if keyword in message and preference not in self.interaction_preferences:
                 self.interaction_preferences.append(preference)
 
+    # === P1-1 情感状态更新 ===
+    def _update_emotional_state(self, message: str) -> None:
+        """基于消息内容和历史模式推断情感状态。"""
+        # 挫败感：检测明确表达挫败的词，结合连续交互和认知负荷
+        _frustration_words = ("焦虑", "害怕", "崩", "烦", "挫败", "没信心", "怕", "压力",
+                             "看不懂", "还是不会", "为什么不对", "怎么又错")
+        if any(w in message for w in _frustration_words):
+            self.frustration_index = min(1.0, self.frustration_index + 0.15)
+            self.consecutive_errors += 1
+        else:
+            # 没有挫败信号时，逐渐衰减
+            self.frustration_index = max(0.0, self.frustration_index - 0.03)
+            self.consecutive_errors = 0
+
+        # 连续 3 次以上挫败，快速升高挫败感
+        if self.consecutive_errors >= 3:
+            self.frustration_index = min(1.0, self.frustration_index + 0.08)
+        
+        # 参与度：基于会话交互频率
+        if self.session_interactions > 0:
+            recency_bonus = min(0.05, 1.0 / self.session_interactions)
+            self.engagement_level = min(1.0, self.engagement_level + recency_bonus)
+
+        # 动机类型推断
+        if any(w in message for w in ("考试", "期末", "考研")):
+            self.motivation_type = "外在动机"
+        elif any(w in message for w in ("感兴趣", "好奇", "想学", "有意思", "探究")):
+            self.motivation_type = "内在动机"
+        elif any(w in message for w in ("必须学", "没办法", "不知道为什么要学")):
+            self.motivation_type = "无动机"
+        elif self.motivation_type == "未诊断":
+            self.motivation_type = "外在动机"  # 默认假设
+
+        # 挫败感同时更新 legacy 字段
+        if self.frustration_index > 0.3:
+            self.focus_level = max(0.15, self.focus_level - 0.05)
+        if self.frustration_index > 0.6:
+            self.cognitive_load = min(1.0, self.cognitive_load + 0.06)
+
+    # === P2-1 Bloom 层级推断 ===
+    def update_bloom_level(self, concept: str, mastery: float) -> None:
+        """根据掌握度推断 Bloom 认知层级。"""
+        if mastery < 0.20:
+            level = BloomLevel.REMEMBER.value
+        elif mastery < 0.40:
+            level = BloomLevel.UNDERSTAND.value
+        elif mastery < 0.60:
+            level = BloomLevel.APPLY.value
+        elif mastery < 0.75:
+            level = BloomLevel.ANALYZE.value
+        elif mastery < 0.90:
+            level = BloomLevel.EVALUATE.value
+        else:
+            level = BloomLevel.CREATE.value
+        self.bloom_levels[concept] = level
+
     def _update_concepts(self, message: str, features: set[str]) -> None:
         # 为了演示倍速，这里的增减分被调高了
         known_points = ("池化层", "最大池化", "平均池化", "卷积核", "反向传播", "链式法则", "梯度下降", "特征图")
@@ -538,6 +636,8 @@ class StudentProfile:
                 else:
                     self.concept_mastery.setdefault(point, current)
                 self.knowledge_traces.setdefault(point, KnowledgeTrace(concept=point, mastery=self.concept_mastery.get(point, current)))
+                # === P2-1 Bloom 层级同步更新 ===
+                self.update_bloom_level(point, self.concept_mastery[point])
         if LearningStateCause.MISCONCEPTION.value in features:
             pattern = self._detect_misconception_pattern(message)
             self.misconception_patterns[pattern] = _clamp(self.misconception_patterns.get(pattern, 0.0) + 0.22)
@@ -636,6 +736,10 @@ class StudentProfile:
         metacognition_gap = self.learning_state_causes.get(LearningStateCause.METACOGNITIVE_MISMATCH.value)
         affect_gap = self.learning_state_causes.get(LearningStateCause.AFFECTIVE_BARRIER.value)
 
+        # === P1-1 情感增强 ===
+        _affect_penalty = (self.frustration_index * 0.25) + (self.consecutive_errors * 0.03)
+        _engagement_bonus = self.engagement_level * 0.12
+
         dimension_inputs = {
             "knowledge_mastery": (
                 avg_mastery,
@@ -668,13 +772,13 @@ class StudentProfile:
                 ["题前自评", "题后校准", "区分看懂与会做"],
             ),
             "motivation_and_purpose": (
-                0.72 if self.learning_goals else 0.54,
+                _clamp((0.72 if self.learning_goals else 0.54) + _engagement_bonus),
                 "目标明确" if self.learning_goals else "目标意义仍需澄清",
                 ["把知识连接到专业/考试/项目目标", "让学生选择学习路径"],
             ),
             "affect_resilience": (
-                _clamp(self.focus_level - ((affect_gap.percentage if affect_gap else 0.0) / 180)),
-                "信心或情绪有阻滞迹象" if affect_gap else "情绪风险暂未升高",
+                _clamp(self.focus_level - ((affect_gap.percentage if affect_gap else 0.0) / 180) - _affect_penalty),
+                "信心或情绪有阻滞迹象" if (affect_gap or self.frustration_index > 0.3) else "情绪风险暂未升高",
                 ["小步成功体验", "反馈只指向任务和下一步"],
             ),
             "interaction_preference": (

@@ -139,3 +139,33 @@ body {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.8); }
 }
+
+/* 任务 8.4: 绘图异常降级兜底样式 */
+.graphic-fallback {
+  animation: fadeIn 0.3s ease-out;
+}
+.graphic-fallback pre {
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* bg-gray-850 (Tailwind 4 没有的中间色) */
+.bg-gray-850 {
+  background-color: #1a1f2e;
+}
+
+/* 任务 8.1: InlineSocraticPopup 过渡动画 */
+.inline-socratic-popup {
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* 任务 8.4: 双栏阻尼过渡 */
+.transition-all.duration-300 {
+  transition-property: width, padding, opacity;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}

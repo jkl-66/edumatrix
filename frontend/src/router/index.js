@@ -8,6 +8,7 @@ import History from '../views/History.vue'
 import Knowledge from '../views/Knowledge.vue'
 import ProfileDashboard from '../views/ProfileDashboard.vue'
 import Settings from '../views/Settings.vue'
+import LearningPathGraph from '../views/LearningPathGraph.vue'
 
 const routes = [
   { path: '/', name: 'Dashboard', component: Dashboard },
@@ -19,6 +20,7 @@ const routes = [
   { path: '/knowledge', name: 'Knowledge', component: Knowledge },
   { path: '/profile', name: 'ProfileDashboard', component: ProfileDashboard },
   { path: '/settings', name: 'Settings', component: Settings },
+  { path: '/learning-path', name: 'LearningPathGraph', component: LearningPathGraph },
 ]
 
 export default createRouter({

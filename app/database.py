@@ -128,6 +128,10 @@ class DBNote(Base):
 
 
 class DBReviewPlan(Base):
+    """持久化物理表：SM-2 间隔重复复习计划
+
+    任务 7.5 扩展：easiness_factor, interval_days(已存在), next_review_at(已存在), last_quality
+    """
     __tablename__ = "review_plans"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -138,6 +142,14 @@ class DBReviewPlan(Base):
     mastery = Column(Float, default=0.0)
     review_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # === 任务 7.5: SM-2 间隔重复参数 ===
+    easiness_factor = Column(Float, default=2.5)  # 易度因子 E, 下限 1.3
+    last_quality = Column(Integer, default=0)     # 上次质量评分 q={2,4,5}
+
+    # === 任务 7.7: 同类题联动 ===
+    similar_quiz_ids = Column(JSON, default=list)  # 关联的相似题 quiz_id 列表
+    priority = Column(Float, default=1.0)          # 复习紧迫度 (越低越紧迫)
 
 
 class DBConversationHistory(Base):

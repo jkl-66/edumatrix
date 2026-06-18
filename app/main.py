@@ -37,6 +37,9 @@ from web_search_api import router as web_search_router
 from code_exec_api import router as code_exec_router
 from profile_api import router as profile_router
 from stream_api import router as stream_router
+from flashcard_api import router as flashcard_router
+from behavior_api import router as behavior_router
+from report_api import router as report_router
 from note_engine import LearningProgressAnalyzer, ReviewScheduler
 from observability import TELEMETRY
 from swarm_factory import build_swarm_from_headers
@@ -351,6 +354,9 @@ app.include_router(web_search_router)
 app.include_router(code_exec_router)
 app.include_router(profile_router)
 app.include_router(stream_router)
+app.include_router(flashcard_router)
+app.include_router(behavior_router)
+app.include_router(report_router)
 
 
 @app.get("/api/health")

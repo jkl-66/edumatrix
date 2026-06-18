@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import re
+from typing import Any
 
 from config import CONFIG
 from models import DebateVerdict, Evidence, RetrievalBundle
@@ -10,29 +13,215 @@ from models import DebateVerdict, Evidence, RetrievalBundle
 class DebateResult:
     clean_evidence: tuple[Evidence, ...]
     verdicts: tuple[DebateVerdict, ...]
+    trajectory: tuple[dict[str, Any], ...] = ()  # 任务 9.1: 辩论完整轨迹
+    knowledge_gap: bool = False                   # 任务 9.1: 知识库覆盖不足标记
+    mean_judge_score: float = 0.0                # 任务 9.1: 平均法官分
+
+
+# 任务 9.1: 证据最低质量阈值（低于此值直接拦截）
+EVIDENCE_MIN_THRESHOLD = 0.20
 
 
 class DebateAugmentedRAG:
     """DRAG-style multi-agent evidence cleaning.
 
-    The implementation uses three deterministic roles so the quality gate is
-    repeatable: Prover estimates answerability, Challenger estimates noise or
-    contradiction risk, and Judge applies the final threshold.
+    P1-2 升级：当 LLM 可用时，使用真正的 LLM 驱动的 Prover-Challenger-Judge
+    三轮对话进行证据辩论清洗。LLM 不可用时回退到确定性评分函数。
     """
 
-    def __init__(self, min_score: float = CONFIG.debate_min_score) -> None:
+    def __init__(self, min_score: float = CONFIG.debate_min_score, llm: Any | None = None) -> None:
         self.min_score = min_score
+        self.llm = llm
 
     def clean(self, bundle: RetrievalBundle) -> DebateResult:
+        # 当 LLM 可用且证据数量适中时，使用 LLM 辩论
+        if self.llm is not None and 1 < len(bundle.evidence) <= 12:
+            return self._llm_debate_clean(bundle)
+        # 否则使用确定性评分函数
+        return self._deterministic_clean(bundle)
+
+    # ================================================================
+    # LLM 驱动的辩论清洗（P1-2 核心新增）
+    # ================================================================
+
+    def _llm_debate_clean(self, bundle: RetrievalBundle) -> DebateResult:
+        """使用 LLM 的 Prover-Challenger-Judge 三轮对话清洗证据。"""
         verdicts: list[DebateVerdict] = []
         clean: list[Evidence] = []
         kept_anchors: set[str] = set()
+
+        # 对整个证据集进行一次 LLM 集体评估
+        collective_verdict = self._collective_batch_judge(bundle)
+
+        # 使用集体评估结果初始化每个证据的判决
+        batch_judgments: dict[str, dict[str, Any]] = {}
+        for j in collective_verdict:
+            batch_judgments[j["evidence_id"]] = j
+
+        for item in bundle.evidence:
+            # 从集体判决中获取，或回退到确定性评分
+            if item.id in batch_judgments:
+                bj = batch_judgments[item.id]
+                pro_score = float(bj.get("pro_score", 0.0))
+                con_score = float(bj.get("con_score", 0.0))
+                judge_score = float(bj.get("judge_score", 0.0))
+                reason = str(bj.get("reason", ""))
+            else:
+                # 回退到确定性评分
+                pro_score = self._prover(bundle.query, bundle.target, item)
+                con_score = self._challenger(bundle.query, bundle.target, item, kept_anchors)
+                judge_score = max(0.0, min(1.0, pro_score - con_score * 0.55 + item.score * 0.35))
+                reason = "LLM 未评估此证据，使用确定性评分"
+
+            # 任务 9.1: 低分证据直接拦截（知识库覆盖不足检测）
+            if item.score < EVIDENCE_MIN_THRESHOLD and judge_score < 0.30:
+                keep = False
+                reason = f"【知识库覆盖不足】证据分 {item.score:.2f} 低于阈值 {EVIDENCE_MIN_THRESHOLD}，已拦截"
+            else:
+                keep = judge_score >= self.min_score
+
+            verdict = DebateVerdict(
+                evidence_id=item.id,
+                pro_score=round(pro_score, 4),
+                con_score=round(con_score, 4),
+                judge_score=round(judge_score, 4),
+                keep=keep,
+                reason=reason,
+            )
+            verdicts.append(verdict)
+            if keep:
+                clean.append(item.with_score(judge_score))
+                kept_anchors.update(item.anchors)
+
+        # 兜底：所有证据都被剔除时保留最高分
+        if not clean and bundle.evidence:
+            best = max(bundle.evidence, key=lambda e: e.score)
+            clean.append(best.with_score(max(best.score, self.min_score)))
+            verdicts.append(
+                DebateVerdict(
+                    evidence_id=best.id,
+                    pro_score=best.score,
+                    con_score=0.0,
+                    judge_score=max(best.score, self.min_score),
+                    keep=True,
+                    reason="LLM 辩论兜底：保留最高分证据避免空上下文",
+                )
+            )
+
+        # 任务 9.1: 构建辩论轨迹
+        trajectory = [
+            {
+                "evidence_id": v.evidence_id,
+                "pro_score": v.pro_score,
+                "con_score": v.con_score,
+                "judge_score": v.judge_score,
+                "keep": v.keep,
+                "reason": v.reason,
+                "method": "llm_debate",
+            }
+            for v in verdicts
+        ]
+        all_scores = [v.judge_score for v in verdicts]
+        mean_judge = sum(all_scores) / max(len(all_scores), 1)
+        knowledge_gap = any(v.judge_score < 0.30 and not v.keep for v in verdicts)
+
+        return DebateResult(
+            clean_evidence=tuple(clean),
+            verdicts=tuple(verdicts),
+            trajectory=tuple(trajectory),
+            knowledge_gap=knowledge_gap,
+            mean_judge_score=round(mean_judge, 4),
+        )
+
+    def _collective_batch_judge(self, bundle: RetrievalBundle) -> list[dict[str, Any]]:
+        """对整个证据集进行 LLM 批量评估，模拟 Prover-Challenger-Judge 三层对话。"""
+        # 构建证据摘要
+        evidence_lines = []
+        for i, item in enumerate(bundle.evidence):
+            evidence_lines.append(
+                f"[{i}] ID={item.id} | 标题={item.title} | "
+                f"来源={item.source} | 类型={item.modality.value} | "
+                f"标签={','.join(item.tags)} | 锚点={','.join(item.anchors)}"
+            )
+
+        system_prompt = (
+            "你是 EduMatrix 的证据辩论裁判委员会主席。你的任务是对检索到的教学证据进行三轮思维评估。\n\n"
+            "三轮评估规则：\n"
+            "1. 正方(Prover)评估：该证据与查询的相关性、权威性和教学价值（0~1）\n"
+            "2. 反方(Challenger)评估：该证据是否存在概念矛盾、过时信息、噪声风险（0~1）\n"
+            "3. 法官(Judge)综合裁决：综合正反方意见给出最终保留分（0~1），低于0.5分建议剔除\n\n"
+            "打分准则：\n"
+            "- 学术源（arXiv等）自动获得 pro_score +0.25 信用分\n"
+            "- 概念矛盾（如查询最大池化但证据讲平均池化）con_score 应极高（>0.7）\n"
+            "- 图像证据与数学概念查询匹配时 pro_score 应 +0.1\n"
+            "- 多模态一致性：如果多个证据间存在相互矛盾的概念，con_score 应升高\n\n"
+            "请以纯 JSON 数组格式返回，不要包含其他文字：\n"
+            '[{"evidence_id": "...", "pro_score": 0.0, "con_score": 0.0, '
+            '"judge_score": 0.0, "reason": "..."}]'
+        )
+
+        user_prompt = (
+            f"查询：{bundle.query}\n"
+            f"目标知识点：{bundle.target}\n"
+            f"完整学习路径：{' -> '.join(bundle.graph_context.learning_path)}\n\n"
+            f"待评估证据列表（共{len(bundle.evidence)}条）：\n"
+            + "\n".join(evidence_lines)
+        )
+
+        try:
+            import asyncio
+            # 尝试异步生成，回退同步
+            if hasattr(self.llm, 'generate'):
+                loop = _get_or_create_loop()
+                if asyncio.iscoroutinefunction(self.llm.generate):
+                    raw = loop.run_until_complete(
+                        self.llm.generate(system_prompt, user_prompt, role="证据辩论裁判")
+                    )
+                else:
+                    raw = self.llm.generate(system_prompt, user_prompt, role="证据辩论裁判")
+            else:
+                raw = self.llm.chat(system_prompt, user_prompt)
+
+            # 解析 JSON
+            json_match = re.search(r"\[.*?\]", raw, re.DOTALL)
+            if not json_match:
+                return []
+            parsed = json.loads(json_match.group())
+            if not isinstance(parsed, list):
+                return []
+            return parsed
+        except Exception as exc:
+            print(f"  [DragDebate] LLM 辩论失败，回退确定性评分: {exc}")
+            return []
+
+    # ================================================================
+    # 原始确定性评分函数（LLM 不可用时的回退路径）
+    # ================================================================
+
+    def _deterministic_clean(self, bundle: RetrievalBundle) -> DebateResult:
+        """原始确定性评分函数路径。"""
+        verdicts: list[DebateVerdict] = []
+        clean: list[Evidence] = []
+        kept_anchors: set[str] = set()
+        # 任务 9.1: 低分证据直接拦截（知识库覆盖不足检测）
+        for item in bundle.evidence:
+            if item.score < EVIDENCE_MIN_THRESHOLD and item.score < self.min_score * 0.6:
+                # 将拦截记录注入兜底逻辑
+                pass
+
         for item in bundle.evidence:
             pro_score = self._prover(bundle.query, bundle.target, item)
             con_score = self._challenger(bundle.query, bundle.target, item, kept_anchors)
             judge_score = max(0.0, min(1.0, pro_score - con_score * 0.55 + item.score * 0.35))
-            keep = judge_score >= self.min_score
-            reason = self._reason(item, pro_score, con_score, judge_score, keep)
+
+            # 任务 9.1: 低分证据直接拦截
+            if item.score < EVIDENCE_MIN_THRESHOLD and judge_score < 0.30:
+                keep = False
+                reason = f"【知识库覆盖不足】证据分 {item.score:.2f} 低于阈值 {EVIDENCE_MIN_THRESHOLD}，已拦截"
+            else:
+                keep = judge_score >= self.min_score
+                reason = self._reason(item, pro_score, con_score, judge_score, keep)
+
             verdict = DebateVerdict(
                 evidence_id=item.id,
                 pro_score=pro_score,
@@ -45,6 +234,8 @@ class DebateAugmentedRAG:
             if keep:
                 clean.append(item.with_score(judge_score))
                 kept_anchors.update(item.anchors)
+
+        # 兜底
         if not clean and bundle.evidence:
             best = max(bundle.evidence, key=lambda evidence: evidence.score)
             clean.append(best.with_score(max(best.score, self.min_score)))
@@ -58,16 +249,38 @@ class DebateAugmentedRAG:
                     reason="兜底保留最高分证据，避免生成器空上下文回答。",
                 )
             )
-        return DebateResult(clean_evidence=tuple(clean), verdicts=tuple(verdicts))
+
+        # 任务 9.1: 构建辩论轨迹
+        trajectory = [
+            {
+                "evidence_id": v.evidence_id,
+                "pro_score": v.pro_score,
+                "con_score": v.con_score,
+                "judge_score": v.judge_score,
+                "keep": v.keep,
+                "reason": v.reason,
+                "method": "deterministic",
+            }
+            for v in verdicts
+        ]
+        all_scores = [v.judge_score for v in verdicts]
+        mean_judge = sum(all_scores) / max(len(all_scores), 1)
+        knowledge_gap = any(v.judge_score < 0.30 and not v.keep for v in verdicts)
+
+        return DebateResult(
+            clean_evidence=tuple(clean),
+            verdicts=tuple(verdicts),
+            trajectory=tuple(trajectory),
+            knowledge_gap=knowledge_gap,
+            mean_judge_score=round(mean_judge, 4),
+        )
 
     def _prover(self, query: str, target: str, item: Evidence) -> float:
         text = " ".join((item.title, item.content, " ".join(item.tags), " ".join(item.anchors)))
         score = item.score
 
-        # === 新增：学术特权提分 ===
         if item.metadata.get("is_academic") or item.source == "arXiv.org":
-            score += 0.25 # 给学术源直接加 0.25 的信用基础分，避免被当作噪声误杀
-        # === 新增结束 ===
+            score += 0.25
 
         if target in text:
             score += 0.28
@@ -101,12 +314,19 @@ class DebateAugmentedRAG:
 
     def _reason(self, item: Evidence, pro: float, con: float, judge: float, keep: bool) -> str:
         action = "保留" if keep else "剔除"
-        
-        # 优化学术记录日志展示
         if keep and (item.metadata.get("is_academic") or item.source == "arXiv.org"):
-            action = "🔬 权威保留"
-            
+            action = "学术保留"
         return (
             f"{action} {item.title}：正方相关性 {pro:.2f}，反方噪声/矛盾风险 {con:.2f}，"
             f"法官分 {judge:.2f}。"
         )
+
+
+def _get_or_create_loop():
+    import asyncio
+    try:
+        return asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop

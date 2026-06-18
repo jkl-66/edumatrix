@@ -1,7 +1,8 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { listKnowledgeDocuments, uploadKnowledgeDocument, deleteKnowledgeDocument } from '../api'
-import { BookOpen, Upload, Trash2, FileText, File, FileImage, FileVideo, Presentation, Tag, Clock, AlertCircle, CheckCircle, Image, Film } from '@lucide/vue'
+import { BookOpen, Upload, Trash2, FileText, File, FileImage, FileVideo, Presentation, Tag, Clock, AlertCircle, CheckCircle, Image, Film, ArrowRight, GitBranch } from '@lucide/vue'
+import KnowledgeGraphExplorer from '../components/KnowledgeGraphExplorer.vue'
 
 const props = defineProps({ studentId: String })
 
@@ -116,6 +117,72 @@ function onDragOver(e) { e.preventDefault(); dragOver.value = true }
 function onDragLeave() { dragOver.value = false }
 function onDrop(e) { e.preventDefault(); dragOver.value = false; handleUpload(e) }
 
+// 任务 8.6: 从文档标签提取知识图谱数据
+const graphNodes = computed(() => {
+  const nodes = []
+  const added = new Set()
+
+  // 文件作为概念节点
+  docs.value.forEach((doc, i) => {
+    if (!added.has(doc.filename)) {
+      added.add(doc.filename)
+      nodes.push({
+        id: doc.filename,
+        name: doc.filename.slice(0, 20),
+        category: doc.file_type === 'pptx' || doc.file_type === 'ppt' ? 1
+          : ['mp4', 'avi', 'mov'].includes(doc.file_type) ? 2 : 0,
+        categoryName: doc.file_type === 'pptx' ? '课件' : ['mp4', 'avi', 'mov'].includes(doc.file_type) ? '视频' : '文档',
+        symbolSize: 30 + (doc.chunk_count || 0) * 0.5,
+        itemStyle: {
+          color: doc.file_type === 'pptx' ? '#f59e0b' : ['mp4', 'avi', 'mov'].includes(doc.file_type) ? '#8b5cf6' : '#3b82f6',
+        },
+      })
+    }
+    // tags 作为关联概念节点
+    ;(doc.tags || []).slice(0, 5).forEach(tag => {
+      if (!added.has(tag)) {
+        added.add(tag)
+        nodes.push({
+          id: tag,
+          name: tag,
+          category: 3,
+          categoryName: '标签',
+          symbolSize: 20,
+          itemStyle: { color: '#10b981' },
+        })
+      }
+    })
+  })
+  return nodes
+})
+
+const graphEdges = computed(() => {
+  const edges = []
+  docs.value.forEach(doc => {
+    ;(doc.tags || []).slice(0, 5).forEach(tag => {
+      edges.push({ source: doc.filename, target: tag, label: '关联' })
+    })
+  })
+  // 标签间共现关联
+  const tagPairs = {}
+  docs.value.forEach(doc => {
+    const tags = (doc.tags || []).slice(0, 5)
+    for (let i = 0; i < tags.length; i++) {
+      for (let j = i + 1; j < tags.length; j++) {
+        const key = [tags[i], tags[j]].sort().join('::')
+        tagPairs[key] = (tagPairs[key] || 0) + 1
+      }
+    }
+  })
+  Object.entries(tagPairs).forEach(([key, count]) => {
+    if (count > 0) {
+      const [s, t] = key.split('::')
+      edges.push({ source: s, target: t, label: `${count}次共现` })
+    }
+  })
+  return edges
+})
+
 onMounted(load)
 </script>
 
@@ -204,6 +271,24 @@ onMounted(load)
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- 任务 8.6: 知识图谱探索器 -->
+    <div class="mt-8">
+      <div class="flex items-center gap-2 mb-4">
+        <GitBranch :size="16" class="text-purple-500" />
+        <h2 class="text-sm font-semibold text-gray-800">知识图谱 ({{ graphNodes.length }} 节点 / {{ graphEdges.length }} 边)</h2>
+      </div>
+      <KnowledgeGraphExplorer
+        :nodes="graphNodes"
+        :edges="graphEdges"
+        :categories="[
+          { name: '文档', itemStyle: { color: '#3b82f6' } },
+          { name: '课件', itemStyle: { color: '#f59e0b' } },
+          { name: '视频', itemStyle: { color: '#8b5cf6' } },
+          { name: '标签', itemStyle: { color: '#10b981' } },
+        ]"
+      />
     </div>
   </div>
 </template>

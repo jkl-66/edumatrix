@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { healthCheck, getDatasets, getProgress, getTeacherDashboard } from '../api'
-import { Activity, Brain, BarChart3, ArrowRight, Sparkles, Users, FileText, StickyNote } from '@lucide/vue'
+import { healthCheck, getDatasets, getProgress, getTeacherDashboard, exportProfilePDF } from '../api'
+import { Activity, Brain, BarChart3, ArrowRight, Sparkles, Users, FileText, StickyNote, Download, Loader2 } from '@lucide/vue'
 
 const props = defineProps({ studentId: String })
 
@@ -9,6 +9,7 @@ const health = ref(null)
 const datasets = ref([])
 const teacherData = ref(null)
 const loading = ref(true)
+const exporting = ref(false)  // 任务 7.6: 导出加载动画
 
 onMounted(async () => {
   try {
@@ -33,6 +34,26 @@ function dimValue(dim) {
 
 function dimColor(val) {
   return val > 0.6 ? 'bg-emerald-500' : val > 0.3 ? 'bg-amber-500' : 'bg-red-500'
+}
+
+// 任务 7.6: 一键导出学情诊断 PDF
+async function exportPDF() {
+  exporting.value = true
+  try {
+    const blob = await exportProfilePDF(props.studentId)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const now = new Date().toISOString().slice(0, 10)
+    a.download = `EduMatrix_学情报告_${props.studentId}_${now}.pdf`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('PDF 导出失败:', e)
+    alert('PDF 导出失败，请查看控制台日志')
+  } finally {
+    exporting.value = false
+  }
 }
 </script>
 
@@ -95,6 +116,22 @@ function dimColor(val) {
           </div>
         </div>
         <p class="text-[10px] text-gray-400 mt-2">限流 {{ health?.rate_limit_rpm || '-' }} RPM</p>
+      </div>
+
+      <!-- 任务 7.6: 一键导出学情报告按钮 -->
+      <div class="card cursor-pointer hover:border-blue-300 transition-colors" @click="exportPDF">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-xs text-gray-500 font-medium">学情报告</p>
+            <p class="text-lg font-semibold mt-1">{{ exporting ? '生成中...' : '一键导出' }}</p>
+          </div>
+          <div class="w-10 h-10 rounded-xl flex items-center justify-center"
+            :class="exporting ? 'bg-green-100' : 'bg-blue-50'">
+            <Download v-if="!exporting" :size="20" class="text-blue-600" />
+            <Loader2 v-else :size="20" class="text-green-600 animate-spin" />
+          </div>
+        </div>
+        <p class="text-[10px] text-gray-400 mt-2">{{ exporting ? '正在使用无头浏览器渲染 PDF...' : '含掌握度雷达图、错题归因、AI建议' }}</p>
       </div>
     </div>
 

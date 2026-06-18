@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { streamChat } from '../api'
+import { streamChat, abortStream } from '../api'
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
@@ -8,32 +8,44 @@ export const useChatStore = defineStore('chat', {
     streamingProgress: 0,
     streamingStatus: '',
     streamingAgents: {},
+    _cleanupStream: null,  // 任务 8.2: AbortController 清理函数
   }),
   actions: {
+    /**
+     * 任务 8.2: 页面销毁时调用，释放流式连接
+     */
+    cleanup() {
+      if (this._cleanupStream) {
+        this._cleanupStream()
+        this._cleanupStream = null
+      }
+      if (this.sending) {
+        abortStream('current')
+        this.sending = false
+      }
+    },
+
     addMessage(msg) {
       this.messages.push(msg)
     },
-    
+
     /**
-     * 自动闭合未闭合的 LaTeX ($$, $) 和 Markdown (```) 块，防止前端渲染引擎崩溃
+     * 自动闭合未闭合的 LaTeX ($$, $) 和 Markdown (```) 块
      */
     getSafeContent(text) {
       if (!text) return ''
       let result = text
 
-      // 1. 检查代码块 ```
       const codeBlockCount = (text.match(/```/g) || []).length
       if (codeBlockCount % 2 !== 0) {
         result += '\n```'
       }
 
-      // 2. 检查 LaTeX 双刀块 $$
       const doubleDollarCount = (text.match(/\$\$/g) || []).length
       if (doubleDollarCount % 2 !== 0) {
         result += '$$'
       }
 
-      // 3. 检查 LaTeX 单刀块 $（跳过双刀）
       const tempText = text.replace(/\$\$/g, '')
       const singleDollarCount = (tempText.match(/(?<!\\)\$/g) || []).length
       if (singleDollarCount % 2 !== 0) {
@@ -53,7 +65,8 @@ export const useChatStore = defineStore('chat', {
       this.addMessage({ role: 'user', content: message })
 
       return new Promise((resolve, reject) => {
-        streamChat(
+        // streamChat 返回 AbortController 清理函数
+        this._cleanupStream = streamChat(
           message,
           studentId,
           (event, data) => {
@@ -71,10 +84,9 @@ export const useChatStore = defineStore('chat', {
             } else if (event === 'complete') {
               this.streamingProgress = 100
               this.streamingStatus = '生成完成！'
-              
-              // 物理清洗，防语法坍塌
+
               const safeContent = this.getSafeContent(data.content)
-              
+
               const assistantMsg = {
                 role: 'assistant',
                 content: `## 学习目标：${data.target || '未识别'}\n\n` + safeContent,
@@ -85,12 +97,14 @@ export const useChatStore = defineStore('chat', {
                 safety: data.safety || null,
                 alignment: data.alignment || {},
               }
-              
+
               this.addMessage(assistantMsg)
               this.sending = false
+              this._cleanupStream = null
               resolve(data)
             } else if (event === 'error') {
               this.sending = false
+              this._cleanupStream = null
               this.addMessage({
                 role: 'assistant',
                 content: `错误：${data.message || '生成失败'}`,
@@ -101,6 +115,7 @@ export const useChatStore = defineStore('chat', {
           },
           (err) => {
             this.sending = false
+            this._cleanupStream = null
             this.addMessage({
               role: 'assistant',
               content: `连接异常中断，正在尝试使用语法防护网收敛输出...`,

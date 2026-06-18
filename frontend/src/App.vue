@@ -1,10 +1,19 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar, Presentation, Clock, GraduationCap, Library, Settings, UserCheck } from '@lucide/vue'
+import { BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar, Presentation, Clock, GraduationCap, Library, Settings, UserCheck, GitBranch } from '@lucide/vue'
+import { abortAllStreams } from './api'
 
 const route = useRoute()
 const router = useRouter()
+
+// 任务 8.2: 全局页面退出/刷新时释放所有流式连接
+onMounted(() => {
+  window.addEventListener('beforeunload', abortAllStreams)
+})
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', abortAllStreams)
+})
 
 const getOrInitStudentId = () => {
   let id = localStorage.getItem('edumatrix_student_id')
@@ -113,7 +122,10 @@ function goHome() {
 
       <!-- Page content -->
       <main class="flex-1 overflow-y-auto p-6">
-        <router-view :student-id="studentId" />
+        <!-- 任务 8.4: 全局渲染异常拦截器（自动降级，防白屏） -->
+        <div @error.capture="(e) => console.warn('[GraphicFallback] 捕获渲染异常:', e)">
+          <router-view :student-id="studentId" />
+        </div>
       </main>
     </div>
   </div>

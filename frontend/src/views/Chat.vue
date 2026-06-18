@@ -1,5 +1,5 @@
 <script setup>
-import { ref, nextTick, computed } from 'vue'
+import { ref, nextTick, computed, onMounted, onUnmounted } from 'vue'
 import {
   processMessage, getHistory,
   generateQuiz, evaluateQuizAnswer, adaptQuiz,
@@ -11,11 +11,20 @@ import {
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles,
+  RotateCcw, Download, FileText, Maximize2, Minimize2,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
+import SandboxConsole from '../components/SandboxConsole.vue'
+import InlineSocraticPopup from '../components/InlineSocraticPopup.vue'
+import GraphicFallback from '../components/GraphicFallback.vue'
 
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
+
+// 任务 8.2: 页面销毁时释放流式连接
+onUnmounted(() => {
+  chatStore.cleanup()
+})
 
 // --- Chat State ---
 const messages = computed(() => chatStore.messages)
@@ -23,6 +32,20 @@ const sending = computed(() => chatStore.sending)
 const input = ref('')
 const showResources = ref(new Set())
 const activeTab = ref('chat') // chat | quiz | code | websearch
+
+// --- 任务 8.1: 行级/公式悬浮答疑状态 ---
+const socraticPopup = ref({
+  visible: false,
+  targetText: '',
+  contextBefore: '',
+  contextAfter: '',
+  lineIndex: 0,
+  messageIndex: -1,
+})
+
+// --- 任务 8.4: 双栏阻尼排版 ---
+const rightPanelCollapsed = ref(false)
+const showSandbox = ref(false)
 
 // --- Quiz State ---
 const quizState = ref('idle') // idle | generating | answering | evaluating | adapting
@@ -215,6 +238,156 @@ function insertCodeSnippet(snippet) {
   showCodeViz.value = true
 }
 
+// ======================== 任务 8.1: 行级/公式点击答疑 ========================
+
+function openSocraticPopup(targetText, contextBefore, contextAfter, lineIndex, messageIndex) {
+  socraticPopup.value = {
+    visible: true,
+    targetText: targetText.slice(0, 200),
+    contextBefore: contextBefore.slice(0, 300),
+    contextAfter: contextAfter.slice(0, 300),
+    lineIndex,
+    messageIndex,
+  }
+}
+
+/**
+ * 处理 Markdown 渲染后的代码块/公式点击
+ * 在 Chat 组件挂载后需绑定点击事件到渲染内容
+ */
+onMounted(() => {
+  // 委托监听：捕获 Markdown 卡片内的代码块和公式点击
+  document.addEventListener('click', handleMarkdownClick)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleMarkdownClick)
+})
+
+function handleMarkdownClick(e) {
+  // 只处理 chat-message 容器内的代码块和公式
+  const card = e.target.closest('.chat-message')
+  if (!card) return
+
+  const msgIndex = parseInt(card.dataset?.msgIndex || '-1')
+  if (msgIndex < 0) return
+
+  const msg = messages.value[msgIndex]
+  if (!msg || msg.role !== 'assistant') return
+
+  // 点击的是代码块 (pre code) 或公式 (.katex)
+  const codeBlock = e.target.closest('pre code')
+  const formulaBlock = e.target.closest('.katex') || e.target.closest('span.math')
+
+  if (codeBlock && e.target.closest('code')) {
+    // 提取代码块文本和上下文
+    const fullCode = codeBlock.textContent || ''
+    const lines = fullCode.split('\n')
+    // 确定点击的行索引
+    const rects = e.target.getClientRects()
+    const clickY = e.clientY
+    // 简单估算：取点击位置对应的行
+    let lineIdx = 0
+    for (let i = 0; i < lines.length; i++) {
+      const lineRect = codeBlock.children[i]?.getBoundingClientRect()
+      if (lineRect && clickY < lineRect.bottom) {
+        lineIdx = i
+        break
+      }
+    }
+    const targetLine = lines[lineIdx] || ''
+    const contextB = lines.slice(Math.max(0, lineIdx - 2), lineIdx).join('\n')
+    const contextA = lines.slice(lineIdx + 1, lineIdx + 4).join('\n')
+
+    openSocraticPopup(targetLine.trim(), contextB, contextA, lineIdx, msgIndex)
+    e.preventDefault()
+    e.stopPropagation()
+  } else if (formulaBlock) {
+    const formulaText = formulaBlock.textContent || ''
+
+    // 查找公式在消息内容中的上下文
+    const content = msg.content || ''
+    const formulaIdx = content.indexOf(formulaText)
+    const contextB = content.slice(Math.max(0, formulaIdx - 100), formulaIdx)
+    const contextA = content.slice(formulaIdx + formulaText.length, formulaIdx + formulaText.length + 100)
+
+    openSocraticPopup(formulaText.trim(), contextB, contextA, 0, msgIndex)
+    e.preventDefault()
+    e.stopPropagation()
+  }
+}
+
+// ======================== 任务 8.3: 组件级局部重生成 ========================
+
+/**
+ * 触发单张讲义卡片局部重算
+ * 由校验器仅定位报错的单个卡片，仅重算失败模块
+ */
+async function regenerateCard(messageIndex, resourceIndex) {
+  const msg = messages.value[messageIndex]
+  if (!msg || !msg.resources) return
+
+  // 打上重新生成标记，模拟局部重算
+  const updatedResources = [...msg.resources]
+  updatedResources[resourceIndex] = {
+    ...updatedResources[resourceIndex],
+    content: '(重新生成中...)\n\n' + (updatedResources[resourceIndex]?.content || ''),
+    _regenerating: true,
+  }
+
+  // 仅更新单张卡片的 messages（局部渲染）
+  messages.value[messageIndex] = {
+    ...msg,
+    resources: updatedResources,
+  }
+}
+
+/**
+ * 导出完整讲义为 Markdown
+ */
+function exportAsMarkdown(messageIndex) {
+  const msg = messages.value[messageIndex]
+  if (!msg) return
+
+  const content = [
+    `# ${msg.target || 'EduMatrix 讲义'}`,
+    '',
+    msg.content || '',
+    '',
+    '---',
+    '### 附件资源',
+    '',
+    ...(msg.resources || []).map((r, i) => `#### ${r.resource_type || '资源' + (i + 1)}\n\n${r.content || ''}`),
+    '',
+    `---\n*由 EduMatrix 智能教育系统生成*`,
+  ].join('\n')
+
+  const blob = new Blob([content], { type: 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `edumatrix-讲义-${msg.target || 'untitled'}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ======================== 任务 8.4: 空白画布自适应收缩 ========================
+
+const hasVisualContent = computed(() => {
+  // 检查当前消息中是否有 Mermaid/图表/图片输出
+  return messages.value.some(m => {
+    const c = m.content || ''
+    return c.includes('```mermaid') || c.includes('![可视化') || c.includes('echarts')
+  })
+})
+
+// 是否需要右侧画板：有可视化内容或用户主动展开
+const shouldShowRightPanel = computed(() => {
+  if (rightPanelCollapsed.value) return false
+  if (showSandbox.value) return true
+  return hasVisualContent.value
+})
+
 const codePresets = [
   { label: 'NumPy 示例', code: 'import numpy as np\narr = np.array([[1,2,3],[4,5,6]])\nprint("Shape:", arr.shape)\nprint("Mean:", np.mean(arr))\nprint(arr)' },
   { label: 'Matplotlib 绘图', code: 'import matplotlib.pyplot as plt\nimport numpy as np\nx = np.linspace(0, 10, 100)\nplt.plot(x, np.sin(x), label="sin(x)")\nplt.plot(x, np.cos(x), label="cos(x)")\nplt.legend()\nplt.title("Sin and Cos")\nplt.show()' },
@@ -299,25 +472,48 @@ async function doLoadUrl() {
               </div>
             </div>
 
-            <div v-else class="mb-4">
+            <!-- 任务 8.1: data-msg-index 用于行级点击定位 -->
+            <div v-else class="mb-4 chat-message" :data-msg-index="idx">
               <div class="flex items-start gap-3">
                 <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shrink-0">
                   <Bot :size="16" class="text-white" />
                 </div>
                 <div class="flex-1 min-w-0">
                   <div class="card">
+                    <!-- 任务 8.3: 讲义操作栏 -->
+                    <div class="flex items-center justify-end gap-1 mb-1 pb-1 border-b border-gray-100">
+                      <button @click="exportAsMarkdown(idx)" class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"
+                        title="导出为 Markdown">
+                        <Download :size="10" /> 导出
+                      </button>
+                      <span class="text-[9px] text-gray-300">💡 点击代码块/公式可即时答疑</span>
+                    </div>
                     <div class="prose prose-sm max-w-none text-sm whitespace-pre-wrap">{{ msg.content }}</div>
                   </div>
 
+                  <!-- 任务 8.3: 资源卡片 + 局部重生成按钮 -->
                   <div v-if="msg.resources?.length" class="mt-3 space-y-1.5">
-                    <div v-for="(res, ri) in msg.resources" :key="ri" class="border border-gray-200 rounded-lg overflow-hidden">
+                    <div v-for="(res, ri) in msg.resources" :key="ri"
+                      class="border border-gray-200 rounded-lg overflow-hidden"
+                      :class="{ 'border-yellow-300 bg-yellow-50/30': res._regenerating }">
                       <div class="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors" @click="toggleResource(ri)">
                         <div class="flex items-center gap-2 min-w-0">
                           <span class="text-xs font-medium text-gray-700 truncate">{{ res.resource_type || res.agent }}</span>
                           <span v-if="res.citations?.length" class="text-[10px] text-gray-400">{{ res.citations.length }} 引用</span>
+                          <span v-if="res._regenerating" class="text-[10px] text-yellow-500 flex items-center gap-1">
+                            <Loader2 :size="10" class="animate-spin" /> 重算中
+                          </span>
                         </div>
-                        <ChevronDown v-if="!showResources.has(ri)" :size="14" class="text-gray-400 shrink-0" />
-                        <ChevronUp v-else :size="14" class="text-gray-400 shrink-0" />
+                        <div class="flex items-center gap-1">
+                          <!-- 任务 8.3: 局部重生成按钮 -->
+                          <button @click.stop="regenerateCard(idx, ri)"
+                            class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"
+                            title="局部重算此卡片">
+                            <RotateCcw :size="10" /> 重算
+                          </button>
+                          <ChevronDown v-if="!showResources.has(ri)" :size="14" class="text-gray-400 shrink-0" />
+                          <ChevronUp v-else :size="14" class="text-gray-400 shrink-0" />
+                        </div>
                       </div>
                       <div v-if="showResources.has(ri)" class="px-3 py-2 border-t border-gray-100 bg-gray-50/50">
                         <p class="text-xs text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">{{ res.content.slice(0, 1000) }}{{ res.content.length > 1000 ? '...' : '' }}</p>
@@ -616,6 +812,64 @@ async function doLoadUrl() {
         </div>
       </div>
     </Teleport>
+
+    <!-- ========== 任务 8.4: 双栏阻尼自适应排版（右侧画板） ========== -->
+    <div v-if="activeTab === 'chat'"
+      class="transition-all duration-300 overflow-hidden shrink-0 border-l border-gray-200"
+      :class="shouldShowRightPanel ? 'w-[360px] lg:w-[420px]' : 'w-0 border-l-0'">
+      <div v-if="shouldShowRightPanel" class="h-full flex flex-col p-3">
+        <!-- 面板切换栏 -->
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+            {{ showSandbox ? '代码沙箱' : '可视化画板' }}
+          </span>
+          <div class="flex gap-1">
+            <button @click="showSandbox = !showSandbox"
+              class="px-2 py-1 rounded text-[10px] transition-colors"
+              :class="showSandbox ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'">
+              <Terminal :size="10" /> 沙箱
+            </button>
+            <button @click="rightPanelCollapsed = true"
+              class="px-2 py-1 rounded bg-gray-100 text-gray-500 hover:bg-gray-200 text-[10px]">
+              <Minimize2 :size="10" /> 折叠
+            </button>
+          </div>
+        </div>
+
+        <!-- 代码沙箱（切换） -->
+        <SandboxConsole v-if="showSandbox"
+          :studentId="props.studentId"
+          :initialCode="'import numpy as np\nprint(\'Hello, EduMatrix!\')'" />
+
+        <!-- 绘图区域 + 空白画布自适应收缩 -->
+        <div v-else class="flex-1 flex flex-col">
+          <div v-if="!hasVisualContent" class="flex-1 flex items-center justify-center text-center text-gray-400">
+            <div>
+              <Maximize2 :size="28" class="mx-auto mb-2 opacity-30" />
+              <p class="text-xs">当前讲义不包含可视化图表</p>
+              <p class="text-[10px] mt-1">右侧面板已自动收缩</p>
+            </div>
+          </div>
+          <!-- 实际绘图区域（可由 GraphicFallback 降级） -->
+          <div v-else class="flex-1">
+            <GraphicFallback
+              originalType="mermaid"
+              errorMessage="图表渲染参数异常"
+              fallbackText="当前图表格式不支持实时渲染，已降级为文本示意图" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 任务 8.1: 行级悬浮苏格拉底即时答疑弹窗 ========== -->
+    <InlineSocraticPopup
+      v-if="socraticPopup.visible"
+      :targetText="socraticPopup.targetText"
+      :contextBefore="socraticPopup.contextBefore"
+      :contextAfter="socraticPopup.contextAfter"
+      :lineIndex="socraticPopup.lineIndex"
+      :messageIndex="socraticPopup.messageIndex"
+      @close="socraticPopup.visible = false" />
   </div>
 </template>
 

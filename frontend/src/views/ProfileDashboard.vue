@@ -4,7 +4,8 @@ import { getStudentProfile, getQuizHistory, getCodeHistory, getWebSearchHistory 
 import {
   BrainCircuit, Target, TrendingUp, BookOpen, AlertTriangle,
   User, Lightbulb, BarChart3, Layers, Activity,
-  CheckCircle2, XCircle, Clock, Zap,
+  CheckCircle2, XCircle, Clock, Zap, Heart, RotateCw,
+  Brain,
 } from '@lucide/vue'
 
 const props = defineProps({ studentId: String })
@@ -138,6 +139,49 @@ onMounted(async () => {
             {{ (profile.cognitive_load * 100).toFixed(0) }}%
           </p>
           <p class="text-[10px] text-gray-400 mt-0.5">专注度: {{ (profile.focus_level * 100).toFixed(0) }}%</p>
+        </div>
+      </div>
+
+      <!-- === 任务 7.2-4: 情感状态与遗忘指标 === -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div class="card">
+          <div class="flex items-center gap-2 mb-2">
+            <Heart :size="14" class="text-pink-500" />
+            <span class="text-[10px] font-medium text-gray-500">挫败感指数</span>
+          </div>
+          <p class="text-sm font-semibold" :class="profile.frustration_index < 0.3 ? 'text-green-600' : profile.frustration_index < 0.6 ? 'text-yellow-600' : 'text-red-600'">
+            {{ (profile.frustration_index * 100).toFixed(0) }}%
+          </p>
+          <div class="h-1.5 bg-gray-200 rounded-full mt-1.5 overflow-hidden">
+            <div class="h-full rounded-full transition-all" :class="profile.frustration_index < 0.3 ? 'bg-green-500' : profile.frustration_index < 0.6 ? 'bg-yellow-500' : 'bg-red-500'"
+              :style="{ width: (profile.frustration_index * 100) + '%' }" />
+          </div>
+        </div>
+        <div class="card">
+          <div class="flex items-center gap-2 mb-2">
+            <Zap :size="14" class="text-amber-500" />
+            <span class="text-[10px] font-medium text-gray-500">参与度</span>
+          </div>
+          <p class="text-sm font-semibold text-blue-600">{{ (profile.engagement_level * 100).toFixed(0) }}%</p>
+          <p class="text-[10px] text-gray-400 mt-0.5">动机: {{ profile.motivation_type || '未诊断' }}</p>
+        </div>
+        <div class="card">
+          <div class="flex items-center gap-2 mb-2">
+            <RotateCw :size="14" class="text-orange-500" />
+            <span class="text-[10px] font-medium text-gray-500">元认知偏差</span>
+          </div>
+          <p class="text-sm font-semibold" :class="profile.metacognitive_mismatch < 0.3 ? 'text-green-600' : 'text-red-600'">
+            {{ (profile.metacognitive_mismatch * 100).toFixed(0) }}%
+          </p>
+          <p class="text-[10px] text-gray-400 mt-0.5">连续错误: {{ profile.consecutive_errors || 0 }}</p>
+        </div>
+        <div class="card">
+          <div class="flex items-center gap-2 mb-2">
+            <Brain :size="14" class="text-violet-500" />
+            <span class="text-[10px] font-medium text-gray-500">BKT 追踪概念</span>
+          </div>
+          <p class="text-sm font-semibold text-gray-800">{{ Object.keys(profile.bkt_states || {}).length || 0 }}</p>
+          <p class="text-[10px] text-gray-400 mt-0.5">会话交互: {{ profile.session_interactions || 0 }}</p>
         </div>
       </div>
 

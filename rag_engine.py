@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from pathlib import Path
+from typing import Any
 import math
 import re
 import concurrent.futures
@@ -9,6 +10,7 @@ import concurrent.futures
 from config import CONFIG
 from embedding_models import EMBEDDINGS
 from knowledge_base import load_evidence_from_file, load_seed_evidence
+from math_utils import cosine_similarity
 from models import Evidence, EvidenceModality, GraphContext, RetrievalBundle
 from observability import TELEMETRY, timed_span
 from vector_store import create_index
@@ -106,17 +108,39 @@ def _evidence_text(item: Evidence) -> str:
 
 
 class GraphRAG:
-    def __init__(self) -> None:
+    def __init__(self, repository: Any | None = None) -> None:
         self.nodes: set[str] = set()
         self.forward: dict[str, set[str]] = defaultdict(set)
         self.reverse: dict[str, set[str]] = defaultdict(set)
         self._build_professional_knowledge_graph()
+        # === F1 修复：从动态图谱仓库加载边，与硬编码边合并 ===
+        if repository is not None:
+            self._load_dynamic_edges(repository)
 
     def _add_edge(self, source: str, target: str) -> None:
         self.nodes.add(source)
         self.nodes.add(target)
         self.forward[source].add(target)
         self.reverse[target].add(source)
+
+    def _load_dynamic_edges(self, repository: Any) -> None:
+        """F1 修复：从动态图谱仓库（Neo4j/内存）加载边，与硬编码图谱合并。"""
+        try:
+            # InMemoryGraphRepository 和 Neo4jGraphRepository 都有 edges 属性或可用 query_prerequisites
+            if hasattr(repository, "edges"):
+                for source, target, _relation in repository.edges:
+                    self._add_edge(source, target)
+            elif hasattr(repository, "query_prerequisites"):
+                # 如果仓库支持查询，尝试遍历所有已知节点
+                if hasattr(repository, "nodes"):
+                    for node in repository.nodes:
+                        result = repository.query_prerequisites(node)
+                        for prereq in result.prerequisites:
+                            self._add_edge(prereq, node)
+                        for down in result.downstream:
+                            self._add_edge(node, down)
+        except Exception as exc:
+            print(f"  [GraphRAG] 动态图谱加载失败，使用硬编码图谱: {exc}")
 
     def _build_professional_knowledge_graph(self) -> None:
         edges = [
@@ -297,6 +321,7 @@ class HybridRAGPipeline:
         visual_index: VisRAG | None = None,
         text_index: TextKnowledgeIndex | None = None,
         faiss_indexes: FAISSIndexSet | None = None,
+        formula_rag: Any | None = None,
     ) -> None:
         self.graph = graph or GraphRAG()
         self.visual_index = visual_index or VisRAG()
@@ -309,6 +334,17 @@ class HybridRAGPipeline:
 
         self.user_index = InMemoryVectorIndex("user-documents")
 
+        # === F2 修复：接入公式双轨检索 ===
+        self.formula_rag = formula_rag
+        if self.formula_rag is None:
+            try:
+                from app.utils.formula_rag import FormulaRAG, seed_formula_index
+                _fr = FormulaRAG()
+                seed_formula_index(_fr)
+                self.formula_rag = _fr
+            except Exception:
+                self.formula_rag = None
+
     def ingest_user_documents(self, evidence: tuple[Evidence, ...]) -> None:
         if not evidence:
             return
@@ -320,7 +356,7 @@ class HybridRAGPipeline:
         if removed > 0:
             TELEMETRY.record_metric("user_index.documents_removed", removed)
 
-    def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k) -> RetrievalBundle:
+    def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k, profile: Any | None = None) -> RetrievalBundle:
         # === 关键修复：延迟加载，打破循环导入 ===
         from web_search_api import search_arxiv
         
@@ -357,6 +393,17 @@ class HybridRAGPipeline:
             user_results = self.user_index.search(query_with_graph, top_k=top_k)
             candidates.extend(user_results)
 
+            # === F2 修复：公式双轨检索结果合并 ===
+            # 仅在查询明确涉及公式/数学/偏导/损失函数等时触发，避免噪声注入
+            _formula_keywords = ("公式", "偏导", "损失函数", "交叉熵", "sigmoid", "softmax", 
+                                "梯度下降", "MSE", "正则化", "导数", "微积分", "数学", "LaTeX")
+            if self.formula_rag is not None and any(kw in query for kw in _formula_keywords):
+                try:
+                    formula_evidence = self.formula_rag.search_as_evidence(query, top_k=min(2, top_k))
+                    candidates.extend(formula_evidence)
+                except Exception as e:
+                    print(f"  [RAG] Formula RAG search failed: {e}")
+
             dedup: dict[str, Evidence] = {}
             for item in candidates:
                 existing = dedup.get(item.id)
@@ -383,6 +430,10 @@ class HybridRAGPipeline:
             # 按检索相关度得分重新排序
             final_evidence.sort(key=lambda item: item.score, reverse=True)
 
+            # === F3 修复：学生画像感知的个性化重排序 ===
+            if profile is not None and hasattr(profile, "concept_mastery"):
+                final_evidence = self._personalized_rerank(final_evidence, profile, target)
+
             result = RetrievalBundle(
                 query=query,
                 target=graph_context.target,
@@ -396,6 +447,40 @@ class HybridRAGPipeline:
                 target=result.target,
             )
             return result
+
+    def _personalized_rerank(self, evidence: list[Evidence], profile: Any, target: str | None) -> list[Evidence]:
+        """F3 修复：基于学生概念掌握度的个性化重排序。
+        - 薄弱知识点（mastery < 0.5）的证据 boost +15%
+        - 已掌握知识点（mastery > 0.8）的证据 downweight -10%
+        - 误概念相关证据额外 boost（概念辨析需求）
+        """
+        mastery = getattr(profile, "concept_mastery", {})
+        misconception = getattr(profile, "misconception_patterns", {})
+        if not mastery:
+            return evidence
+
+        reranked = []
+        for item in evidence:
+            boost = 1.0
+            text_lower = (item.title + " " + item.content).lower()
+
+            # 对每个概念检查掌握度
+            for concept, level in mastery.items():
+                if concept.lower() in text_lower or concept in item.tags:
+                    if level < 0.5:
+                        boost *= 1.15  # 薄弱概念的证据 boost
+                    elif level > 0.8:
+                        boost *= 0.90  # 已掌握概念的证据降权
+
+            # 误概念相关证据额外 boost
+            for pattern, strength in misconception.items():
+                if any(kw in text_lower for kw in pattern.split("与")):
+                    boost *= 1.10
+
+            reranked.append(item.with_score(round(item.score * boost, 4)))
+
+        reranked.sort(key=lambda item: item.score, reverse=True)
+        return reranked
 
     def _infer_target(self, query: str) -> str:
         for concept in sorted(self.graph.nodes, key=len, reverse=True):
@@ -466,8 +551,14 @@ class FAISSIndexSet:
         return ()
 
 
-def build_rag_pipeline() -> HybridRAGPipeline:
-    graph = GraphRAG()
+def build_rag_pipeline(repository: Any | None = None) -> HybridRAGPipeline:
+    """构建混合 RAG 管线。
+    
+    Args:
+        repository: 可选的动态图谱仓库（InMemoryGraphRepository/Neo4jGraphRepository），
+                    传入后 GraphRAG 会从中加载动态构建的边。
+    """
+    graph = GraphRAG(repository=repository)
     vis_rag = VisRAG()
 
     if CONFIG.use_faiss:

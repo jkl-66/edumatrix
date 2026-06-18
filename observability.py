@@ -47,6 +47,40 @@ class TelemetrySink:
         self.metrics.clear()
         self.spans.clear()
 
+    # === P2-5 教育专用指标 ===
+    def record_learning_event(self, student_id: str, event_type: str, concept: str, value: float) -> None:
+        """记录学习事件（掌握度变化、误概念出现、挫败感波动等）。"""
+        self.record_metric(
+            f"learning.{event_type}",
+            value,
+            student_id=student_id,
+            concept=concept,
+        )
+
+    def record_engagement(self, student_id: str, frustration: float, engagement: float) -> None:
+        """记录学生参与度和情感状态。"""
+        self.record_metric("engagement.frustration", frustration, student_id=student_id)
+        self.record_metric("engagement.level", engagement, student_id=student_id)
+
+    def get_education_summary(self) -> dict[str, Any]:
+        """获取教育维度的指标汇总。"""
+        edu_metrics = {}
+        for m in self.metrics:
+            if m.name.startswith("learning."):
+                key = m.name
+                edu_metrics.setdefault(key, []).append(m.value)
+            if m.name.startswith("engagement."):
+                key = m.name
+                edu_metrics.setdefault(key, []).append(m.value)
+        return {
+            key: {
+                "mean": round(sum(vals) / len(vals), 4) if vals else 0,
+                "count": len(vals),
+                "last": vals[-1] if vals else 0,
+            }
+            for key, vals in sorted(edu_metrics.items())
+        }
+
 
 class timed_span:
     def __init__(self, sink: TelemetrySink, name: str, **attributes: Any) -> None:

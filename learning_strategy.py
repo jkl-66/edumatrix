@@ -71,6 +71,30 @@ class LearningStrategyEngine:
                 )
             )
 
+        # === P1-1 情感感知策略分支 ===
+        if profile.frustration_index > 0.4:
+            actions.append(
+                StrategyAction(
+                    strategy=StrategyType.HINT_LADDER,  # 使用 HINT_LADDER 策略型，但内容改为情感安抚
+                    title="挫败感缓解与信心重建",
+                    description=f"学生挫败感偏高({profile.frustration_index:.2f})。降低第一题难度，先建立成功体验；"
+                                f"反馈聚焦具体任务进展而非人格评价；使用积极暗示（'上一题你已经掌握了关键点'）。",
+                    trigger=f"挫败感指数{profile.frustration_index:.2f}>0.4",
+                    priority=0,  # 最高优先级
+                )
+            )
+        if profile.motivation_type == "无动机":
+            actions.append(
+                StrategyAction(
+                    strategy=StrategyType.RETRIEVAL_PRACTICE,
+                    title="动机激活：知识连接与意义发现",
+                    description="暂停批量刷题，先通过案例展示当前知识在实际项目/考试中的具体应用场景，"
+                                "让学生自己选择学习路径和目标，增强自主感。",
+                    trigger="无动机状态",
+                    priority=0,
+                )
+            )
+
         weakest = min(profile.concept_mastery.items(), key=lambda item: item[1], default=(target, 0.48))
         actions.append(
             StrategyAction(

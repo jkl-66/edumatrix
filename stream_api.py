@@ -13,6 +13,49 @@ from content_safety import CONTENT_SAFETY
 router = APIRouter(prefix="/api/stream", tags=["streaming"])
 
 
+# === P1-4 形成性评价：微型检查点函数 ===
+def _run_formative_check(query: str, target: str, streamed_parts: list, profile) -> dict | None:
+    """根据教学内容生成快速理解检查的关键词和判断。"""
+    if not streamed_parts or not target:
+        return None
+
+    # 提取教学内容的摘要关键词
+    keywords = []
+    for part in streamed_parts:
+        if hasattr(part, "content") and part.content:
+            for kw in (target, "概念", "公式", "应用", "示例", "原理"):
+                if kw in part.content and kw not in keywords:
+                    keywords.append(kw)
+
+    # 根据掌握度推断检查要点
+    mastery = profile.concept_mastery.get(target, 0.48) if profile and hasattr(profile, "concept_mastery") else 0.48
+    if mastery < 0.3:
+        check_focus = f"请用一句话总结「{target}」的核心思想"
+        expected_hint = f"看是否提到{target}的关键特性"
+        difficulty = "基础"
+    elif mastery < 0.7:
+        check_focus = f"请用自己的话解释「{target}」与前置知识的区别与联系"
+        expected_hint = "关注概念辨析能力"
+        difficulty = "进阶"
+    else:
+        check_focus = f"请举例说明「{target}」在实际场景中的应用"
+        expected_hint = "关注迁移应用能力"
+        difficulty = "高阶"
+
+    return {
+        "target": target,
+        "check_type": "summary",
+        "difficulty": difficulty,
+        "question": check_focus,
+        "expected_hint": expected_hint,
+        "keywords": keywords[:5],
+        "mastery_before": round(mastery, 2),
+        "profile_update": {
+            "concept_mastery": {target: min(1.0, mastery + 0.02)},  # 接触后微弱提升
+        },
+    }
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -161,6 +204,21 @@ async def stream_chat(request: Request) -> StreamingResponse:
             for part in streamed_parts:
                 if hasattr(part, "content") and hasattr(part, "resource_type"):
                     final_content += f"\n\n## {part.resource_type}\n\n{part.content}"
+
+            # === P1-4 形成性评价：在安全审查前嵌入微型检查点 ===
+            _formative_check = _run_formative_check(
+                message, retrieval.target if retrieval else "未知",
+                streamed_parts, swarm.profile_store.get(student_id)
+            )
+            if _formative_check:
+                yield _sse("formative_check", _formative_check)
+                # 将检查结果注入 profile_data
+                if _formative_check.get("profile_update"):
+                    profile_obj = swarm.profile_store.get(student_id)
+                    if profile_obj:
+                        for key, val in _formative_check["profile_update"].items():
+                            if hasattr(profile_obj, key):
+                                setattr(profile_obj, key, val)
 
             safety_result = CONTENT_SAFETY.check_safety(final_content)
             if not safety_result["passed"]:

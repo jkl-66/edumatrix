@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
-
-from app.database import get_db
+from fastapi import APIRouter, Request, HTTPException
+from app.database import run_db_op
 from app.crud import load_student_profile, save_student_profile
 from swarm_factory import build_swarm_from_headers
 
@@ -16,13 +14,12 @@ router = APIRouter(prefix="/api/profile", tags=["profile"])
 async def get_profile(
     student_id: str,
     request: Request,
-    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
 
     if not profile:
-        profile = load_student_profile(db, student_id)
+        profile = await run_db_op(load_student_profile, student_id)
         swarm.profile_store[student_id] = profile
 
     return {
@@ -58,14 +55,13 @@ async def get_profile(
 async def update_profile(
     student_id: str,
     request: Request,
-    db: Session = Depends(get_db),
 ) -> dict[str, str]:
     payload = await request.json()
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
 
     if not profile:
-        profile = load_student_profile(db, student_id)
+        profile = await run_db_op(load_student_profile, student_id)
         swarm.profile_store[student_id] = profile
 
     major = payload.get("major")
@@ -87,6 +83,6 @@ async def update_profile(
         profile.interaction_preferences = list(set(existing + preferences))[:5]
 
     profile._refresh_dynamic_profile()
-    save_student_profile(db, profile)
+    await run_db_op(save_student_profile, profile)
 
     return {"status": "updated", "student_id": student_id}

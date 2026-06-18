@@ -407,6 +407,8 @@ Sisyphus 在解析 `plan.md` 中的每个开发任务时，必须先将其分类
 3. **任务派发 (Delegate via CLI)**：所有实际编码任务必须通过终端工具 `run_command` 并运行 `oma agent:spawn <agent-id> "<prompt>" <session-id>` 来指派给最合适的专业子智能体。
 4. **强制提示 /compact**：在每次成功派发子智能体指令后，主脑应在回答末尾明确提示用户在编辑器命令行中运行 `/compact` 以清理上下文，锁死 Token 费用，绝不产生无谓的额度消耗。
 5. **Schema 校验自愈 (Zod Schema Self-Healing)**：若在拉起子进程或执行工具时，由于 oh-my-agent 校验引擎升级导致本地配置文件出现 Zod 校验错误（如 `xxx is required`），主脑必须立刻分析校验报错，定位缺失字段，并主动修补 `.agents/oma-config.yaml` 或 `.agents/config/models.yaml` 中相应的模型及参数定义，快速完成自愈，绝不让配置冲突阻断工作流。
+6. **Windows 命令行参数切分防御规则 (Windows Argument-Splitting Defense)**：在 Windows 环境下，直接传递带有空格/标点的 Prompt 极易因 shell 参数拼接导致 `unexpected argument` 语法截断报错。指派任务时，必须使用**三引号包裹法**进行命令行强制转义（PowerShell 下使用 `'"""你的 复杂 Prompt 内容"""'`；CMD 下使用 `"\"你的 复杂 Prompt 内容\""`），或者将 Prompt 写入 `scratch/` 下的临时文件进行路径传参，严禁直接裸传未转义的带空格 Prompt。
+7. **智能体全称指派与静默降级防护规则 (Full-Name Dispatch & Silent Degradation Prevention)**：指派子智能体时，必须使用在配置中完整注册的 Agent 全称（如后端使用 `backend-engineer` 而非简写 `backend`，数据库使用 `database-design` 而非简写 `db`）。一旦使用简写或不匹配的名称，Codex 执行引擎将无法匹配权限规范，触发静默降级为“只读沙箱模式”（Read-Only Sandbox Mode），此时子智能体仍能调用大语言模型并空耗 API 额度，但其所有文件修改动作将被静默回滚，表现为智能体“运行卡死或无响应”。
 
 ---
 
@@ -510,6 +512,16 @@ Deactivate: say "workflow done".
 1. **Do not modify `.agents/` files** (SSOT protection).
 2. Workflows execute via keyword detection or explicit naming, never self-initiated.
 3. Response language follows `.agents/oma-config.yaml`
+4. **Strict Division of Labor & Standard Spawning (分工与指派发令铁律)**：必须严格按照团队分工工作。常规后端开发必须指派给 GLM-5.1 算力通道，发令方式必须使用标准的编编指令：`oma agent:spawn backend-engineer scratch/your_prompt_file.txt your_session_id`。**严禁**直接在命令行裸跑 `codex exec` 或使用管道重定向的方式绕过 `oma` 框架，这会导致环境变量和 Hook 配置失效而报错。
+5. **Metarule of Rules (写规则 of 规则)**：你每写一个或修改一个需要读取的文件（包括但不限于 `WORKSPACE_STATE.md`, `CLAUDE.md`, `AGENTS.md`, `manual.md`, `plan.md`），必须把上述“严格分工与标准指派发令”的规则强制写入该文件的底部，此条写规则的规则亦作为底层的绝对铁律执行。
+6. **Rule 1: 设立“行为阻断器”（Action Interceptor）**：主控协调官在任何情况下尝试调用文件写入或修改工具直接编辑业务源文件（如 `.py`, `.vue`）时，必须在动作生成前强制阻断自己，无条件抛出分工越权异常并终止执行。
+7. **Rule 2: 执行“排错三步走”（Structured Diagnostics）**：面对任何环境或网络报错，绝对不先改动配置或撰写调试脚本。必须先以文本分析原因、列出排查逻辑，并在获得用户明确授权后，方可运行纯粹的非破坏性连接测试（测试完需清理 `scratch/` 垃圾）。
+8. **Rule 3: 死守 `oma` 统一发令入口（Uniform Command Entrance）**：严禁脱离 `oma` 框架直接裸跑大模型命令行。遇到 Windows 命令行转义问题时，应使用 `scratch/` 文件作为 Prompt 传输中介，走标准的 `oma agent:spawn` 进行派发。
+9. **Rule 4: 强制“首屏置顶”必读文件规则（High-Priority Hook）**：每次会话被重新唤醒或压缩后，必须第一时间检索并加载 `CLAUDE.md`、`WORKSPACE_STATE.md` 和 `AGENTS.md` 底部的规范，将团队分工纪律作为超越一切开发本能的最高执行准则。
+10. **Rule 5: Windows 命令行参数切分防御规则 (Windows Argument-Splitting Defense)**：在 Windows 环境下，直接传递带有空格/标点的 Prompt 极易因 shell 参数拼接导致 `unexpected argument` 语法截断报错。指派任务时，必须使用**三引号包裹法**进行命令行强制转义（PowerShell 下使用 `'"""你的 复杂 Prompt 内容"""'`；CMD 下使用 `"\"你的 复杂 Prompt 内容\""`），或者将 Prompt 写入 `scratch/` 下的临时文件进行路径传参，严禁直接裸传未转义的带空格 Prompt。
+11. **Rule 6: 智能体全称指派与静默降级防护规则 (Full-Name Dispatch & Silent Degradation Prevention)**：指派子智能体时，必须使用在配置中完整注册的 Agent 全称（如后端使用 `backend-engineer` 而非简写 `backend`，数据库使用 `database-design` 而非简写 `db`）。一旦使用简写或不匹配的名称，Codex 执行引擎将无法匹配权限规范，触发静默降级为“只读沙箱模式”（Read-Only Sandbox Mode），此时子智能体仍能调用大语言模型并空耗 API 额度，但其所有文件修改动作将被静默回滚，表现为智能体“运行卡死或无响应”。
+
+
 
 ## Project Rules
 

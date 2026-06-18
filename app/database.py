@@ -1,9 +1,10 @@
 import json
 import os
+import asyncio
 from datetime import datetime, timezone
-from sqlalchemy import create_engine, Column, String, Float, Integer, Text, DateTime, JSON, Boolean, event
+from sqlalchemy import create_engine, Column, String, Float, Integer, Text, DateTime, JSON, Boolean, event, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, relationship
 
 from contextvars import ContextVar
 from contextlib import contextmanager
@@ -44,12 +45,13 @@ engine = create_engine(
     echo=False
 )
 
-# 物理连接池触发 WAL（Write-Ahead Logging）模式，实现读写非阻塞
+# 物理连接池触发 WAL（Write-Ahead Logging）模式，实现读写非阻塞，并启用外键约束
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
 
 # 每次执行 SQL 前拦截：对于 PostgreSQL，若有租户上下文，则动态设置 search_path
@@ -64,6 +66,23 @@ def before_cursor_execute(conn, cursor, statement, parameters, context, executem
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+async def run_db_op(func, *args, **kwargs):
+    """
+    Run a database operation in a separate thread using a thread-local Session.
+    Avoids transaction pollution and concurrency issues in AsyncIO environment.
+    """
+    loop = asyncio.get_running_loop()
+    
+    def _run_with_session():
+        db = SessionLocal()
+        try:
+            res = func(db, *args, **kwargs)
+            return res
+        finally:
+            db.close()
+            
+    return await loop.run_in_executor(None, _run_with_session)
 
 class DBStudentProfile(Base):
     """持久化物理表：存储学生 10 维画像、掌握度、认知负荷与学习偏好"""
@@ -90,6 +109,23 @@ class DBStudentProfile(Base):
     history_logs = Column(Text, default="")              # 提问历史（以换行符或JSON数组隔开）
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # 扩充物理字段 (Task 6.2)
+    major = Column(Text, default="")
+    favorites = Column(JSON, default=list)
+    knowledge_traces = Column(JSON, default=dict)
+    profile_evidence = Column(JSON, default=list)
+
+    # 级联删除配置关系 (Task 6.2)
+    alignment_logs = relationship("DBAlignmentLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    notes = relationship("DBNote", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    review_plans = relationship("DBReviewPlan", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    conversation_history = relationship("DBConversationHistory", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    knowledge_documents = relationship("DBKnowledgeDocument", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    quiz_records = relationship("DBQuizRecord", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    web_search_history = relationship("DBWebSearchHistory", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    code_executions = relationship("DBCodeExecution", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    wrong_questions = relationship("DBWrongQuestion", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+
 class DBUser(Base):
     """用户表：存储登录凭证"""
     __tablename__ = "users"
@@ -104,7 +140,7 @@ class DBAlignmentLog(Base):
     __tablename__ = "alignment_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    student_id = Column(String(64), index=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
     target_concept = Column(String(128))
     passed = Column(Boolean, default=False)
     distance = Column(Float)
@@ -113,12 +149,13 @@ class DBAlignmentLog(Base):
     advice = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
+    student_profile = relationship("DBStudentProfile", back_populates="alignment_logs")
 
 class DBNote(Base):
     __tablename__ = "notes"
 
     id = Column(String(64), primary_key=True)
-    student_id = Column(String(64), index=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
     source = Column(String(128), default="conversation")
     content = Column(Text)
     tags = Column(JSON, default=list)
@@ -126,6 +163,7 @@ class DBNote(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    student_profile = relationship("DBStudentProfile", back_populates="notes")
 
 class DBReviewPlan(Base):
     """持久化物理表：SM-2 间隔重复复习计划
@@ -135,7 +173,7 @@ class DBReviewPlan(Base):
     __tablename__ = "review_plans"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    student_id = Column(String(64), index=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
     concept = Column(String(128))
     interval_days = Column(Integer, default=1)
     next_review_at = Column(DateTime)
@@ -156,7 +194,7 @@ class DBConversationHistory(Base):
     __tablename__ = "conversation_history"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    student_id = Column(String(64), index=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
     query = Column(Text)
     response_summary = Column(Text)
     target = Column(String(128))
@@ -164,13 +202,14 @@ class DBConversationHistory(Base):
     alignment_passed = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    student_profile = relationship("DBStudentProfile", back_populates="conversation_history")
 
 class DBKnowledgeDocument(Base):
     """持久化物理表：存储用户上传的知识库文档"""
     __tablename__ = "knowledge_documents"
 
     id = Column(String(64), primary_key=True)
-    student_id = Column(String(64), index=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
     filename = Column(String(256))
     file_type = Column(String(16))  # md / txt / pdf / pptx / mp4
     file_size = Column(Integer, default=0)
@@ -182,13 +221,14 @@ class DBKnowledgeDocument(Base):
     multimodal_metadata = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    student_profile = relationship("DBStudentProfile", back_populates="knowledge_documents")
 
 class DBQuizRecord(Base):
     """持久化物理表：存储测验记录与置信度反馈"""
     __tablename__ = "quiz_records"
 
     id = Column(String(64), primary_key=True)
-    student_id = Column(String(64), index=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
     question = Column(Text)
     student_answer = Column(Text)
     correct_answer = Column(Text, default="")
@@ -202,13 +242,14 @@ class DBQuizRecord(Base):
     session_id = Column(String(64), default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    student_profile = relationship("DBStudentProfile", back_populates="quiz_records")
 
 class DBWebSearchHistory(Base):
     """持久化物理表：存储联网搜索与文档加载记录"""
     __tablename__ = "web_search_history"
 
     id = Column(String(64), primary_key=True)
-    student_id = Column(String(64), index=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
     query = Column(String(512))
     source_type = Column(String(32))  # web_search / url_load
     source_url = Column(Text, default="")
@@ -217,19 +258,36 @@ class DBWebSearchHistory(Base):
     chunk_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    student_profile = relationship("DBStudentProfile", back_populates="web_search_history")
 
 class DBCodeExecution(Base):
     """持久化物理表：存储代码执行记录"""
     __tablename__ = "code_executions"
 
     id = Column(String(64), primary_key=True)
-    student_id = Column(String(64), index=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
     code = Column(Text)
     language = Column(String(32), default="python")
     output = Column(Text, default="")
     error = Column(Text, default="")
     execution_time_ms = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    student_profile = relationship("DBStudentProfile", back_populates="code_executions")
+
+class DBWrongQuestion(Base):
+    """持久化物理表：存储错题记录 (Task 6.2)"""
+    __tablename__ = "wrong_questions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
+    quiz_record_id = Column(String(64), ForeignKey("quiz_records.id", ondelete="CASCADE"), nullable=True)
+    concept_name = Column(String(128), index=True)
+    wrong_reason_category = Column(String(128), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    student_profile = relationship("DBStudentProfile", back_populates="wrong_questions")
+    quiz_record = relationship("DBQuizRecord")
 
 # 物理并网：自动创建所有本地 SQLite 数据库表
 def init_db():

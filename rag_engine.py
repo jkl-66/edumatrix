@@ -361,9 +361,19 @@ class HybridRAGPipeline:
         from web_search_api import search_arxiv
         
         with timed_span(TELEMETRY, "hybrid_rag.retrieve", top_k=top_k):
-            target = target or self._infer_target(query)
-            graph_context = self.graph.get_context(target)
-            query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
+            out_of_domain = not self._is_ml_concept(query)
+            if out_of_domain:
+                graph_context = GraphContext(
+                    target=query,
+                    learning_path=(),
+                    prerequisite_edges=(),
+                    downstream_edges=(),
+                )
+                query_with_graph = query
+            else:
+                target = target or self._infer_target(query)
+                graph_context = self.graph.get_context(target)
+                query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
 
             candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
 
@@ -439,6 +449,8 @@ class HybridRAGPipeline:
                 target=graph_context.target,
                 graph_context=graph_context,
                 evidence=tuple(final_evidence),
+                low_confidence=low_confidence,
+                out_of_domain=out_of_domain,
             )
             TELEMETRY.record_metric("retrieval.evidence_count", len(result.evidence), target=result.target)
             TELEMETRY.record_metric(

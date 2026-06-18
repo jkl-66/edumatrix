@@ -156,6 +156,8 @@ class RetrievalBundle:
     target: str
     graph_context: GraphContext
     evidence: tuple[Evidence, ...]
+    low_confidence: bool = False
+    out_of_domain: bool = False
 
     def context_prompt(self) -> str:
         evidence_lines = []

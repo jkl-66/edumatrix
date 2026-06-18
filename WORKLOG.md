@@ -297,6 +297,91 @@
 - **文件**：`frontend/src/App.vue`
 - **改进**：重构了 `studentId` 的初始化逻辑。从原来的每次页面刷新即生成 `stu-Date.now()` 改为首先读取 `localStorage`。如果存在则复用，如果不存在则自动生成并固化。从而在刷新页面或跨会话时自动保存学生的学习路径、历史聊天记录与画像状态。
 
-#### 4. 专项验证与运行速度优化
+#### 4. 前端轨迹展示与掌握度大屏 (Wave 4 - Task 4.2)
+- **文件**：`frontend/src/components/MasteryRadar.vue` [NEW], `frontend/src/components/AgentTimeline.vue` [NEW], `frontend/src/views/Chat.vue`
+- **改进**：
+  - 引入并集成了 `echarts` 数据可视化库。
+  - 实现了 `MasteryRadar.vue` 雷达图组件，展现灰色“初始学情”与科技蓝“最新学情”双圈对比，并在回答完毕后动态向外滑动外扩。
+  - 实现了 `AgentTimeline.vue` 垂直时间轴组件，通过 `animate-pulse` 呼吸灯效果流式展示 Coordinator, Diagnostician, Planner 等多智能体协作状态。
+  - 完美挂载到 `Chat.vue` 右侧的可视化侧边栏中。
+
+#### 5. 讯飞流式 TTS 接入与嘴形低通滤波 (Wave 5 - Task 5.1 & 5.2)
+- **文件**：`frontend/src/components/AvatarSpeech.vue` [NEW], `frontend/src/views/Settings.vue`
+- **改进**：
+  - 新建 `AvatarSpeech.vue` 并接入科大讯飞流式 TTS WebSocket 接口，利用 Web Audio API 的 `AudioContext` 实现二进制音频 PCM 流式“边合成边播放”的零延迟体验。
+  - 引入音频 `AnalyserNode` 获取实时音频振幅，在嘴形 Canvas 中应用一阶低通指数平滑滤波器（平滑系数 $\alpha = 0.25$：`SmoothScale = 0.25 * TargetScale + 0.75 * LastScale`）消除了高频电噪声和爆破音抖动。
+  - 在 `Settings.vue` 页面中增加了科大讯飞 `APPID`、`API Key` 和 `API Secret` 的配置项，支持从 UI 自主配置。
+
+#### 6. 验证与构建测试
+- **改进**：在 `frontend` 目录运行 `npm run build` 成功完成打包构建，生成无警告与错误的生产 dist。
+
+#### 7. 专项验证与运行速度优化
 - **测试并网**：联合运行全套测试 `python -m pytest test_edumatrix.py tests/test_graph_builder.py -v`。
 - **结果**：全量 49 个测试 100% 绿灯通过。由于 `test_edumatrix.py` 成功拦截了 mock provider 路由，整体运行时间从 193s 缩短至 24.71s。
+
+---
+
+### 2026-06-16
+> **今日概述**：全面推进并完成了 **Wave 6（底层高可用与数据持久化加固）** 中 Task 6.1、Task 6.2 与 Task 6.3 的核心开发与并网验证。优化了 FastAPI 的数据库高并发性能，实现了 RAG 异步非阻塞检索改造，扩充了数据库画像持久化字段并新增错题物理表支持，并对沙箱容器预热池加装互斥锁，成功通过了包含高并发写锁与级联物理删除在内的全部 17 个系统核心单元测试。
+
+#### 1. FastAPI 与 RAG 异步非阻塞化改造 (Task 6.1)
+- **异步 RAG 检索**：在 `rag_engine.py` 中新增 `retrieve_async` 异步方法，采用 `loop.run_in_executor` 结合 `asyncio.gather` 并发调度本地向量库、arXiv 联网检索和用户文档检索，彻底消除了原本同步阻塞 IO 引起的主线程事件循环锁死隐患。
+- **Swarm 调度异步改造**：重构 `ZPDPlannerAgent` 提供 `plan_async` 方法，在 `agent_swarm.py` 中将 Swarm 控制流的路径规划更改为 `await self.planner.plan_async(...)`。
+- **高并发 DB 线程池隔离**：在 `app/database.py` 中编写 `run_db_op` 辅助方法，使用 `loop.run_in_executor` 在独立子线程中为数据库事务分配和回收局部 Local Session。
+- **全路由异步并网**：将 `app/main.py` 和 `app/auth.py` 中的同步 CRUD 数据库阻塞接口全部重构为 `await run_db_op(...)` 非阻塞调用。
+
+#### 2. 数据库画像扩充与级联物理删除加固 (Task 6.2)
+- **持久化字段扩充**：在 `DBStudentProfile` 中新增 `major`、`favorites`、`knowledge_traces` 和 `profile_evidence` 物理字段，在 `app/crud.py` 的加载与保存函数中添加对这些复杂嵌套 JSON 数据的反序列化及还原。
+- **错题物理表与 CASCADE**：定义了物理表 `DBWrongQuestion` 并为各子关联表（如错题表、计划表、会话历史等）的 `student_id` 配置 `ondelete="CASCADE"` 约束。
+- **SQLite 级联开启**：在 `app/database.py` 中挂载 SQLAlchemy event listener，一旦与 SQLite 建立物理连接，强制执行 `PRAGMA foreign_keys=ON` 以在物理层激活 CASCADE 级联删除。
+
+#### 3. 隔离代码沙箱常驻容器池并发安全 (Task 6.3)
+- **并发互斥锁**：在 `SandboxProcessRunner` 中初始化 `asyncio.Lock()`，并在 `_prewarm_pool` 启动预热、Docker 容器分配、以及容器回收等操作中应用 `async with self._lock`，从根本上杜绝了多协程并发运行代码时对 `self.containers` 列表修改产生的竞态冲突。
+
+#### 4. 自动化测试并网与环境自愈
+- **测试环境自愈**：修复了在 Windows 平台测试时由于文件夹权限受阻导致的 `PermissionError`，通过 `icacls` 命令赋予了用户完全控制权限；并在 `test_edumatrix.py` 中注入 `init_db()` 自愈依赖，解决了在空库跑测试时 `no such table: student_profiles` 的闪退问题。
+- **测试结果**：成功运行 `python -m pytest test_edumatrix.py`，全量 17 个测试（包括新增的级联物理删除测试 `test_database_cascade_deletes` 与多线程高并发写压测 `test_database_concurrency_writes`）全部 100% 顺利绿灯通过。
+
+#### 5. VisRAG 内置学术图片生成与并网 (Task 10.3)
+- **文件**：`data/patches/`下的 7 张 VisRAG 预生成图表，`rag_engine.py`
+- **改进**：
+  - 手动或通过脚本验证 VisRAG 依赖的 7 张学术规范图片资源物理生成，保存在指定的本地补丁存储区。
+  - 在混合检索管道中更新对这些静态图片的索引及多模态文档展示引用，成功实现 VisRAG 内置图片跟本地学术规范并网。
+
+#### 6. Codex 与 CCSwitch 协议冲突系统性诊断与挂起 (Task 2.3)
+- **文件**：`C:\Users\iray\.codex\config.toml`、`C:\Users\iray\.codex\auth.json`
+- **诊断详情**：
+  - 启动子代理测试时，Codex 强制运行在 `responses` 传输协议上，该协议强制使用 Vercel 专有的 `/v1/responses` 端点。
+  - 本地 CCSwitch 拦截代理及 GLM 官方 API 对 `/v1/responses` 访问皆返回超时或 404 错误（因为它们仅支持标准的 Chat Completions `/v1/chat/completions` API）。
+  - 尝试将 Codex `wire_api` 字段更改为 `chat_completions` 会导致 CLI 解析配置直接闪退；直连 GLM 官方也因其不支持该专有端点而报错。
+  - **恢复环境**：为确保本地工作区无污染，已将 `config.toml` 与 `auth.json` 中被临时改动的配置项 100% 物理还原为初始的 CCSwitch 代理状态。目前 Task 2.3 因协议级不兼容暂时挂起。
+
+---
+
+### 2026-06-17
+> **今日概述**：成功重构并部署了本地 `Pruning Proxy`（参数裁剪与上下文压缩代理服务器，监听 15722 端口，转发至 15721），解决了 Codex 与 CCSwitch / GLM-5.1 的底层大尺寸 payload 兼容性冲突，打通了 Codex (GLM-5.1) 子智能体编码通道，并通过了全部 17 项基准单元测试及子智能体模拟文件读写、指令执行测试，正式解除了 Task 2.3 的挂起状态。
+
+#### 1. Codex 本地中转代理净化与 Payload 瘦身
+- **物理中转定位**：重构 [scratch/sniffer.py](file:///d:/project-edumatrix/edumatrix-main/scratch/sniffer.py)，使其升级为在 15722 端口运行的 Pruning Proxy 净化代理，负责对 Codex 访问进行劫持并实施物理瘦身，然后再透明转发至真正的 CC Switch (15721) 服务。
+- **参数与工具白名单裁剪**：在代理服务器中配置工具白名单。剔除 Codex 发送的包含 29 个 Chrome 浏览器端操作的 `mcp__chrome_devtools` 命名空间工具，仅保留后端开发所需的 `apply_patch` (代码修改)、`shell_command` (终端执行) 和 `request_user_input` (用户交互) 三大核心工具。
+- **Skills 冗余上下文压缩**：自动拦截输入中庞大的 `<skills_instructions>` 块（约 900KB 的 Markdown 汇总描述），将其替换为极简占位符。
+- **瘦身效果**：成功将原始 `1.02MB` 的请求 Payload **物理压缩至 82KB 左右（缩减达 92%）**，完美避开了 GLM-5.1 的 128K context window 上限限制以及嵌套 `namespace` 类型的 400 Bad Request 参数校验阻碍。
+
+#### 2. 多轮对话代理崩溃 Hot-fix 抢修
+- **TypeError 修复**：在模拟多轮对话测试中，发现代理拦截器在处理只有工具调用而无 text 内容的历史消息时，由于 `item["content"]` 字段为 `None` 导致 `for block in item["content"]` 抛出 `TypeError` 崩溃。
+- **防御校验**：立即在 `sniffer.py` 中增加了 `item["content"] is not None` 防御性检查并实现了热重启，保障了代理在长会话多轮迭代中的防弹级稳定性。
+
+#### 3. 双层验证与开发通道打通
+- **连通性重放验证**：运行 `python scratch/test_responses_body.py` 成功通过 15722 端口取得智谱官方 GLM-5.1 的流式 `PONG` 应答与正确的 token 消耗计量。
+- **子智能体开发仿真测试**：通过 stdin 管道执行 `codex exec`，成功验证了子智能体（GLM-5.1）调用代理时能够无缝利用 `apply_patch` 和 `shell_command` 物理创建并运行 [scratch/hello_proxy_simulation.py](file:///d:/project-edumatrix/edumatrix-main/scratch/hello_proxy_simulation.py)，其输出 `'Proxy Simulation Success!'` 完全符合预期。
+- **解除挂起**：将 `config.toml` 配置无缝指向本地 15722 代理，解除 Task 2.3 的挂起状态，开发环境已完全准备好让 GLM-5.1 进行本地 FAISS 序列化开发。
+
+#### 4. Task 2.3 Local FAISS 持久化序列化与静态图片路由并网
+- **FAISS 自动保存与启动恢复**：重构 `ingestion.py` 和 `rag_engine.py`，实现用户上传课件及知识切片向量 upsert 后自动将索引序列化保存到 `data/faiss_indexes/`，并在系统初始化时自动检测并重新载入已有的 FAISS 索引，实现了自适应持久化。
+- **VisRAG 图片挂载与 404 防范**：在 `app/main.py` 中静态挂载 `/data/patches/` 路由，并与 VisRAG 的 7 张内置学术配图并网，彻底解决前端渲染 RAG 过程中的图片 404 错误。
+- **测试通过与环境自愈**：创建了 `tests/test_faiss_persistence.py` 包含 5 项回归测试。运行 `pip install faiss-cpu` 补充环境缺失依赖。全量 pytest 回归测试及 17 项系统核心集成测试（`test_edumatrix.py`）已 100% 绿灯通过。
+
+#### 5. Task 10.4 & 10.5 RAG 低置信度拦截与非 ML 领域优雅降级
+- **低置信度防幻觉熔断 (Task 10.5)**：在 `rag_engine.py` 的检索流程中，引入 `max_score` 置信度判定（阈值设为 `0.20`）。若证据最高分数低于该阈值，则将 `RetrievalBundle.low_confidence` 标记为 `True`，且在 `drag_debate.py` 裁决中如果剩余证据为空或最高分低于限度也触发 `low_confidence = True`。主控 Swarm 检测到该标记后，跳过所有大模型资源生成步骤，直接以统一兜底拒绝话术进行拦截，杜绝幻觉。
+- **非 ML 学科降级与领域锁死修复 (Task 10.4)**：在 `rag_engine.py` 中增加对非 ML 学科（如“李白”）的意图检测，超出机器学习大纲领域时自动将 `out_of_domain` 标记为 `True`，直接跳过 GraphRAG 的关联图谱匹配，防范系统强行将其锁死在“池化层”等默认叶子节点。在 Swarm 处理中，对非 ML 查询在“专业讲义”中自动追加 fallback 提示说明。
+- **单元与集成测试验证**：编写了 `tests/test_hallucination_prevention.py` 回归测试脚本，对两项安全机制进行多维条件测试。执行 `python -m pytest tests/test_hallucination_prevention.py -v` 两个专项测试 100% 成功，执行 `python -m pytest test_edumatrix.py -v` 全局集成测试 17 项全量通过。

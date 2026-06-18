@@ -18,10 +18,10 @@ class EduMatrixConfig:
     spark_url: str = os.getenv("SPARK_URL", "wss://spark-api.xf-yun.com/v3.5/chat")
     spark_domain: str = os.getenv("SPARK_DOMAIN", "generalv3.5")
 
-    llm_provider: str = os.getenv("EDUMATRIX_LLM_PROVIDER", "openai")
-    llm_endpoint: str = os.getenv("EDUMATRIX_LLM_ENDPOINT", "https://windhub.cc/v1/chat/completions")
+    llm_provider: str = os.getenv("EDUMATRIX_LLM_PROVIDER", "deterministic")
+    llm_endpoint: str = os.getenv("EDUMATRIX_LLM_ENDPOINT", "")
     llm_api_key: str = os.getenv("EDUMATRIX_LLM_API_KEY", "")
-    llm_model: str = os.getenv("EDUMATRIX_LLM_MODEL", "doubao-1-5-pro-32k-250115")
+    llm_model: str = os.getenv("EDUMATRIX_LLM_MODEL", "deterministic")
     llm_temperature: float = float(os.getenv("EDUMATRIX_LLM_TEMPERATURE", "0.3"))
     llm_max_tokens: int = int(os.getenv("EDUMATRIX_LLM_MAX_TOKENS", "4096"))
     llm_timeout: int = int(os.getenv("EDUMATRIX_LLM_TIMEOUT", "120"))

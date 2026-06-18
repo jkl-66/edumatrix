@@ -8,7 +8,8 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-DATA_DIR = Path(r"d:\code\edumatrix\data\datasets")
+ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT / "data" / "datasets"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 manifest = []
@@ -25,7 +26,7 @@ def save_csv(df, name, subdir="", metadata=None):
         "dataset_name": name,
         "asset_type": "dataset",
         "license": metadata.get("license", ""),
-        "local_path": str(csv_path.relative_to(Path(r"d:\code\edumatrix"))),
+        "local_path": str(csv_path.relative_to(ROOT)),
         "rows": len(df),
         "columns": len(df.columns),
         "topic_tags": metadata.get("tags", []),
@@ -202,7 +203,8 @@ except Exception as e:
 # Save manifest
 # ============================================================
 print("\n" + "=" * 60)
-manifest_path = Path(r"d:\code\edumatrix\data\manifest\datasets_manifest.jsonl")
+manifest_path = ROOT / "data" / "manifest" / "datasets_manifest.jsonl"
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
 with open(manifest_path, "w", encoding="utf-8") as f:
     for entry in manifest:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")

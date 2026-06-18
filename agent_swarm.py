@@ -778,7 +778,7 @@ class EduMatrixSwarm:
 
             profile = await self.profile_probe.async_update(profile, user_input)
 
-            retrieval = self.planner.plan(self.rag, user_input, profile)
+            retrieval = await self.planner.plan_async(self.rag, user_input, profile)
             debate_result = self.debate.clean(retrieval)
             TELEMETRY.record_metric(
                 "debate.keep_rate",
@@ -827,9 +827,28 @@ class EduMatrixSwarm:
                 previous_resources = resources
                 correction = (
                     f"第 {attempt + 1} 次对齐失败：{alignment_report.advice} "
-                    "重写时必须统一池化类型、变量名和图示节点。"
+                    "重写时必须统一池化类型、变量名 and 图示节点。"
                 )
             TELEMETRY.record_metric("alignment.rollback_count", rollback_count, target=retrieval.target)
+
+            if retrieval.out_of_domain:
+                degradation_msg = "\n\n*(提示：EduMatrix 标准学科大纲知识图谱暂未涵盖该领域，系统已自动切换至多模态混合文本检索与实时互联网检索模式进行解答，您可以上传相关课件以扩充图谱。)*"
+                new_resources = []
+                for res in resources:
+                    if res.resource_type == "专业讲义":
+                        new_content = res.content + degradation_msg
+                        new_resources.append(
+                            AgentOutput(
+                                agent=res.agent,
+                                resource_type=res.resource_type,
+                                content=new_content,
+                                citations=res.citations,
+                                private_rationale=res.private_rationale,
+                            )
+                        )
+                    else:
+                        new_resources.append(res)
+                resources = tuple(new_resources)
 
             assert alignment_report is not None
             learning_signal = self.evaluator.evaluate(profile, resources)

@@ -6,7 +6,7 @@ from datetime import datetime
 # 允许 app 导入 root 目录下的 models.py
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models import StudentProfile, DimensionState, CauseBreakdown, KnowledgeTrace, AlignmentReport
+from models import StudentProfile, DimensionState, CauseBreakdown, KnowledgeTrace, AlignmentReport, ProfileEvidence, ProfileEvidenceSource
 from app.database import DBStudentProfile, DBAlignmentLog, DBNote, DBReviewPlan, DBConversationHistory
 
 def to_dict_safe(obj) -> dict:
@@ -49,6 +49,33 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
         profile.history = db_profile.history_logs.split("\n")
     else:
         profile.history = []
+
+    # 还原新增加的物理字段 (Task 6.2)
+    profile.major = db_profile.major or ""
+    profile.favorites = list(db_profile.favorites or [])
+    
+    if db_profile.knowledge_traces:
+        for k, v in db_profile.knowledge_traces.items():
+            profile.knowledge_traces[k] = KnowledgeTrace(
+                concept=v.get("concept", k),
+                mastery=v.get("mastery", 0.48),
+                attempts=v.get("attempts", 0),
+                correct_attempts=v.get("correct_attempts", 0),
+                last_updated=v.get("last_updated", "")
+            )
+            
+    if db_profile.profile_evidence:
+        profile.profile_evidence = [
+            ProfileEvidence(
+                source=ProfileEvidenceSource(e.get("source")),
+                text=e.get("text", ""),
+                features=tuple(e.get("features", [])),
+                weight=e.get("weight", 0.0),
+                confidence=e.get("confidence", 0.0),
+                timestamp=e.get("timestamp", "")
+            )
+            for e in db_profile.profile_evidence if e
+        ]
 
     # 还原 dimension_states
     if db_profile.dimension_states:
@@ -102,7 +129,12 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     
     db_profile.history_logs = "\n".join(profile.history)
     
-    # 序列化复杂对象为 JSON 格式存入 SQLite
+    # 序列化复杂/新增物理对象为 JSON 格式存入 SQLite (Task 6.2)
+    db_profile.major = profile.major
+    db_profile.favorites = to_dict_safe(profile.favorites)
+    db_profile.knowledge_traces = to_dict_safe(profile.knowledge_traces)
+    db_profile.profile_evidence = to_dict_safe(profile.profile_evidence)
+    
     db_profile.dimension_states = to_dict_safe(profile.dimension_states)
     db_profile.learning_state_causes = to_dict_safe(profile.learning_state_causes)
     

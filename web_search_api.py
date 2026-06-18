@@ -13,9 +13,8 @@ import urllib.error
 import xml.etree.ElementTree as ET
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
 
-from app.database import DBWebSearchHistory, get_db
+from app.database import DBWebSearchHistory, run_db_op
 from document_parser import chunk_document
 from rag_engine import hybrid_rag
 from swarm_factory import build_swarm_from_headers
@@ -36,7 +35,6 @@ def _generate_id() -> str:
 @router.post("/search")
 async def web_search(
     request: Request,
-    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     payload = await request.json()
     query = str(payload.get("query", "")).strip()
@@ -83,8 +81,12 @@ async def web_search(
         content_preview=combined_text[:500],
         chunk_count=len(evidence_chunks),
     )
-    db.add(db_record)
-    db.commit()
+    
+    def save_record(session):
+        session.add(db_record)
+        session.commit()
+        
+    await run_db_op(save_record)
 
     return {
         "search_id": search_id,
@@ -181,7 +183,6 @@ def _parse_duckduckgo_html(html: str, max_results: int) -> list[dict[str, str]]:
 @router.post("/load-url")
 async def load_url(
     request: Request,
-    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     payload = await request.json()
     url = str(payload.get("url", "")).strip()
@@ -233,8 +234,12 @@ async def load_url(
         content_preview=text_content[:500],
         chunk_count=len(evidence_chunks),
     )
-    db.add(db_record)
-    db.commit()
+    
+    def save_load_url_record(session):
+        session.add(db_record)
+        session.commit()
+        
+    await run_db_op(save_load_url_record)
 
     return {
         "doc_id": doc_id,
@@ -268,15 +273,17 @@ async def _fetch_url_content(url: str) -> str:
 async def get_search_history(
     student_id: str,
     limit: int = 20,
-    db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    records = (
-        db.query(DBWebSearchHistory)
-        .filter(DBWebSearchHistory.student_id == student_id)
-        .order_by(DBWebSearchHistory.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    def fetch_history(session):
+        return (
+            session.query(DBWebSearchHistory)
+            .filter(DBWebSearchHistory.student_id == student_id)
+            .order_by(DBWebSearchHistory.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        
+    records = await run_db_op(fetch_history)
     return [
         {
             "id": r.id,

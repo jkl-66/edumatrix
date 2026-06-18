@@ -10,14 +10,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
 
 # 允许 app 导入 root 目录下的模块
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from config import CONFIG
 from concurrency import AsyncWorkerPool, TokenBucket
 from models import DIMENSION_LABELS, StudentProfile
-from app.database import init_db, get_db, DBStudentProfile, DBUser
+from app.database import init_db, DBStudentProfile, DBUser, run_db_op
 from app.crud import (
     load_student_profile,
     save_student_profile,
@@ -55,7 +55,7 @@ swarm = build_swarm_from_headers(type("h", (), {"get": lambda s, k, d=None: d})(
 
 app = FastAPI(
     title="EduMatrix 智教矩阵 API",
-    description="基于 FastAPI + SQLite + Swarm 智能体的高并发个性化教育系统后端",
+    description="基于 FastAPI + SQLite + Swarm 智能体的高并发个性化教育 system 后端",
     version="1.1.0"
 )
 
@@ -93,22 +93,28 @@ async def add_process_time_header(request: Request, call_next):
 
 
 @app.post("/api/auth/login")
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     """JWT 登录接口，获取访问令牌 (Task 2.2)"""
-    user = authenticate_user(db, form_data.username, form_data.password)
+    def do_auth(session):
+        user = authenticate_user(session, form_data.username, form_data.password)
+        if not user:
+            # 如果是首次演示，且数据库为空，自动创建 demo 用户
+            if form_data.username == "demo-student" and form_data.password == "demo-password":
+                user = DBUser(username="demo-student", hashed_password=get_password_hash("demo-password"))
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+            else:
+                return None
+        return user
+
+    user = await run_db_op(do_auth)
     if not user:
-        # 如果是首次演示，且数据库为空，自动创建 demo 用户
-        if form_data.username == "demo-student" and form_data.password == "demo-password":
-            user = DBUser(username="demo-student", hashed_password=get_password_hash("demo-password"))
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     access_token_expires = timedelta(minutes=CONFIG.auth_access_token_expire_minutes)
     access_token = create_access_token(
@@ -180,12 +186,12 @@ MACHINE_LEARNING_DATASETS = [
     },
 ]
 
-def _seed_demo_class(db: Session) -> None:
+def _seed_demo_class(db) -> None:
     """初始化数据库种子数据（演示专用学生）"""
     samples = {
-        "stu-ml-001": "我是计算机专业，期末要考机器学习。逻辑回归和混淆矩阵总混，accuracy 很高但 recall 低我不知道怎么判断，希望用图和例子一步步讲。",
+        "stu-ml-001": "我是计算机专业，期末要考机器学习。逻辑回归 and 混淆矩阵总混，accuracy 很高但 recall 低我不知道怎么判断，希望用图和例子一步步讲。",
         "stu-ml-002": "我线性回归能看懂公式，但一到项目就不会做数据预处理，只会照着答案改代码，想要代码实操 and 提示。",
-        "stu-ml-003": "我过拟合和正则化分不清，训练集分数高就以为模型好，题干长的时候会漏掉验证集条件。",
+        "stu-ml-003": "我过拟合 and 正则化分不清，训练集分数高就以为模型好，题干长的时候会漏掉验证集条件。",
     }
     for student_id, message in samples.items():
         db_profile = db.query(DBStudentProfile).filter(DBStudentProfile.student_id == student_id).first()
@@ -256,13 +262,15 @@ async def read_index():
 
 @app.get("/api/teacher")
 async def get_teacher_dashboard(
-    db: Session = Depends(get_db),
     current_user: DBUser = Depends(get_current_user)
 ):
     """获取教师端诊断看板（直接从本地 SQLite 数据库中读取，实现实时持久化，受 JWT 保护）"""
-    _seed_demo_class(db)
-    db_profiles = db.query(DBStudentProfile).all()
-    profiles = [load_student_profile(db, db_prof.student_id) for db_prof in db_profiles]
+    def fetch_dashboard_data(session):
+        _seed_demo_class(session)
+        db_profiles = session.query(DBStudentProfile).all()
+        return [load_student_profile(session, db_prof.student_id) for db_prof in db_profiles]
+
+    profiles = await run_db_op(fetch_dashboard_data)
     
     heatmap = []
     for profile in profiles:
@@ -306,7 +314,6 @@ async def get_datasets():
 @app.post("/api/process")
 async def process_student_message(
     request: Request, 
-    db: Session = Depends(get_db),
     current_user: DBUser = Depends(get_current_user)
 ):
     """核心画像提取与多智能体资源生成接口（SQLite 与 Swarm 双轨并网，受 JWT 保护）"""
@@ -322,7 +329,7 @@ async def process_student_message(
         raise HTTPException(status_code=400, detail="message is required")
 
     # 1. 物理层：从本地 SQLite 数据库中加载/初始化学生画像
-    profile = load_student_profile(db, student_id)
+    profile = await run_db_op(load_student_profile, student_id)
 
     # 2. 动态 LLM：从前端请求头读取 API 配置，构建或复用 Swarm 实例
     active_swarm = build_swarm_from_headers(request.headers)
@@ -333,17 +340,17 @@ async def process_student_message(
     # 4. 编排层：运行 1+3+5 智能体矩阵进行画像抽取与资源交付
     package = await active_swarm.async_process(message, student_id=student_id)
     
-    # 4. 持久化层：将 Swarm 更新后的最新画像存回 SQLite，确保事务完整性
-    save_student_profile(db, package.profile)
-    
-    # 5. 审计层：保存流形对齐校验记录
-    record_alignment_log(db, student_id, package.alignment, package.target)
+    # 4. 持久化层与审计层：在一个 DB 事务中在 run_db_op 里执行，保证事务完整性！
+    def save_and_log(session):
+        save_student_profile(session, package.profile)
+        record_alignment_log(session, package.student_id, package.alignment, package.target)
+        resource_summary = "; ".join(f"{r.agent}:{r.resource_type}" for r in package.resources)
+        record_conversation(
+            session, package.student_id, message, resource_summary,
+            package.target, len(package.resources), package.alignment.passed,
+        )
 
-    resource_summary = "; ".join(f"{r.agent}:{r.resource_type}" for r in package.resources)
-    record_conversation(
-        db, student_id, message, resource_summary,
-        package.target, len(package.resources), package.alignment.passed,
-    )
+    await run_db_op(save_and_log)
 
     return _package_response(package)
 
@@ -389,8 +396,8 @@ async def get_metrics():
 
 
 @app.get("/api/sessions/{student_id}")
-async def list_sessions(student_id: str, db: Session = Depends(get_db)):
-    conversations = get_conversation_history(db, student_id, limit=20)
+async def list_sessions(student_id: str):
+    conversations = await run_db_op(get_conversation_history, student_id, limit=20)
     return {
         "student_id": student_id,
         "sessions": [
@@ -435,35 +442,41 @@ async def submit_feedback(request: Request):
 
 
 @app.get("/api/notes/{student_id}")
-async def list_notes(student_id: str, db: Session = Depends(get_db)):
-    notes = get_notes(db, student_id)
+async def list_notes(student_id: str):
+    notes = await run_db_op(get_notes, student_id)
     return {"student_id": student_id, "notes": [{"id": n.id, "source": n.source, "content": n.content[:300], "tags": n.tags, "concepts": n.concepts, "created_at": n.created_at.isoformat()} for n in notes]}
 
 
 @app.post("/api/notes/{student_id}")
-async def add_note(student_id: str, request: Request, db: Session = Depends(get_db)):
+async def add_note(student_id: str, request: Request):
     payload = await request.json()
     content = str(payload.get("content", "")).strip()
     if not content:
         raise HTTPException(status_code=400, detail="content is required")
-    note = create_note(
-        db, student_id, source=payload.get("source", "manual"),
-        content=content, tags=payload.get("tags"), concepts=payload.get("concepts"),
+    
+    note = await run_db_op(
+        create_note, student_id, source=payload.get("source", "manual"),
+        content=content, tags=payload.get("tags"), concepts=payload.get("concepts")
     )
     return {"id": note.id, "created_at": note.created_at.isoformat()}
 
 
 @app.delete("/api/notes/{note_id}")
-async def remove_note(note_id: str, db: Session = Depends(get_db)):
-    if not delete_note(db, note_id):
+async def remove_note(note_id: str):
+    success = await run_db_op(delete_note, note_id)
+    if not success:
         raise HTTPException(status_code=404, detail="note not found")
     return {"deleted": True}
 
 
 @app.get("/api/progress/{student_id}")
-async def get_progress(student_id: str, db: Session = Depends(get_db)):
-    profile = load_student_profile(db, student_id)
-    notes = get_notes(db, student_id, limit=5)
+async def get_progress(student_id: str):
+    def fetch_data(session):
+        profile = load_student_profile(session, student_id)
+        notes = get_notes(session, student_id, limit=5)
+        return profile, notes
+
+    profile, notes = await run_db_op(fetch_data)
     analyzer = LearningProgressAnalyzer()
     report = analyzer.build_report(
         student_id, profile.concept_mastery,
@@ -481,8 +494,8 @@ async def get_progress(student_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/history/{student_id}")
-async def get_history(student_id: str, db: Session = Depends(get_db)):
-    conversations = get_conversation_history(db, student_id)
+async def get_history(student_id: str):
+    conversations = await run_db_op(get_conversation_history, student_id)
     return {
         "student_id": student_id,
         "history": [
@@ -500,8 +513,8 @@ async def get_history(student_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/review/{student_id}")
-async def get_review(student_id: str, db: Session = Depends(get_db)):
-    plans = get_review_plan(db, student_id)
+async def get_review(student_id: str):
+    plans = await run_db_op(get_review_plan, student_id)
     return {
         "student_id": student_id,
         "due_reviews": [
@@ -518,14 +531,14 @@ async def get_review(student_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/review/{student_id}")
-async def update_review(student_id: str, request: Request, db: Session = Depends(get_db)):
+async def update_review(student_id: str, request: Request):
     payload = await request.json()
     concept = str(payload.get("concept", "")).strip()
     mastery = float(payload.get("mastery", 0.5))
     if not concept:
         raise HTTPException(status_code=400, detail="concept is required")
     scheduler = ReviewScheduler()
-    plan = upsert_review_plan(db, student_id, concept, mastery, scheduler.INTERVALS[0])
+    plan = await run_db_op(upsert_review_plan, student_id, concept, mastery, scheduler.INTERVALS[0])
     return {
         "concept": plan.concept,
         "next_review_at": plan.next_review_at.isoformat(),
@@ -537,9 +550,14 @@ async def update_review(student_id: str, request: Request, db: Session = Depends
 # ============================================================
 # SPA static file serving (for Docker/production)
 # ============================================================
+# Serve VisRAG patch images to prevent 404s
+PATCHES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "patches")
+if os.path.isdir(PATCHES_DIR):
+    app.mount("/data/patches", StaticFiles(directory=PATCHES_DIR), name="patches")
+
 if os.path.isdir(FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)

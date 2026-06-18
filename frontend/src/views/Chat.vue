@@ -20,6 +20,7 @@ import GraphicFallback from '../components/GraphicFallback.vue'
 
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
+const avatarRef = ref(null)
 
 // 任务 8.2: 页面销毁时释放流式连接
 onUnmounted(() => {
@@ -29,6 +30,24 @@ onUnmounted(() => {
 // --- Chat State ---
 const messages = computed(() => chatStore.messages)
 const sending = computed(() => chatStore.sending)
+
+// Watch for new assistant messages to trigger TTS
+watch(messages, (newMsgs, oldMsgs) => {
+  if (newMsgs.length > (oldMsgs?.length || 0)) {
+    const lastMsg = newMsgs[newMsgs.length - 1]
+    if (lastMsg.role === 'assistant' && !lastMsg.error && avatarRef.value) {
+      // Remove Markdown headers and code blocks for cleaner TTS
+      const cleanText = lastMsg.content
+        .replace(/#+\s/g, '')
+        .replace(/```[\s\S]*?```/g, '[代码块已省略]')
+        .replace(/\*\*/g, '')
+        .replace(/\$/g, '')
+      
+      avatarRef.value.speak(cleanText)
+    }
+  }
+}, { deep: true })
+
 const input = ref('')
 const showResources = ref(new Set())
 const activeTab = ref('chat') // chat | quiz | code | websearch
@@ -770,9 +789,36 @@ async function doLoadUrl() {
               </div>
             </div>
             <div v-if="urlResult?.error" class="mt-3 text-sm text-red-600 bg-red-50 rounded-lg p-3">{{ urlResult.error }}</div>
-          </div>
-        </div>
-      </div>
+            </div>
+            </div>
+            </div>
+
+            <!-- Right Visualization Sidebar -->
+            <div class="w-80 hidden xl:flex flex-col gap-6 overflow-y-auto scrollbar-none pb-4 shrink-0">
+            <AvatarSpeech ref="avatarRef" />
+            
+            <AgentTimeline 
+            :progress="chatStore.streamingProgress" 
+            :status="chatStore.streamingStatus" 
+            :agents="chatStore.streamingAgents" 
+            />
+
+            <MasteryRadar 
+            :initial-data="capturedInitialProfile" 
+            :latest-data="latestProfile" 
+            />
+
+            <div class="card bg-gradient-to-br from-indigo-500 to-purple-700 text-white border-none shadow-lg mt-auto">
+            <div class="flex items-center gap-2 mb-3">
+            <Sparkles :size="16" />
+            <h4 class="text-xs font-bold uppercase tracking-wider">EduMatrix AI 提示</h4>
+            </div>
+            <p class="text-xs leading-relaxed opacity-90">
+            EduMatrix 正在实时分析你的认知边界。完成对话后，雷达图将动态更新你的最新能力掌握情况。
+            </p>
+            </div>
+            </div>
+
     </div>
 
     <!-- CODE VIZ FLOATING WINDOW -->

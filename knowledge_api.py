@@ -5,10 +5,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from app.database import DBKnowledgeDocument, get_db
+from app.database import DBKnowledgeDocument, run_db_op
 from document_parser import chunk_document, parse_uploaded_file, parse_pptx_slides
 from rag_engine import hybrid_rag
 
@@ -37,7 +36,6 @@ SUPPORTED_EXTENSIONS = {
 async def upload_document(
     file: UploadFile = File(...),
     student_id: str = "default",
-    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     filename = file.filename or "unnamed"
     ext = os.path.splitext(filename)[1].lower()
@@ -81,8 +79,12 @@ async def upload_document(
         is_multimodal=is_multimodal,
         multimodal_metadata=extra_metadata,
     )
-    db.add(db_doc)
-    db.commit()
+    
+    def save_doc(session):
+        session.add(db_doc)
+        session.commit()
+        
+    await run_db_op(save_doc)
 
     doc_dir = UPLOAD_DIR / student_id
     doc_dir.mkdir(parents=True, exist_ok=True)
@@ -127,14 +129,16 @@ def _estimate_video_duration(raw: bytes) -> float:
 @router.get("/list")
 async def list_documents(
     student_id: str = "default",
-    db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    docs = (
-        db.query(DBKnowledgeDocument)
-        .filter(DBKnowledgeDocument.student_id == student_id)
-        .order_by(DBKnowledgeDocument.created_at.desc())
-        .all()
-    )
+    def fetch_docs(session):
+        return (
+            session.query(DBKnowledgeDocument)
+            .filter(DBKnowledgeDocument.student_id == student_id)
+            .order_by(DBKnowledgeDocument.created_at.desc())
+            .all()
+        )
+        
+    docs = await run_db_op(fetch_docs)
     return [
         {
             "id": doc.id,
@@ -157,24 +161,32 @@ async def list_documents(
 async def delete_document(
     doc_id: str,
     student_id: str = "default",
-    db: Session = Depends(get_db),
 ) -> dict[str, str]:
-    doc = (
-        db.query(DBKnowledgeDocument)
-        .filter(DBKnowledgeDocument.id == doc_id, DBKnowledgeDocument.student_id == student_id)
-        .first()
-    )
-    if not doc:
+    def do_delete(session):
+        doc = (
+            session.query(DBKnowledgeDocument)
+            .filter(DBKnowledgeDocument.id == doc_id, DBKnowledgeDocument.student_id == student_id)
+            .first()
+        )
+        if not doc:
+            return None
+            
+        filename = doc.filename
+        file_type = doc.file_type or "txt"
+        session.delete(doc)
+        session.commit()
+        return filename, file_type
+
+    res = await run_db_op(do_delete)
+    if not res:
         raise HTTPException(status_code=404, detail="文档未找到")
 
-    ext = "." + (doc.file_type or "txt")
+    filename, file_type = res
+    ext = "." + file_type
     doc_file = UPLOAD_DIR / student_id / f"{doc_id}{ext}"
     if doc_file.exists():
         doc_file.unlink()
 
-    hybrid_rag.remove_user_documents(doc.filename)
-
-    db.delete(doc)
-    db.commit()
+    hybrid_rag.remove_user_documents(filename)
 
     return {"status": "deleted", "id": doc_id}

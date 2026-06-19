@@ -5,6 +5,32 @@ import { Settings, Save, Key, Globe, Cpu, Thermometer, Eye, EyeOff, CheckCircle2
 const showKey = ref(false)
 const saved = ref(false)
 
+// 任务 9.2: 教学风格与致谢墙
+const teachingStyle = ref(localStorage.getItem('edumatrix_teaching_style') || 'socratic')
+const styleSaved = ref(false)
+const showCredits = ref(false)
+
+const credits = [
+  { name: 'FastAPI', license: 'MIT', description: '高性能异步 Python Web 框架' },
+  { name: 'SQLAlchemy', license: 'MIT', description: 'Python SQL 工具包与 ORM' },
+  { name: 'Vue 3', license: 'MIT', description: '渐进式前端框架' },
+  { name: 'Vite', license: 'MIT', description: '下一代前端构建工具' },
+  { name: 'Tailwind CSS', license: 'MIT', description: '实用优先的 CSS 框架' },
+  { name: 'ECharts', license: 'Apache-2.0', description: '数据可视化图表库' },
+  { name: 'MathJax', license: 'Apache-2.0', description: '数学公式渲染引擎' },
+  { name: 'KaTeX', license: 'MIT', description: '快速数学公式渲染库' },
+  { name: 'FAISS', license: 'MIT', description: '向量相似度搜索库' },
+  { name: 'PyMuPDF', license: 'AGPL-3.0', description: 'PDF 文档处理库' },
+  { name: 'SQLite', license: 'Public Domain', description: '轻量级嵌入式数据库' },
+  { name: 'Lucide', license: 'ISC', description: '开源图标库' },
+]
+
+function saveTeachingStyle() {
+  localStorage.setItem('edumatrix_teaching_style', teachingStyle.value)
+  styleSaved.value = true
+  setTimeout(() => { styleSaved.value = false }, 3000)
+}
+
 const config = ref({
   apiKey: '',
   endpoint: 'https://windhub.cc/v1/chat/completions',
@@ -175,6 +201,65 @@ onMounted(load)
           <div class="w-2 h-2 rounded-full bg-blue-500"></div>
           <span class="text-gray-600">Model: {{ config.model }}</span>
         </div>
+      </div>
+    </div>
+
+    <!-- 任务 9.2: 教学风格切换 -->
+    <div class="card mt-4">
+      <h3 class="text-sm font-bold text-gray-800 mb-4 flex items-center gap-2">
+        <Sparkles :size="16" class="text-purple-500" />
+        教学风格偏好
+      </h3>
+      <div class="space-y-3">
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input
+            type="radio"
+            v-model="teachingStyle"
+            value="socratic"
+            class="accent-purple-500"
+            @change="saveTeachingStyle"
+          />
+          <div>
+            <p class="text-sm font-medium text-gray-700">苏格拉底式启发答疑</p>
+            <p class="text-xs text-gray-400">以追问和反问引导学生自己发现问题，培养批判性思维</p>
+          </div>
+        </label>
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input
+            type="radio"
+            v-model="teachingStyle"
+            value="formal"
+            class="accent-blue-500"
+            @change="saveTeachingStyle"
+          />
+          <div>
+            <p class="text-sm font-medium text-gray-700">严肃严谨讲授</p>
+            <p class="text-xs text-gray-400">以系统化、结构化的方式完整讲解知识点，侧重理论推导</p>
+          </div>
+        </label>
+        <p v-if="styleSaved" class="text-xs text-emerald-600">教学风格已更新，将在下一次对话中生效</p>
+      </div>
+    </div>
+
+    <!-- 任务 9.2: 开源致谢墙 -->
+    <div class="card mt-4">
+      <div class="flex items-center justify-between cursor-pointer" @click="showCredits = !showCredits">
+        <h3 class="text-sm font-bold text-gray-800 flex items-center gap-2">
+          <span class="text-lg">❤️</span>
+          开源致谢墙
+        </h3>
+        <span class="text-xs text-gray-400">{{ showCredits ? '收起' : '展开' }}</span>
+      </div>
+      <div v-if="showCredits" class="mt-4 space-y-3">
+        <p class="text-xs text-gray-500">EduMatrix 智教矩阵基于以下优秀的开源项目构建：</p>
+        <div class="grid grid-cols-2 gap-2">
+          <div v-for="dep in credits" :key="dep.name" class="bg-gray-50 rounded-lg p-2.5">
+            <p class="text-xs font-medium text-gray-700">{{ dep.name }}</p>
+            <p class="text-[10px] text-gray-400">{{ dep.license }}</p>
+            <p class="text-[10px] text-gray-400 truncate">{{ dep.description }}</p>
+          </div>
+        </div>
+        <p class="text-[10px] text-gray-400 mt-2">EduMatrix 遵循 Apache 2.0 开源协议发布</p>
       </div>
     </div>
   </div>

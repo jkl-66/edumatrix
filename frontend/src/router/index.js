@@ -9,6 +9,8 @@ import Knowledge from '../views/Knowledge.vue'
 import ProfileDashboard from '../views/ProfileDashboard.vue'
 import Settings from '../views/Settings.vue'
 import LearningPathGraph from '../views/LearningPathGraph.vue'
+import WrongQuestionBook from '../views/WrongQuestionBook.vue'
+import RevisionCalendar from '../views/RevisionCalendar.vue'
 
 const routes = [
   { path: '/', name: 'Dashboard', component: Dashboard },
@@ -21,6 +23,8 @@ const routes = [
   { path: '/profile', name: 'ProfileDashboard', component: ProfileDashboard },
   { path: '/settings', name: 'Settings', component: Settings },
   { path: '/learning-path', name: 'LearningPathGraph', component: LearningPathGraph },
+  { path: '/wrong-questions', name: 'WrongQuestionBook', component: WrongQuestionBook },
+  { path: '/revision-calendar', name: 'RevisionCalendar', component: RevisionCalendar },
 ]
 
 export default createRouter({

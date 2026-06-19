@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { healthCheck, getDatasets, getProgress, getTeacherDashboard, exportProfilePDF } from '../api'
-import { Activity, Brain, BarChart3, ArrowRight, Sparkles, Users, FileText, StickyNote, Download, Loader2 } from '@lucide/vue'
+import { Activity, Brain, BarChart3, ArrowRight, Sparkles, Users, FileText, StickyNote, Download, Loader2, XCircle, Calendar } from '@lucide/vue'
 
 const props = defineProps({ studentId: String })
 
@@ -201,6 +201,29 @@ async function exportPDF() {
         <div>
           <p class="text-sm font-medium text-gray-800">教师看板</p>
           <p class="text-xs text-gray-400 mt-0.5">热力图与干预推荐</p>
+        </div>
+      </router-link>
+    </div>
+
+    <!-- 任务 7.4: 错题本与复习日历 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <router-link to="/wrong-questions" class="card flex items-center gap-4 hover:border-red-200 transition-colors group">
+        <div class="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center group-hover:bg-red-100 transition-colors">
+          <XCircle :size="20" class="text-red-500" />
+        </div>
+        <div>
+          <p class="text-sm font-medium text-gray-800">错题本</p>
+          <p class="text-xs text-gray-400 mt-0.5">查看错题微步断点分析，按概念分类筛选</p>
+        </div>
+      </router-link>
+
+      <router-link to="/revision-calendar" class="card flex items-center gap-4 hover:border-blue-200 transition-colors group">
+        <div class="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center group-hover:bg-blue-100 transition-colors">
+          <Calendar :size="20" class="text-blue-500" />
+        </div>
+        <div>
+          <p class="text-sm font-medium text-gray-800">复习日历</p>
+          <p class="text-xs text-gray-400 mt-0.5">每日打卡签到，抗遗忘复习计划</p>
         </div>
       </router-link>
     </div>

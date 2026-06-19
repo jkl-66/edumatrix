@@ -125,6 +125,7 @@ class DBStudentProfile(Base):
     web_search_history = relationship("DBWebSearchHistory", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
     code_executions = relationship("DBCodeExecution", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
     wrong_questions = relationship("DBWrongQuestion", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    checkin_logs = relationship("DBCheckinLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
 
 class DBUser(Base):
     """用户表：存储登录凭证"""
@@ -288,6 +289,35 @@ class DBWrongQuestion(Base):
 
     student_profile = relationship("DBStudentProfile", back_populates="wrong_questions")
     quiz_record = relationship("DBQuizRecord")
+
+
+class DBCheckinLog(Base):
+    """持久化物理表：复习打卡日志 (Task 7.4)"""
+    __tablename__ = "checkin_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
+    checkin_date = Column(DateTime, default=datetime.utcnow)
+    duration_minutes = Column(Integer, default=10)
+    concepts_reviewed = Column(JSON, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    student_profile = relationship("DBStudentProfile")
+
+
+class DBArxivCache(Base):
+    """持久化物理表：arXiv 学术检索本地缓存 (Task 2.4)"""
+    __tablename__ = "arxiv_cache"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    query_hash = Column(String(64), index=True, nullable=False)
+    arxiv_id = Column(String(64))
+    title = Column(String(512))
+    authors = Column(String(1024), default="")
+    abstract = Column(Text, default="")
+    pdf_url = Column(String(512), default="")
+    published_at = Column(DateTime)
+    cached_at = Column(DateTime, default=datetime.utcnow)
 
 # 物理并网：自动创建所有本地 SQLite 数据库表
 def init_db():

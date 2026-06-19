@@ -202,6 +202,31 @@ async def evaluate_answer(
             local_record.next_action = result.get("next_action", "practice")
             local_record.attempt_number = attempt_number
             session.commit()
+
+            # === 任务 7.4: 错题自动入库（准确率 < 60%） ===
+            if accuracy_score < 0.6:
+                # 提取阻断概念
+                blocking_concept = local_record.target_concept or "通用概念"
+                # 检查是否已存在相同概念错题
+                existing = session.query(DBWrongQuestion).filter(
+                    DBWrongQuestion.student_id == student_id,
+                    DBWrongQuestion.concept_name == blocking_concept,
+                    DBWrongQuestion.quiz_record_id == quiz_id,
+                ).first()
+                if not existing:
+                    wrong_q = DBWrongQuestion(
+                        student_id=student_id,
+                        quiz_record_id=quiz_id,
+                        concept_name=blocking_concept,
+                        wrong_reason_category=result.get("next_action", "practice"),
+                    )
+                    session.add(wrong_q)
+
+                    # 同时更新 profile.weak_points
+                    if blocking_concept not in profile.weak_points:
+                        profile.weak_points.append(blocking_concept)
+                    save_student_profile(session, profile)
+                session.commit()
             
         return profile.concept_mastery.get(local_record.target_concept if local_record else "", 0.5)
 
@@ -529,3 +554,153 @@ async def generate_similar_quiz(
         "sandbox_validated": sandbox_passed,
         "sandbox_attempts": attempts,
     }
+
+
+# === 任务 7.4: 错题查询与复习打卡 API ===
+
+@router.get("/wrong-questions/{student_id}")
+async def get_wrong_questions(
+    student_id: str,
+    concept: str = "",
+    limit: int = 50,
+) -> list[dict]:
+    """获取学生的错题列表，支持按概念筛选。"""
+    from app.database import DBWrongQuestion, DBQuizRecord
+
+    def fetch_wrong_questions(session):
+        query = session.query(DBWrongQuestion).filter(
+            DBWrongQuestion.student_id == student_id,
+        )
+        if concept:
+            query = query.filter(DBWrongQuestion.concept_name == concept)
+        records = query.order_by(DBWrongQuestion.created_at.desc()).limit(limit).all()
+
+        results = []
+        for r in records:
+            quiz_detail = None
+            if r.quiz_record_id:
+                qr = session.query(DBQuizRecord).filter(
+                    DBQuizRecord.id == r.quiz_record_id
+                ).first()
+                if qr:
+                    quiz_detail = {
+                        "question": qr.question[:200],
+                        "student_answer": qr.student_answer[:200],
+                        "correct_answer": qr.correct_answer[:200],
+                        "accuracy_score": qr.accuracy_score,
+                        "feedback": qr.feedback[:200] if qr.feedback else "",
+                    }
+            results.append({
+                "id": r.id,
+                "concept_name": r.concept_name,
+                "wrong_reason_category": r.wrong_reason_category,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
+                "quiz_detail": quiz_detail,
+            })
+        return results
+
+    return await run_db_op(fetch_wrong_questions)
+
+
+@router.get("/wrong-concepts/{student_id}")
+async def get_wrong_concepts(student_id: str) -> list[dict]:
+    """获取学生的错题概念聚合统计。"""
+    from app.database import DBWrongQuestion
+
+    def fetch_concept_stats(session):
+        from sqlalchemy import func
+        records = (
+            session.query(
+                DBWrongQuestion.concept_name,
+                func.count(DBWrongQuestion.id).label("count"),
+            )
+            .filter(DBWrongQuestion.student_id == student_id)
+            .group_by(DBWrongQuestion.concept_name)
+            .order_by(func.count(DBWrongQuestion.id).desc())
+            .all()
+        )
+        return [
+            {"concept": r.concept_name, "count": r.count}
+            for r in records
+        ]
+
+    return await run_db_op(fetch_concept_stats)
+
+
+@router.post("/checkin/{student_id}")
+async def checkin_review(
+    student_id: str,
+    request: Request,
+) -> dict:
+    """复习打卡签到：记录当天的复习行为。"""
+    payload = await request.json()
+    concept = str(payload.get("concept", ""))
+    duration_minutes = int(payload.get("duration_minutes", 10))
+
+    from datetime import date, datetime
+
+    def do_checkin(session):
+        from app.database import DBCheckinLog
+
+        today = date.today()
+        existing = session.query(DBCheckinLog).filter(
+            DBCheckinLog.student_id == student_id,
+            DBCheckinLog.checkin_date == today,
+        ).first()
+
+        if existing:
+            existing.duration_minutes += duration_minutes
+            if concept:
+                existing.concepts_reviewed = list(set(
+                    (existing.concepts_reviewed or []) + [concept]
+                ))
+            session.commit()
+            return {"checked_in": True, "streak": _calc_streak(session, student_id), "first_today": False}
+        else:
+            log = DBCheckinLog(
+                student_id=student_id,
+                checkin_date=today,
+                duration_minutes=duration_minutes,
+                concepts_reviewed=[concept] if concept else [],
+            )
+            session.add(log)
+            session.commit()
+            return {"checked_in": True, "streak": _calc_streak(session, student_id), "first_today": True}
+
+    return await run_db_op(do_checkin)
+
+
+@router.get("/checkin/streak/{student_id}")
+async def get_checkin_streak(student_id: str) -> dict:
+    """获取打卡连续天数。"""
+    from app.database import DBCheckinLog
+
+    def fetch_streak(session):
+        return {"streak": _calc_streak(session, student_id)}
+
+    return await run_db_op(fetch_streak)
+
+
+def _calc_streak(session, student_id: str) -> int:
+    """计算连续打卡天数。"""
+    from app.database import DBCheckinLog
+    from datetime import date, timedelta
+
+    records = (
+        session.query(DBCheckinLog.checkin_date)
+        .filter(DBCheckinLog.student_id == student_id)
+        .order_by(DBCheckinLog.checkin_date.desc())
+        .all()
+    )
+    if not records:
+        return 0
+
+    streak = 0
+    expected = date.today()
+    for (d,) in records:
+        if d == expected:
+            streak += 1
+            expected -= timedelta(days=1)
+        elif d < expected:
+            break
+    return streak

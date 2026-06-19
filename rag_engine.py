@@ -584,3 +584,102 @@ def build_rag_pipeline(repository: Any | None = None) -> HybridRAGPipeline:
 graph_rag = GraphRAG()
 vis_rag = VisRAG()
 hybrid_rag = build_rag_pipeline()
+
+
+# === 任务 2.4: arXiv 联网学术检索本地缓存 ===
+import hashlib
+
+
+def _query_hash(query: str) -> str:
+    return hashlib.sha256(query.lower().strip().encode("utf-8")).hexdigest()[:16]
+
+
+def check_arxiv_cache(query: str) -> list[dict] | None:
+    """检查 arXiv 缓存表是否命中。
+
+    Args:
+        query: 用户搜索词
+
+    Returns:
+        缓存结果列表（若命中），否则 None
+    """
+    try:
+        from app.database import DBArxivCache
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        import os
+
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "edumatrix.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        qh = _query_hash(query)
+        cached = session.query(DBArxivCache).filter(
+            DBArxivCache.query_hash == qh
+        ).order_by(DBArxivCache.cached_at.desc()).limit(10).all()
+
+        session.close()
+
+        if cached:
+            return [
+                {
+                    "arxiv_id": c.arxiv_id,
+                    "title": c.title,
+                    "authors": c.authors,
+                    "abstract": c.abstract[:300],
+                    "pdf_url": c.pdf_url,
+                    "published": c.published_at.isoformat() if c.published_at else "",
+                }
+                for c in cached
+            ]
+        return None
+    except Exception:
+        return None
+
+
+def save_arxiv_cache(query: str, results: list[dict]) -> None:
+    """将 arXiv 检索结果写入本地缓存表。
+
+    Args:
+        query: 用户搜索词
+        results: arXiv API 返回的论文列表
+    """
+    try:
+        from app.database import DBArxivCache
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from datetime import datetime
+        import os
+
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "edumatrix.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        qh = _query_hash(query)
+
+        for paper in results:
+            # 检查是否已存在相同 arxiv_id
+            existing = session.query(DBArxivCache).filter(
+                DBArxivCache.query_hash == qh,
+                DBArxivCache.arxiv_id == paper.get("arxiv_id", ""),
+            ).first()
+            if existing:
+                continue
+
+            entry = DBArxivCache(
+                query_hash=qh,
+                arxiv_id=paper.get("arxiv_id", ""),
+                title=paper.get("title", "")[:500],
+                authors=str(paper.get("authors", ""))[:1000],
+                abstract=paper.get("abstract", "")[:2000],
+                pdf_url=paper.get("pdf_url", "")[:500],
+                published_at=datetime.fromisoformat(paper["published"].replace("Z", "+00:00")) if paper.get("published") else None,
+            )
+            session.add(entry)
+
+        session.commit()
+        session.close()
+    except Exception:
+        pass

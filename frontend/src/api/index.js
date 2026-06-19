@@ -292,3 +292,28 @@ export async function updateStudentProfile(studentId, data) {
   const r = await api.post(`/profile/${studentId}`, data, { headers: buildHeaders() })
   return r.data
 }
+
+// === 任务 7.4: 错题与复习打卡 API ===
+export async function getWrongQuestions(studentId, concept = '') {
+  const params = concept ? { concept } : {}
+  const r = await api.get(`/quiz/wrong-questions/${studentId}`, { params, headers: buildHeaders() })
+  return r.data
+}
+
+export async function getWrongConcepts(studentId) {
+  const r = await api.get(`/quiz/wrong-concepts/${studentId}`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function checkinReview(studentId, concept = '', durationMinutes = 10) {
+  const r = await api.post(`/quiz/checkin/${studentId}`, {
+    concept,
+    duration_minutes: durationMinutes,
+  }, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function getCheckinStreak(studentId) {
+  const r = await api.get(`/quiz/checkin/streak/${studentId}`, { headers: buildHeaders() })
+  return r.data
+}

@@ -299,7 +299,29 @@ async def get_search_history(
 
 
 def search_arxiv(query: str, max_results: int = 3) -> tuple[Evidence, ...]:
-    """内部函数：并发调用的 arXiv 学术检索接口（带自动重试抗压机制）"""
+    """内部函数：并发调用的 arXiv 学术检索接口（带自动重试抗压机制）
+
+    === 任务 2.4: 优先使用本地缓存 ===
+    """
+    from rag_engine import check_arxiv_cache, save_arxiv_cache
+
+    # 先检查本地缓存
+    cached = check_arxiv_cache(query)
+    if cached:
+        evidences = [
+            Evidence(
+                id=f"arxiv-cache-{shortuuid.uuid()[:8]}",
+                title=paper.get("title", "")[:200],
+                content=f"摘要: {paper.get('abstract', '')[:500]}",
+                modality=EvidenceModality.TEXT,
+                source="arxiv_cache",
+                tags=("arxiv", "academic"),
+                score=0.85,
+            )
+            for paper in cached
+        ]
+        return tuple(evidences[:max_results])
+
     safe_query = urllib.parse.quote(query)
     url = f"http://export.arxiv.org/api/query?search_query=all:{safe_query}&max_results={max_results}"
     
@@ -371,7 +393,43 @@ def search_arxiv(query: str, max_results: int = 3) -> tuple[Evidence, ...]:
             results.append(evidence)
     except Exception as e:
         print(f"  [arXiv] XML 数据解析失败: {e}")
-        
+
+    # === 任务 2.4: 缓存检索结果到本地 ===
+    if results:
+        try:
+            root = ET.fromstring(xml_data)
+            namespace = {'atom': 'http://www.w3.org/2005/Atom'}
+            cached_papers = []
+            for entry in root.findall('atom:entry', namespace):
+                title_elem = entry.find('atom:title', namespace)
+                summary_elem = entry.find('atom:summary', namespace)
+                if title_elem is None:
+                    continue
+                title = title_elem.text.replace('\n', ' ').strip() if title_elem.text else ""
+                summary = summary_elem.text.replace('\n', ' ').strip() if summary_elem is not None and summary_elem.text else ""
+                link = entry.find("atom:link[@type='text/html']", namespace)
+                pdf_url = link.attrib['href'] if link is not None else ""
+                id_elem = entry.find('atom:id', namespace)
+                arxiv_id = id_elem.text.strip() if id_elem is not None else ""
+                authors = [
+                    author.find('atom:name', namespace).text
+                    for author in entry.findall('atom:author', namespace)
+                    if author.find('atom:name', namespace) is not None
+                ]
+                published_elem = entry.find('atom:published', namespace)
+                published = published_elem.text.strip() if published_elem is not None else ""
+                cached_papers.append({
+                    "arxiv_id": arxiv_id,
+                    "title": title[:500],
+                    "authors": ", ".join(authors)[:1000],
+                    "abstract": summary[:2000],
+                    "pdf_url": pdf_url[:500],
+                    "published": published,
+                })
+            save_arxiv_cache(query, cached_papers)
+        except Exception as ce:
+            print(f"  [arXiv] 缓存写入失败: {ce}")
+
     return tuple(results)
 
 

@@ -694,6 +694,50 @@ class StudentProfile:
             return "公式套用误区"
         return "未分类误概念"
 
+    # === 任务 7.3.B: 艾宾浩斯遗忘衰减 ===
+    def apply_profile_decay(self) -> dict[str, float]:
+        """对全知识点执行艾宾浩斯遗忘衰减。
+
+        每次读取画像时自动更新掌握度：
+        M_decayed = M_last * (t_base / (t_elapsed + t_base))^(-β)
+        其中 t_base=24.0h, β=cognitive_load映射至[0.08,0.18]
+
+        Returns:
+            衰减后的 concept_mastery 字典
+        """
+        from datetime import datetime, timezone
+
+        last_str = self.last_update_timestamp
+        try:
+            last_time = datetime.fromisoformat(last_str)
+        except (ValueError, TypeError):
+            last_time = datetime.now(timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        if last_time.tzinfo is None:
+            last_time = last_time.replace(tzinfo=timezone.utc)
+
+        hours_passed = max(0.0, (now - last_time).total_seconds() / 3600.0)
+
+        # 不足 1 小时不衰减
+        if hours_passed < 1.0:
+            return dict(self.concept_mastery)
+
+        # β 随认知负荷在 [0.08, 0.18] 间映射
+        beta = 0.08 + (self.cognitive_load * 0.10)
+        beta = max(0.08, min(0.18, beta))
+
+        t_base = 24.0
+        decayed = {}
+        for concept, mastery in self.concept_mastery.items():
+            # M * (t_base / (t + t_base))^β  =  M * (24/(t+24))^β
+            decay_factor = (t_base / (hours_passed + t_base)) ** beta
+            decayed[concept] = max(0.0, min(1.0, mastery * decay_factor))
+
+        self.concept_mastery.update(decayed)
+        self.last_update_timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        return decayed
+
     def _refresh_dynamic_profile(self) -> None:
         cause_scores = {cause.value: 0.0 for cause in LearningStateCause}
         cause_evidence: dict[str, list[str]] = {cause.value: [] for cause in LearningStateCause}

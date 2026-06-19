@@ -181,6 +181,31 @@ class ProfileProbeAgent:
         # 将已有的知识点拼接成字符串
         existing_keys_str = ", ".join(existing_concepts) if existing_concepts else "暂无"
 
+        # === 任务 7.8.B: 知识点白名单 ===
+        # 只有白名单中的概念才能被画像提取器追踪
+        _KNOWLEDGE_WHITELIST: tuple[str, ...] = (
+            "机器学习", "监督学习", "无监督学习", "半监督学习", "强化学习",
+            "线性回归", "逻辑回归", "决策树", "支持向量机", "朴素贝叶斯",
+            "K近邻", "K-Means", "主成分分析", "奇异值分解",
+            "神经网络", "卷积神经网络", "循环神经网络", "Transformer",
+            "注意力机制", "自注意力", "多头注意力",
+            "反向传播", "梯度下降", "链式法则", "损失函数",
+            "激活函数", "Softmax", "ReLU", "Sigmoid", "Tanh",
+            "池化层", "最大池化", "平均池化", "卷积核", "卷积运算",
+            "特征图", "全连接层", "批归一化", "Dropout",
+            "过拟合", "欠拟合", "正则化", "L1正则化", "L2正则化",
+            "交叉验证", "模型评估", "混淆矩阵", "精确率", "召回率", "F1分数",
+            "ROC曲线", "AUC", "均方误差", "交叉熵",
+            "数据预处理", "特征工程", "特征选择", "标准化", "归一化",
+            "Python编程", "线性代数", "概率统计", "微积分",
+            "超参数调优", "网格搜索", "随机搜索",
+            "词嵌入", "Word2Vec", "GloVe", "BERT", "GPT",
+            "生成对抗网络", "变分自编码器",
+            "迁移学习", "微调", "元学习",
+            "图神经网络", "知识图谱",
+            "推荐系统", "协同过滤", "矩阵分解",
+        )
+
         system_prompt = (
             "你是 EduMatrix 的画像抽取器，只能输出 JSON。\n"
             "字段包括 course, major, goals, weak_points(必须是字符串数组), preferences, "
@@ -194,6 +219,10 @@ class ProfileProbeAgent:
             "2. weak_points 和 mastery_updates 中的实体必须从已追踪字典中选取，\n"
             "   除非遇到完全全新的专业名词，否则禁止创建新实体。\n"
             "3. 所有实体必须是最精简的核心名词。\n"
+            "⚠️ 【知识点白名单强制过滤】：\n"
+            f"可接受的知识点仅限于以下白名单：{', '.join(_KNOWLEDGE_WHITELIST)}\n"
+            "禁止创建白名单之外的新概念节点。若学生提到的内容不在白名单中，\n"
+            "请尝试映射到白名单中最接近的已有知识点。\n"
             "示例输出：{\"weak_points\": [\"逻辑回归\"], \"mastery_updates\": {\"逻辑回归\": 0.35}}"
         )
 
@@ -348,6 +377,9 @@ class SwarmMediationMode(str, Enum):
     NORMAL = "normal"              # 默认模式
     DEBATE_MODE = "debate_mode"   # 降维思辨讲解模式
     CHALLENGE_MODE = "challenge_mode"  # 代码进阶挑战模式
+    # === 任务 7.3: 自适应二档教学机制 ===
+    SIMPLIFIED_MODE = "simplified_mode"  # 降维解释：掌握度<50%
+    ADVANCED_MODE = "advanced_mode"      # 进阶挑战：掌握度>80%
 
 
 class SwarmMediationRouter:
@@ -363,6 +395,16 @@ class SwarmMediationRouter:
     Mode 2 - CHALLENGE_MODE:
         触发条件：目标概念连续 2 次正确率 >= 0.85 且 cognitive_load < 0.40
         动作：跳过基础讲解，切换挑战模式，激活 SandboxEvaluator
+
+    Mode 3 - SIMPLIFIED_MODE (任务 7.3):
+        触发条件：目标知识点掌握度 < 50%
+        动作：降维解释 — 强制大模型避免复杂公式，使用拟人比喻讲解，
+              生成 STEM 二维矢量物理受力分析图 / 化学生成式 SVG
+
+    Mode 4 - ADVANCED_MODE (任务 7.3):
+        触发条件：目标知识点掌握度 > 80%
+        动作：进阶挑战 — 自动推送难题、KaTeX 底层推导和
+              包含 Scikit-Learn/PyTorch 库的复杂代码案例
     """
 
     def __init__(self):
@@ -399,8 +441,15 @@ class SwarmMediationRouter:
         Returns:
             决策后的 Swarm 运行模式
         """
+        # ——— 任务 7.3: 基于掌握度的自适应二档教学 ———
+        if target and target in profile.concept_mastery:
+            mastery = profile.concept_mastery[target]
+            if mastery < 0.50:
+                return SwarmMediationMode.SIMPLIFIED_MODE
+            elif mastery > 0.80:
+                return SwarmMediationMode.ADVANCED_MODE
+
         # ——— 规则 1: DEBATE_MODE ———
-        # 同一薄弱点连续 2 次答题正确率 < 0.55
         debate_triggered = False
         for concept, accuracies in self._accuracy_history.items():
             if len(accuracies) >= 2:
@@ -410,7 +459,6 @@ class SwarmMediationRouter:
                     break
 
         # ——— 规则 2: CHALLENGE_MODE ———
-        # 目标概念连续 2 次正确率 >= 0.85 且 cognitive_load < 0.40
         challenge_triggered = False
         check_concept = target or (profile.weak_points[0] if profile.weak_points else None)
         if check_concept and check_concept in self._accuracy_history:
@@ -420,7 +468,7 @@ class SwarmMediationRouter:
                 if all(a >= 0.85 for a in last_two) and profile.cognitive_load < 0.40:
                     challenge_triggered = True
 
-        # ——— 模式优先级：DEBATE > CHALLENGE > NORMAL ———
+        # ——— 模式优先级：DEBATE > ADVANCED > CHALLENGE > SIMPLIFIED > NORMAL ———
         new_mode: SwarmMediationMode
         if debate_triggered:
             new_mode = SwarmMediationMode.DEBATE_MODE
@@ -458,6 +506,37 @@ class SwarmMediationRouter:
             instructions["theory"] = (
                 "【系统强制指令: DEBATE_MODE】学生在此知识点连续 2 次答错。"
                 "请降低概念讲解深度，使用类比和具体例子，避免抽象公式堆砌。"
+            )
+
+        elif mode == SwarmMediationMode.SIMPLIFIED_MODE:
+            instructions["theory"] = (
+                "【系统强制指令: SIMPLIFIED_MODE】学生对此知识点掌握度低于 50%。"
+                "请使用降维解释：避免复杂公式推导，使用拟人比喻和日常类比讲解核心概念。"
+                "如需要可生成 ASCII/文本示意图帮助学生理解。"
+                "必须包含至少一个生活中的类比例子。"
+            )
+            instructions["mapper"] = (
+                "【系统强制指令: SIMPLIFIED_MODE】学生对此知识点掌握度低于 50%。"
+                "请生成极简 Mermaid 对比图或流程图，使用自然语言标签而非专业术语缩写，"
+                "图例需用通俗语言解释每个节点的核心作用。"
+            )
+
+        elif mode == SwarmMediationMode.ADVANCED_MODE:
+            instructions["theory"] = (
+                "【系统强制指令: ADVANCED_MODE】学生对此知识点掌握度高于 80%。"
+                "请使用进阶挑战模式：包含 KaTeX 公式底层推导、高阶理论扩展、"
+                "以及当前前沿研究方向的简要介绍。避免重复基础概念讲解。"
+            )
+            instructions["coder"] = (
+                "【系统强制指令: ADVANCED_MODE】学生已掌握基础。"
+                "请生成包含 Scikit-Learn/PyTorch 库的复杂代码案例，"
+                "包含完整训练流程、模型评估和结果可视化。"
+                "代码需含有超参数调优、交叉验证等进阶操作。"
+            )
+            instructions["quiz"] = (
+                "【系统强制指令: ADVANCED_MODE】学生已掌握基础。"
+                "请生成 2-3 道综合性应用题，需要学生进行多步推导，"
+                "包含实际数据分析和模型选择决策，禁止出简单概念记忆题。"
             )
 
         elif mode == SwarmMediationMode.CHALLENGE_MODE:
@@ -648,6 +727,50 @@ class AsyncResourceFactory:
 
         return injections
 
+    @staticmethod
+    def _get_learning_style_priority(profile: StudentProfile) -> dict[str, str]:
+        """任务 7.9: 根据学习风格调整生成资源的排版优先级。
+
+        learning_style 字段来源于 StudentProfile 的认知风格推断：
+        - Visual（视觉型）: 优先思维导图
+        - Text（文本/阅读型）: 优先专业讲义
+        - Active（实践型）: 优先代码实操
+        """
+        style = (profile.cognitive_style or "").lower()
+        injections: dict[str, str] = {}
+
+        if "视觉" in style or "visual" in style:
+            injections["mapper"] = (
+                "【学习风格适配: Visual】学生偏好视觉学习。"
+                "请将 Mermaid 思维导图作为核心输出，添加丰富的颜色标记和节点注释。"
+                "使用分层结构展示概念的层级关系，每个分支都配具体例子。"
+            )
+            injections["theory"] = (
+                "【学习风格适配: Visual】学生偏好视觉学习。"
+                "请在讲义中嵌入 ASCII/文本示意图，配合文字讲解。"
+                "多使用类比和视觉化的语言描述抽象概念。"
+            )
+
+        elif "文本" in style or "阅读" in style or "text" in style:
+            injections["theory"] = (
+                "【学习风格适配: Text】学生偏好文本阅读学习。"
+                "请生成结构化详细的文字讲义，包含完整的概念定义、推导过程和代码示例。"
+                "使用标题层级和列表组织内容，便于阅读和回顾。"
+            )
+
+        elif "实践" in style or "代码" in style or "active" in style or "code" in style:
+            injections["coder"] = (
+                "【学习风格适配: Active】学生偏好实践操作学习。"
+                "请将代码实操案例作为核心输出，每个概念都配可运行的 Python 代码。"
+                "代码需要含完整的注释和结果可视化，支持学生边看边练。"
+            )
+            injections["theory"] = (
+                "【学习风格适配: Active】学生偏好实践学习。"
+                "请在讲义中以代码驱动讲解概念，先用代码示例展示结果，再解释理论原理。"
+            )
+
+        return injections
+
     async def generate_all(
         self,
         *,
@@ -664,8 +787,11 @@ class AsyncResourceFactory:
     ) -> tuple[AgentOutput, ...]:
         import asyncio
 
-        # === 任务 10.2: 将教学策略翻译为角色注入指令 ===
+        # === 任务 7.3: 将教学策略翻译为角色注入指令 ===
         strategy_injections = self._build_strategy_injections(strategy_plan)
+
+        # === 任务 7.9: 学习风格驱动的资源优先级调整 ===
+        style_priority = self._get_learning_style_priority(profile)
 
         # === 合并 FSM 路由指令（来自 SwarmMediationRouter） ===
         merged_injections: dict[str, str] = {}
@@ -805,29 +931,74 @@ class EduMatrixSwarm:
             alignment_report = None
             rollback_count = 0
             previous_resources = None
+            # === 任务 8.9: 局部外科手术式重新计算缓存 ===
+            # 仅对失败的 Agent 触发 regenerate，其他 4 个组件缓存复用
+            regeneration_cache: dict[str, AgentOutput] = {}
+            failed_agent_name: str = ""
             for attempt in range(CONFIG.rollback_limit + 1):
-                resources = await self.factory.generate_all(
-                    query=user_input,
-                    retrieval=retrieval,
-                    clean_evidence=debate_result.clean_evidence,
-                    profile=profile,
-                    correction=correction,
-                    conversation_memory=conversation_memory,
-                    previous_resources=previous_resources,
-                    alignment_advice=correction,
-                    # 任务 10.2: 注入策略计划
-                    strategy_plan=self.strategy_engine.build_plan(profile, target=retrieval.target),
-                    # 任务 7.3: 注入 FSM 路由指令
-                    mediation_instructions=mediation_instructions,
-                )
+                # 任务 8.9: 若只有特定 agent 失败，仅重新生成该 agent
+                if failed_agent_name and previous_resources:
+                    # 缓存其他成功 agent 的输出
+                    for res in previous_resources:
+                        if res.agent != failed_agent_name:
+                            regeneration_cache[res.agent] = res
+                    resources = await self.factory.generate_all(
+                        query=user_input,
+                        retrieval=retrieval,
+                        clean_evidence=debate_result.clean_evidence,
+                        profile=profile,
+                        correction=correction,
+                        conversation_memory=conversation_memory,
+                        previous_resources=previous_resources,
+                        alignment_advice=correction,
+                        strategy_plan=self.strategy_engine.build_plan(profile, target=retrieval.target),
+                        mediation_instructions=mediation_instructions,
+                    )
+                    # 合并缓存的结果
+                    all_outputs = list(resources)
+                    for res in all_outputs:
+                        if res.agent in regeneration_cache and res.agent != failed_agent_name:
+                            all_outputs[all_outputs.index(res)] = regeneration_cache[res.agent]
+                    resources = tuple(all_outputs)
+                else:
+                    resources = await self.factory.generate_all(
+                        query=user_input,
+                        retrieval=retrieval,
+                        clean_evidence=debate_result.clean_evidence,
+                        profile=profile,
+                        correction=correction,
+                        conversation_memory=conversation_memory,
+                        previous_resources=previous_resources,
+                        alignment_advice=correction,
+                        strategy_plan=self.strategy_engine.build_plan(profile, target=retrieval.target),
+                        mediation_instructions=mediation_instructions,
+                    )
                 alignment_report = self.alignment.verify(resources)
                 if alignment_report.passed:
                     break
+
+                # 任务 8.9: 从冲突报告中提取失败的 Agent 名称
+                failed_agent_name = ""
+                if alignment_report.conflicts:
+                    for conflict in alignment_report.conflicts:
+                        conflict_resources = conflict.get("resources", [])
+                        if conflict_resources:
+                            # 尝试从冲突的 resource 名称中提取 Agent 名
+                            for r_name in conflict_resources:
+                                for res in resources:
+                                    if res.agent in r_name or r_name in res.agent:
+                                        failed_agent_name = res.agent
+                                        break
+                                if failed_agent_name:
+                                    break
+                        if failed_agent_name:
+                            break
+
                 rollback_count += 1
                 previous_resources = resources
                 correction = (
                     f"第 {attempt + 1} 次对齐失败：{alignment_report.advice} "
-                    "重写时必须统一池化类型、变量名 and 图示节点。"
+                    f"【任务 8.9 局部重写】仅需重写 agent={failed_agent_name or '全部'}"
                 )
             TELEMETRY.record_metric("alignment.rollback_count", rollback_count, target=retrieval.target)
 

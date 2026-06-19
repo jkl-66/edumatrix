@@ -7,6 +7,39 @@ from models import (
     StrategyType,
     StudentProfile,
 )
+from enum import Enum
+
+
+class TeachingTier(str, Enum):
+    """自适应教学档位（任务 7.3）。"""
+    SIMPLIFIED = "simplified"  # 降维解释：掌握度 < 50%
+    STANDARD = "standard"      # 标准模式：50% ~ 80%
+    ADVANCED = "advanced"      # 进阶挑战：掌握度 > 80%
+
+
+def detect_teaching_tier(profile: StudentProfile, target: str | None = None) -> TeachingTier:
+    """根据目标概念掌握度检测自适应教学档位。
+
+    Args:
+        profile: 学生画像
+        target: 目标知识点（若为 None 则取最薄弱点）
+
+    Returns:
+        教学档位枚举
+    """
+    if target and target in profile.concept_mastery:
+        mastery = profile.concept_mastery[target]
+    elif profile.concept_mastery:
+        mastery = min(profile.concept_mastery.values())
+    else:
+        return TeachingTier.STANDARD
+
+    if mastery < 0.50:
+        return TeachingTier.SIMPLIFIED
+    elif mastery > 0.80:
+        return TeachingTier.ADVANCED
+    else:
+        return TeachingTier.STANDARD
 
 
 class LearningStrategyEngine:

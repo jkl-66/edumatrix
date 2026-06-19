@@ -20,6 +20,7 @@ import GraphicFallback from '../components/GraphicFallback.vue'
 import AvatarSpeech from '../components/AvatarSpeech.vue'
 import AgentTimeline from '../components/AgentTimeline.vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
+import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
@@ -90,6 +91,16 @@ const socraticPopup = ref({
 // --- 任务 8.4: 双栏阻尼排版 ---
 const rightPanelCollapsed = ref(false)
 const showSandbox = ref(false)
+
+// 任务 8.5: 视频渲染面板状态
+const showVideoPanel = ref(false)
+const videoPanelUrl = ref('')
+function toggleVideoPanel() {
+  showVideoPanel.value = !showVideoPanel.value
+  if (showVideoPanel.value) {
+    videoPanelUrl.value = '/api/v1/video/stream?student_id=' + props.studentId + '&t=' + Date.now()
+  }
+}
 
 // --- Quiz State ---
 const quizState = ref('idle') // idle | generating | answering | evaluating | adapting
@@ -950,6 +961,21 @@ async function doLoadUrl() {
       :lineIndex="socraticPopup.lineIndex"
       :messageIndex="socraticPopup.messageIndex"
       @close="socraticPopup.visible = false" />
+
+    <!-- 任务 8.5: 视频渲染面板 -->
+    <button
+      v-if="activeTab === 'chat'"
+      class="fixed bottom-24 right-6 z-40 w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center"
+      :title="showVideoPanel ? '关闭视频面板' : '生成讲解视频'"
+      @click="toggleVideoPanel"
+    >
+      <Video :size="20" />
+    </button>
+    <VideoRenderPanel
+      :visible="showVideoPanel"
+      :videoUrl="videoPanelUrl"
+      :studentId="props.studentId"
+      @close="showVideoPanel = false" />
   </div>
 </template>
 

@@ -71,6 +71,20 @@ async def stream_chat(request: Request) -> StreamingResponse:
 
     swarm = build_swarm_from_headers(request.headers)
 
+    # 任务 9.2: 读取教学风格偏好
+    teaching_style = request.headers.get("x-edumatrix-teaching-style", "")
+    style_prefix = ""
+    if teaching_style == "socratic":
+        style_prefix = (
+            "【教学风格: 苏格拉底式】请使用启发式教学法，通过追问和反问引导学生自己发现问题。"
+            "避免直接给出完整答案，多用'你怎么看？''为什么？'等开放式提问。\n"
+        )
+    elif teaching_style == "formal":
+        style_prefix = (
+            "【教学风格: 严谨讲授】请使用系统化、结构化的方式完整讲解知识点。"
+            "侧重理论推导和公式讲解，确保内容的严谨性和完整性。\n"
+        )
+
     async def event_generator() -> AsyncGenerator[str, None]:
         running_tasks = []
 
@@ -137,7 +151,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                         query=message, graph_context=retrieval.graph_context,
                         evidence=debate_result.clean_evidence,
                         profile=swarm.profile_store.get(student_id),
-                        conversation_memory="",
+                        conversation_memory=style_prefix,
                     )
                     task = asyncio.create_task(coro)
                     running_tasks.append(task)
@@ -179,7 +193,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                                 evidence=debate_result.clean_evidence,
                                 profile=swarm.profile_store.get(student_id),
                                 correction=f"第{attempt+1}次对齐失败：{alignment_report.advice[:100]}",
-                                conversation_memory="",
+                                conversation_memory=style_prefix,
                             )
                             for role, rt in agent_jobs
                         ]

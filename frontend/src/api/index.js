@@ -16,6 +16,11 @@ function buildHeaders() {
   if (cfg.model) headers['X-EduMatrix-Model'] = cfg.model
   if (cfg.temperature != null) headers['X-EduMatrix-Temperature'] = String(cfg.temperature)
   if (cfg.maxTokens) headers['X-EduMatrix-Max-Tokens'] = String(cfg.maxTokens)
+  // 任务 9.2: 教学风格
+  try {
+    const style = localStorage.getItem('edumatrix_teaching_style')
+    if (style) headers['X-EduMatrix-Teaching-Style'] = style
+  } catch {}
   return headers
 }
 

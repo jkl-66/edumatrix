@@ -385,3 +385,21 @@
 - **低置信度防幻觉熔断 (Task 10.5)**：在 `rag_engine.py` 的检索流程中，引入 `max_score` 置信度判定（阈值设为 `0.20`）。若证据最高分数低于该阈值，则将 `RetrievalBundle.low_confidence` 标记为 `True`，且在 `drag_debate.py` 裁决中如果剩余证据为空或最高分低于限度也触发 `low_confidence = True`。主控 Swarm 检测到该标记后，跳过所有大模型资源生成步骤，直接以统一兜底拒绝话术进行拦截，杜绝幻觉。
 - **非 ML 学科降级与领域锁死修复 (Task 10.4)**：在 `rag_engine.py` 中增加对非 ML 学科（如“李白”）的意图检测，超出机器学习大纲领域时自动将 `out_of_domain` 标记为 `True`，直接跳过 GraphRAG 的关联图谱匹配，防范系统强行将其锁死在“池化层”等默认叶子节点。在 Swarm 处理中，对非 ML 查询在“专业讲义”中自动追加 fallback 提示说明。
 - **单元与集成测试验证**：编写了 `tests/test_hallucination_prevention.py` 回归测试脚本，对两项安全机制进行多维条件测试。执行 `python -m pytest tests/test_hallucination_prevention.py -v` 两个专项测试 100% 成功，执行 `python -m pytest test_edumatrix.py -v` 全局集成测试 17 项全量通过。
+
+---
+
+### 2026-06-19
+> **完工报告**：完成 **Wave 7 至 Wave 9 体验与安全加固 E2E 全链路深度验收与收尾大盘同步。** 针对 Wave 7 之前遗留的 3D Anki 闪卡交互、错题本内相似题重测挑战、Swarm 中英文角色键映射 Bug 及雷达图报错等问题在上一轮全面修复，本轮对 Wave 8 (自适应视频生成渲染与播放控制、组件级局部外科重算自愈缓存) 以及 Wave 9 (Prover-Challenger-Judge 防幻觉辩论、白盒推理轨迹时序追踪 timeline、设置面板开源致谢墙、arXiv 搜索本地 SQLite 缓存) 进行了全面的源码与集成链路验收。前端打包编译与后端 17 个集成单元测试均 100% 绿灯顺利通过，Wave 7-9 完美完工！
+
+#### 1. Wave 8 加固任务验收
+- **自适应视频播放器 (Task 8.5)**：[VideoRenderPanel.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/VideoRenderPanel.vue) 中完整模拟了 5 步视频生成管线，并提供完整的 HTML5 播放、静音、Seek 定位和全屏展示交互。
+- **Swarm 局部重算自愈 (Task 8.9)**：[agent_swarm.py:L1028](file:///d:/project-edumatrix/edumatrix-main/agent_swarm.py#L1028) 中完美引入了对齐冲突的 `failed_agent_name` 单个重算并合并缓存 `regeneration_cache` 逻辑，且在前端 [Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) 中完成了卡片重新生成状态绑定。
+
+#### 2. Wave 9 加固任务验收
+- **防幻觉辩论与白盒轨迹 (Task 9.1)**：[drag_debate.py](file:///d:/project-edumatrix/edumatrix-main/drag_debate.py) 的 `DebateAugmentedRAG` 驱动三层 Prover-Challenger-Judge 辩论与低分拦截；流式通道推送的推理轨迹在前端 [AgentTimeline.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/AgentTimeline.vue) 中以可视化时序图完整白盒化呈现。
+- **致谢墙与风格切换 (Task 9.2)**：[Settings.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Settings.vue) 完美支持 LocalStorage 风格切换，底部搭载折叠式开源致谢墙，展示 12 个基础开源生态组件的许可证和职责。
+- **arXiv 学术缓存表 (Task 2.4)**：[web_search_api.py](file:///d:/project-edumatrix/edumatrix-main/web_search_api.py) 拦截 arXiv 检索并接入 [rag_engine.py](file:///d:/project-edumatrix/edumatrix-main/rag_engine.py#L645) 缓存读写逻辑，使用哈希 `query_hash` 加快检索；在数据库 [database.py:L310](file:///d:/project-edumatrix/edumatrix-main/app/database.py#L310) 增加了 `DBArxivCache` 的 SQLite `"arxiv_cache"` 物理表支持。
+
+#### 3. 前端打包与测试验证
+- **生产编译**：在 `frontend` 目录运行 `npm run build`，以 517ms 极速编译通过，没有发现任何未定义模板变量引起的 Vue 编译期 crash 隐患。
+- **后端回归测试**：运行 `python -m pytest test_edumatrix.py`，全量 17 个集成并发单元用例 100% 绿灯全部通过。

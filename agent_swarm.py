@@ -356,6 +356,15 @@ class ZPDPlannerAgent:
         retrieval = rag.retrieve(enhanced_query, target=target, profile=profile)
         return retrieval
 
+    async def plan_async(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile):
+        """异步版本的 ZPD 路径规划。
+
+        将同步的 plan() 卸载到默认线程池，避免阻塞事件循环上的其他协程
+        （EduMatrixSwarm.async_process 同时驱动多个 LLM 调用与检索）。
+        """
+        import asyncio
+        return await asyncio.to_thread(self.plan, rag, query, profile)
+
     def get_path_plan(self) -> dict | None:
         return self._last_path_plan
 
@@ -796,12 +805,40 @@ class AsyncResourceFactory:
         # === 合并 FSM 路由指令（来自 SwarmMediationRouter） ===
         merged_injections: dict[str, str] = {}
         all_roles = set(role for role, _ in self.jobs)
+        
+        # 中英文角色名双向映射，解决 Prompt 注入时中英文键不匹配的 Bug
+        ROLE_MAP = {
+            "theory": "理论教授",
+            "mapper": "逻辑画师",
+            "coder": "极客助教",
+            "quiz": "考官智能体",
+            "director": "虚拟导演",
+        }
+        REVERSE_ROLE_MAP = {v: k for k, v in ROLE_MAP.items()}
+
         for role in all_roles:
             parts = []
-            if mediation_instructions and role in mediation_instructions:
-                parts.append(mediation_instructions[role])
+            eng_role = REVERSE_ROLE_MAP.get(role, "")
+
+            # 1. 注入 FSM 调解指令 (Mediation)
+            if mediation_instructions:
+                if role in mediation_instructions:
+                    parts.append(mediation_instructions[role])
+                elif eng_role and eng_role in mediation_instructions:
+                    parts.append(mediation_instructions[eng_role])
+
+            # 2. 注入教学策略指令 (Strategy)
             if role in strategy_injections:
                 parts.append(strategy_injections[role])
+            elif eng_role and eng_role in strategy_injections:
+                parts.append(strategy_injections[eng_role])
+
+            # 3. 注入学习风格驱动指令 (Style)
+            if role in style_priority:
+                parts.append(style_priority[role])
+            elif eng_role and eng_role in style_priority:
+                parts.append(style_priority[eng_role])
+
             if parts:
                 merged_injections[role] = "\n".join(parts)
 
@@ -857,8 +894,20 @@ class AsyncResourceFactory:
             else:
                 results.append(output)
 
-        order = {resource_type: index for index, (_, resource_type) in enumerate(self.jobs)}
-        return tuple(sorted(results, key=lambda item: order[item.resource_type]))
+        # === 任务 7.8: 根据学习风格调整生成资源的排版优先级 ===
+        default_order = ["专业讲义", "思维导图", "代码实操案例", "练习题", "虚拟人视频脚本"]
+        style = (profile.cognitive_style or "").lower()
+        if "视觉" in style or "visual" in style:
+            preferred_order = ["思维导图", "专业讲义", "代码实操案例", "练习题", "虚拟人视频脚本"]
+        elif "实践" in style or "代码" in style or "active" in style or "code" in style:
+            preferred_order = ["代码实操案例", "专业讲义", "思维导图", "练习题", "虚拟人视频脚本"]
+        elif "文本" in style or "阅读" in style or "text" in style:
+            preferred_order = ["专业讲义", "思维导图", "代码实操案例", "练习题", "虚拟人视频脚本"]
+        else:
+            preferred_order = default_order
+
+        order = {res_type: idx for idx, res_type in enumerate(preferred_order)}
+        return tuple(sorted(results, key=lambda item: order.get(item.resource_type, 999)))
 
 
 class EduMatrixSwarm:
@@ -925,6 +974,51 @@ class EduMatrixSwarm:
             )
 
             conversation_memory = _build_conversation_memory(profile, max_turns=6)
+
+            # === 任务 8.1 / 低置信度幻觉拦截 ===
+            if retrieval.low_confidence:
+                from models import AlignmentReport
+                refusal_msg = "抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉，建议您在‘课件管理’页面中上传包含该概念的教学资料。"
+                resources = tuple(
+                    AgentOutput(
+                        agent=role,
+                        resource_type=rt,
+                        content=refusal_msg,
+                        citations=(),
+                        private_rationale="低置信度防幻觉硬拦截",
+                    )
+                    for role, rt in self.factory.jobs
+                )
+                alignment_report = AlignmentReport(
+                    passed=True,
+                    distance=0.0,
+                    threshold=0.65,
+                    conflicts=[],
+                    advice="低置信度自动拦截",
+                )
+                learning_signal = self.evaluator.evaluate(profile, resources)
+                TELEMETRY.record_metric("learning.estimated_accuracy", learning_signal.accuracy, target=retrieval.target)
+                if learning_signal.needs_replan:
+                    profile.cognitive_load = min(1.0, profile.cognitive_load + 0.08)
+                    profile.update_from_feedback(
+                        feedback="系统量化评估显示当前正确率或沙盒错误率触发重规划，需要降低难度并补充诊断。",
+                        accuracy=learning_signal.accuracy,
+                        self_confidence=None,
+                        hint_count=1,
+                    )
+                strategy_plan = self.strategy_engine.build_plan(profile, target=retrieval.target)
+
+                return ResourcePackage(
+                    student_id=student_id,
+                    target=retrieval.target,
+                    profile=profile,
+                    retrieval=retrieval,
+                    verdicts=debate_result.verdicts,
+                    resources=resources,
+                    alignment=alignment_report,
+                    learning_signal=learning_signal,
+                    strategy_plan=strategy_plan,
+                )
 
             correction = ""
             resources: tuple[AgentOutput, ...] = ()

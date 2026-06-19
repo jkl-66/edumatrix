@@ -214,7 +214,7 @@ function onChartClick(params) {
 onMounted(async () => {
   try {
     const res = await getStudentProfile(props.studentId)
-    profile.value = typeof res.data === 'object' ? res.data : JSON.parse(res.data)
+    profile.value = res.data ? (typeof res.data === 'object' ? res.data : JSON.parse(res.data)) : res
   } catch (e) {
     error.value = '加载学生画像失败'
   }

@@ -1,10 +1,10 @@
 <script setup>
-import { ref, nextTick, computed, onMounted, onUnmounted } from 'vue'
+import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import {
   processMessage, getHistory,
   generateQuiz, evaluateQuizAnswer, adaptQuiz,
   webSearch, loadUrl,
-  runCode,
+  runCode, getStudentProfile,
 } from '../api'
 import {
   Send, Bot, User, Loader2, BookOpen, Code2, LayoutGrid, HelpCircle, Video,
@@ -21,6 +21,20 @@ import GraphicFallback from '../components/GraphicFallback.vue'
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
 const avatarRef = ref(null)
+
+const capturedInitialProfile = ref(null)
+const latestProfile = ref(null)
+
+watch(sending, async (newVal, oldVal) => {
+  if (oldVal === true && newVal === false) {
+    try {
+      const profile = await getStudentProfile(props.studentId)
+      latestProfile.value = profile
+    } catch (e) {
+      console.error('更新最新学生画像失败:', e)
+    }
+  }
+})
 
 // 任务 8.2: 页面销毁时释放流式连接
 onUnmounted(() => {
@@ -274,9 +288,18 @@ function openSocraticPopup(targetText, contextBefore, contextAfter, lineIndex, m
  * 处理 Markdown 渲染后的代码块/公式点击
  * 在 Chat 组件挂载后需绑定点击事件到渲染内容
  */
-onMounted(() => {
+onMounted(async () => {
   // 委托监听：捕获 Markdown 卡片内的代码块和公式点击
   document.addEventListener('click', handleMarkdownClick)
+
+  // 任务 7.8: 初始化认知画像，消除 MasteryRadar 渲染报错
+  try {
+    const profile = await getStudentProfile(props.studentId || 'default')
+    capturedInitialProfile.value = profile
+    latestProfile.value = profile
+  } catch (e) {
+    console.error('加载学生画像失败:', e)
+  }
 })
 
 onUnmounted(() => {

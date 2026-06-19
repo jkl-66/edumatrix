@@ -444,6 +444,10 @@ class HybridRAGPipeline:
             if profile is not None and hasattr(profile, "concept_mastery"):
                 final_evidence = self._personalized_rerank(final_evidence, profile, target)
 
+            # 置信度评估：无证据或最高分低于阈值 -> 触发幻觉拒答
+            top_score = final_evidence[0].score if final_evidence else 0.0
+            low_confidence = (not final_evidence) or top_score < 0.30
+
             result = RetrievalBundle(
                 query=query,
                 target=graph_context.target,
@@ -511,6 +515,50 @@ class HybridRAGPipeline:
         if "CNN" in query or "卷积神经网络" in query:
             return "卷积神经网络"
         return "池化层"
+
+    def _is_ml_concept(self, query: str) -> bool:
+        """判断查询是否落在机器学习/深度学习学科范畴。
+
+        非 ML 查询触发 out-of-domain 优雅降级（清空 GraphContext.learning_path），
+        从而绕过默认的图谱锁定回退到通用文本/外网检索。
+
+        判定规则（任一命中即视为 ML）：
+        1. 命中知识图谱节点（包含其英文别名 Pooling/CNN/ReLU/...）
+        2. 命中 ML 关键字白名单（中英）
+        """
+        if not query:
+            return False
+        q = query.strip()
+        if not q:
+            return False
+
+        # 1) 图谱节点直接命中
+        for node in self.graph.nodes:
+            if node and node in q:
+                return True
+
+        # 2) ML/DL 关键字白名单（节点别名 + 通用术语 + 常见英文缩写）
+        ml_keywords = (
+            # 中文
+            "机器学习", "深度学习", "神经网络", "卷积", "池化", "回归", "分类",
+            "聚类", "决策树", "支持向量", "朴素贝叶斯", "随机森林", "梯度",
+            "反向传播", "激活函数", "正则化", "过拟合", "欠拟合", "损失函数",
+            "交叉熵", "softmax", "sigmoid", "特征", "训练", "验证", "测试集",
+            "超参数", "学习率", "批量", "迭代", "embedding", "嵌入", "注意力",
+            "transformer", "强化学习", "自监督", "预训练", "微调",
+            # 英文/缩写（大小写不敏感，下方做 lower 比较）
+            "machine learning", "deep learning", "neural network", "cnn",
+            "rnn", "lstm", "gru", "mlp", "svm", "knn", "pca", "pooling",
+            "convolution", "regression", "classification", "clustering",
+            "gradient", "backprop", "relu", "tensor", "feature map",
+            "loss function", "optimizer", "adam", "sgd",
+        )
+        q_lower = q.lower()
+        for kw in ml_keywords:
+            if kw.lower() in q_lower:
+                return True
+
+        return False
 
 
 class FAISSIndexSet:

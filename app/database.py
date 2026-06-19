@@ -190,6 +190,8 @@ class DBReviewPlan(Base):
     similar_quiz_ids = Column(JSON, default=list)  # 关联的相似题 quiz_id 列表
     priority = Column(Float, default=1.0)          # 复习紧迫度 (越低越紧迫)
 
+    student_profile = relationship("DBStudentProfile", back_populates="review_plans")
+
 
 class DBConversationHistory(Base):
     __tablename__ = "conversation_history"
@@ -302,7 +304,7 @@ class DBCheckinLog(Base):
     concepts_reviewed = Column(JSON, default=list)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    student_profile = relationship("DBStudentProfile")
+    student_profile = relationship("DBStudentProfile", back_populates="checkin_logs")
 
 
 class DBArxivCache(Base):

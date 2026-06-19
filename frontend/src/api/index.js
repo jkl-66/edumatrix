@@ -132,14 +132,18 @@ export async function generateQuiz(studentId, targetConcept, difficulty = 'mediu
   return r.data
 }
 
-export async function evaluateQuizAnswer(quizId, studentId, answer, studentConfidence = 0.5, attemptNumber = 1) {
-  const r = await api.post('/quiz/evaluate', {
+export async function evaluateQuizAnswer(quizId, studentId, answer, studentConfidence = 0.5, attemptNumber = 1, sourceQuizId = '') {
+  const payload = {
     quiz_id: quizId,
     student_id: studentId,
     answer,
     student_confidence: studentConfidence,
     attempt_number: attemptNumber,
-  }, { headers: buildHeaders() })
+  }
+  if (sourceQuizId) {
+    payload.source_quiz_id = sourceQuizId
+  }
+  const r = await api.post('/quiz/evaluate', payload, { headers: buildHeaders() })
   return r.data
 }
 
@@ -317,3 +321,40 @@ export async function getCheckinStreak(studentId) {
   const r = await api.get(`/quiz/checkin/streak/${studentId}`, { headers: buildHeaders() })
   return r.data
 }
+
+// --- Anki Flashcard API ---
+export async function generateFlashcard(studentId, quizId = '') {
+  const r = await api.post('/flashcard/generate', {
+    student_id: studentId,
+    quiz_id: quizId,
+  }, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function reviewFlashcard(studentId, concept, quality) {
+  const r = await api.post('/flashcard/review', {
+    student_id: studentId,
+    concept,
+    quality,
+  }, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function getDueFlashcards(studentId, maxCount = 20) {
+  const r = await api.get('/flashcard/due', {
+    params: { student_id: studentId, max_count: maxCount },
+    headers: buildHeaders(),
+  })
+  return r.data
+}
+
+// --- Similar Quiz API ---
+export async function generateSimilarQuiz(studentId, sourceQuizId, concept = '') {
+  const r = await api.post('/quiz/similar', {
+    student_id: studentId,
+    source_quiz_id: sourceQuizId,
+    concept,
+  }, { headers: buildHeaders() })
+  return r.data
+}
+

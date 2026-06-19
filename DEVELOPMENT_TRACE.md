@@ -231,3 +231,32 @@
 - **Token 消耗估计**：约 X Input / Y Output
 - **架构师（用户）终审反馈**：[Pending / Approved]
 ```
+
+## 2026-06-19 🐛 全线路 Bug 修复记录
+
+### 概述
+全线路扫描发现 9 项 Bug（P0-P4），全部修复，58/58 测试通过。
+
+### 修复清单
+
+| Bug | 文件 | 根因 | 修复 |
+|-----|------|------|------|
+| BUG-01 | `requirements.txt` | 缺少 `python-jose` | `pip install python-jose[cryptography]` |
+| BUG-02 | `data/patches/` | 7 张 VisRAG 测试图片缺失 | 创建最小有效 64×64 RGBA PNG |
+| BUG-03 | `agent_swarm.py` | `asyncio.get_event_loop()` Python 3.12+ 弃用 | 替换为 `new_event_loop()` |
+| BUG-04 | `app/database.py` | `declarative_base()` SQLAlchemy 2.0 弃用 | 改从 `sqlalchemy.orm` 导入 |
+| BUG-05 | `app/database.py` | 15 处 `datetime.utcnow()` Python 3.12+ 弃用 | 包装为 `_utcnow()` |
+| BUG-06 | `app/database.py` + `test_edumatrix.py` | `passive_deletes=True` 依赖数据库级联失败 | 改为 `passive_deletes=False` + 补数据库列 |
+| BUG-07 | `app/crud.py` | 并发 `load_student_profile` TOCTOU 竞态 | `IntegrityError` 捕获 + 回滚重读 |
+| BUG-08 | `quiz_api.py` | `/evaluate` 端点 `db` 变量未定义 | 包裹为 `run_db_op` 执行 |
+| BUG-09 | `edumatrix.db` | 10+ 缺失数据库列 (`is_multimodal` 等) | `ALTER TABLE ADD COLUMN` |
+
+### 前端真实性审计修复
+- **VideoRenderPanel**：从孤儿组件集成到 Chat.vue（浮动按钮 + modal 面板）
+- **教学风格**：Settings.vue → `X-EduMatrix-Teaching-Style` 头 → stream_api.py 注入苏格拉底/严谨讲授指令
+
+### 验证
+```
+python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
+```
+

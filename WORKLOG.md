@@ -417,3 +417,31 @@
 - **回归与接口验证**：
   - 局部编写测试脚本，验证所有受灾接口全部恢复为 `200 OK` 且图表完美渲染。
   - 全套 17 个 pytest 集成测试用例 100% 绿色跑通。
+
+### 2026-06-19 (第二轮 Bug 修复)
+> **Bug 修复报告**：全线路扫描发现 9 项 Bug，全部修复，58/58 测试通过。
+
+#### 1. 服务阻断修复
+- **BUG-01 JWT 依赖缺失**：`app/main.py` 缺少 `python-jose` 导致启动崩溃。执行 `pip install python-jose[cryptography]`，验证通过。
+
+#### 2. 功能缺陷修复
+- **BUG-02 VisRAG 缺图**：`data/patches/` 目录缺失 7 张测试图片 (`pooling_2x2.png` 等)。创建最小有效 RGBA PNG 占位图，`test_patches_image_files_exist` 通过。
+- **BUG-03 `get_event_loop()` 弃用**：`agent_swarm.py:L1146` 的 `asyncio.get_event_loop()` 在 Python 3.12+ 弃用。替换为 `asyncio.new_event_loop()`。
+- **BUG-08 quiz_api db 作用域**：`/evaluate` 端点中第 7.7 段裸 `db.query()` 引用未定义变量。包裹为 `run_db_op` 执行。
+
+#### 3. 弃用警告清理
+- **BUG-04 `declarative_base()` 弃用**：`app/database.py` 的 `from sqlalchemy.ext.declarative` 改 `from sqlalchemy.orm`。
+- **BUG-05 `datetime.utcnow()` 弃用**：15 处 `datetime.utcnow` 替换为自定义 `_utcnow()` 包装函数。
+
+#### 4. 测试稳定性修复
+- **BUG-06 级联删除失败**：`passive_deletes=True` 依赖 SQLite 数据库级联但 pragma 未生效。改为 `passive_deletes=False` 让 SQLAlchemy 在内存中级联。同时补充数据库缺失列。
+- **BUG-07 并发竞态**：`load_student_profile` TOCTOU 窗口导致 `UNIQUE constraint` 冲突。添加 `IntegrityError` 捕获 + 回滚重读。
+
+#### 5. 前端真实度审计与补全
+- **VideoRenderPanel 孤儿组件**：创建了组件但未在任何页面 import。集成到 Chat.vue：加浮动按钮「生成讲解视频」+ modal 面板绑定。
+- **教学风格未传递**：Settings.vue 保存到 localStorage 但 AI 未感知。`api/index.js` 在 `buildHeaders()` 添加 `X-EduMatrix-Teaching-Style` 头；`stream_api.py` 读取并注入苏格拉底/严谨讲授指令前缀。
+
+#### 6. 回归验证
+- 全量 41 个单元测试 + 17 个集成测试 = **58/58 全部通过**。
+- 前端 3 个新组件 + 2 个修改组件语法验证通过。
+

@@ -1143,7 +1143,7 @@ class EduMatrixSwarm:
     def process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
         import asyncio
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.new_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)

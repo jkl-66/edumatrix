@@ -253,16 +253,16 @@ async def evaluate_answer(
     try:
         similar_to_source = payload.get("source_quiz_id", "")
         if similar_to_source and accuracy_score >= 0.7:
-            # 查找到源题对应的复习计划
             source_concept = quiz_record.target_concept
-            review_plan = db.query(DBReviewPlan).filter(
-                DBReviewPlan.student_id == student_id,
-                DBReviewPlan.concept == source_concept,
-            ).first()
-            if review_plan:
-                # 降低优先级 (数值越大越不紧迫)
-                review_plan.priority = min(5.0, (review_plan.priority or 1.0) * 1.5)
-                db.commit()
+            def _lower_review_priority(session):
+                review_plan = session.query(DBReviewPlan).filter(
+                    DBReviewPlan.student_id == student_id,
+                    DBReviewPlan.concept == source_concept,
+                ).first()
+                if review_plan:
+                    review_plan.priority = min(5.0, (review_plan.priority or 1.0) * 1.5)
+                    session.commit()
+            await run_db_op(_lower_review_priority)
     except Exception:
         pass
 

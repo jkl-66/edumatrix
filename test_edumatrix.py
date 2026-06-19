@@ -374,6 +374,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
         finally:
             session.close()
 
+
     def test_database_concurrency_writes(self):
         import concurrent.futures
         from app.database import SessionLocal

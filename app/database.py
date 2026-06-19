@@ -3,12 +3,16 @@ import os
 import asyncio
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, String, Float, Integer, Text, DateTime, JSON, Boolean, event, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 
 from contextvars import ContextVar
 from contextlib import contextmanager
 from sqlalchemy.pool import Pool
+from datetime import timezone
+
+# SQLAlchemy-compatible utcnow (avoids Python 3.12+ deprecation)
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 # 锁定租户上下文 ContextVar，默认值为公共(public)命名空间
 tenant_context: ContextVar[str] = ContextVar("tenant_context", default="public")
@@ -107,7 +111,7 @@ class DBStudentProfile(Base):
     learning_state_causes = Column(JSON, default=dict)   # 原因占比 Breakdown
     
     history_logs = Column(Text, default="")              # 提问历史（以换行符或JSON数组隔开）
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_updated = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     # 扩充物理字段 (Task 6.2)
     major = Column(Text, default="")
@@ -116,16 +120,16 @@ class DBStudentProfile(Base):
     profile_evidence = Column(JSON, default=list)
 
     # 级联删除配置关系 (Task 6.2)
-    alignment_logs = relationship("DBAlignmentLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
-    notes = relationship("DBNote", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
-    review_plans = relationship("DBReviewPlan", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
-    conversation_history = relationship("DBConversationHistory", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
-    knowledge_documents = relationship("DBKnowledgeDocument", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
-    quiz_records = relationship("DBQuizRecord", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
-    web_search_history = relationship("DBWebSearchHistory", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
-    code_executions = relationship("DBCodeExecution", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
-    wrong_questions = relationship("DBWrongQuestion", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
-    checkin_logs = relationship("DBCheckinLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=True)
+    alignment_logs = relationship("DBAlignmentLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
+    notes = relationship("DBNote", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
+    review_plans = relationship("DBReviewPlan", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
+    conversation_history = relationship("DBConversationHistory", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
+    knowledge_documents = relationship("DBKnowledgeDocument", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
+    quiz_records = relationship("DBQuizRecord", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
+    web_search_history = relationship("DBWebSearchHistory", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
+    code_executions = relationship("DBCodeExecution", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
+    wrong_questions = relationship("DBWrongQuestion", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
+    checkin_logs = relationship("DBCheckinLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
 
 class DBUser(Base):
     """用户表：存储登录凭证"""
@@ -135,7 +139,7 @@ class DBUser(Base):
     username = Column(String(64), unique=True, index=True, nullable=False) # 通常与 student_id 一致
     hashed_password = Column(String(128), nullable=False)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class DBAlignmentLog(Base):
     __tablename__ = "alignment_logs"
@@ -148,7 +152,7 @@ class DBAlignmentLog(Base):
     threshold = Column(Float)
     conflicts = Column(JSON, default=list)
     advice = Column(Text)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="alignment_logs")
 
@@ -161,8 +165,8 @@ class DBNote(Base):
     content = Column(Text)
     tags = Column(JSON, default=list)
     concepts = Column(JSON, default=list)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="notes")
 
@@ -180,7 +184,7 @@ class DBReviewPlan(Base):
     next_review_at = Column(DateTime)
     mastery = Column(Float, default=0.0)
     review_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     # === 任务 7.5: SM-2 间隔重复参数 ===
     easiness_factor = Column(Float, default=2.5)  # 易度因子 E, 下限 1.3
@@ -203,7 +207,7 @@ class DBConversationHistory(Base):
     target = Column(String(128))
     resources_count = Column(Integer, default=0)
     alignment_passed = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="conversation_history")
 
@@ -222,7 +226,7 @@ class DBKnowledgeDocument(Base):
     chunk_count = Column(Integer, default=0)
     is_multimodal = Column(Boolean, default=False)
     multimodal_metadata = Column(JSON, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="knowledge_documents")
 
@@ -243,7 +247,7 @@ class DBQuizRecord(Base):
     next_action = Column(String(64), default="review")  # review / practice / advance
     attempt_number = Column(Integer, default=1)
     session_id = Column(String(64), default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="quiz_records")
 
@@ -259,7 +263,7 @@ class DBWebSearchHistory(Base):
     title = Column(String(256), default="")
     content_preview = Column(Text, default="")
     chunk_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="web_search_history")
 
@@ -274,7 +278,7 @@ class DBCodeExecution(Base):
     output = Column(Text, default="")
     error = Column(Text, default="")
     execution_time_ms = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="code_executions")
 
@@ -287,7 +291,7 @@ class DBWrongQuestion(Base):
     quiz_record_id = Column(String(64), ForeignKey("quiz_records.id", ondelete="CASCADE"), nullable=True)
     concept_name = Column(String(128), index=True)
     wrong_reason_category = Column(String(128), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="wrong_questions")
     quiz_record = relationship("DBQuizRecord")
@@ -299,10 +303,10 @@ class DBCheckinLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
-    checkin_date = Column(DateTime, default=datetime.utcnow)
+    checkin_date = Column(DateTime, default=_utcnow)
     duration_minutes = Column(Integer, default=10)
     concepts_reviewed = Column(JSON, default=list)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="checkin_logs")
 
@@ -319,7 +323,7 @@ class DBArxivCache(Base):
     abstract = Column(Text, default="")
     pdf_url = Column(String(512), default="")
     published_at = Column(DateTime)
-    cached_at = Column(DateTime, default=datetime.utcnow)
+    cached_at = Column(DateTime, default=_utcnow)
 
 # 物理并网：自动创建所有本地 SQLite 数据库表
 def init_db():

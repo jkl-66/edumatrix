@@ -27,13 +27,41 @@ def to_dict_safe(obj):
     return obj
 
 def load_student_profile(db: Session, student_id: str) -> StudentProfile:
-    """从 SQLite 中加载学生画像，如果不存在则初始化并存入数据库"""
+    """从 SQLite 中加载学生画像，如果不存在则初始化并存入数据库
+    
+    Note: 使用 db.merge() 避免并发写入时的 UNIQUE 约束竞态 (BUG-07 fix)
+    """
+    from sqlalchemy.exc import IntegrityError
+
     db_profile = db.query(DBStudentProfile).filter(DBStudentProfile.student_id == student_id).first()
     
     if not db_profile:
         # 创建默认画像并写入 SQLite 物理表
         profile = StudentProfile(student_id=student_id)
-        save_student_profile(db, profile)
+        try:
+            save_student_profile(db, profile)
+        except IntegrityError:
+            db.rollback()
+            # 并发写入冲突，重新读取
+            db_profile = db.query(DBStudentProfile).filter(DBStudentProfile.student_id == student_id).first()
+            if db_profile:
+                # 并发写入冲突，重新读取并映射
+                profile = StudentProfile(student_id=student_id)
+                profile.target_course = db_profile.target_course
+                profile.knowledge_base = db_profile.knowledge_base
+                profile.cognitive_style = db_profile.cognitive_style
+                profile.focus_level = db_profile.focus_level
+                profile.cognitive_load = db_profile.cognitive_load
+                profile.weak_points = list(db_profile.weak_points or [])
+                profile.learning_goals = list(db_profile.learning_goals or [])
+                profile.interaction_preferences = list(db_profile.interaction_preferences or [])
+                profile.concept_mastery = dict(db_profile.concept_mastery or {})
+                profile.misconception_patterns = dict(db_profile.misconception_patterns or {})
+                if db_profile.history_logs:
+                    profile.history = db_profile.history_logs.split("\n")
+                profile.major = db_profile.major or ""
+                profile.favorites = list(db_profile.favorites or [])
+                return profile
         return profile
 
     # 物理反序列化映射：从 SQLite JSON 数据构建内存 Dataclass 实例

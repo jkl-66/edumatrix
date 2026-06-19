@@ -159,6 +159,10 @@ class SandboxProcessRunner:
             f"exec(base64.b64decode('{encoded_wrapper}').decode('utf-8'))"
         )
 
+        import os
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+
         try:
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
@@ -166,6 +170,7 @@ class SandboxProcessRunner:
                 exec_command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
 
             try:
@@ -192,6 +197,47 @@ class SandboxProcessRunner:
                 await process.wait()
                 exec_time = time.time() - start_time
                 return "", "错误: 代码运行超时 (超过 3.0 秒被强制熔断)", exec_time
+
+        except (NotImplementedError, AttributeError):
+            # 如果事件循环不支持异步子进程（如 Windows 上的 SelectorEventLoop），
+            # 则退回到使用 ThreadPoolExecutor 运行同步 of subprocess.run
+            import subprocess
+            loop = asyncio.get_running_loop()
+
+            def run_sync_subprocess():
+                try:
+                    res = subprocess.run(
+                        [sys.executable, "-c", exec_command],
+                        capture_output=True,
+                        timeout=3.0,
+                        env=env
+                    )
+                    return res.returncode, res.stdout, res.stderr
+                except subprocess.TimeoutExpired:
+                    return -1, b"", b"timeout"
+
+            try:
+                ret_code, stdout_bytes, stderr_bytes = await loop.run_in_executor(
+                    self.executor,
+                    run_sync_subprocess
+                )
+                if ret_code == -1 and stderr_bytes == b"timeout":
+                    exec_time = time.time() - start_time
+                    return "", "错误: 代码运行超时 (超过 3.0 秒被强制熔断)", exec_time
+
+                stdout = stdout_bytes.decode('utf-8', errors='replace')
+                stderr = stderr_bytes.decode('utf-8', errors='replace')
+
+                if "===STDERR_SEPARATOR===" in stdout:
+                    part_out, part_err = stdout.split("===STDERR_SEPARATOR===", 1)
+                    stdout = part_out
+                    stderr = part_err + stderr
+
+                exec_time = time.time() - start_time
+                return stdout, stderr, exec_time
+            except Exception as e:
+                exec_time = time.time() - start_time
+                return "", f"沙箱子进程启动失败 (线程池退路): {e}", exec_time
 
         except Exception as e:
             exec_time = time.time() - start_time
@@ -267,6 +313,8 @@ for extra in ("numpy", "np", "pandas", "pd", "matplotlib", "plt", "sklearn"):
             pass
 
 try:
+    import warnings
+    warnings.filterwarnings("ignore", message=".*FigureCanvasAgg is non-interactive.*")
     compiled = compile(code_to_run, "<sandbox>", "exec")
     with redirect_stdout(output_buffer), redirect_stderr(error_buffer):
         exec(compiled, restricted_globals)

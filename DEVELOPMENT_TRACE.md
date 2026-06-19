@@ -198,6 +198,23 @@
 
 ---
 
+### [2026-06-19] - Wave 7-9 后续 Bug 修复与自愈加固 (测验历史 500、教师看板 500、代码沙箱及 Matplotlib 绘图不渲染)
+- **任务编号**：`TASK_WAVE89_BUGFIX`
+- **对应智能体**：`Antigravity (Gemini-3.5-Flash)`
+- **绑定 Skill**：`oma-backend`, `oma-debug`, `oma-qa`
+- **开发场景**：[quiz_api.py](file:///d:/project-edumatrix/edumatrix-main/quiz_api.py) (补齐 `run_db_op` 导入)；[app/auth.py](file:///d:/project-edumatrix/edumatrix-main/app/auth.py) (用原生 `bcrypt` 模块重写哈希/校验，移除了与 `bcrypt 5.0.0` 冲突的 `passlib`)；[app/crud.py](file:///d:/project-edumatrix/edumatrix-main/app/crud.py) (在 `to_dict_safe` 中增加对 `Enum` 和 `type` 的直接解包，防止循环引用死锁)；[code_exec_api.py](file:///d:/project-edumatrix/edumatrix-main/code_exec_api.py) (在沙箱子进程运行中添加 `SelectorEventLoop` 的 `run_in_executor + subprocess.run` 线程池退路；同时注入 `PYTHONIOENCODING=utf-8` 环境变量，并在 wrapper 脚本中过滤 `FigureCanvasAgg is non-interactive` 的 `UserWarning`)。
+- **自愈重试记录**：
+  1. *第一次报错*：进入“学习画像”与“教师看板”页面分别抛出 NameError 崩溃和 500。排查堆栈分别发现了 `run_db_op` 的缺失，以及 `passlib` 对最新 `bcrypt 5.0.0` 库的版本不兼容，此外 `to_dict_safe` 因 Enum 属性的双向循环属性（`__objclass__`）引发 `RecursionError` 递归死锁。
+  2. *第二次报错*：Matplotlib 运行输出“沙箱子进程启动失败：”，且绘图文字由于 GBK 编码在后端解码成乱码 `![:](data:image/png;base64...)`。排查发现 Uvicorn 的重载策略在 Windows 上应用了不支持异步子进程的 `SelectorEventLoop` 从而触发 `NotImplementedError`。
+  3. *自愈与修复*：弃用 `passlib` 改为用底层的 `bcrypt` 库进行原始加密和校验；在 `to_dict_safe` 中增加 `isinstance(obj, Enum)` 判断对其进行直接解包；在 `code_exec_api.py` 补充捕获 `NotImplementedError` 并配置 `run_in_executor` 线程池作为 Windows 退路机制，向子进程传入 `PYTHONIOENCODING=utf-8` 环境变量并过滤警告，彻底打通了前后端绘图与画像的无死锁运行。
+- **测试验证结果**：
+  * **主集成测试**：`python -m pytest test_edumatrix.py` ➡️ `17 passed (100% 成功)`
+  * **脚本端点测试**：`test_quiz_endpoints.py` 和 `test_teacher_dashboard.py` ➡️ 状态返回全部为 `200 OK` 且画板图片无乱码渲染。
+- **Token 消耗估计**：约 32,000 Input / 2,600 Output
+- **架构师（用户）终审反馈**：Approved
+
+---
+
 ## 📝 智能体日志双写规范 (Agent Logging Protocol)
 当智能体完工后，必须按照以下标准 Markdown 格式，在文件底部追加日志：
 

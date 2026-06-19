@@ -9,7 +9,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.database import DBQuizRecord, DBReviewPlan, DBStudentProfile, get_db
+from app.database import DBQuizRecord, DBReviewPlan, DBStudentProfile, get_db, run_db_op
 from app.crud import load_student_profile, save_student_profile
 from learning_event_bus import (
     LearningEventBus,

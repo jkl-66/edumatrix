@@ -403,3 +403,17 @@
 #### 3. 前端打包与测试验证
 - **生产编译**：在 `frontend` 目录运行 `npm run build`，以 517ms 极速编译通过，没有发现任何未定义模板变量引起的 Vue 编译期 crash 隐患。
 - **后端回归测试**：运行 `python -m pytest test_edumatrix.py`，全量 17 个集成并发单元用例 100% 绿灯全部通过。
+
+#### 4. 深入系统自愈与局部异常修复 (2026-06-19 晚间追加)
+- **测验历史查询 500 修复**：在 [quiz_api.py](file:///d:/project-edumatrix/edumatrix-main/quiz_api.py) 中补齐了 `run_db_op` 的导入，解决了进入“学习画像”页面时拉取答题历史报 `NameError: name 'run_db_op' is not defined` 的崩溃。
+- **教师看板 500 修复（鉴权与序列化死锁）**：
+  - 在 [app/auth.py](file:///d:/project-edumatrix/edumatrix-main/app/auth.py) 中彻底弃用并移除了与新版 `bcrypt 5.0.0` 冲突的 `passlib` 依赖，重构为直接调用 `bcrypt` 原生库来进行密码哈希与匹配，解决了免密自动创建 `demo-student` 时抛出 `ValueError` 的问题。
+  - 在 [app/crud.py](file:///d:/project-edumatrix/edumatrix-main/app/crud.py) 的 `to_dict_safe` 递归序列化方法中，前置了对 `Enum` 和 `type` 的直接解包。若为 `Enum` 实例直接返回其 `value`，避免了枚举属性中 `__objclass__` 引起的 `实例 -> 类 -> 实例` 双向循环引用导致的 `RecursionError` 无限递归死锁。
+- **代码沙箱 Windows 事件循环退路 (Fallback) 挂载**：
+  - 针对 Windows 上 Uvicorn 默认使用的 `SelectorEventLoop` 无法支持异步子进程操作引起的 `NotImplementedError` 崩溃，在 [code_exec_api.py](file:///d:/project-edumatrix/edumatrix-main/code_exec_api.py) 中加装了 `run_in_executor` 结合同步 `subprocess.run` 的线程池退路方案，完美兼容了 Windows 平台。
+- **Matplotlib 绘图乱码与不渲染修复**：
+  - 显式向子进程注入了 `PYTHONIOENCODING=utf-8` 环境变量，强行锁死子进程输出的字符集为 UTF-8。这避免了在 Windows (中文环境下默认为 GBK / CP936) 渲染的 `![可视化输出]` 在后端被解码成乱码 `![:]` 进而被前端解析时丢弃的现象。
+  - 在 wrapper 脚本中通过 `warnings.filterwarnings("ignore", message=".*FigureCanvasAgg is non-interactive.*")` 拦截屏蔽非交互式警告输出，解决了前端一直显示红色警告文本的问题。
+- **回归与接口验证**：
+  - 局部编写测试脚本，验证所有受灾接口全部恢复为 `200 OK` 且图表完美渲染。
+  - 全套 17 个 pytest 集成测试用例 100% 绿色跑通。

@@ -17,13 +17,28 @@ import { useChatStore } from '../stores/chat'
 import SandboxConsole from '../components/SandboxConsole.vue'
 import InlineSocraticPopup from '../components/InlineSocraticPopup.vue'
 import GraphicFallback from '../components/GraphicFallback.vue'
+import AvatarSpeech from '../components/AvatarSpeech.vue'
+import AgentTimeline from '../components/AgentTimeline.vue'
+import MasteryRadar from '../components/MasteryRadar.vue'
 
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
 const avatarRef = ref(null)
 
+// --- Chat State ---
+const messages = computed(() => chatStore.messages)
+const sending = computed(() => chatStore.sending)
+
 const capturedInitialProfile = ref(null)
 const latestProfile = ref(null)
+
+const radarConcepts = computed(() => {
+  if (!latestProfile.value?.concept_mastery) return []
+  return Object.entries(latestProfile.value.concept_mastery).map(([name, score]) => ({
+    name,
+    mastery: score
+  }))
+})
 
 watch(sending, async (newVal, oldVal) => {
   if (oldVal === true && newVal === false) {
@@ -40,10 +55,6 @@ watch(sending, async (newVal, oldVal) => {
 onUnmounted(() => {
   chatStore.cleanup()
 })
-
-// --- Chat State ---
-const messages = computed(() => chatStore.messages)
-const sending = computed(() => chatStore.sending)
 
 // Watch for new assistant messages to trigger TTS
 watch(messages, (newMsgs, oldMsgs) => {
@@ -827,8 +838,8 @@ async function doLoadUrl() {
             />
 
             <MasteryRadar 
-            :initial-data="capturedInitialProfile" 
-            :latest-data="latestProfile" 
+            :concepts="radarConcepts" 
+            :student-id="props.studentId" 
             />
 
             <div class="card bg-gradient-to-br from-indigo-500 to-purple-700 text-white border-none shadow-lg mt-auto">

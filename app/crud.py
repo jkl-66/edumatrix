@@ -9,9 +9,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models import StudentProfile, DimensionState, CauseBreakdown, KnowledgeTrace, AlignmentReport, ProfileEvidence, ProfileEvidenceSource
 from app.database import DBStudentProfile, DBAlignmentLog, DBNote, DBReviewPlan, DBConversationHistory
 
-def to_dict_safe(obj) -> dict:
-    """递归将 dataclass 转换为字典"""
-    if hasattr(obj, "__dict__"):
+def to_dict_safe(obj):
+    """递归将 dataclass 转换为字典，安全避免 Enum/类型 循环递归"""
+    from enum import Enum
+    if isinstance(obj, Enum):
+        return obj.value
+    elif isinstance(obj, type):
+        return obj.__name__
+    elif hasattr(obj, "__dict__"):
         return {k: to_dict_safe(v) for k, v in obj.__dict__.items()}
     elif isinstance(obj, dict):
         return {k: to_dict_safe(v) for k, v in obj.items()}

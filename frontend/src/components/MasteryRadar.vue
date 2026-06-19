@@ -50,7 +50,7 @@ function buildOption() {
 }
 
 function initChart() {
-  if (!chartRef.value) return
+  if (!chartRef.value || !props.concepts || props.concepts.length === 0) return
   if (chartInstance) {
     chartInstance.dispose()
     chartInstance = null
@@ -79,13 +79,28 @@ onUnmounted(() => {
   }
 })
 
-watch(() => props.concepts, () => {
-  if (chartInstance) {
-    chartInstance.setOption(buildOption(), true)
+watch(() => props.concepts, (newVal) => {
+  if (newVal && newVal.length > 0) {
+    nextTick(() => {
+      if (!chartInstance) {
+        initChart()
+      } else {
+        chartInstance.setOption(buildOption(), true)
+      }
+    })
+  } else {
+    if (chartInstance) {
+      chartInstance.dispose()
+      chartInstance = null
+    }
   }
 }, { deep: true })
 </script>
 
 <template>
-  <div ref="chartRef" class="w-full h-full min-h-[250px]" />
+  <div v-show="props.concepts && props.concepts.length > 0" ref="chartRef" class="w-full h-full min-h-[250px]" />
+  <div v-if="!props.concepts || props.concepts.length === 0" class="flex flex-col items-center justify-center min-h-[250px] text-xs text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200 p-4 text-center">
+    <span class="font-medium text-slate-500 mb-1">能力掌握度雷达图</span>
+    <span>完成对话后将动态更新您的能力状态</span>
+  </div>
 </template>

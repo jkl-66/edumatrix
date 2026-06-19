@@ -53,6 +53,13 @@ MACHINE_LEARNING_DATASETS = [
         "url": "https://www.openml.org/d/554",
         "note": "70000 张手写数字图像，作为拓展项目，不作为首轮核心依赖。",
     },
+    {
+      "name": "人工智能基础 (核心课设)",
+        "task": "理论框架、综合复习、本地知识库",
+        "url": "本地文件: data/人工智能基础/",  # 因为是本地压缩包没有下载网址，可以直接写相对路径提示自己
+        "note": "这是我上传的独家《人工智能基础》本地课设压缩包资料，包含核心讲义与练习。",
+    },
+    
 ]
 
 
@@ -662,9 +669,39 @@ INDEX_HTML = r"""<!doctype html>
         document.querySelectorAll('.math-plot').forEach(container => {
           if(container.innerHTML !== "") return; 
           let funcsStr = container.getAttribute('data-funcs');
-          let dataArray = funcsStr.split(',').map(f => {
-              return { fn: f.replace(/[\u4e00-\u9fa5:：]/g, '').trim() };
-          }).filter(d => d.fn.length > 0);
+          // 1. 智能分割函数：按逗号切分，但完美避开括号内部的逗号
+          let rawFuncsArray = [];
+          let currentFunc = "";
+          let parenLevel = 0;
+          for (let i = 0; i < funcsStr.length; i++) {
+              let char = funcsStr[i];
+              if (char === '(') parenLevel++;
+              else if (char === ')') parenLevel--;
+              
+              // 只有当不在括号内，且遇到逗号时，才进行切分
+              if (char === ',' && parenLevel === 0) {
+                  rawFuncsArray.push(currentFunc);
+                  currentFunc = "";
+              } else {
+                  currentFunc += char;
+              }
+          }
+          if (currentFunc) rawFuncsArray.push(currentFunc);
+
+          // 2. 扔进净水器进行终极过滤
+          let dataArray = rawFuncsArray.map(f => {
+              let cleanFn = f.replace(/[\u4e00-\u9fa5:：]/g, '') // 剃除中文
+                             .replace(/^[yYfF]\s*\(?[xX]?\)?\s*=\s*/, '') // 砍掉 y=
+                             .replace(/\\frac\s*{([^{}]+)}\s*{([^{}]+)}/g, '($1)/($2)') // 翻译 LaTeX 分数
+                             .replace(/e\s*\^\s*\{([^}]+)\}/g, 'exp($1)') // e^{-x} 转 exp
+                             .replace(/e\s*\^\s*\(([^)]+)\)/g, 'exp($1)') // e^(-x) 转 exp
+                             .replace(/e\s*\^\s*([a-zA-Z0-9_-]+)/g, 'exp($1)') // e^-x 转 exp
+                             .replace(/[{[]/g, '(') // 统一左括号
+                             .replace(/[}\]]/g, ')') // 统一右括号
+                             .replace(/\\/g, '') // 清除反斜杠
+                             .trim();
+              return { fn : cleanFn };
+          }).filter(d => d.fn.length > 0 );
           try {
             functionPlot({ target: '#' + container.id, width: 500, height: 300, grid: true, data: dataArray });
           } catch (err) {

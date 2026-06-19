@@ -7,7 +7,18 @@ from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
 
-from models import Evidence, EvidenceModality
+try:
+    from models import Evidence, EvidenceModality
+except ImportError:
+    # 如果无法导入，定义简单的替代类
+    class Evidence:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+    
+    class EvidenceModality:
+        TEXT = 'text'
+        CODE = 'code'
 
 
 def parse_uploaded_file(file: BinaryIO, filename: str) -> str:
@@ -21,6 +32,15 @@ def parse_uploaded_file(file: BinaryIO, filename: str) -> str:
         return raw.decode("utf-8", errors="replace")
     elif ext == ".txt":
         return raw.decode("utf-8", errors="replace")
+    elif ext == ".py":
+        try:
+            # Python 代码本质上就是文本，直接用 utf-8 读取
+            content = raw.decode("utf-8", errors="replace")
+            # 在开头加个标记，告诉大模型这是 Python 代码
+            return f"【这是 Python 代码文件】\n{content}"
+        except Exception as e:
+            print(f"读取代码文件失败: {e}")
+            return ""
     elif ext in (".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv"):
         return _transcribe_video(raw, filename)
     else:
@@ -254,15 +274,47 @@ def parse_pptx_slides(raw: bytes) -> tuple[dict, ...]:
 
 
 def chunk_document(text: str, source: str, chunk_size: int = 520, overlap: int = 80) -> tuple[Evidence, ...]:
-    normalized = re.sub(r"\s+", " ", text).strip()
-    if not normalized:
+    if not text.strip():
         return ()
+    
+    # 判断是否是代码文件
+    is_code_file = source.lower().endswith('.py')
+    
+    if is_code_file:
+        # 代码文件：优先按类和函数边界切分
+        separators = ["\nclass ", "\ndef ", "\n\n", "\n", " ", ""]
+        chunk_size = 1000
+        overlap = 200
+    else:
+        # 普通文档：按空格归一化
+        text = re.sub(r"\s+", " ", text).strip()
+        separators = ["\n\n", "\n", " ", ""]
+    
     chunks: list[Evidence] = []
     start = 0
     idx = 1
-    while start < len(normalized):
-        end = min(len(normalized), start + chunk_size)
-        content = normalized[start:end].strip()
+    text_len = len(text)
+    
+    while start < text_len:
+        end = min(text_len, start + chunk_size)
+        content = text[start:end]
+        
+        # 如果是代码文件，尝试在分隔符处断开
+        if is_code_file and end < text_len:
+            # 从后往前找最佳分隔点
+            best_split = end
+            for sep in separators:
+                pos = content.rfind(sep)
+                if pos > chunk_size // 2:  # 确保不会切得太短
+                    best_split = start + pos + len(sep)
+                    break
+            end = best_split
+        
+        content = text[start:end].strip()
+        if not content:
+            start += 1
+            continue
+            
         chunk_id = hashlib.sha256(f"{source}:{idx}:{content[:64]}".encode()).hexdigest()[:16]
         chunks.append(Evidence(
             id=chunk_id,
@@ -274,9 +326,9 @@ def chunk_document(text: str, source: str, chunk_size: int = 520, overlap: int =
             anchors=tuple(),
             metadata={"chunk_index": idx, "doc_source": source},
         ))
-        if end == len(normalized):
+        if end == text_len:
             break
-        start = end - overlap
+        start = max(0, end - overlap)
         idx += 1
     return tuple(chunks)
 

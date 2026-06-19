@@ -184,6 +184,12 @@ MACHINE_LEARNING_DATASETS = [
         "url": "https://www.openml.org/d/554",
         "note": "70000 张手写数字图像，作为拓展项目，不作为首轮核心依赖。",
     },
+    {
+        "name": "人工智能基础 (核心课设)",
+        "task": "理论框架、综合复习、本地知识库",
+        "url": "本地文件: data/人工智能基础/",
+        "note": "这是我上传的独家《人工智能基础》本地课设压缩包资料，包含核心讲义与练习。",
+    },
 ]
 
 def _seed_demo_class(db) -> None:

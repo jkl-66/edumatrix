@@ -12,6 +12,7 @@ This list is curated for EduMatrix's "机器学习导论" RAG/VisRAG dataset. St
 
 | Tier | Source | URL | Modalities | Why it fits EduMatrix | Notes |
 |---|---|---|---|---|---|
+| A | 人工智能基础本地资料 | Local File | PDF讲义, 文本, PPT | 补充课程的基础概念体系 | 已解压存放在 data/人工智能基础/ 目录下 |
 | A | ML Engineering course | https://ml-course.github.io/master/ | Notebooks, PDF slides, YouTube videos | Very aligned with introductory ML: linear models, evaluation, ensembles, data engineering, neural networks. | Good first crawl target because notebook/slide/video are parallel views of same lesson. |
 | A | mlcourse.ai | https://github.com/Yorko/mlcourse.ai | Notebooks, images, data, Chinese notebooks, videos/slides links | Strong practice-heavy course with pandas, visualization, trees, logistic regression, ensembles, PCA, clustering. | License badge says CC BY-NC-SA 4.0; bonus assignments are not public-shareable. |
 | A | COMPSCI 589 open applied ML course | https://github.com/mlds-lab/COMPSCI-589 | PDF slides, PDF handouts, LaTeX source, Jupyter demos | Full open-source applied ML course with regression/classification/clustering/dimensionality reduction. | GPL-3.0; demos are older Python 2 but still useful as teaching artifacts. |

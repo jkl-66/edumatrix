@@ -21,6 +21,7 @@ SUPPORTED_EXTENSIONS = {
     ".txt": "text",
     ".pdf": "pdf",
     ".json": "json",
+    ".py": "python_code",
     ".pptx": "presentation",
     ".ppt": "presentation",
     ".mp4": "video",

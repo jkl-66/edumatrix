@@ -260,3 +260,19 @@
 python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 ```
 
+---
+
+### [2026-06-20] - 修复队友引入的代码物理路径 Bug 及降级依赖隐患
+- **任务编号**：`TASK_HOTFIX_001`
+- **对应智能体**：`backend-engineer (anthropic/claude-sonnet-4-6)`
+- **绑定 Skill**：`oma-backend`, `oma-debug`, `oma-qa`
+- **开发场景**：[fix.py](file:///d:/project-edumatrix/edumatrix-main/fix.py) (物理路径修正为一级 dirname)、[document_parser.py](file:///d:/project-edumatrix/edumatrix-main/document_parser.py) (fallback 引入 `StrEnumMock` 包装解决 `.value` 崩溃隐患)、[web_search_api.py](file:///d:/project-edumatrix/edumatrix-main/web_search_api.py) (用 Python 标准库 `uuid` 替换未安装的 `shortuuid`)。
+- **自愈重试记录**：
+  1. *第一次报错*：Codex / GLM-5.1 通道触发 `429 Too Many Requests` 限流异常，导致子进程退出。
+  2. *自愈与修复*：主控协调官 Sisyphus 启动 Claude 转发代理（9000 端口），并通过 shell 级环境变量重定向将请求转发至 Claude 3.5 Sonnet 通道，实现无感热切换与自动完工。
+- **测试验证结果**：
+  * 后端集成测试 `python test_edumatrix.py` ➡️ **17 tests in 9.055s OK** 绿灯跑通。
+- **Token 消耗估计**：约 15,000 Input / 1,000 Output
+- **架构师（用户）终审反馈**：Pending
+
+

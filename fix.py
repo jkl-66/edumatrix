@@ -2,7 +2,7 @@ import sqlite3
 import os
 
 # 获取数据库路径
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "edumatrix.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "edumatrix.db")
 
 # 连接到数据库
 conn = sqlite3.connect(DB_PATH)

@@ -16,9 +16,20 @@ except ImportError:
             for k, v in kwargs.items():
                 setattr(self, k, v)
     
+    class StrEnumMock:
+        """模拟 Enum 成员，提供 .value 属性以兼容真实 EvidenceModality 的调用方式"""
+        def __init__(self, value: str):
+            self.value = value
+
+        def __str__(self) -> str:
+            return self.value
+
+        def __repr__(self) -> str:
+            return f"StrEnumMock({self.value!r})"
+
     class EvidenceModality:
-        TEXT = 'text'
-        CODE = 'code'
+        TEXT = StrEnumMock('text')
+        CODE = StrEnumMock('code')
 
 
 def parse_uploaded_file(file: BinaryIO, filename: str) -> str:

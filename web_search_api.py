@@ -310,7 +310,7 @@ def search_arxiv(query: str, max_results: int = 3) -> tuple[Evidence, ...]:
     if cached:
         evidences = [
             Evidence(
-                id=f"arxiv-cache-{shortuuid.uuid()[:8]}",
+                id=f"arxiv-cache-{uuid.uuid4().hex[:8]}",
                 title=paper.get("title", "")[:200],
                 content=f"摘要: {paper.get('abstract', '')[:500]}",
                 modality=EvidenceModality.TEXT,

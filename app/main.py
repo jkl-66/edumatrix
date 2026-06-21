@@ -383,6 +383,48 @@ app.include_router(behavior_router)
 app.include_router(report_router)
 
 
+# === 任务 8.1: 行级/公式苏格拉底即时答疑 (直接挂载在app上，避免模块缓存问题) ===
+@app.post("/api/stream/explain")
+async def socratic_explain_direct(request: Request) -> dict[str, Any]:
+    payload = await request.json()
+    target_text = str(payload.get("target_text", "")).strip()
+    context_before = str(payload.get("context_before", ""))
+    context_after = str(payload.get("context_after", ""))
+    student_id = str(payload.get("student_id", "default"))
+    if not target_text:
+        raise HTTPException(status_code=400, detail="target_text 不能为空")
+    swarm = build_swarm_from_headers(request.headers)
+    profile = swarm.profile_store.get(student_id)
+    is_formula = any(c in target_text for c in ['\\', '∂', '∫', '∑', 'π', 'θ', 'lim', 'frac', 'partial'])
+    is_code = 'def ' in target_text or 'import ' in target_text or 'class ' in target_text or '=' in target_text
+    if is_formula:
+        system = ("你是一位温和的苏格拉底导师。用户点击了一个数学公式，"
+                  "请用启发式分步推导解释这个公式。\n\n"
+                  "规则：\n1) 先问学生这个公式中每个符号表示什么\n"
+                  "2) 再拆解公式结构，用通俗比喻解释\n"
+                  "3) 给出一个具体数值例子\n"
+                  "4) 最后问一个引导性问题确认理解\n"
+                  "5) 使用中文回复，保持简洁友善")
+        user = f"用户点击的公式: {target_text}\n上文: {context_before}\n下文: {context_after}"
+    elif is_code:
+        system = ("你是一位温和的苏格拉底导师。用户点击了一行代码，"
+                  "请用启发式方式解释这行代码的作用。\n\n"
+                  "规则：\n1) 先问学生你觉得这行代码在做什么\n"
+                  "2) 解释代码的关键部分和参数\n"
+                  "3) 给出一个简单的运行示例\n"
+                  "4) 最后问一个引导性问题\n"
+                  "5) 使用中文回复")
+        user = f"用户点击的代码: {target_text}\n上文: {context_before}\n下文: {context_after}"
+    else:
+        system = "你是一位温和的苏格拉底导师。用户选取了一段文本，请用启发式方式解释。"
+        user = f"用户选取的内容: {target_text}\n上文: {context_before}\n下文: {context_after}"
+    try:
+        content = await swarm.async_generator.llm.generate(system, user, role="苏格拉底辩手")
+        return {"status": "success", "content": content, "target_text": target_text}
+    except Exception as e:
+        return {"status": "fallback", "content": f"📖 选取内容: {target_text[:80]}\n💡 可在主对话继续追问", "target_text": target_text}
+
+
 @app.get("/api/health")
 async def health_check(request: Request):
     from config import CONFIG

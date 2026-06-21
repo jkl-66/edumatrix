@@ -364,3 +364,93 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"重算失败: {str(e)}")
+
+
+@router.post("/explain")
+async def socratic_explain(request: Request) -> dict[str, Any]:
+    """任务 8.1: 行级/公式苏格拉底即时答疑。
+
+    接收被点击的代码行/公式文本及上下文，返回苏格拉底式分步推导。
+    """
+    payload = await request.json()
+    target_text = str(payload.get("target_text", "")).strip()
+    context_before = str(payload.get("context_before", ""))
+    context_after = str(payload.get("context_after", ""))
+    student_id = str(payload.get("student_id", "default"))
+
+    if not target_text:
+        raise HTTPException(status_code=400, detail="target_text 不能为空")
+
+    swarm = build_swarm_from_headers(request.headers)
+    profile = swarm.profile_store.get(student_id)
+
+    # 根据内容类型构建苏格拉底提示
+    is_formula = any(c in target_text for c in ['\\', '∂', '∫', '∑', 'π', 'θ', '_', '^', 'lim', 'frac', 'partial'])
+    is_code = 'def ' in target_text or 'import ' in target_text or 'class ' in target_text or '=' in target_text
+
+    if is_formula:
+        system = (
+            "你是一位温和的苏格拉底导师。用户点击了一个数学公式，"
+            "请用启发式分步推导解释这个公式。\n\n"
+            "规则：\n"
+            "1) 先问学生这个公式中每个符号表示什么，让学生自己回忆\n"
+            "2) 再拆解公式结构，用通俗比喻解释\n"
+            "3) 给出一个具体数值例子\n"
+            "4) 最后问一个引导性问题确认理解\n"
+            "5) 使用中文回复，保持简洁友善"
+        )
+        user = f"用户点击的公式: {target_text}\n上文: {context_before}\n下文: {context_after}"
+    elif is_code:
+        system = (
+            "你是一位温和的苏格拉底导师。用户点击了一行代码，"
+            "请用启发式方式解释这行代码的作用。\n\n"
+            "规则：\n"
+            "1) 先问学生你觉得这行代码在做什么\n"
+            "2) 解释代码的关键部分和参数\n"
+            "3) 给出一个简单的运行示例\n"
+            "4) 最后问一个引导性问题\n"
+            "5) 使用中文回复"
+        )
+        user = f"用户点击的代码: {target_text}\n上文: {context_before}\n下文: {context_after}"
+    else:
+        system = "你是一位温和的苏格拉底导师。用户选取了一段文本，请用启发式方式解释。"
+        user = f"用户选取的内容: {target_text}\n上文: {context_before}\n下文: {context_after}"
+
+    try:
+        content = await swarm.async_generator.llm.generate(system, user, role="苏格拉底辩手")
+        return {"status": "success", "content": content, "target_text": target_text}
+    except Exception as e:
+        return {
+            "status": "fallback",
+            "content": _socratic_fallback(target_text, is_formula, is_code),
+            "target_text": target_text,
+        }
+
+
+def _socratic_fallback(text: str, is_formula: bool, is_code: bool) -> str:
+    """LLM 不可用时返回模板化兜底解释。"""
+    lines = []
+    if is_formula:
+        lines.append("📐 这是一个数学表达式，表示一个数学运算关系")
+        if '\\frac' in text:
+            lines.append("📝 分数形式: \\frac{分子}{分母} 表示分子除以分母")
+        if '\\partial' in text:
+            lines.append("🎯 偏导符号 ∂ 表示多元函数对某一变量的偏导数")
+        if 'lim' in text.lower():
+            lines.append("🎯 极限符号 lim 表示当变量趋近某值时的函数行为")
+        lines.append("")
+        lines.append("💡 可追问: 每个符号表示什么？这个公式的物理意义是什么？")
+    elif is_code:
+        lines.append("💻 这是一段代码语句")
+        if 'def ' in text:
+            lines.append("📦 函数定义: def 关键字声明可复用的代码块")
+        elif 'import ' in text:
+            lines.append("📚 import 导入外部库/模块")
+        elif '=' in text and '(' in text:
+            lines.append("📦 函数调用/赋值语句")
+        lines.append("")
+        lines.append("💡 可追问: 参数是什么？返回值是什么？")
+    else:
+        lines.append(f"📖 选取内容: {text[:80]}")
+        lines.append("💡 请在后端对话框继续追问")
+    return "\n".join(lines)

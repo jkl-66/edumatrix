@@ -373,3 +373,13 @@ export async function regenerateComponent(studentId, role, resourceType, query) 
   return r.data
 }
 
+export async function socraticExplain(opts) {
+  const r = await api.post('/stream/explain', {
+    target_text: opts.target_text,
+    context_before: opts.context_before || '',
+    context_after: opts.context_after || '',
+    student_id: opts.student_id || 'default',
+  }, { headers: buildHeaders() })
+  return r.data
+}
+

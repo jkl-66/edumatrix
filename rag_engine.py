@@ -532,6 +532,16 @@ class HybridRAGPipeline:
         if not q:
             return False
 
+        # 0) 垃圾查询前置过滤：纯数字/字母乱序/无意义字符串
+        import re
+        # 如果查询中没有常见的中文字符和英文单词模式
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in q)
+        has_english_word = bool(re.search(r'[a-zA-Z]{3,}', q))
+        # 纯数字+标点的查询或长度>15的连续无意义字符
+        garbage_pattern = bool(re.match(r'^[a-z0-9\s\-_.,!?;:]+$', q_lower)) if not has_chinese else False
+        if (not has_chinese and not has_english_word) or (garbage_pattern and len(q) > 8 and not has_chinese):
+            return False
+
         # 1) 图谱节点直接命中
         for node in self.graph.nodes:
             if node and node in q:

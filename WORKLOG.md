@@ -495,6 +495,37 @@
 #### 2. 测试验证与并网
 * 运行完成完整的 `scratch/test_stream_complete.py` 自测试，输出验证所有 5 个动作智能体（讲义、思维导图、代码、评测、视频）能够齐整且无阻塞地并行流式吐字，前端交互成功跑通到 100% 结束。
 * 运行 `npm run build` 前端生产打包测试，100% 绿灯无任何警告或渲染模板未定义字段 crash 隐患编译通过。
-* `test_edumatrix.py` 集成测试套件 100% 通过（17 passed）。
+* `test_edumatrix.py` 集成测试套件 100% 通过（17 passed in 7.71s）。
+
+#### 3. GitHub 拉取更新 + 全量系统测试验收 (2026-06-21)
+* **代码拉取**：`git pull origin main` → Fast-forward 合并，21 个文件更新。
+* **Bug 修复**：
+  - **指代消解 Bug** (#1)：`_COREFERENCE_KEYWORDS` 混入查询意图关键词（"应用场景"等）导致正常提问被错误替换；拆分为 `_COREFERENCE_KEYWORDS` 和 `_QUERY_INTENT_KEYWORDS`。
+  - **代词正则 Unicode Bug** (#2)：策略2正则 `(?<!\w)它(?!\w)` 在 Python 3 默认 Unicode 模式下因 `\w` 匹配中文而失效；添加 `re.ASCII` 标志修复。
+* **测试矩阵**：
+  - 赛题重点一（画像）：指代消解 ✅ / Ebbinghaus 衰减 ✅ / 客观信号 ✅
+  - 赛题重点二（路径规划）：ZPD 三档机制 ✅ / 自适应模式切换 ✅
+  - 赛题重点三（沙箱）：死循环 3.0s 熔断 ✅ / Matplotlib 中文 ✅
+  - 赛题重点四（防幻觉）：Poincaré 距离 ✅ / 流形校验 ✅ / 低置信度熔断 ✅
+  - 全量 17 项自动化测试：**17 passed in 7.71s**
+
+#### 4. 覆盖率补写 + 真实 API E2E + Socratic 答疑优化 (2026-06-21)
+* **新增测试**（28项）：
+  - `test_frontend_core_components_exist`：11个核心前端组件验证
+  - `test_report_api_browser_pool_exists`：BrowserPool PDF导出模块
+  - `test_sse_syntax_buffer_in_store`：SSE语法缓冲 + AbortController
+* **真实 API E2E 验证**：
+  - regenerateComponent 端点 ✅（status=success, 307 chars）
+  - 知识图谱 API ✅（正常返回）
+  - SSE 流中止 ✅（2s超时, 无崩溃）
+* **边界问题修复**：
+  - `rag_engine._is_ml_concept`：增加垃圾查询前置过滤
+  - `models._refresh_dynamic_profile`：增加 behavior_sanity_check 互补cap调用
+* **Socratic 即时答疑升级**（v2）：
+  - 后端新增 `/api/stream/explain` 端点，调用真实 LLM 生成苏格拉底式分步推导
+  - 前端 `InlineSocraticPopup.vue` 从纯模板升级为调用后端 API（LLM不可用时回退到模板）
+  - 支持公式/代码/文本三种场景的启发式解释
+  - 真实 API 测试：公式/代码/文本 3/3 全部通过
+* **全量回归**：**28/28 passed in 9.64s**
 
 

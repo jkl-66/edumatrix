@@ -325,7 +325,40 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 
 ---
 
-### [2026-06-21] - 思维导图多巴胺主题、全屏缩放与 LaTeX 解析漏洞修复
+### [2026-06-21] - GitHub 拉取更新 + 全系统测试验收 + Bug 修复 (Reasonix 自动化测试)
+- **任务编号**：`TASK_FULL_TEST_001`
+- **对应智能体**：`Reasonix (Automated Test Agent)`
+- **测试范围**：赛题重点一~四 + 全量 17 项自动化测试 + 后端基建 + 前端验证
+- **Bug 修复**：
+  1. **`agent_swarm.py` 指代消解 Bug**：
+     - `_COREFERENCE_KEYWORDS` 中混入了查询意图关键词（"应用场景"/"怎么算"/"怎么用"/"为什么"），导致学生提问中的正常关键词被替换为概念名（如"应用场景"→"逻辑回归"）。
+     - **修复**：将映射表拆分为 `_COREFERENCE_KEYWORDS`（仅保留真正的模糊指代代词）和 `_QUERY_INTENT_KEYWORDS`（查询意图辅助关联，不替换原文）。
+     - 移除 `"它的": ()` 条目——该条目导致丢失"的"字（"它的"→"逻辑回归"），应由策略2的独立代词匹配正确处理。
+  2. **`agent_swarm.py` 代词正则 Unicode Bug**：
+     - 策略2中正则 `(?<!\w)它(?!\w)` 在 Python 3 默认 Unicode 模式下，`\w` 匹配中文，导致"它的"中的"它"前后都被判定为单词边界无法匹配。
+     - **修复**：在 `re.compile` 中添加 `re.ASCII` 标志，使 `\w` 仅匹配 `[a-zA-Z0-9_]`。
+- **测试验证结果**：
+  * **自动化测试**：运行 `python -m pytest test_edumatrix.py` ➡️ **17 passed in 7.71s (100% OK)**。
+  * **赛题重点一（画像）**：指代消解修复验证通过（"那它的应用场景又是什么？" → "那损失函数的应用场景又是什么？"）；Ebbinghaus 遗忘衰减正确；update_from_feedback/update_from_message 正常工作。
+  * **赛题重点二（路径规划）**：ZPD 三档机制正确——低掌握度回滚 (basic)、ZPD 区间直接教学 (intermediate)、高掌握度进阶 (advanced)。
+  * **赛题重点三（沙箱）**：死循环 3.0s 看门狗熔断；Matplotlib 中文 Base64 渲染成功。
+  * **赛题重点四（防幻觉）**：Poincaré 距离正常计算；流形一致性校验通过；RAG 低置信度 (<0.30) 熔断拒答逻辑已实现。
+  * **前端验证**：Vite 服务正常，12+ 核心页面可访问。
+- **已知问题**：
+  * `rag_engine._infer_target` 对非 ML 查询默认返回"池化层"，可能导致系统对非ML问题生成不相关的ML内容。建议增加 out-of-domain 检测并在前端展示对应的优雅降级提示。
+  
+### [2026-06-21] - 赛题重点一「硬拦截锁死」逻辑验证与集成测试 (AutoResearch)
+- **任务编号**：`TASK_PROFILE_HARDCAP_001`
+- **验证结论**：3次答错掌握度上限锁死逻辑已完整实现，位于 `bkt_engine.behavior_sanity_check()`（非 `models.py`）。
+  - `mastery_cap=0.5`：3次正确率均值 < 0.6 时强制 cap
+  - `metacognitive_boost=0.30`：元认知偏差上调30%
+  - 调用链路：`agent_swarm.py` L948-L952（chat 流程中自动执行）
+- **测试验证**：
+  * 6项专项手动测试全部通过（3次全错 cap / 3次全对无影响 / 边界值0.5 / 边界值0.7 / 无数据 / 多概念隔离）
+  * 新增 `test_behavior_sanity_hard_cap_locks_mastery` 集成测试
+  * **18/18 passed in 9.48s**（17原项 + 1新增）
+
+
 - **任务编号**：`TASK_UI_MATH_HEAL_002`
 - **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
 - **绑定 Skill**：`oma-frontend`, `oma-qa`

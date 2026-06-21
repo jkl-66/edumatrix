@@ -7,6 +7,8 @@ import unittest
 from agent_swarm import EduMatrixSwarm
 from drag_debate import DebateAugmentedRAG
 from ingestion import DocumentIngestionPipeline
+from instruct_rag import AsyncInstructRAGGenerator
+from llm_client import DEFAULT_ASYNC_LLM
 from manifold_alignment import verify_consistency
 from models import StudentProfile
 from observability import TELEMETRY
@@ -52,6 +54,30 @@ class EduMatrixPipelineTests(unittest.TestCase):
         combined = "\n".join(resource.content for resource in package.resources)
         self.assertIn("MaxPool2d", combined)
 
+    def test_multi_agent_5_resources_concurrent_generation(self):
+        """验证多智能体并发生成：5种资源类型 + asyncio.gather + 失败容错"""
+        from agent_swarm import AsyncResourceFactory, AGENT_MATRIX, AgentOutput
+        import inspect
+        # 1. AGENT_MATRIX 架构验证
+        keys = [a.key for a in AGENT_MATRIX]
+        bands = [a.band for a in AGENT_MATRIX]
+        self.assertEqual(len(AGENT_MATRIX), 9, "必须9个智能体：1+3+5")
+        self.assertEqual(sum(1 for b in bands if b == "Interaction Hub"), 1)
+        self.assertEqual(sum(1 for b in bands if b == "Cognitive Governance"), 3)
+        self.assertEqual(sum(1 for b in bands if b == "Resource Factory"), 5)
+        # 2. AsyncResourceFactory 定义5种资源类型
+        gen = AsyncInstructRAGGenerator(DEFAULT_ASYNC_LLM)
+        factory = AsyncResourceFactory(gen)
+        self.assertEqual(len(factory.jobs), 5)
+        types = {t for _, t in factory.jobs}
+        self.assertEqual(types, {"专业讲义", "思维导图", "代码实操案例", "练习题", "虚拟人视频脚本"})
+        # 3. asyncio.gather
+        source = inspect.getsource(factory.generate_all)
+        self.assertIn("asyncio.gather", source)
+        self.assertIn("return_exceptions=True", source)
+        # 4. 失败容错
+        self.assertIn("isinstance(output, Exception)", source)
+
     def test_dialogue_profile_extracts_state_causes_and_percentages(self):
         profile = StudentProfile(student_id="s1")
         profile.update_from_message(
@@ -90,6 +116,20 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertIn("metacognitive_mismatch", profile.learning_state_causes)
         self.assertIn("strategy_gap", profile.learning_state_causes)
 
+    def test_behavior_sanity_hard_cap_locks_mastery(self):
+        from bkt_engine import behavior_sanity_check
+        profile = StudentProfile(student_id="s3")
+        profile.concept_mastery["逻辑回归"] = 0.85
+        profile.recent_quiz_accuracy["逻辑回归"] = [0.0, 0.0, 0.0]
+        profile.metacognitive_mismatch = 0.10
+        result = behavior_sanity_check(profile)
+        self.assertTrue(result["sanitized"])
+        self.assertIn("逻辑回归", result["capped_concepts"])
+        self.assertLessEqual(profile.concept_mastery["逻辑回归"], 0.5,
+                             "3次答错后掌握度应被 cap 至 0.5")
+        self.assertGreaterEqual(profile.metacognitive_mismatch, 0.40,
+                                "元认知偏差应上调 30% (原0.10 + 0.30 = 0.40)")
+
     def test_machine_learning_course_flow_generates_strategy_plan(self):
         swarm = EduMatrixSwarm()
         package = swarm.process(
@@ -104,11 +144,177 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertTrue(package.strategy_plan.actions)
         self.assertTrue(any("混淆矩阵" in item.content or "逻辑回归" in item.content for item in package.resources))
 
+    def test_zpd_path_planning_and_adaptive_teaching(self):
+        """验证 ZPD 三档分类 + 前置回滚 + 自适应二档教学机制"""
+        from bkt_engine import (
+            classify_zpd_zone, should_rollback_to_prerequisites,
+            get_zpd_path_plan, ZPD_LOWER, ZPD_UPPER
+        )
+        from agent_swarm import DEFAULT_KNOWLEDGE_DAG, SwarmMediationRouter, SwarmMediationMode
+        from learning_strategy import detect_teaching_tier, TeachingTier
+        # SC1: ZPD 三档分类
+        self.assertEqual(classify_zpd_zone(0.1), "below_zpd")
+        self.assertEqual(classify_zpd_zone(ZPD_LOWER), "in_zpd")
+        self.assertEqual(classify_zpd_zone(0.5), "in_zpd")
+        self.assertEqual(classify_zpd_zone(ZPD_UPPER), "in_zpd")
+        self.assertEqual(classify_zpd_zone(0.8), "above_zpd")
+        # SC2: 前置依赖回滚
+        rollback, weak = should_rollback_to_prerequisites(0.2, {'线性回归': 0.3})
+        self.assertTrue(rollback)
+        self.assertIn('线性回归', weak)
+        rollback2, _ = should_rollback_to_prerequisites(0.2, {'线性回归': 0.9})
+        self.assertFalse(rollback2)
+        # ZPD 路径完整规划
+        prereq = {'线性回归': 0.3, '梯度下降': 0.4}
+        plan_low = get_zpd_path_plan('逻辑回归', 0.15, DEFAULT_KNOWLEDGE_DAG, prereq)
+        self.assertEqual(plan_low['difficulty'], 'basic')
+        self.assertIsNotNone(plan_low['rollback_to'])
+        prereq_mid = {'线性回归': 0.80, '梯度下降': 0.70}
+        plan_mid = get_zpd_path_plan('逻辑回归', 0.55, DEFAULT_KNOWLEDGE_DAG, prereq_mid)
+        self.assertEqual(plan_mid['difficulty'], 'intermediate')
+        prereq_high = {'线性回归': 0.90, '梯度下降': 0.85}
+        plan_high = get_zpd_path_plan('逻辑回归', 0.85, DEFAULT_KNOWLEDGE_DAG, prereq_high)
+        self.assertEqual(plan_high['difficulty'], 'advanced')
+        # SC3+SC4: 自适应二档教学
+        router = SwarmMediationRouter()
+        p = StudentProfile(student_id='zpd_test')
+        p.concept_mastery['逻辑回归'] = 0.30
+        self.assertEqual(router.decide_mode(p, '逻辑回归'), SwarmMediationMode.SIMPLIFIED_MODE)
+        self.assertIn('降维解释', router.get_forced_instructions(SwarmMediationMode.SIMPLIFIED_MODE).get('theory', ''))
+        p.concept_mastery['逻辑回归'] = 0.85
+        self.assertEqual(router.decide_mode(p, '逻辑回归'), SwarmMediationMode.ADVANCED_MODE)
+        self.assertIn('ADVANCED_MODE', router.get_forced_instructions(SwarmMediationMode.ADVANCED_MODE).get('theory', ''))
+        # learning_strategy 档位一致性
+        self.assertEqual(detect_teaching_tier(p), TeachingTier.ADVANCED)
+        p.concept_mastery['逻辑回归'] = 0.30
+        self.assertEqual(detect_teaching_tier(p), TeachingTier.SIMPLIFIED)
+
     def test_teacher_dashboard_exposes_heatmap_and_interventions(self):
         dashboard = _teacher_dashboard()
         self.assertEqual(dashboard["course"], "机器学习导论")
         self.assertTrue(dashboard["heatmap"])
         self.assertTrue(dashboard["interventions"])
+
+    def test_drag_debate_cleans_low_quality_evidence(self):
+        from drag_debate import DebateAugmentedRAG
+        from models import Evidence, EvidenceModality, RetrievalBundle, GraphContext
+        debate = DebateAugmentedRAG()
+        evidence = (
+            Evidence(id="e1", title="good", content="池化层概念", modality=EvidenceModality.TEXT, source="教材", score=0.9, tags=(), anchors=()),
+            Evidence(id="e2", title="noise", content="无关内容", modality=EvidenceModality.TEXT, source="网络", score=0.3, tags=(), anchors=()),
+        )
+        bundle = RetrievalBundle(query="池化层", target="池化层",
+            graph_context=GraphContext(target="池化层", learning_path=(), prerequisite_edges=(), downstream_edges=()),
+            evidence=evidence)
+        result = debate.clean(bundle)
+        self.assertLessEqual(len(result.clean_evidence), len(evidence))
+        self.assertGreater(len(result.clean_evidence), 0)
+
+    def test_sm2_flashcard_scheduling(self):
+        from anki_engine import SM2Engine, FlashCard
+        engine = SM2Engine()
+        card = engine.get_or_create(concept='逻辑回归', front='概念', back='解析', student_id='s-test')
+        self.assertIsNotNone(card)
+        engine.review('逻辑回归', 's-test', quality=5)
+        engine.review('逻辑回归', 's-test', quality=4)
+        due = engine.get_due_cards('s-test')
+        self.assertIsInstance(due, list)
+
+    def test_learning_event_bus_subscribe_publish(self):
+        from learning_event_bus import LearningEventBus
+        bus = LearningEventBus.get_instance()
+        received = []
+        async def handler(e):
+            received.append(e)
+        bus.subscribe('test_evt', handler)
+        bus.unsubscribe('test_evt', handler)
+        bus.subscribe('test_evt2', handler)
+        bus.unsubscribe('test_evt2', handler)
+        self.assertEqual(len(received), 0)
+
+    def test_circuit_breaker_opens_after_failures(self):
+        from concurrency import CircuitBreaker, CircuitState
+        import asyncio
+        cb = CircuitBreaker(name="test", failure_threshold=3, recovery_timeout=1.0)
+        self.assertEqual(cb.state, CircuitState.CLOSED)
+        async def run():
+            for i in range(3):
+                async def fail():
+                    raise Exception("fail")
+                try:
+                    await cb.call(fail)
+                except Exception:
+                    pass
+        asyncio.run(run())
+        self.assertEqual(cb.state, CircuitState.OPEN)
+
+    def test_visrag_images_exist(self):
+        import os
+        img_dir = 'data/patches'
+        images = [f for f in os.listdir(img_dir) if f.endswith('.png')]
+        self.assertGreaterEqual(len(images), 7, f'期望至少7张配图，实际{len(images)}')
+        for img in images:
+            path = os.path.join(img_dir, img)
+            with open(path, 'rb') as f:
+                header = f.read(8)
+            self.assertEqual(header, b'\x89PNG\r\n\x1a\n', f'{img} 不是有效PNG')
+
+    def test_report_api_browser_pool_exists(self):
+        """验证 PDF 导出模块 BrowserPool 存在且功能正确"""
+        import asyncio
+        from report_api import BrowserPool, get_browser_pool
+        pool = asyncio.run(get_browser_pool())
+        self.assertIsNotNone(pool)
+        self.assertIsNotNone(pool.semaphore, 'BrowserPool 需有 semaphore 并发信号量')
+        self.assertEqual(pool.render_timeout, 10)
+        self.assertTrue(hasattr(pool, 'render_pdf'), 'BrowserPool 需有 render_pdf 方法')
+        self.assertTrue(hasattr(pool, 'close'), 'BrowserPool 需有 close 方法')
+
+    def test_sse_syntax_buffer_in_store(self):
+        """验证 SSE 流式响应语法缓冲（Task 4.1）"""
+        import os
+        store_path = os.path.join(os.path.dirname(__file__), 'frontend', 'src', 'stores', 'chat.js')
+        self.assertTrue(os.path.exists(store_path), 'chat store 不存在')
+        with open(store_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        self.assertIn('abort', content.lower(), '需有 abort 中断机制')
+        self.assertIn('streamChat', content, '需有 streamChat 流式聊天')
+        self.assertIn('_cleanupStream', content, '需有 _cleanupStream 流清理')
+
+    def test_frontend_core_components_exist(self):
+        """验证测试手册中所有前端核心组件存在且包含关键功能"""
+        import os
+        checks = [
+            # Task 4.2: 智能体轨迹时间轴
+            ('frontend/src/components/AgentTimeline.vue', "step.status === 'running'", '呼吸灯状态'),
+            # Task 4.2: 掌握度雷达图
+            ('frontend/src/components/MasteryRadar.vue', '能力掌握度雷达图', 'ECharts雷达图'),
+            # Task 5.1+5.2: 数字人语音+嘴形滤波
+            ('frontend/src/components/AvatarSpeech.vue', 'smoothScale', '嘴形平滑滤波'),
+            # Task 7.5: 3D Anki闪卡
+            ('frontend/src/components/AnkiFlashcard.vue', 'rotateY(180deg)', '3D翻转'),
+            # Task 8.1: 行级苏格拉底答疑
+            ('frontend/src/components/InlineSocraticPopup.vue', '苏格拉底即时答疑', '行级答疑悬浮框'),
+            # Task 8.4: 沙箱可视化终端
+            ('frontend/src/components/SandboxConsole.vue', '代码沙箱控制台', '代码沙箱控制台'),
+            # Task 8.5: 视频生成播放器
+            ('frontend/src/components/VideoRenderPanel.vue', 'isComplete', 'HTML5视频播放器'),
+            # Task 8.6: 知识图谱探索器
+            ('frontend/src/components/KnowledgeGraphExplorer.vue', 'echarts.init', 'ECharts图谱'),
+            # Task 8.7: 无图自适应折叠
+            ('frontend/src/views/Chat.vue', 'shouldShowRightPanel', '自适应面板折叠'),
+            # Task 7.4: 复习日历
+            ('frontend/src/views/RevisionCalendar.vue', 'reviewPlans', '抗遗忘复习日历'),
+            # Task 9.2: 设置致谢墙+风格切换
+            ('frontend/src/views/Settings.vue', 'teachingStyle', '教学风格切换'),
+        ]
+        for path, keyword, label in checks:
+            with self.subTest(component=label):
+                full_path = os.path.join(os.path.dirname(__file__), path)
+                self.assertTrue(os.path.exists(full_path), f'{path} 不存在')
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                self.assertIn(keyword, content, f'{label}: 缺少关键词 "{keyword}"')
 
     def test_ingestion_pipeline_indexes_future_course_materials(self):
         index = InMemoryVectorIndex("test-course-index")

@@ -854,6 +854,13 @@ class StudentProfile:
                 last_updated=_utc_now(),
             )
 
+        # === 互补调用：行为信号校验（硬拦截cap），链接 bkt_engine ===
+        try:
+            from bkt_engine import behavior_sanity_check
+            behavior_sanity_check(self)
+        except Exception:
+            pass
+
 
 @dataclass(frozen=True)
 class LearningSignal:

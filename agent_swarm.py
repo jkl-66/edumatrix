@@ -57,18 +57,22 @@ def _build_conversation_memory(profile: StudentProfile, max_turns: int = 6) -> s
 
 # 口语指代消解知识库：模糊指代 -> 可能映射的核心知识点前缀
 _COREFERENCE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    # 仅保留真正的模糊指代代词 —— 这些应该被替换为具体概念名
     "这个": ("逻辑回归", "池化层", "卷积核", "反向传播", "梯度下降", "Transformer",
              "线性回归", "决策树", "支持向量机", "过拟合", "正则化"),
     "这类": ("逻辑回归", "池化层", "卷积核", "反向传播", "梯度下降",
              "分类算法", "回归算法", "优化方法"),
     "这个代码": ("PyTorch", "TensorFlow", "代码实操", "编程实现"),
     "这个公式": ("链式法则", "梯度下降", "损失函数", "激活函数", "Softmax"),
+    "这个图": ("特征图", "计算图", "网络结构图"),
+}
+
+# 查询意图关键词 —— 不替换原文，仅用于辅助推断关联概念
+_QUERY_INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "怎么算": ("梯度下降", "反向传播", "链式法则", "卷积运算", "池化计算"),
     "怎么用": ("逻辑回归", "线性回归", "决策树", "支持向量机"),
     "为什么": ("反向传播", "梯度下降", "过拟合", "损失函数"),
     "应用场景": ("逻辑回归", "决策树", "支持向量机", "卷积神经网络"),
-    "它的": (),
-    "这个图": ("特征图", "计算图", "网络结构图"),
     "梯度下降这类": ("梯度下降", "优化算法", "SGD", "Adam"),
 }
 
@@ -90,7 +94,8 @@ def _resolve_coreference(
     """
     resolved = message
 
-    # 策略1：基于关键词知识库的直接替换
+    # 策略1：基于模糊指代关键词的替换
+    # 仅替换真正的指代代词，不替换查询意图关键词
     for fuzzy_phrase, targets in _COREFERENCE_KEYWORDS.items():
         if fuzzy_phrase in resolved:
             # 在已有的知识点中查找最可能的匹配
@@ -109,7 +114,8 @@ def _resolve_coreference(
     history_concepts = [c for c in existing_concepts if c.lower() in history_context.lower()]
     for pronoun in ("它", "这个", "这类"):
         # 仅当代词以独立词出现时才替换（非嵌入在其他词中）
-        pattern = re.compile(rf'(?<!\w){pronoun}(?!\w)')
+        # 使用 re.ASCII 确保 \w 仅匹配 [a-zA-Z0-9_]，不匹配中文
+        pattern = re.compile(rf'(?<!\w){pronoun}(?!\w)', re.ASCII)
         if pattern.search(resolved) and history_concepts:
             # 用最近提及的知识点替换
             resolved = pattern.sub(history_concepts[-1], resolved, count=1)

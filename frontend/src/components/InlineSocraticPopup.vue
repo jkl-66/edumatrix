@@ -3,8 +3,10 @@
  * InlineSocraticPopup.vue — 任务 8.1: 行级/公式悬浮苏格拉底即时答疑
  *
  * 监听代码块/公式点击事件，提取行上下文，弹出轻量化悬浮推导窗口。
+ * v2: 调用后端 /api/stream/explain 获取真实 AI 解释，LLM 不可用时回退到模板。
  */
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { socraticExplain } from '../api'
 
 const emit = defineEmits(['close'])
 
@@ -14,57 +16,74 @@ const props = defineProps({
   contextAfter: { type: String, default: '' },
   lineIndex: { type: Number, default: 0 },
   messageIndex: { type: Number, default: -1 },
+  studentId: { type: String, default: 'demo-student' },
 })
 
 const visible = ref(true)
 const steps = ref([])
 const loading = ref(true)
+const error = ref('')
 const popupRef = ref(null)
 
-// 模拟苏格拉底分步推导（实际可对接后端 SocraticDebater API）
-function generateSteps(text) {
+// 调用后端 API 获取苏格拉底式解释
+async function fetchSocraticExplanation() {
+  if (!props.targetText) {
+    steps.value = ['无法识别目标内容']
+    loading.value = false
+    return
+  }
+  try {
+    const result = await socraticExplain({
+      target_text: props.targetText,
+      context_before: props.contextBefore,
+      context_after: props.contextAfter,
+      student_id: props.studentId,
+    })
+    if (result.status === 'success') {
+      // 将返回的文本按行拆分为步骤
+      const content = result.content || ''
+      steps.value = content.split('\n').filter(line => line.trim())
+    } else {
+      // fallback 模板
+      steps.value = (result.content || '').split('\n').filter(line => line.trim())
+    }
+  } catch (e) {
+    error.value = e.message || '请求失败'
+    // 本地兜底
+    steps.value = generateFallback(props.targetText)
+  }
+  loading.value = false
+}
+
+// 本地兜底模板（仅 LLM 不可用时）
+function generateFallback(text) {
   if (!text) return ['无法识别目标内容']
   const lines = []
-  // Step 1: 识别是什么
   const isFormula = text.includes('\\frac') || text.includes('\\partial') || text.includes('$$')
   const isCode = text.includes('def ') || text.includes('import ') || text.includes('class ')
-
   if (isFormula) {
-    lines.push('📐 这是一个数学表达式，表示一个数学运算关系')
-    if (text.includes('\\frac')) {
-      lines.push('📝 分数形式: \\frac{分子}{分母} 表示分子除以分母')
-    }
-    if (text.includes('\\partial')) {
-      lines.push('🎯 偏导符号 ∂ 表示多元函数对某一变量的偏导数')
-      lines.push('💡 可提问: "每个符号表示什么？" "展开讲讲这个公式的意义？"')
-    }
+    lines.push('📐 这是一个数学表达式')
+    if (text.includes('\\frac')) lines.push('📝 分数形式: \\frac{分子}{分母}')
+    if (text.includes('\\partial')) lines.push('🎯 偏导符号 ∂ 表示偏导数')
+    lines.push('')
+    lines.push('💡 可追问: "每个符号表示什么？"')
   } else if (isCode) {
     lines.push('💻 这是一段代码语句')
-    if (text.includes('def ')) {
-      lines.push('📦 这是函数定义: def 关键字声明一个可复用的代码块')
-      lines.push('💡 可追问: "参数是什么？" "返回值是什么？"')
-    } else if (text.includes('import ')) {
-      lines.push('📚 import 语句用于引入外部库/模块')
-      lines.push('💡 可追问: "这个库有什么常用函数？"')
-    }
+    if (text.includes('def ')) lines.push('📦 函数定义: def 关键字声明代码块')
+    else if (text.includes('import ')) lines.push('📚 import 用于引入外部库')
+    lines.push('')
+    lines.push('💡 可追问: "参数和返回值是什么？"')
   } else {
     lines.push('📖 选取内容: "' + text.slice(0, 60) + '"')
-    lines.push('💡 点击下方按钮向苏格拉底辩手提问')
+    lines.push('💡 可在主对话继续追问')
   }
-  lines.push('')
-  lines.push('🤔 以上是初步解析，需要进一步详细推导吗？')
-
   return lines
 }
 
 onMounted(async () => {
   await nextTick()
   await nextTick()
-  // 模拟 LLM 调用（实际可调后端 SocraticDebater 接口）
-  setTimeout(() => {
-    steps.value = generateSteps(props.targetText)
-    loading.value = false
-  }, 300)
+  await fetchSocraticExplanation()
 })
 
 function close() {
@@ -77,11 +96,7 @@ function askDeeper() {
     '',
     '--- 更深层推导 ---',
     `基于上下文: ${props.contextBefore.slice(0, 60)}...`,
-    '1. 先分析基础概念',
-    '2. 再拆解关键步骤',
-    '3. 最后检验理解是否正确',
-    '',
-    '💡 可在主对话中继续追问详细推导',
+    '💡 可在主对话框中继续追问详细推导',
   ])
 }
 </script>
@@ -110,6 +125,9 @@ function askDeeper() {
           <div v-if="loading" class="flex items-center gap-2 text-gray-400 text-xs">
             <div class="animate-spin w-3 h-3 border border-purple-500 border-t-transparent rounded-full" />
             正在推导...
+          </div>
+          <div v-if="error" class="text-xs text-red-400 mb-2">
+            {{ error }}
           </div>
           <div v-else class="space-y-2">
             <div v-for="(step, i) in steps" :key="i"

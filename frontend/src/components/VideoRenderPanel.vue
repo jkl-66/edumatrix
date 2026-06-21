@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { Video, Loader2, Play, Maximize2, Minimize2, Volume2, VolumeX } from '@lucide/vue'
 
 const props = defineProps({
@@ -121,6 +121,13 @@ function seekTo(e) {
 
 onMounted(() => {
   if (props.visible) simulateRender()
+})
+
+watch(() => props.visible, (newVal) => {
+  if (newVal) {
+    steps.forEach(s => s.status.value = 'pending')
+    simulateRender()
+  }
 })
 
 onUnmounted(() => {

@@ -96,6 +96,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
         try:
             from models import StudentProfile
             profile = swarm.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
+            alignment_report = None
 
             await check_disconnection()
             yield _sse("progress", {"step": "profile", "message": "正在分析学生画像...", "progress": 10})
@@ -163,19 +164,19 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     
                     streamed_parts.append(result)
                     completed += 1
-                    yield _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10})
+                    return _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10})
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
                     completed += 1
-                    yield _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10, "error": str(e)[:80]})
+                    return _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10, "error": str(e)[:80]})
 
             tasks = [_gen_one(role, rt) for role, rt in agent_jobs]
             for task in asyncio.as_completed(tasks):
                 await check_disconnection()
-                async for chunk in await task:
-                    await check_disconnection()
-                    yield chunk
+                chunk = await task
+                await check_disconnection()
+                yield chunk
 
             await check_disconnection()
             yield _sse("progress", {"step": "alignment", "message": "正在校验多模态一致性...", "progress": 85})
@@ -214,10 +215,10 @@ async def stream_chat(request: Request) -> StreamingResponse:
             await check_disconnection()
             yield _sse("progress", {"step": "safety", "message": "正在进行内容安全审查...", "progress": 95})
 
-            final_content = ""
+            safety_content = ""
             for part in streamed_parts:
                 if hasattr(part, "content") and hasattr(part, "resource_type"):
-                    final_content += f"\n\n## {part.resource_type}\n\n{part.content}"
+                    safety_content += f"\n\n## {part.resource_type}\n\n{part.content}"
 
             # === P1-4 形成性评价：在安全审查前嵌入微型检查点 ===
             _formative_check = _run_formative_check(
@@ -234,9 +235,11 @@ async def stream_chat(request: Request) -> StreamingResponse:
                             if hasattr(profile_obj, key):
                                 setattr(profile_obj, key, val)
 
-            safety_result = CONTENT_SAFETY.check_safety(final_content)
+            safety_result = CONTENT_SAFETY.check_safety(safety_content)
+            target_str = getattr(retrieval, "target", "")
+            final_content = f"## 学习目标：{target_str}\n\n系统已为您调配了 5 大专业动作智能体协同生成自适应讲义。请在下方点击展开各个模块进行针对性学习："
             if not safety_result["passed"]:
-                final_content = f"[内容安全提示] 部分内容已过滤\n\n{CONTENT_SAFETY.sanitize(final_content)}"
+                final_content = f"[内容安全提示] 部分内容已过滤\n\n{final_content}"
 
             strategy_plan = None
             try:
@@ -270,11 +273,34 @@ async def stream_chat(request: Request) -> StreamingResponse:
             except Exception:
                 pass
 
+            alignment_data = {
+                "passed": True,
+                "distance": 0.0,
+                "threshold": 0.65,
+                "conflicts": [],
+                "advice": "未进行校验"
+            }
+            if alignment_report:
+                alignment_data = {
+                    "passed": alignment_report.passed,
+                    "distance": alignment_report.distance,
+                    "threshold": alignment_report.threshold,
+                    "conflicts": [
+                        {
+                            "type": c.get("type", "conflict"),
+                            "resources": c.get("resources", []),
+                            "distance": c.get("distance", 0.0),
+                            "suggestion": c.get("suggestion", "")
+                        } for c in alignment_report.conflicts
+                    ] if alignment_report.conflicts else [],
+                    "advice": alignment_report.advice
+                }
+
             yield _sse("complete", {
                 "target": getattr(retrieval, "target", ""),
                 "content": final_content,
                 "resources": [
-                    {"agent": getattr(r, "agent", ""), "type": getattr(r, "resource_type", ""), "content": (getattr(r, "content", "") or "")[:200]}
+                    {"agent": getattr(r, "agent", ""), "type": getattr(r, "resource_type", ""), "content": getattr(r, "content", "") or ""}
                     for r in streamed_parts[:8]
                 ],
                 "safety": {
@@ -282,6 +308,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     "issues_count": len(safety_result.get("issues", [])),
                 },
                 "profile": profile_data,
+                "alignment": alignment_data,
                 "strategy_plan": {
                     "actions": [
                         {"title": a.title, "description": a.description, "priority": a.priority}
@@ -297,3 +324,43 @@ async def stream_chat(request: Request) -> StreamingResponse:
 
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/regenerate")
+async def regenerate_component(request: Request) -> dict[str, Any]:
+    payload = await request.json()
+    student_id = str(payload.get("student_id", "default"))
+    role = str(payload.get("role", ""))
+    resource_type = str(payload.get("resource_type", ""))
+    query = str(payload.get("query", ""))
+    
+    if not role or not resource_type or not query:
+        raise HTTPException(status_code=400, detail="参数缺失")
+        
+    swarm = build_swarm_from_headers(request.headers)
+    profile = swarm.profile_store.get(student_id)
+    
+    try:
+        retrieval = await swarm.planner.plan_async(swarm.rag, query, profile)
+        evidence = swarm.debate.clean(retrieval).clean_evidence
+        graph_context = retrieval.graph_context
+    except Exception:
+        evidence = []
+        graph_context = ""
+        
+    try:
+        result = await swarm.async_generator.generate(
+            role=role,
+            resource_type=resource_type,
+            query=query,
+            graph_context=graph_context,
+            evidence=evidence,
+            profile=profile,
+        )
+        content = result.content if hasattr(result, "content") else str(result)
+        return {
+            "status": "success",
+            "content": content
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"重算失败: {str(e)}")

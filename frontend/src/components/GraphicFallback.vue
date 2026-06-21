@@ -5,7 +5,7 @@
  * 全局部署渲染异常拦截器，SVG/图表参数报错时不直接白屏崩溃，
  * 自动降级展示 Mermaid/ASCII 文本示意图。
  */
-import { ref, computed } from 'vue'
+import { ref, computed, onErrorCaptured } from 'vue'
 
 const props = defineProps({
   originalType: { type: String, default: 'mermaid' },  // 'mermaid' | 'echarts' | 'svg'
@@ -15,7 +15,13 @@ const props = defineProps({
   altDiagram: { type: String, default: '' },
 })
 
-const showFallback = ref(true)
+const showFallback = ref(false)
+
+onErrorCaptured((err, instance, info) => {
+  console.warn('[GraphicFallback] 捕获渲染组件异常:', err, info)
+  showFallback.value = true
+  return false // 阻止错误向上冒泡
+})
 
 // 将 Mermaid 或错误文本转换为纯文本 ASCII 示意图
 const asciiDiagram = computed(() => {

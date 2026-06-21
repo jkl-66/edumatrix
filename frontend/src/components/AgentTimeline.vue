@@ -10,6 +10,7 @@ import {
   Clock, CheckCircle2, XCircle, Search, MessageSquare, GitBranch, AlertTriangle, Loader2,
   BookOpen, LayoutGrid, Code2, HelpCircle, Video, Target
 } from '@lucide/vue'
+import { useChatStore } from '../stores/chat'
 
 const props = defineProps({
   steps: { type: Array, default: () => [] },  // Array of {id, agent, action, status, detail, timestamp, duration}
@@ -19,6 +20,8 @@ const props = defineProps({
   status: { type: String, default: '' },
   agents: { type: Object, default: () => ({}) },
 })
+
+const chatStore = useChatStore()
 
 const expanded = ref(new Set())
 
@@ -36,36 +39,73 @@ const computedSteps = computed(() => {
     return props.steps
   }
 
-  const result = []
+  const steps = [
+    { id: 'coord', agent: '全脑主控官', action: '意图分析与分发', detail: '接收学生输入，分析学习意图，动态规划协同路径并路由上下文。' },
+    { id: 'diag', agent: '诊断官', action: '调取学情画像', detail: '分析学生认知缺陷树与当前掌握度，评估需要重点突破的概念盲区。' },
+    { id: 'retrieve', agent: '检索器', action: '多模态检索增强', detail: '调用 Hybrid RAG 框架与 VisRAG 视觉模型，检索讲义、公式与图示。' },
+    { id: 'debate', agent: '辩论官', action: '苏格拉底思辨', detail: '开启真理越辩越明（DragDebate）正反双方多智能体认知思维风暴。' },
+    { id: '理论教授', agent: '理论教授', action: '自适应精讲生成', detail: '生成针对当前概念的底层数理推导、核心理论剖析与深度讲义。' },
+    { id: '逻辑画师', agent: '逻辑画师', action: '拓扑可视化渲染', detail: '为概念生成知识拓扑 Mermaid 图谱，并向 Poincaré 盘计算流形对齐点。' },
+    { id: '极客助教', agent: '极客助教', action: '沙箱代码案例', detail: '生成可在代码沙箱中安全执行的 Python/JS 代码实例与步骤注解。' },
+    { id: '考官智能体', agent: '考官智能体', action: '自适应评测构建', detail: '生成细粒度多步 CAT 测试题，并配置相应的自适应评估反馈规则。' },
+    { id: '虚拟导演', agent: '虚拟导演', action: '多模态视频脚本', detail: '整理生成内容，进行讲解视频脚本设计与讲解音频分片规划。' },
+    { id: 'align', agent: '对齐器', action: '流形一致性校验', detail: '执行拓扑流形对齐，校验讲义内容完整度，并生成对齐差异分析报告。' }
+  ]
 
-  // 将 agents 实时状态转化为步骤
-  Object.entries(props.agents).forEach(([name, info], index) => {
-    result.push({
-      id: name,
-      agent: name,
-      action: info.type || '生成资源',
-      status: info.error ? 'error' : (info.done ? 'success' : 'running'),
-      detail: info.error ? `生成出错: ${info.error}` : `成功生成 ${info.type || '资源'}`,
-      duration: 1200 + index * 300,
-    })
-  })
+  // 判断当前对话流是否已完成/结束
+  const isFinished = props.progress >= 100 || 
+                     props.status === '生成完成！' || 
+                     (!chatStore.sending && chatStore.messages.length > 0 && 
+                      chatStore.messages[chatStore.messages.length - 1].role === 'assistant' && 
+                      !chatStore.messages[chatStore.messages.length - 1].error)
 
-  // 如果正在生成中且当前状态不在列表中，作为主控官的步骤显示
-  if (props.status && props.progress < 100) {
-    const alreadyExists = result.some(r => r.action === props.status)
-    if (!alreadyExists) {
-      result.push({
-        id: 'status-running',
-        agent: '全脑主控官',
-        action: props.status,
-        status: 'running',
-        detail: '全脑主控官正在动态路由并调度协调子智能体...',
-        duration: 0,
-      })
+  return steps.map((step, index) => {
+    let status = 'pending'
+    let detail = step.detail
+    let duration = 0
+
+    if (isFinished) {
+      status = 'success'
+      duration = 800 + index * 120
+    } else {
+      if (step.id === 'coord') {
+        status = props.progress >= 10 ? 'success' : (props.progress > 0 ? 'running' : 'pending')
+      } else if (step.id === 'diag') {
+        if (props.progress >= 10) {
+          status = props.progress >= 25 ? 'success' : 'running'
+        }
+      } else if (step.id === 'retrieve') {
+        if (props.progress >= 25) {
+          status = props.progress >= 40 ? 'success' : 'running'
+        }
+      } else if (step.id === 'debate') {
+        if (props.progress >= 40) {
+          status = props.progress >= 50 ? 'success' : 'running'
+        }
+      } else if (['理论教授', '逻辑画师', '极客助教', '考官智能体', '虚拟导演'].includes(step.id)) {
+        if (props.progress >= 50) {
+          const info = props.agents[step.id]
+          if (info) {
+            status = info.error ? 'error' : (info.done ? 'success' : 'running')
+            if (info.error) detail = `生成异常: ${info.error}`
+          } else {
+            status = props.progress >= 80 ? 'success' : 'running'
+          }
+        }
+      } else if (step.id === 'align') {
+        if (props.progress >= 80) {
+          status = props.progress >= 95 ? 'success' : 'running'
+        }
+      }
     }
-  }
 
-  return result
+    return {
+      ...step,
+      status,
+      detail,
+      duration: Math.round(duration)
+    }
+  })
 })
 
 const totalDuration = computed(() => {
@@ -105,7 +145,7 @@ function agentIcon(agent) {
     </div>
 
     <!-- 时间线 -->
-    <div class="p-3 max-h-[400px] overflow-y-auto scrollbar-thin">
+    <div class="p-3">
       <div v-if="!computedSteps.length" class="text-center text-gray-500 text-xs py-6">
         <Loader2 :size="20" class="mx-auto mb-2 opacity-50 animate-spin text-purple-500" />
         <p>等待推理步骤...</p>
@@ -162,6 +202,7 @@ function agentIcon(agent) {
 <style scoped>
 .agent-timeline {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  flex-shrink: 0;
 }
 
 /* 滚动条美化 */

@@ -363,3 +363,13 @@ export async function generateSimilarQuiz(studentId, sourceQuizId, concept = '')
   return r.data
 }
 
+export async function regenerateComponent(studentId, role, resourceType, query) {
+  const r = await api.post('/stream/regenerate', {
+    student_id: studentId,
+    role,
+    resource_type: resourceType,
+    query,
+  }, { headers: buildHeaders() })
+  return r.data
+}
+

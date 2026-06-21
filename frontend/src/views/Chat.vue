@@ -4,7 +4,7 @@ import {
   processMessage, getHistory,
   generateQuiz, evaluateQuizAnswer, adaptQuiz,
   webSearch, loadUrl,
-  runCode, getStudentProfile,
+  runCode, getStudentProfile, regenerateComponent,
 } from '../api'
 import {
   Send, Bot, User, Loader2, BookOpen, Code2, LayoutGrid, HelpCircle, Video,
@@ -17,6 +17,7 @@ import { useChatStore } from '../stores/chat'
 import SandboxConsole from '../components/SandboxConsole.vue'
 import InlineSocraticPopup from '../components/InlineSocraticPopup.vue'
 import GraphicFallback from '../components/GraphicFallback.vue'
+import ManifoldVisualizer from '../components/ManifoldVisualizer.vue'
 import AvatarSpeech from '../components/AvatarSpeech.vue'
 import AgentTimeline from '../components/AgentTimeline.vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
@@ -32,6 +33,114 @@ const sending = computed(() => chatStore.sending)
 
 const capturedInitialProfile = ref(null)
 const latestProfile = ref(null)
+
+// --- 思维导图放大模态框状态 ---
+const zoomModal = ref({
+  visible: false,
+  code: '',
+})
+const zoomScale = ref(1.0)
+const panOffset = ref({ x: 0, y: 0 })
+let isPanning = false
+let startPanCoords = { x: 0, y: 0 }
+
+function zoomIn() {
+  zoomScale.value = Math.min(3.0, zoomScale.value + 0.2)
+}
+function zoomOut() {
+  zoomScale.value = Math.max(0.4, zoomScale.value - 0.2)
+}
+function resetZoom() {
+  zoomScale.value = 1.0
+  panOffset.value = { x: 0, y: 0 }
+}
+function closeZoomModal() {
+  zoomModal.value.visible = false
+  zoomModal.value.code = ''
+}
+
+function startPan(e) {
+  isPanning = true
+  startPanCoords = { x: e.clientX - panOffset.value.x, y: e.clientY - panOffset.value.y }
+}
+function doPan(e) {
+  if (!isPanning) return
+  panOffset.value = { x: e.clientX - startPanCoords.x, y: e.clientY - startPanCoords.y }
+}
+function endPan() {
+  isPanning = false
+}
+
+// 绑定全局方法，供 v-html 内按钮点击调用
+window.zoomMindmap = (btn) => {
+  const mermaidDiv = btn.closest('.my-3').querySelector('.mermaid')
+  if (mermaidDiv) {
+    const rawCode = decodeURIComponent(mermaidDiv.getAttribute('data-code') || '')
+    zoomModal.value.code = rawCode
+    zoomModal.value.visible = true
+    zoomScale.value = 1.0
+    panOffset.value = { x: 0, y: 0 }
+  }
+}
+
+watch(() => zoomModal.value.code, (newVal) => {
+  if (newVal) {
+    nextTick(() => {
+      if (typeof window.mermaid !== 'undefined') {
+        try {
+          window.mermaid.init(undefined, document.querySelectorAll('.zoom-mermaid-target .mermaid'))
+        } catch (err) {
+          console.error('Zoom mermaid init error:', err)
+        }
+      }
+    })
+  }
+})
+
+function initMermaid() {
+  if (typeof window.mermaid !== 'undefined') {
+    nextTick(() => {
+      try {
+        window.mermaid.initialize({
+          startOnLoad: false,
+          theme: 'default', // Using default theme for light background and dopamine-like colors
+          securityLevel: 'loose',
+          themeVariables: {
+            background: '#ffffff',
+            primaryColor: '#ff79c6',
+            primaryTextColor: '#111827',
+            lineColor: '#6366f1',
+            fontSize: '12px'
+          }
+        })
+        window.mermaid.init(undefined, document.querySelectorAll('.mermaid'))
+      } catch (err) {
+        console.error('Mermaid render error:', err)
+      }
+    })
+  }
+}
+
+watch(messages, () => {
+  initMermaid()
+}, { deep: true })
+
+watch(() => chatStore.sending, () => {
+  initMermaid()
+})
+
+
+onMounted(() => {
+  initMermaid()
+})
+
+const nameToRole = {
+  '理论教授': 'theory_expert',
+  '逻辑画师': 'visualizer',
+  '极客助教': 'sandbox_coder',
+  '考官智能体': 'assessor',
+  '虚拟导演': 'director'
+}
 
 const radarConcepts = computed(() => {
   if (!latestProfile.value?.concept_mastery) return []
@@ -76,6 +185,9 @@ watch(messages, (newMsgs, oldMsgs) => {
 
 const input = ref('')
 const showResources = ref(new Set())
+watch(showResources, () => {
+  initMermaid()
+}, { deep: true })
 const activeTab = ref('chat') // chat | quiz | code | websearch
 
 // --- 任务 8.1: 行级/公式悬浮答疑状态 ---
@@ -161,9 +273,10 @@ async function send() {
   }
 }
 
-function toggleResource(idx) {
+function toggleResource(msgIdx, resIdx) {
+  const key = `${msgIdx}-${resIdx}`
   const s = new Set(showResources.value)
-  s.has(idx) ? s.delete(idx) : s.add(idx)
+  s.has(key) ? s.delete(key) : s.add(key)
   showResources.value = s
 }
 
@@ -314,6 +427,13 @@ onMounted(async () => {
   // 委托监听：捕获 Markdown 卡片内的代码块和公式点击
   document.addEventListener('click', handleMarkdownClick)
 
+  // 注册全局 CAT 自适应测验板触发方法
+  window.startInteractiveQuiz = (conceptName) => {
+    activeTab.value = 'quiz'
+    quizConcept.value = conceptName || latestProfile.value?.learning_goals?.[0] || '逻辑回归'
+    startQuiz()
+  }
+
   // 任务 7.8: 初始化认知画像，消除 MasteryRadar 渲染报错
   try {
     const profile = await getStudentProfile(props.studentId || 'default')
@@ -326,6 +446,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleMarkdownClick)
+  window.startInteractiveQuiz = null
 })
 
 function handleMarkdownClick(e) {
@@ -383,26 +504,80 @@ function handleMarkdownClick(e) {
 
 // ======================== 任务 8.3: 组件级局部重生成 ========================
 
+function getAgentConfig(agentName, resourceType) {
+  const name = (agentName || resourceType || '').toLowerCase()
+  if (name.includes('theory') || name.includes('理论') || name.includes('professor')) {
+    return { label: '理论教授', color: 'text-blue-600 bg-blue-50 border-blue-100', icon: 'BookOpen' }
+  }
+  if (name.includes('visual') || name.includes('画师') || name.includes('图示') || name.includes('渲染')) {
+    return { label: '逻辑画师', color: 'text-purple-600 bg-purple-50 border-purple-100', icon: 'LayoutGrid' }
+  }
+  if (name.includes('retrieve') || name.includes('检索') || name.includes('rag')) {
+    return { label: '检索专家', color: 'text-indigo-600 bg-indigo-50 border-indigo-100', icon: 'Search' }
+  }
+  if (name.includes('debate') || name.includes('辩论') || name.includes('socratic')) {
+    return { label: '苏格拉底辩手', color: 'text-green-600 bg-green-50 border-green-100', icon: 'HelpCircle' }
+  }
+  if (name.includes('sandbox') || name.includes('coder') || name.includes('代码') || name.includes('助教')) {
+    return { label: '极客助教', color: 'text-amber-600 bg-amber-50 border-amber-100', icon: 'Terminal' }
+  }
+  if (name.includes('assess') || name.includes('quiz') || name.includes('考官') || name.includes('评测')) {
+    return { label: '考官智能体', color: 'text-rose-600 bg-rose-50 border-rose-100', icon: 'BrainCircuit' }
+  }
+  return { label: agentName || resourceType || '教育智能体', color: 'text-gray-600 bg-gray-50 border-gray-100', icon: 'Bot' }
+}
+
+function getIconComponent(iconName) {
+  const mapping = {
+    BookOpen,
+    LayoutGrid,
+    Search,
+    HelpCircle,
+    Terminal,
+    BrainCircuit,
+    Bot
+  }
+  return mapping[iconName] || Bot
+}
+
 /**
  * 触发单张讲义卡片局部重算
  * 由校验器仅定位报错的单个卡片，仅重算失败模块
  */
 async function regenerateCard(messageIndex, resourceIndex) {
-  const msg = messages.value[messageIndex]
+  const msg = chatStore.messages[messageIndex]
   if (!msg || !msg.resources) return
 
-  // 打上重新生成标记，模拟局部重算
-  const updatedResources = [...msg.resources]
-  updatedResources[resourceIndex] = {
-    ...updatedResources[resourceIndex],
-    content: '(重新生成中...)\n\n' + (updatedResources[resourceIndex]?.content || ''),
-    _regenerating: true,
+  const res = msg.resources[resourceIndex]
+  if (!res) return
+
+  let query = ''
+  for (let i = messageIndex - 1; i >= 0; i--) {
+    if (chatStore.messages[i].role === 'user') {
+      query = chatStore.messages[i].content
+      break
+    }
+  }
+  if (!query) {
+    query = msg.target || ''
   }
 
-  // 仅更新单张卡片的 messages（局部渲染）
-  messages.value[messageIndex] = {
-    ...msg,
-    resources: updatedResources,
+  res._regenerating = true
+
+  try {
+    const data = await regenerateComponent(
+      props.studentId || 'default',
+      res.agent,
+      res.type || res.resource_type || '',
+      query
+    )
+    if (data && data.status === 'success') {
+      res.content = data.content
+    }
+  } catch (e) {
+    console.error('Error regenerating component:', e)
+  } finally {
+    res._regenerating = false
   }
 }
 
@@ -438,10 +613,18 @@ function exportAsMarkdown(messageIndex) {
 // ======================== 任务 8.4: 空白画布自适应收缩 ========================
 
 const hasVisualContent = computed(() => {
-  // 检查当前消息中是否有 Mermaid/图表/图片输出
+  // 检查当前消息中是否有 Mermaid/图表/图片输出 (包括子智能体资源内容)
   return messages.value.some(m => {
     const c = m.content || ''
-    return c.includes('```mermaid') || c.includes('![可视化') || c.includes('echarts')
+    const hasMainVisual = c.includes('```mermaid') || c.includes('![可视化') || c.includes('echarts')
+    if (hasMainVisual) return true
+    if (m.resources?.length) {
+      return m.resources.some(r => {
+        const rc = r.content || ''
+        return rc.includes('```mermaid') || rc.includes('![可视化') || rc.includes('echarts')
+      })
+    }
+    return false
   })
 })
 
@@ -450,6 +633,62 @@ const shouldShowRightPanel = computed(() => {
   if (rightPanelCollapsed.value) return false
   if (showSandbox.value) return true
   return hasVisualContent.value
+})
+
+const studentMastery = computed(() => {
+  let profile = latestProfile.value
+  if (!profile) {
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      if (messages.value[i].role === 'assistant' && messages.value[i].profile) {
+        profile = messages.value[i].profile
+        break
+      }
+    }
+  }
+  if (!profile || !profile.concept_mastery) return []
+  return Object.entries(profile.concept_mastery).map(([name, score]) => ({
+    name,
+    mastery: score,
+  }))
+})
+
+const targetPoints = computed(() => {
+  let profile = latestProfile.value
+  if (!profile) {
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      if (messages.value[i].role === 'assistant' && messages.value[i].profile) {
+        profile = messages.value[i].profile
+        break
+      }
+    }
+  }
+  if (!profile || !profile.concept_mastery) return []
+  return Object.keys(profile.concept_mastery).map(name => ({
+    name
+  }))
+})
+
+const lastAssistantMessage = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'assistant') {
+      return messages.value[i]
+    }
+  }
+  return null
+})
+
+const klDivergence = computed(() => {
+  return lastAssistantMessage.value?.alignment?.distance ?? 0.0
+})
+
+const conflictDetected = computed(() => {
+  return !(lastAssistantMessage.value?.alignment?.passed ?? true)
+})
+
+const alignmentProgress = computed(() => {
+  const dist = klDivergence.value
+  if (dist === 0) return 100
+  return Math.max(0, Math.min(100, (1 - dist) * 100))
 })
 
 const codePresets = [
@@ -492,6 +731,293 @@ async function doLoadUrl() {
     urlLoading.value = false
   }
 }
+
+function renderMarkdown(text, type = '', conceptName = '') {
+  if (!text) return ''
+
+  let cleaned = text.trim()
+  if (cleaned.startsWith('```markdown') && cleaned.endsWith('```')) {
+    cleaned = cleaned.slice(11, -3).trim()
+  } else if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
+    const firstLineEnd = cleaned.indexOf('\n')
+    if (firstLineEnd !== -1) {
+      const lang = cleaned.substring(3, firstLineEnd).trim().toLowerCase()
+      if (lang === '' || lang === 'markdown' || lang === 'text' || lang === 'txt') {
+        cleaned = cleaned.substring(firstLineEnd + 1, cleaned.length - 3).trim()
+      }
+    }
+  }
+
+  let html = cleaned
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+  // 1. Math extraction: Block math ($$, \[) and inline math ($, \()
+  const blockMath = []
+  html = html.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
+    const idx = blockMath.length
+    blockMath.push({ math: math.trim(), display: true })
+    return `@@BLOCK_MATH_TOKEN_${idx}@@`
+  })
+  html = html.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
+    const idx = blockMath.length
+    blockMath.push({ math: math.trim(), display: true })
+    return `@@BLOCK_MATH_TOKEN_${idx}@@`
+  })
+
+  const inlineMath = []
+  html = html.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
+    const idx = inlineMath.length
+    inlineMath.push({ math: math.trim(), display: false })
+    return `@@INLINE_MATH_TOKEN_${idx}@@`
+  })
+  html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => {
+    const idx = inlineMath.length
+    inlineMath.push({ math: math.trim(), display: false })
+    return `@@INLINE_MATH_TOKEN_${idx}@@`
+  })
+
+  // 2. Code blocks extraction
+  const codeBlocks = []
+  html = html.replace(/```([^\n]*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const isMermaid = lang.toLowerCase().includes('mermaid') || code.includes('mindmap') || code.includes('graph ') || code.includes('sequenceDiagram')
+    let blockHtml = ''
+    if (isMermaid) {
+      // Replace inline math tokens inside Mermaid code with clean plain-text math
+      let cleanCode = code.trim()
+      const tokenRegex = /@@INLINE_MATH_TOKEN_(\d+)@@/g
+      cleanCode = cleanCode.replace(tokenRegex, (match, idx) => {
+        const item = inlineMath[parseInt(idx)]
+        if (item) {
+          // Strip LaTeX symbols and dollar signs for clean plain text in Mermaid
+          return item.math
+            .replace(/\$/g, '')
+            .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '$1^')
+            .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '$1/$2')
+            .replace(/\\partial/g, 'd')
+            .replace(/\\Sigma/g, 'sum')
+            .replace(/\\sigma/g, 'sigma')
+            .replace(/\\alpha/g, 'alpha')
+            .replace(/\\cdot/g, '·')
+            .replace(/\\/g, '')
+        }
+        return ''
+      })
+
+      // We HTML-escape the raw Mermaid code inside data-code attribute to prevent issues
+      const escapedCode = encodeURIComponent(cleanCode)
+
+      blockHtml = `<div class="my-3 p-4 bg-white border border-gray-200 rounded-xl text-xs flex flex-col items-center shadow-sm max-w-full">
+        <div class="w-full flex items-center justify-between mb-3 pb-2 border-b border-gray-100">
+          <div class="flex items-center gap-1.5">
+            <span class="text-base">📊</span>
+            <span class="font-bold text-gray-800 text-xs">概念思维导图</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="window.zoomMindmap && window.zoomMindmap(this)" class="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-[10px] font-semibold transition-all flex items-center gap-0.5 shadow-sm">
+              🔍 放大/全屏
+            </button>
+            <span class="text-[9px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-mono font-medium">Mermaid</span>
+          </div>
+        </div>
+        <div class="mermaid-container w-full overflow-auto flex justify-center py-2 bg-white max-h-[300px]" style="cursor: zoom-in;" onclick="window.zoomMindmap && window.zoomMindmap(this)">
+          <div class="mermaid w-full flex justify-center" data-code="${escapedCode}">${cleanCode}</div>
+        </div>
+      </div>`
+    } else {
+      blockHtml = `<pre class="my-3 p-3 bg-gray-900 text-green-400 rounded-lg overflow-x-auto font-mono text-xs leading-relaxed">${code.trim()}</pre>`
+    }
+    const idx = codeBlocks.length
+    codeBlocks.push(blockHtml)
+    return `@@CODE_BLOCK_TOKEN_${idx}@@`
+  })
+
+  // 3. Line-by-line processing for Tables and Lists
+  const lines = html.split('\n')
+  let inTable = false
+  let tableHeader = []
+  let tableRows = []
+  let inList = false
+  const processedLines = []
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+
+    // Table checking
+    const isTableRow = trimmed.startsWith('|') && trimmed.endsWith('|')
+    if (isTableRow) {
+      if (inList) {
+        processedLines.push('</ul>')
+        inList = false
+      }
+      const cells = trimmed.slice(1, -1).split('|').map(c => c.trim())
+      const isSeparator = cells.every(c => /^[:-]+$/.test(c))
+      if (isSeparator) {
+        continue
+      }
+      if (!inTable) {
+        inTable = true
+        tableHeader = cells
+      } else {
+        tableRows.push(cells)
+      }
+      continue
+    } else {
+      if (inTable) {
+        processedLines.push(generateTableHtml(tableHeader, tableRows))
+        inTable = false
+        tableHeader = []
+        tableRows = []
+      }
+    }
+
+    // List item checking
+    const listMatch = line.match(/^(\s*)[-*+]\s+(.*)$/)
+    if (listMatch) {
+      const content = listMatch[2]
+      if (!inList) {
+        processedLines.push('<ul class="my-2 space-y-1 list-disc list-inside">')
+        inList = true
+      }
+      processedLines.push(`<li class="ml-4 text-xs text-gray-600 my-1 leading-relaxed">${content}</li>`)
+    } else {
+      if (inList) {
+        processedLines.push('</ul>')
+        inList = false
+      }
+      processedLines.push(line)
+    }
+  }
+
+  if (inTable) {
+    processedLines.push(generateTableHtml(tableHeader, tableRows))
+  }
+  if (inList) {
+    processedLines.push('</ul>')
+  }
+
+  html = processedLines.join('\n')
+
+  // Helper for Table HTML generation
+  function generateTableHtml(header, rows) {
+    let tableHtml = '<div class="overflow-x-auto my-4 border border-gray-200/80 rounded-xl shadow-sm bg-white"><table class="min-w-full divide-y divide-gray-200">'
+    if (header && header.length > 0) {
+      tableHtml += '<thead class="bg-gray-50/75"><tr>'
+      header.forEach(h => {
+        tableHtml += `<th class="px-4 py-2.5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">${h}</th>`
+      })
+      tableHtml += '</tr></thead>'
+    }
+    tableHtml += '<tbody class="divide-y divide-gray-100 bg-white">'
+    rows.forEach(row => {
+      tableHtml += '<tr class="hover:bg-gray-50/50 transition-colors">'
+      row.forEach(cell => {
+        tableHtml += `<td class="px-4 py-2 text-xs text-gray-600">${cell}</td>`
+      })
+      tableHtml += '</tr>'
+    })
+    tableHtml += '</tbody></table></div>'
+    return tableHtml
+  }
+
+  // 4. General inline Markdown replacements
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-gray-900">$1</strong>')
+  html = html.replace(/\*([^*]+)\*/g, '<em class="italic text-gray-800">$1</em>')
+  html = html.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 bg-gray-100 text-red-600 rounded font-mono text-xs font-medium">$1</code>')
+  html = html.replace(/^### (.*$)/gim, '<h4 class="text-xs font-bold text-gray-800 mt-4 mb-1.5 flex items-center gap-1">$1</h4>')
+  html = html.replace(/^## (.*$)/gim, '<h3 class="text-sm font-semibold text-gray-900 mt-5 mb-2 border-b border-gray-100 pb-1 flex items-center gap-1.5">$1</h3>')
+  html = html.replace(/^# (.*$)/gim, '<h2 class="text-base font-bold text-gray-900 mt-6 mb-3 flex items-center gap-2">$1</h2>')
+
+  // Paragraph spacing
+  html = html.replace(/\n\n/g, '<div class="h-2.5"></div>')
+
+  // Helper to render math
+  function renderMath(math, display) {
+    if (window.katex) {
+      try {
+        return window.katex.renderToString(math, {
+          displayMode: display,
+          throwOnError: false,
+          trust: true
+        })
+      } catch (err) {
+        console.error('KaTeX rendering error:', err)
+      }
+    }
+    // Fallback: raw but clean formatting with math symbols
+    const cleanMath = math
+      .replace(/\\Sigma/g, '∑')
+      .replace(/\\sigma/g, 'σ')
+      .replace(/\\mu/g, 'μ')
+      .replace(/\\beta/g, 'β')
+      .replace(/\\theta/g, 'θ')
+      .replace(/\\alpha/g, 'α')
+      .replace(/\\lambda/g, 'λ')
+      .replace(/\\partial/g, '∂')
+      .replace(/\\infty/g, '∞')
+      .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '<span style="text-decoration: overline">$1</span>')
+      .replace(/([a-zA-Z0-9]+)_([a-zA-Z0-9]+)/g, '$1<sub>$2</sub>')
+      .replace(/([a-zA-Z0-9]+)\^([a-zA-Z0-9]+)/g, '$1<sup>$2</sup>')
+      .replace(/\\cdot/g, '·')
+      .replace(/\\times/g, '×')
+      .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1)/($2)')
+      .replace(/\\sqrt\{([^}]+)\}/g, '√($1)')
+      .replace(/\\text\{([^}]+)\}/g, '$1')
+      .replace(/\\quad/g, '&nbsp;&nbsp;')
+
+    if (display) {
+      return `<div class="my-3.5 p-4 bg-gray-50/75 border border-gray-100 rounded-xl text-center font-serif text-sm overflow-x-auto select-all shadow-inner text-gray-800">${cleanMath}</div>`
+    } else {
+      return `<span class="font-serif italic bg-gray-50/75 px-1.5 py-0.5 rounded text-xs select-all text-gray-800 border border-gray-100/50">${cleanMath}</span>`
+    }
+  }
+
+  // 5. Restore block and inline math, and code blocks
+  blockMath.forEach((item, idx) => {
+    html = html.split(`@@BLOCK_MATH_TOKEN_${idx}@@`).join(renderMath(item.math, true))
+  })
+  inlineMath.forEach((item, idx) => {
+    html = html.split(`@@INLINE_MATH_TOKEN_${idx}@@`).join(renderMath(item.math, false))
+  })
+  codeBlocks.forEach((block, idx) => {
+    html = html.split(`@@CODE_BLOCK_TOKEN_${idx}@@`).join(block)
+  })
+
+  // Format any raw plain LaTeX variables left in text (not inside HTML tags or code blocks)
+  html = html
+    .replace(/\\in\b/g, ' ∈ ')
+    .replace(/\\sigma\b/g, 'σ')
+    .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '<span style="text-decoration: overline">$1</span>')
+    .replace(/\\([{}])/g, '$1')
+    .replace(/([a-zA-Z0-9])_([a-zA-Z0-9_]+)/g, '$1<sub>$2</sub>')
+    .replace(/([a-zA-Z0-9])_\{([^}]+)\}/g, '$1<sub>$2</sub>')
+    .replace(/([a-zA-Z0-9])\^([a-zA-Z0-9+-\\*\\top\\partial]+)/g, (match, base, exp) => {
+      const displayExp = exp === '\\top' || exp === 'top' ? 'T' : exp
+      return `${base}<sup>${displayExp}</sup>`
+    })
+    .replace(/([a-zA-Z0-9])\^\{([^}]+)\}/g, (match, base, exp) => {
+      const displayExp = exp === '\\top' || exp === 'top' ? 'T' : exp
+      return `${base}<sup>${displayExp}</sup>`
+    })
+
+  // 6. Append quiz CAT link button for assessor agent
+  const normalizedType = type.toLowerCase()
+  if (normalizedType.includes('assess') || normalizedType.includes('quiz') || normalizedType.includes('考官') || normalizedType.includes('评测')) {
+    const escapedConcept = (conceptName || '机器学习').replace(/'/g, "\\'")
+    html += `<div class="mt-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 flex items-center justify-between">
+      <div class="text-xs text-blue-800">
+        <strong>📝 评测联动已就绪：</strong>已为您准备了针对此概念的自适应多步评测。
+      </div>
+      <button onclick="window.startInteractiveQuiz && window.startInteractiveQuiz('${escapedConcept}')" class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all whitespace-nowrap">
+        去测验板作答 (CAT) →
+      </button>
+    </div>`
+  }
+
+  return html
+}
 </script>
 
 <template>
@@ -499,18 +1025,25 @@ async function doLoadUrl() {
     <!-- Main content area -->
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Tabs -->
-      <div class="flex gap-1 mb-4 border-b border-gray-200 pb-2">
-        <button class="tab-btn" :class="{ active: activeTab === 'chat' }" @click="activeTab = 'chat'">
-          <MessageSquare :size="14" /> 对话
-        </button>
-        <button class="tab-btn" :class="{ active: activeTab === 'quiz' }" @click="activeTab = 'quiz'">
-          <BrainCircuit :size="14" /> 测验
-        </button>
-        <button class="tab-btn" :class="{ active: activeTab === 'code' }" @click="activeTab = 'code'">
-          <Terminal :size="14" /> 代码
-        </button>
-        <button class="tab-btn" :class="{ active: activeTab === 'websearch' }" @click="activeTab = 'websearch'">
-          <Globe :size="14" /> 联网
+      <div class="flex items-center justify-between mb-4 border-b border-gray-200 pb-2">
+        <div class="flex gap-1">
+          <button class="tab-btn" :class="{ active: activeTab === 'chat' }" @click="activeTab = 'chat'">
+            <MessageSquare :size="14" /> 对话
+          </button>
+          <button class="tab-btn" :class="{ active: activeTab === 'quiz' }" @click="activeTab = 'quiz'">
+            <BrainCircuit :size="14" /> 测验
+          </button>
+          <button class="tab-btn" :class="{ active: activeTab === 'code' }" @click="activeTab = 'code'">
+            <Terminal :size="14" /> 代码
+          </button>
+          <button class="tab-btn" :class="{ active: activeTab === 'websearch' }" @click="activeTab = 'websearch'">
+            <Globe :size="14" /> 联网
+          </button>
+        </div>
+        <button v-if="activeTab === 'chat' && rightPanelCollapsed"
+          @click="rightPanelCollapsed = false"
+          class="px-2.5 py-1 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg flex items-center gap-1 transition-all">
+          <Maximize2 :size="12" /> 展开可视化画板
         </button>
       </div>
 
@@ -552,35 +1085,40 @@ async function doLoadUrl() {
                       </button>
                       <span class="text-[9px] text-gray-300">💡 点击代码块/公式可即时答疑</span>
                     </div>
-                    <div class="prose prose-sm max-w-none text-sm whitespace-pre-wrap">{{ msg.content }}</div>
+                    <div class="prose prose-sm max-w-none text-sm" v-html="renderMarkdown(msg.content)"></div>
                   </div>
 
                   <!-- 任务 8.3: 资源卡片 + 局部重生成按钮 -->
-                  <div v-if="msg.resources?.length" class="mt-3 space-y-1.5">
+                  <div v-if="msg.resources?.length" class="mt-3 space-y-2.5">
                     <div v-for="(res, ri) in msg.resources" :key="ri"
-                      class="border border-gray-200 rounded-lg overflow-hidden"
-                      :class="{ 'border-yellow-300 bg-yellow-50/30': res._regenerating }">
-                      <div class="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors" @click="toggleResource(ri)">
-                        <div class="flex items-center gap-2 min-w-0">
-                          <span class="text-xs font-medium text-gray-700 truncate">{{ res.resource_type || res.agent }}</span>
-                          <span v-if="res.citations?.length" class="text-[10px] text-gray-400">{{ res.citations.length }} 引用</span>
-                          <span v-if="res._regenerating" class="text-[10px] text-yellow-500 flex items-center gap-1">
-                            <Loader2 :size="10" class="animate-spin" /> 重算中
+                      class="border border-gray-200/80 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 bg-white"
+                      :class="{ 'ring-2 ring-yellow-400/50 bg-yellow-50/20': res._regenerating }">
+                      <div class="flex items-center justify-between px-4 py-3 cursor-pointer bg-gray-50/75 hover:bg-gray-100/70 transition-colors" @click="toggleResource(idx, ri)">
+                        <div class="flex items-center gap-2.5 min-w-0">
+                          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border shadow-sm"
+                            :class="getAgentConfig(res.agent, res.resource_type || res.type).color">
+                            <component :is="getIconComponent(getAgentConfig(res.agent, res.resource_type || res.type).icon)" class="w-3.5 h-3.5" />
+                            {{ getAgentConfig(res.agent, res.resource_type || res.type).label }}
+                          </span>
+                          <span v-if="res.citations?.length" class="text-[10px] text-gray-400 font-medium px-1.5 py-0.5 bg-gray-100 rounded-md">{{ res.citations.length }} 引用</span>
+                          <span v-if="res._regenerating" class="text-[10px] text-yellow-600 flex items-center gap-1 font-medium bg-yellow-50 border border-yellow-100 px-2 py-0.5 rounded-full">
+                            <Loader2 :size="10" class="animate-spin text-yellow-500" /> 正在重新生成...
                           </span>
                         </div>
-                        <div class="flex items-center gap-1">
-                          <!-- 任务 8.3: 局部重生成按钮 -->
+                        <div class="flex items-center gap-2">
                           <button @click.stop="regenerateCard(idx, ri)"
-                            class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"
-                            title="局部重算此卡片">
-                            <RotateCcw :size="10" /> 重算
+                            class="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1 px-2 py-1 hover:bg-white rounded-lg border border-gray-200/60 shadow-sm transition-all"
+                            title="重新生成此模块">
+                            <RotateCcw :size="11" /> 重算
                           </button>
-                          <ChevronDown v-if="!showResources.has(ri)" :size="14" class="text-gray-400 shrink-0" />
-                          <ChevronUp v-else :size="14" class="text-gray-400 shrink-0" />
+                          <div class="w-5 h-5 rounded-full flex items-center justify-center bg-gray-200/50 text-gray-500">
+                            <ChevronDown v-if="!showResources.has(`${idx}-${ri}`)" :size="12" class="shrink-0" />
+                            <ChevronUp v-else :size="12" class="shrink-0" />
+                          </div>
                         </div>
                       </div>
-                      <div v-if="showResources.has(ri)" class="px-3 py-2 border-t border-gray-100 bg-gray-50/50">
-                        <p class="text-xs text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">{{ res.content.slice(0, 1000) }}{{ res.content.length > 1000 ? '...' : '' }}</p>
+                      <div v-if="showResources.has(`${idx}-${ri}`)" class="px-5 py-4 border-t border-gray-100 bg-white">
+                        <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(res.content, res.type || res.resource_type || res.agent, msg.target)"></div>
                       </div>
                     </div>
                   </div>
@@ -840,20 +1378,22 @@ async function doLoadUrl() {
 
             <!-- Right Visualization Sidebar -->
             <div class="w-80 hidden xl:flex flex-col gap-6 overflow-y-auto scrollbar-none pb-4 shrink-0">
-            <AvatarSpeech ref="avatarRef" />
+            <AvatarSpeech ref="avatarRef" class="shrink-0" />
             
             <AgentTimeline 
+            class="shrink-0"
             :progress="chatStore.streamingProgress" 
             :status="chatStore.streamingStatus" 
             :agents="chatStore.streamingAgents" 
             />
 
             <MasteryRadar 
+            class="shrink-0"
             :concepts="radarConcepts" 
             :student-id="props.studentId" 
             />
 
-            <div class="card bg-gradient-to-br from-indigo-500 to-purple-700 text-white border-none shadow-lg mt-auto">
+            <div class="p-5 border border-indigo-600/35 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-700 text-white shadow-lg mt-auto">
             <div class="flex items-center gap-2 mb-3">
             <Sparkles :size="16" />
             <h4 class="text-xs font-bold uppercase tracking-wider">EduMatrix AI 提示</h4>
@@ -942,11 +1482,25 @@ async function doLoadUrl() {
             </div>
           </div>
           <!-- 实际绘图区域（可由 GraphicFallback 降级） -->
-          <div v-else class="flex-1">
-            <GraphicFallback
-              originalType="mermaid"
-              errorMessage="图表渲染参数异常"
-              fallbackText="当前图表格式不支持实时渲染，已降级为文本示意图" />
+          <div v-else class="flex-1 flex flex-col min-h-0">
+            <!-- 图表内容区 -->
+            <div class="flex-1 relative overflow-auto min-h-0">
+              <div class="h-full">
+                <GraphicFallback
+                  originalType="mermaid"
+                  errorMessage="图表渲染参数异常"
+                  fallbackText="当前图表格式不支持实时渲染，已降级为文本示意图"
+                >
+                  <ManifoldVisualizer
+                    :studentMastery="studentMastery"
+                    :targetPoints="targetPoints"
+                    :klDivergence="klDivergence"
+                    :alignmentProgress="alignmentProgress"
+                    :conflictDetected="conflictDetected"
+                  />
+                </GraphicFallback>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -976,6 +1530,41 @@ async function doLoadUrl() {
       :videoUrl="videoPanelUrl"
       :studentId="props.studentId"
       @close="showVideoPanel = false" />
+
+    <!-- 思维导图放大模态框 -->
+    <Teleport to="body">
+      <div v-if="zoomModal.visible" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="closeZoomModal">
+        <div class="bg-white rounded-2xl shadow-2xl w-[95vw] h-[90vh] flex flex-col overflow-hidden border border-gray-100">
+          <!-- 头部 -->
+          <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">📊</span>
+              <h3 class="text-sm font-bold text-gray-800">思维导图高解析大图 (支持拖拽/缩放)</h3>
+            </div>
+            <div class="flex items-center gap-3">
+              <!-- 缩放控制键 -->
+              <div class="flex items-center bg-white border border-gray-200 rounded-lg shadow-sm">
+                <button @click="zoomOut" class="px-3 py-1.5 hover:bg-gray-50 border-r border-gray-200 text-xs font-semibold text-gray-600 transition-colors">- 缩小</button>
+                <span class="px-3 text-xs font-mono font-bold text-gray-700">{{ (zoomScale * 100).toFixed(0) }}%</span>
+                <button @click="zoomIn" class="px-3 py-1.5 hover:bg-gray-50 border-l border-gray-200 text-xs font-semibold text-gray-600 transition-colors">+ 放大</button>
+                <button @click="resetZoom" class="px-3 py-1.5 hover:bg-gray-50 border-l border-gray-200 text-xs font-semibold text-gray-600 transition-colors">重置</button>
+              </div>
+              <button class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-semibold transition-colors" @click="closeZoomModal">关闭</button>
+            </div>
+          </div>
+          <!-- 画布内容 -->
+          <div class="flex-1 overflow-auto bg-gray-50 flex items-center justify-center relative p-6 cursor-grab active:cursor-grabbing" @mousedown="startPan" @mousemove="doPan" @mouseup="endPan" @mouseleave="endPan">
+            <div 
+              :key="zoomModal.code" 
+              class="zoom-mermaid-target transition-transform duration-200 origin-center bg-white p-8 rounded-xl shadow-md border border-gray-100 flex items-center justify-center animate-fade-in"
+              :style="{ transform: `scale(${zoomScale}) translate(${panOffset.x}px, ${panOffset.y}px)` }"
+            >
+              <div class="mermaid flex justify-center">{{ zoomModal.code }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 

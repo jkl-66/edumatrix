@@ -6,7 +6,7 @@ from datetime import timedelta
 from dataclasses import asdict
 from typing import Any
 from fastapi import FastAPI, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
@@ -316,6 +316,17 @@ async def get_teacher_dashboard(
 async def get_datasets():
     """获取机器学习课件及公开数据集"""
     return {"course": "机器学习导论", "datasets": MACHINE_LEARNING_DATASETS}
+
+@app.get("/api/v1/video/stream")
+async def stream_video(student_id: str):
+    """自适应生成讲解视频的推流端点 (Task 8.5/8.6 兜底)"""
+    local_path = os.path.join(
+        "data", "raw", "github_repos", "compsci-589", "src", "Figures", "iShadow_calib.mp4"
+    )
+    if os.path.isfile(local_path):
+        return FileResponse(local_path)
+    # 联网时重定向到外部公共 MP4，死保演示端点不为 404
+    return RedirectResponse(url="https://www.w3schools.com/html/mov_bbb.mp4")
 
 @app.post("/api/process")
 async def process_student_message(

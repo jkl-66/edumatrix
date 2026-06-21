@@ -87,9 +87,13 @@ export const useChatStore = defineStore('chat', {
 
               const safeContent = this.getSafeContent(data.content)
 
+              const finalMsgContent = (safeContent.includes('学习目标') || safeContent.includes('##'))
+                ? safeContent
+                : `## 学习目标：${data.target || '未识别'}\n\n` + safeContent
+
               const assistantMsg = {
                 role: 'assistant',
-                content: `## 学习目标：${data.target || '未识别'}\n\n` + safeContent,
+                content: finalMsgContent,
                 resources: data.resources || [],
                 profile: data.profile || null,
                 strategy: data.strategy_plan || null,

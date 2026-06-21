@@ -459,4 +459,42 @@
 * 物理启动 `sniffer.py` 净化代理（15722 端口）以及 `claude_proxy.py` 后台转发服务（9000 端口）。
 * 运行全量 `test_edumatrix.py` ➡️ **17 tests in 9.055s OK**，且 arXiv 检索日志中 NameError 全部归零，表现极其完美。
 
+---
+
+### 2026-06-21
+> **今日概述**：紧急抢修并加固了系统智能对话流（SSE）中并发卡死重大 P0 级 Bug；完成了右侧可视化画板 Poincaré 双曲圆盘组件的挂载，修复了绘图异常降级兜底的显示缺陷；并针对内层嵌套代码的 Markdown 围栏冲突、行内/块级 LaTeX 渲染规范、Mermaid 节点解析崩溃以及侧边栏时间轴被 flex 压缩截断等体验性与鲁棒性问题进行了全面加固。
+
+#### 1. 计划/完成工作
+[x] **SSE 流式卡死 Bug 抢修**：修复了 `stream_api.py` 中异步生成工作流 `_gen_one` 原为异步生成器（使用了 `yield`），导致其返回的 generator 被错误传入 `asyncio.as_completed` 时引发的 `TypeError: An asyncio.Future, a coroutine or an awaitable is required` 异常。已将 `_gen_one` 改写为标准的协程函数（通过 `return` 传递生成的 SSE 事件字符串），并将 `asyncio.as_completed` 中提取的任务块做单次 `await chunk` 处理，完美疏通了网络 I/O 边界。
+[x] **创建系统验收与测试手册**：成功在 docs 目录下并网生成了 `edumatrix_test_manual.md` 以及对齐赛题的 `edumatrix_competition_mapping.md`。
+[x] **Poincaré 双曲圆盘可视化画板并网与兜底**：
+  - **后端**：在 `stream_api.py` 的 complete 消息中打包加入了由多智能体对齐模块产出的 `alignment` 报告信息（包括距离、是否通过、冲突列表等）。
+  - **前端兜底**：重构了 `GraphicFallback.vue`，将其改造为支持 `onErrorCaptured` 拦截的真实 Vue 错误边界组件，默认优先渲染插槽，出错时才自动捕获渲染崩溃并降级显示文本示意图。
+  - **画板挂载与展开交互**：在 `Chat.vue` 中导入并挂载了 `ManifoldVisualizer.vue` 组件，通过 `latestProfile` 动态驱动粒子散度计算，并在选项卡栏右侧增加了“展开可视化画板”的自适应按钮，解决了右侧画板折叠后无法重新展开的交互缺陷。
+[x] **讲义 Markdown 与 LaTeX 公式高解析渲染**：
+  - 针对原系统在 Chat 卡片中仅用双大括号 `{{ msg.content }}` 导致 raw markdown 源码暴露的体验性 Bug，在 `Chat.vue` 中部署了定制化的轻量 `renderMarkdown` 渲染器，支持一到三级 Markdown 标题、加粗、无序列表及行内代码/代码块的完整转换。
+  - 内置 LaTeX 高解析解析：支持将 `$$...$$` 块公式与 `$...$` 行内公式渲染为 serif 衬线数学字体和轻量灰色背景，极大提升了 STEM 教学卡片的学术与美学质感。
+  - 内置 Mermaid 降级屏蔽：针对文字气泡中冗长丑陋的 ````mermaid` 原生代码，自动拦截并生成精美的“结构图谱已加载到右侧画板”提示卡片，引导用户视线流向旁加莱双曲圆盘。
+[x] **嵌套 Markdown 围栏自动剥离**：
+  - 在 `Chat.vue` 中优化了 `renderMarkdown` 渲染逻辑，在转义 HTML 实体前，前置识别并自动剪切剥离整个大模型响应首尾可能被包裹的外层 markdown 围栏，防止内层嵌套 python 代码块中的结束符意外闭合外层，彻底解决了虚拟导演响应中代码块意外开裂泄漏为普通单行文本的顽疾。
+[x] **全面 LaTeX 公式与变量约束并网**：
+  - 重构了 `instruct_rag.py` 里的 `_build_instruction_plan` 系统提示词生成函数，注入了全局 LaTeX 强规范。
+  - 强制大模型在输出所有权重、偏置、公式及变量参数（如 w, b, x, w1, w2, dL/dw, z = w1x1 + w2x2 + b 等）时，必须统一包裹在 $...$ 或 $$...$$ 中，严禁使用纯文本或反单引号包裹（code），在物理层面提升了教学内容公式呈现的一致性。
+[x] **Mermaid 结构规范与节点括号双引号强约束**：
+  - 重构了 `instruct_rag.py` 中的 `逻辑画师` 智能体指令系统，提供完整的 `mindmap` 缩进结构示例，并制定致命防错红线：严禁单行多节点、强求每一行包含且仅有一个节点并强制缩进换行，且对含有特殊字符/括号/等号/运算符的节点强制使用双引号包装（如 `"dL/dW = (y_hat - y) * X"`）。这彻底清除了因大模型单行平铺多节点而导致的语法崩溃，确保图谱与思维导图 100% 成功编译。
+  - 为 `Chat.vue` 的右侧 Mermaid 图表容器指定了基于 `currentMermaidCode` 的 `:key` 响应式键绑定，确保数据变化时销毁重建元素，杜绝了 `data-processed` 导致的状态缓存死锁。
+[x] **侧边栏高度弹性收缩与时间线截断防护**：
+  - 对侧边栏中渲染的 `<AvatarSpeech>`、`<AgentTimeline>` 和 `<MasteryRadar>` 容器组件应用了 `flex-shrink: 0` (Tailwind `shrink-0`) 声明，有效防御了雷达图膨胀后对时间轴的高度强行挤压，结合侧边栏 `overflow-y-auto` 确保时序追踪步骤完美展现且可进行独立滚动，终结了 timeline 显示截断的严重布局 Bug。
+
+[x] **思维导图多巴胺亮色主题与全屏缩放控制**：
+  - 移除了右侧边栏中带有语法解析问题的“概念思维导图”选项卡，使右侧画板聚焦于 Poincaré 双曲对齐图谱，极简清爽。
+  - 重构了 `renderMarkdown` 中的 Mermaid 渲染机制，拦截并使用 `inlineMath` 解析值将所有的 LaTeX 标记 (`@@INLINE_MATH_TOKEN@@`) 安全替换为无符号纯文本，从根本上杜绝了 Mermaid 不支持数学字符引起的渲染闪退或原始标记泄露。
+  - 将脑图容器改版为清新雅致的 **白色背景**，并使用 Mermaid 的 **`default` (多巴胺亮色)** 主题配置（粉色节点、解构线条），极大改善了深色模式下暗色文字难以识别的问题。
+  - 在每个脑图卡片上设计挂载了 **🔍 放大/全屏** 双击或点击唤起按钮，支持唤起覆盖全屏的 `Teleport` 高保真模态框。在框内实现了基于鼠标事件的 **平移拖拽 (Drag & Pan)** 及 **放大缩小 (Zoom Scale)** 算法，并完美解决了多图共存时的 DOM 更新，彻底根治了密集脑图导致的显示拥挤、看不清的问题。
+
+#### 2. 测试验证与并网
+* 运行完成完整的 `scratch/test_stream_complete.py` 自测试，输出验证所有 5 个动作智能体（讲义、思维导图、代码、评测、视频）能够齐整且无阻塞地并行流式吐字，前端交互成功跑通到 100% 结束。
+* 运行 `npm run build` 前端生产打包测试，100% 绿灯无任何警告或渲染模板未定义字段 crash 隐患编译通过。
+* `test_edumatrix.py` 集成测试套件 100% 通过（17 passed）。
+
 

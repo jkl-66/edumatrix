@@ -275,4 +275,73 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 15,000 Input / 1,000 Output
 - **架构师（用户）终审反馈**：Pending
 
+---
+
+### [2026-06-21] - 修复多智能体并行生成流卡死与文档并网
+- **任务编号**：`TASK_STREAM_HEAL_001`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-debug`, `oma-backend`, `oma-qa`
+- **开发场景**：[stream_api.py](file:///d:/project-edumatrix/edumatrix-main/stream_api.py) (修复 `_gen_one` 异步生成器类型异常及 `asyncio.as_completed` 任务流消耗机制)；[docs/edumatrix_test_manual.md](file:///d:/project-edumatrix/edumatrix-main/docs/edumatrix_test_manual.md) 与 [docs/edumatrix_competition_mapping.md](file:///d:/project-edumatrix/edumatrix-main/docs/edumatrix_competition_mapping.md) (并网生成与对齐赛题的测试手册)。
+- **自愈重试记录**：
+  1. *第一次报错*：从前端测试智能对话发生卡死，并且控制台报错 `TypeError: An asyncio.Future, a coroutine or an awaitable is required`，连接异常关闭。
+  2. *自愈与修复*：经定位发现队友将 `_gen_one` 写成了 `yield` 形式的生成器，导致传递给 `asyncio.as_completed` 时发生类型崩溃，使流通道连接断开触发前端 EventSource 自动无限重连导致看似卡在 50% 进度。通过将 `_gen_one` 修正为标准 coroutine 函数并做单次 await chunk 推送至 SSE，彻底根治卡死 Bug。
+- **测试验证结果**：
+  * **脚本端点测试**：运行 `python scratch/test_stream_complete.py` ➡️ **100% Stream Completed**，所有 5 个动作智能体资源全部以 200 OK 顺畅输出。
+  * **主集成测试**：`python -m unittest test_edumatrix.EduMatrixPipelineTests` ➡️ **17 passed (100% OK)**。
+- **Token 消耗估计**：约 25,000 Input / 1,800 Output
+- **架构师（用户）终审反馈**：Pending
+
+---
+
+### [2026-06-21] - 并网挂载双曲线画板与异常错误边界兜底
+- **任务编号**：`TASK_POINCARE_DISK_001`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-frontend`, `oma-design`, `oma-qa`
+- **开发场景**：[stream_api.py](file:///d:/project-edumatrix/edumatrix-main/stream_api.py) (在 complete 事件中追加返回 `alignment` 数据报告)、[GraphicFallback.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/GraphicFallback.vue) (改造为利用 `onErrorCaptured` 拦截子组件错误的 Vue 错误边界组件，默认渲染 Slot)、[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (引入 `ManifoldVisualizer`，添加 `studentMastery` 等 computed 属性并实例化圆盘组件，在 Tab 栏右侧加装自适应展开按钮，并在消息容器中使用自定义的 `renderMarkdown` 渲染器以 v-html 形式高保真解析 HTML/LaTeX 公式)。
+- **自愈重试记录**：
+  1. *第一次报错*：双栏排版在右侧画板显示“图示渲染异常 ... 当前图表格式不支持实时渲染，已降级为文本示意图”，重试没有任何反馈。同时，生成的智能讲义以原始 markdown 字符串（含冗余的 ````mermaid` 代码块和 LaTeX 源码）直接展示在气泡中，未进行任何排版渲染。
+  2. *自愈与修复*：排查发现 `Chat.vue` 消息气泡使用 `{{ msg.content }}` 进行插值导致 HTML 实体转义。通过在 complete 事件中传输 alignment 报告、在 `GraphicFallback` 中使用 `onErrorCaptured` 拦截错误并默认初始化为优先渲染 slot、最后在 `Chat.vue` 中正确绑定庞加莱组件并传入计算属性，完美将发光的双曲线测地线轨迹展示在前端。同时，在 `Chat.vue` 内部实现并部署了轻量级的 `renderMarkdown` 渲染引擎，支持一至三级标题、无序列表、加粗字样、行内/块级 LaTeX 公式高解析，并自动屏蔽净化气泡中冗余的 ````mermaid` 声明，引导用户将视线聚焦至右侧动态流形，彻底消除了 Markdown 源码裸露的缺陷。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built in 17.09s (100% OK)**，无任何警告与未定义模板变量报错。
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py` ➡️ **17 passed in 10.46s (100% OK)**。
+- **Token 消耗估计**：约 20,000 Input / 1,500 Output
+- **架构师（用户）终审反馈**：Pending
+
+---
+
+### [2026-06-21] - 嵌套代码围栏剥离、LaTeX数学规范注入与侧边栏时间轴截断加固
+- **任务编号**：`TASK_UI_MATH_HEAL_001`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-frontend`, `oma-backend`, `oma-qa`
+- **开发场景**：[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (在 `renderMarkdown` 前置剥离外层包裹围栏，添加 `:key` 值绑定图表组件防止 `data-processed` 缓存冲突，并为侧边栏挂载 `shrink-0` 防止挤压)、[AgentTimeline.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/AgentTimeline.vue) (在 `.agent-timeline` CSS 中配置 `flex-shrink: 0`)、[instruct_rag.py](file:///d:/project-edumatrix/edumatrix-main/instruct_rag.py) (在 `_build_instruction_plan` 中注入 LaTeX 强要求提示词及逻辑画师 Mermaid mindmap 特殊字符双引号限制指令)。
+- **自愈重试记录**：
+  1. *第一次报错*：进入对话界面，虚拟导演响应卡片外出现一行泄漏的 `python def sigmoid...` 源码，同时数学符号如 `w1` 和 `dL/dw` 仍显示为普通红字没有 KaTeX 化。此外，思维导图显示 “Syntax error in text” 崩溃，而当对话完成雷达图拉满时，推理时间线的最下方步骤直接被顶出了视口且被 `overflow-hidden` 截断。
+  2. *自愈与修复*：排查定位到：大模型响应经常被双层 `` ` `` 围栏（外层 `markdown`，内层 `python`）包裹，导致非贪婪匹配提前闭合将代码块吐在外部；数学公式未被 LaTeX 符号包裹，默认为 code tag；Mermaid 节点存在括号但未用引号包装，导致语法解析崩坏；时间线容器没有设置缩放抗性被 flex box 高度无序挤压。通过在 Markdown parser 最前端追加围栏剔除过滤、后端系统提示词强加 LaTeX delimiters 约束与 Mermaid node 包装限制、以及为侧边栏三大模块加装 `shrink-0` 成功根治了所有体验性缺陷。
+- **测试验证结果**：
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py` ➡️ **17 passed in 12.60s (100% OK)**。
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 757ms (100% OK)**。
+- **Token 消耗估计**：约 25,000 Input / 2,000 Output
+- **架构师（用户）终审反馈**：Pending
+
+---
+
+### [2026-06-21] - 思维导图多巴胺主题、全屏缩放与 LaTeX 解析漏洞修复
+- **任务编号**：`TASK_UI_MATH_HEAL_002`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (移除右侧边栏 mindmap 标签，重构 `renderMarkdown` 清除 LaTeX 缓存标记，改用亮白底色及 default dopamine 亮色主题渲染思维导图，并加装 Teleport 模态框提供 Scale 缩放和鼠标拖拽平移支持)。
+- **自愈重试记录**：
+  1. *第一次报错*：思维导图节点内错误显示 `@@INLINE_MATH_TOKEN@@` 等 LaTeX 内部还原替换标记；同时右侧边栏 mindmap 选项卡依旧时常报语法错误崩溃，卡片大图渲染密集时导致排版极其拥挤且配色阴暗看不清字。
+  2. *自愈与修复*：
+     - 在 `renderMarkdown` 中将 Mermaid code 块的提取移至 Math 提取之后，并匹配替换所有 LaTeX 语法标记为去符号纯文本，防止 Mermaid 不支持数学字符闪退。
+     - 彻底切除了右侧侧边栏 mindmap 切换，仅保留核心庞加莱图谱。
+     - 将 mindmap 设为白色背景卡片，引入 `default` dopamine 亮色主题。
+     - 创建 `zoomModal` 状态与拖拽、缩放逻辑，并挂载 Teleport 画布大图查看框，完美支持滚轮缩放、按钮 Scale、鼠标拖拽 Pan 体验。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 19.05s (100% OK)**。
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py` ➡️ **17 passed (100% OK)**。
+- **Token 消耗估计**：约 25,000 Input / 2,000 Output
+- **架构师（用户）终审反馈**：Pending
+
+
 

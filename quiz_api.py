@@ -71,7 +71,8 @@ async def generate_quiz(
     try:
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
         import json as json_lib
-        result = json_lib.loads(response)
+        raw_hints = result.get("hints", [])
+        result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
     except Exception:
         tc = target_concept
         result = {
@@ -205,6 +206,7 @@ async def evaluate_answer(
 
             # === 任务 7.4: 错题自动入库（准确率 < 60%） ===
             if accuracy_score < 0.6:
+                from app.database import DBWrongQuestion
                 # 提取阻断概念
                 blocking_concept = local_record.target_concept or "通用概念"
                 # 检查是否已存在相同概念错题
@@ -325,6 +327,8 @@ async def adapt_quiz(
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
         import json as json_lib
         result = json_lib.loads(response)
+        raw_hints = result.get("hints", [])
+        result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
     except Exception:
         result = {
             "question": f"请用你自己的话解释 {target} 的核心原理，并给出一个实际例子",

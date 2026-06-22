@@ -542,4 +542,13 @@
   - 前端开发与生产打包：`npm run build` ➡️ **Built successfully (100% OK)**。
   - 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed in 10.46s (100% OK)**。
 
+#### 6. Mermaid 思维导图嵌套代码块解析失败与 Windows CRLF 兼容性修复 (2026-06-22)
+* **嵌套代码块解析失败修复**：针对大语言模型（DeepSeek）在生成思维导图时，其节点内输出嵌套的 Markdown 代码块（如 ` ```python ... ````）导致前端正则匹配非贪婪截断、图表解析崩溃的问题，以及 Windows 换行符 `\r\n`（CRLF）导致语言提取多出回车符 `\r`（变成 `mermaid\r`）的缺陷进行了安全加固。
+  - **后端约束**：在 `instruct_rag.py` 中为 `逻辑画师` 智能体添加致命防错红线约束，绝对禁止输出任何反单引号 (`) 或嵌套 Markdown 代码块，如果需要展示代码，必须作为普通文本或使用节点ID加方括号及双引号包裹，绝不能使用任何反单引号或代码块！
+  - **前端正则**：在 `Chat.vue` 中将代码块匹配正则升级为 `/```([^\r\n]*)\r?\n([\s\S]*?)```/g`，完美过滤 `\r` 隐藏回车符，并兼容跨平台换行符。
+  - **拆行优化**：在 `sanitizeMermaidCode` 中将 `code.split('\n')` 改为 `code.split(/\r?\n/)`，消除行尾 `\r` 隐形空白的影响。
+* **测试与编译校验**：
+  - 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 593ms (100% OK)**。
+  - 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed in 9.21s (100% OK)**。
+
 

@@ -929,6 +929,7 @@ class EduMatrixSwarm:
         self.rag = rag
         self.profile_store = profile_store if profile_store is not None else {}
         use_llm = llm if llm is not None else DEFAULT_ASYNC_LLM
+        self.llm = use_llm
         self.profile_probe = ProfileProbeAgent(use_llm)
         self.planner = ZPDPlannerAgent()
         self.debate = DebateAugmentedRAG()

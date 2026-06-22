@@ -374,7 +374,60 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
   * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 19.05s (100% OK)**。
   * **主集成测试**：运行 `python -m pytest test_edumatrix.py` ➡️ **17 passed (100% OK)**。
 - **Token 消耗估计**：约 25,000 Input / 2,000 Output
-- **架构师（用户）终审反馈**：Pending
+- **架构师（用户）终审反馈**：Approved
+
+---
+
+### [2026-06-22] - Socratic 解释 API 测试覆盖与 RAG 垃圾过滤 NameError 修复
+- **任务编号**：`TASK_SOCRATIC_HEAL_003`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-backend`, `oma-debug`, `oma-qa`
+- **开发场景**：拉取队友更新并分析代码差异。解决 `rag_engine.py` 垃圾查询过滤功能中出现的 `NameError: q_lower is not defined` 崩溃问题。
+- **自愈重试记录**：
+  1. *第一次报错*：分析队友新增的 RAG 垃圾过滤逻辑时，发现当查询不含中文时，程序会运行 `re.match(..., q_lower)`，而此时 `q_lower` 尚未被定义（真正的 `q_lower = q.lower()` 定义在函数底部），触发 `NameError`。
+  2. *修复方式*：将 `q_lower = q.lower()` 的定义挪至函数最顶部 `q = query.strip()` 的正下方，同时清理底部冗余定义。
+- **测试验证结果**：
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**（涵盖队友新增的 Socratic 接口、Anki 翻转卡片、事件总线、主控路由二档测试等）。
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 15.98s (100% OK)**。
+- **Token 消耗估计**：约 15,000 Input / 1,500 Output
+- **架构师（用户）终审反馈**：Approved
+
+---
+
+### [2026-06-22] - Mermaid 概念脑图自动容错与 HTML 实体反转义修复
+- **任务编号**：`TASK_MERMAID_HEAL_004`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：解决真实 LLM 交互时，概念思维导图显示“Syntax error in text”语法崩溃以及由于全局转义导致 flowchart 箭头变为 `--&gt;` 报错的问题。
+- **自愈重试记录**：
+  1. *第一次分析*：发现 `renderMarkdown` 在最开头对所有 `<`、`>`、`&` 进行了 HTML 实体化，导致 Mermaid 内部的流程箭头 `-->` 变成了 `--&gt;`，渲染引擎在执行 `mermaid.init` 时抛出语法错误。同时大模型经常会在 mindmap 结构中生成 `- `、`* ` 等 Markdown 列表标记，或者包含空格与特殊字符（如括号、数学运算符等）的节点没有用双引号包裹，引发语法失效。
+  2. *自愈与修复*：
+     - 在 `Chat.vue` 中增加了 HTML 反转义清洗流程，在送给 Mermaid 初始化前，强制将 `--&gt;` 还原为 `-->`。
+     - 编写了 `sanitizeMermaidCode` 脑图自动重构引擎，过滤列表符号（`- ` / `* `）与非标 markdown 符号，并使用正则表达式自动对包含特殊字符的裸节点及形状节点（如 `root((卷积神经网络))` ➡️ `root(("卷积神经网络"))`）打上双引号，保证 100% 自愈渲染。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 588ms (100% OK)**。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 20,000 Input / 2,000 Output
+- **架构师（用户）终审反馈**：Approved
+
+---
+
+### [2026-06-22] - Mermaid 渲染生命周期重复渲染冲突修复
+- **任务编号**：`TASK_MERMAID_LIFECYCLE_005`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：解决由于 Vue 响应式状态（messages 列表数据）改变，导致多次调用 `initMermaid()`。在此期间，Mermaid 会重新扫描页面上所有的 `.mermaid` 容器，而历史消息中已经被解析为 SVG 标签的容器会被当做 Mermaid 源码再次执行 `mermaid.init`，引发 “Syntax error in text” 崩溃。
+- **自愈重试记录**：
+  1. *第一次报错*：用户反馈进行脑图样式升级后，思维导图全部显示 syntax error 报错炸弹。定位发现是 `window.mermaid.init` 对已经具有 `data-processed="true"` 且内容已被转成 `<svg>` 的元素进行重复渲染所致。
+  2. *自愈与修复*：
+     - 在 `initMermaid()` 里的元素查询器中加入排除过滤选择器：`document.querySelectorAll('.mermaid:not([data-processed="true"])')`，使已解析元素完全脱离 Mermaid 的多次扫描，防止破坏已渲染的图表。
+     - 在大图预览 `zoomModal` 每次被触发时，主动获取对应目标并调用 `target.removeAttribute('data-processed')` 和还原原始 Mermaid 代码（`target.innerHTML = newVal`），从而保证模态框多次开闭都可以正常全新渲染。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 576ms (100% OK)**。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 15,000 Input / 1,500 Output
+- **架构师（用户）终审反馈**：Approved
+
 
 
 

@@ -519,7 +519,7 @@
   - 知识图谱 API ✅（正常返回）
   - SSE 流中止 ✅（2s超时, 无崩溃）
 * **边界问题修复**：
-  - `rag_engine._is_ml_concept`：增加垃圾查询前置过滤
+  - `rag_engine._is_ml_concept`：增加垃圾查询前置过滤，并已修复其中使用未定义变量 `q_lower` 的 NameError 崩溃 Bug（将 `q_lower` 变量的定义和赋值移到了最前端）
   - `models._refresh_dynamic_profile`：增加 behavior_sanity_check 互补cap调用
 * **Socratic 即时答疑升级**（v2）：
   - 后端新增 `/api/stream/explain` 端点，调用真实 LLM 生成苏格拉底式分步推导
@@ -527,5 +527,19 @@
   - 支持公式/代码/文本三种场景的启发式解释
   - 真实 API 测试：公式/代码/文本 3/3 全部通过
 * **全量回归**：**28/28 passed in 9.64s**
+
+#### 5. Mermaid 思维导图自动容错与语法消解加固 (2026-06-22)
+* **HTML 实体溢出修复**：由于 `renderMarkdown` 在开头全局转义了 `<`、`>`、`&` 等 HTML 字符，导致 Mermaid 内部的流程图箭头 `-->` 被转义为 `--&gt;` 从而触发 Mermaid 语法报错。已在 Mermaid 解析子模块中添加 HTML 反转义清洗 `cleanCode` 解决该问题。
+* **Mermaid 思维导图自动修复引擎**：在前端 [Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) 中加装了 `sanitizeMermaidCode` 重构清洗器：
+  - 自动清理大模型输出的多余 Markdown 列表前缀（如 `- `、`* `、`+ ` 等）。
+  - 自动清理节点内的 Markdown 粗斜体/反单引号等非标准标记。
+  - 自动匹配没有用双引号包裹但包含特殊字符（空格、括号、等号、数学符号等）的节点（如 `root((卷积神经网络))` 自动修护为 `root(("卷积神经网络"))`，`dL/dW = (y_hat - y) * X` 自动包裹为 `"dL/dW = (y_hat - y) * X"`）。
+  - 保证大模型在直接输出缩进文本或格式散乱的脑图语法时，前端能 100% 自愈通过 Mermaid 渲染。
+* **Mermaid 重复渲染生命周期修复**：由于 Vue 在流式消息更新或历史消息加载时频繁触发 `initMermaid`，导致 Mermaid 重新解析已经渲染成 SVG 的元素（SVG HTML 内容会被当成脑图代码二次解析），触发 “Syntax error in text” 崩溃。
+  - **修复 1**：在主解析器 `initMermaid` 中，过滤只查询未渲染过的脑图元素：`document.querySelectorAll('.mermaid:not([data-processed="true"])')`，彻底锁死历史消息防止二次解析。
+  - **修复 2**：在放大模态框 `zoomModal.code` 监听器中，在 init 之前执行 `target.removeAttribute('data-processed')` 并重置 `target.innerHTML = newVal`，保证大图预览可以重复开闭自愈渲染。
+* **测试与编译校验**：
+  - 前端开发与生产打包：`npm run build` ➡️ **Built successfully (100% OK)**。
+  - 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed in 10.46s (100% OK)**。
 
 

@@ -531,6 +531,7 @@ class HybridRAGPipeline:
         q = query.strip()
         if not q:
             return False
+        q_lower = q.lower()
 
         # 0) 垃圾查询前置过滤：纯数字/字母乱序/无意义字符串
         import re
@@ -563,7 +564,6 @@ class HybridRAGPipeline:
             "gradient", "backprop", "relu", "tensor", "feature map",
             "loss function", "optimizer", "adam", "sgd",
         )
-        q_lower = q.lower()
         for kw in ml_keywords:
             if kw.lower() in q_lower:
                 return True

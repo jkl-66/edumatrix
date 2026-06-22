@@ -113,7 +113,15 @@ function initMermaid() {
             fontSize: '12px'
           }
         })
-        window.mermaid.init(undefined, document.querySelectorAll('.mermaid'))
+        // Loop through unprocessed elements individually to prevent rendering errors in one diagram from blocking others
+        const elements = document.querySelectorAll('.mermaid:not([data-processed="true"])')
+        elements.forEach((el) => {
+          try {
+            window.mermaid.init(undefined, el)
+          } catch (err) {
+            console.error('Individual Mermaid render error:', err)
+          }
+        })
       } catch (err) {
         console.error('Mermaid render error:', err)
       }
@@ -732,6 +740,113 @@ async function doLoadUrl() {
   }
 }
 
+function sanitizeMermaidCode(code) {
+  let lines = code.split(/\r?\n/)
+  let result = []
+  let isMindmap = false
+  let nodeCounter = 0
+
+  const delimPairs = [
+    { open: '((', close: '))' },
+    { open: '{{', close: '}}' },
+    { open: '(', close: ')' },
+    { open: '[', close: ']' },
+  ];
+
+  for (let line of lines) {
+    let trimmed = line.trim()
+    if (!trimmed) {
+      result.push(line)
+      continue
+    }
+
+    if (trimmed === 'mindmap') {
+      isMindmap = true
+      result.push(line)
+      continue
+    }
+
+    if (!isMindmap) {
+      result.push(line)
+      continue
+    }
+
+    // Preserve indentation
+    let indent = line.match(/^(\s*)/)[0]
+
+    // 1. Remove Markdown list markers: - , * , +
+    let cleaned = trimmed.replace(/^[-*+]\s+/, '')
+
+    // 2. Remove markdown bold/italic/backticks inside node text (e.g. **text**)
+    cleaned = cleaned.replace(/\*\*/g, '').replace(/`/g, '')
+
+    // 3. Skip comments
+    if (cleaned.startsWith('%%')) {
+      result.push(line)
+      continue
+    }
+
+    // 4. Strip outer double quotes if they exist around the entire cleaned text
+    if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+      cleaned = cleaned.slice(1, -1).trim()
+    }
+
+    // 5. Check if it already matches the ID + shape delimiter syntax
+    let isShape = false
+    let id = ''
+    let openDelim = ''
+    let innerText = ''
+    let closeDelim = ''
+
+    for (const pair of delimPairs) {
+      const escapedOpen = pair.open.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
+      const escapedClose = pair.close.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
+      const regex = new RegExp(`^([a-zA-Z0-9_-]+)\\s*(${escapedOpen})\\s*(.*?)\\s*(${escapedClose})$`)
+      const match = cleaned.match(regex)
+      if (match) {
+        id = match[1]
+        openDelim = match[2]
+        innerText = match[3]
+        closeDelim = match[4]
+        isShape = true
+        break
+      }
+    }
+
+    if (isShape) {
+      // Clean inner text: strip quotes inside shape
+      let cleanText = innerText.trim()
+      if (cleanText.startsWith('"') && cleanText.endsWith('"')) {
+        cleanText = cleanText.slice(1, -1)
+      }
+      // Replace double quotes inside shape with &quot;
+      cleanText = cleanText.replace(/\\"/g, '"').replace(/"/g, '&quot;').trim()
+      
+      // Wrap in double quotes for Mermaid parsing safety
+      let wrappedText = '"' + cleanText + '"'
+      result.push(indent + id + openDelim + wrappedText + closeDelim)
+      continue
+    }
+
+    // 6. For plain nodes:
+    // If it contains special characters, wrap it in square brackets shape and generate a unique ID.
+    // Otherwise, output as plain text without quotes.
+    const hasSpecial = /[\(\)\[\]\{\}"\\:&<>]/g.test(cleaned)
+    if (hasSpecial) {
+      nodeCounter++
+      const nodeId = `node_${nodeCounter}`
+      let cleanText = cleaned.replace(/\\"/g, '"').replace(/"/g, '&quot;').trim()
+      let wrappedText = '"' + cleanText + '"'
+      result.push(indent + nodeId + '[' + wrappedText + ']')
+    } else {
+      let cleanText = cleaned.replace(/\\"/g, '"').replace(/"/g, '&quot;').trim()
+      result.push(indent + cleanText)
+    }
+  }
+
+  return result.join('\n')
+}
+
 function renderMarkdown(text, type = '', conceptName = '') {
   if (!text) return ''
 
@@ -780,12 +895,18 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
   // 2. Code blocks extraction
   const codeBlocks = []
-  html = html.replace(/```([^\n]*)\n([\s\S]*?)```/g, (_, lang, code) => {
+  html = html.replace(/```([^\r\n]*)\r?\n([\s\S]*?)```/g, (_, lang, code) => {
     const isMermaid = lang.toLowerCase().includes('mermaid') || code.includes('mindmap') || code.includes('graph ') || code.includes('sequenceDiagram')
     let blockHtml = ''
     if (isMermaid) {
-      // Replace inline math tokens inside Mermaid code with clean plain-text math
+      // Unescape HTML entities first (since the message was escaped at the start of renderMarkdown)
       let cleanCode = code.trim()
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+
       const tokenRegex = /@@INLINE_MATH_TOKEN_(\d+)@@/g
       cleanCode = cleanCode.replace(tokenRegex, (match, idx) => {
         const item = inlineMath[parseInt(idx)]
@@ -804,6 +925,27 @@ function renderMarkdown(text, type = '', conceptName = '') {
         }
         return ''
       })
+
+      const blockTokenRegex = /@@BLOCK_MATH_TOKEN_(\d+)@@/g
+      cleanCode = cleanCode.replace(blockTokenRegex, (match, idx) => {
+        const item = blockMath[parseInt(idx)]
+        if (item) {
+          return item.math
+            .replace(/\$/g, '')
+            .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '$1^')
+            .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '$1/$2')
+            .replace(/\\partial/g, 'd')
+            .replace(/\\Sigma/g, 'sum')
+            .replace(/\\sigma/g, 'sigma')
+            .replace(/\\alpha/g, 'alpha')
+            .replace(/\\cdot/g, '·')
+            .replace(/\\/g, '')
+        }
+        return ''
+      })
+
+      // Run mindmap/syntax auto-heal on Mermaid code
+      cleanCode = sanitizeMermaidCode(cleanCode)
 
       // We HTML-escape the raw Mermaid code inside data-code attribute to prevent issues
       const escapedCode = encodeURIComponent(cleanCode)
@@ -824,6 +966,13 @@ function renderMarkdown(text, type = '', conceptName = '') {
         <div class="mermaid-container w-full overflow-auto flex justify-center py-2 bg-white max-h-[300px]" style="cursor: zoom-in;" onclick="window.zoomMindmap && window.zoomMindmap(this)">
           <div class="mermaid w-full flex justify-center" data-code="${escapedCode}">${cleanCode}</div>
         </div>
+        <!-- 调试面板：折叠展示原始及清洗后的代码 -->
+        <details class="w-full mt-2 pt-2 border-t border-gray-100 text-[10px] text-gray-400 cursor-pointer">
+          <summary class="hover:text-gray-600 select-none text-[9px] font-semibold">🔍 查看 Mermaid 源码与自愈调试信息</summary>
+          <div class="mt-2 p-2 bg-gray-50 rounded font-mono text-[9px] whitespace-pre overflow-x-auto text-left text-gray-600">
+<strong>[自愈清洗后代码]:</strong>\n${cleanCode}\n\n<strong>[大模型原始输出]:</strong>\n${code.trim()}
+          </div>
+        </details>
       </div>`
     } else {
       blockHtml = `<pre class="my-3 p-3 bg-gray-900 text-green-400 rounded-lg overflow-x-auto font-mono text-xs leading-relaxed">${code.trim()}</pre>`

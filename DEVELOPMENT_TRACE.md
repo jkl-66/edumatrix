@@ -428,6 +428,21 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 15,000 Input / 1,500 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
 
-
-
+### [2026-06-22] - Mermaid 概念脑图嵌套代码块解析失败与 Windows CRLF 兼容性修复
+- **任务编号**：`TASK_MERMAID_NESTED_CODE_006`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-backend`, `oma-qa`
+- **开发场景**：解决真实大模型（DeepSeek）在生成思维导图时，其节点内输出嵌套的 Markdown 代码块（如 ` ```python ... ``` `）导致前端正则匹配截断、图表解析失败，以及 Windows 换行符 `\r\n`（CRLF）导致语言提取多出回车符 `\r` 的问题。
+- **自愈重试记录**：
+  1. *第一次报错*：用户反馈思维导图显示不出来，且变成一大串单行的 Markdown 原始代码块。分析定位发现大模型在 mindmap 节点中嵌套了代码块，前端的正则 `/```([^\n]*)\n([\s\S]*?)```/g`（非贪婪匹配）在遇到嵌套代码块的结束标记时提前中止，将 Mermaid 脑图完全破坏并把后半段文本当做普通文字漏出。同时在 Windows 平台下，提取出的 lang 变量带有隐藏的 `\r`（`"mermaid\r"`）。
+  2. *自愈与修复*：
+     - **后端规则**：在 `instruct_rag.py` 中为 `逻辑画师` 添加致命防错红线约束，绝对禁止输出任何反单引号 (`) 或嵌套 Markdown 代码块，如果需要展示代码，必须以普通文本或 ID+方括号+双引号格式表达，从源头杜绝嵌套。
+     - **前端正则**：在 `Chat.vue` 中将代码块匹配正则升级为 `/```([^\r\n]*)\r?\n([\s\S]*?)```/g`，完美过滤 `\r` 隐藏回车符，并兼容跨平台换行符。
+     - **拆行优化**：在 `sanitizeMermaidCode` 中将 `code.split('\n')` 改为 `code.split(/\r?\n/)`，消除行尾 `\r` 隐形空白的影响。
+- **测试验证结果**：
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 593ms (100% OK)**。
+- **Token 消耗估计**：约 25,000 Input / 2,200 Output
+- **架构师（用户）终审反馈**：Approved

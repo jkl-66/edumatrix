@@ -52,32 +52,36 @@ async def generate_quiz(
     llm = await _get_llm(request)
 
     system_prompt = (
-        "你是一个智能出题考官。根据给定的知识点和难度，生成一道简答题。\n"
+        "你是一个智能出题考官。根据给定的知识点和难度，生成一道有深度的简答题。\n"
         "请以JSON格式返回，包含以下字段：\n"
-        "question: 题目文本\n"
-        "reference_answer: 参考答案要点（用逗号分隔的关键点）\n"
-        "concept: 考察的知识点\n"
-        "difficulty: easy/medium/hard\n"
-        "hints: 3个提示阶梯，从模糊到具体"
+        "{\n"
+        '  "question": "题目文本（鼓励学生用自己的话解释概念、原理或流程）",\n'
+        '  "reference_answer": "分点列出参考答案关键点，每点用分号分隔",\n'
+        '  "concept": "考察的知识点名称",\n'
+        '  "difficulty": "easy/medium/hard",\n'
+        '  "hints": ["提示1（模糊引导）", "提示2（半具体提示）", "提示3（具体提示但非直接答案）"]\n'
+        "}\n"
+        "要求：reference_answer 要覆盖该概念的核心原理、关键特征和典型应用，不少于3个要点。"
     )
     user_prompt = (
         f"知识点：{target_concept}\n"
         f"难度：{difficulty}\n"
         f"学生画像：weak_points={profile.weak_points}, "
         f"mastery={profile.concept_mastery.get(target_concept, 0.45):.2f}\n"
-        "请生成一道简答题，鼓励学生用自己的话回答，而不是单纯填空。"
+        f"请生成一道检验学生理解深度的简答题。"
     )
 
     try:
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
         import json as json_lib
+        result = json_lib.loads(response)
         raw_hints = result.get("hints", [])
         result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
     except Exception:
         tc = target_concept
         result = {
             "question": f"请解释 {tc} 的核心概念和关键特点",
-            "reference_answer": f"{tc}的基本定义,核心原理,主要应用场景",
+            "reference_answer": f"{tc}的基本定义；核心原理；主要应用场景",
             "concept": tc,
             "difficulty": difficulty,
             "hints": [
@@ -148,21 +152,31 @@ async def evaluate_answer(
     llm = await _get_llm(request)
 
     system_prompt = (
-        "你是一个严格但友好的评估者。你需要：\n"
-        "1. 将学生的答案与参考答案对比\n"
-        "2. 给出accuracy_score (0.0-1.0) 的精确评分\n"
-        "3. 计算ai_confidence (0.0-1.0)，表示你对评分的确信度\n"
-        "4. 生成个性化的feedback，指出正确部分和需要改进的部分\n"
-        "5. 给出next_action: 'review'(需复习)/'practice'(需练习)/'advance'(可以进阶)\n"
-        "6. 给出metacognitive_gap: student_confidence与accuracy的差异提醒\n"
-        "请以JSON格式返回。"
+        "你是一位严谨而敏锐的评估专家。你需要对学生的答案做多维度语义分析。\n\n"
+        "请严格以JSON格式返回，字段如下：\n"
+        "{\n"
+        '  "accuracy_score": 0.0~1.0,  // 整体准确度评分\n'
+        '  "ai_confidence": 0.0~1.0,   // 你对评分的把握度\n'
+        '  "score_breakdown": {         // 分维度评分\n'
+        '    "key_points_coverage": 0.0~1.0,  // 覆盖了多少参考答案关键点\n'
+        '    "semantic_correctness": 0.0~1.0, // 语义是否正确，有无概念混淆\n'
+        '    "depth_and_detail": 0.0~1.0,     // 回答的深度和细节程度\n'
+        '    "clarity_and_logic": 0.0~1.0     // 表达清晰度和逻辑性\n'
+        "  },\n"
+        '  "feedback": "详细的个性化反馈，先肯定正确部分，再指出具体遗漏或误解",\n'
+        '  "misconceptions": ["学生存在的具体误解1", "误解2"],  // 可空\n'
+        '  "missing_points": ["遗漏的关键点1", "遗漏的关键点2"],  // 可空\n'
+        '  "next_action": "review"|"practice"|"advance",\n'
+        '  "metacognitive_gap": "学生自评与真实表现之间的差异分析"\n'
+        "}\n"
+        "请严格评估，避免评分膨胀。accuracy_score < 0.4 = 严重不足, 0.4~0.7 = 部分正确, > 0.7 = 良好。"
     )
     user_prompt = (
-        f"问题：{quiz_record.question}\n"
-        f"参考答案要点：{quiz_record.correct_answer}\n"
-        f"学生答案：{student_answer}\n"
-        f"学生自评置信度：{student_confidence:.2f}\n"
-        f"请严格评估并返回JSON。"
+        f"【问题】{quiz_record.question}\n"
+        f"【参考答案】{quiz_record.correct_answer}\n"
+        f"【学生答案】{student_answer}\n"
+        f"【学生自评置信度】{student_confidence:.2f}\n"
+        "请返回JSON格式的多维度评估。"
     )
 
     try:
@@ -173,7 +187,15 @@ async def evaluate_answer(
         result = {
             "accuracy_score": 0.6,
             "ai_confidence": 0.7,
+            "score_breakdown": {
+                "key_points_coverage": 0.5,
+                "semantic_correctness": 0.6,
+                "depth_and_detail": 0.5,
+                "clarity_and_logic": 0.6,
+            },
             "feedback": f"你的答案包含一些正确要点。参考答案包含:{quiz_record.correct_answer[:100]}...",
+            "misconceptions": [],
+            "missing_points": ["请对比参考答案补充遗漏关键点"],
             "next_action": "practice",
             "metacognitive_gap": "",
         }
@@ -272,7 +294,10 @@ async def evaluate_answer(
         "quiz_id": quiz_id,
         "accuracy_score": accuracy_score,
         "ai_confidence": ai_confidence,
+        "score_breakdown": result.get("score_breakdown", {}),
         "feedback": result.get("feedback", ""),
+        "misconceptions": result.get("misconceptions", []),
+        "missing_points": result.get("missing_points", []),
         "next_action": result.get("next_action", "practice"),
         "metacognitive_gap": result.get("metacognitive_gap", ""),
         "concept_mastery_updated": concept_mastery_updated,
@@ -314,7 +339,14 @@ async def adapt_quiz(
     llm = await _get_llm(request)
     system_prompt = (
         "你是一个智能出题考官。根据学生上次的表现，生成一道针对性的跟进简答题。\n"
-        "以JSON格式返回: question, reference_answer, concept, difficulty, hints"
+        "请以JSON格式返回：\n"
+        "{\n"
+        '  "question": "题目文本",\n'
+        '  "reference_answer": "分点列出参考答案关键点，用分号分隔",\n'
+        '  "concept": "考察的知识点",\n'
+        '  "difficulty": "easy/medium/hard",\n'
+        '  "hints": ["提示1", "提示2", "提示3"]\n'
+        "}"
     )
     user_prompt = (
         f"目标概念：{target}\n"
@@ -332,7 +364,7 @@ async def adapt_quiz(
     except Exception:
         result = {
             "question": f"请用你自己的话解释 {target} 的核心原理，并给出一个实际例子",
-            "reference_answer": f"{target}的核心原理,实际应用场景,关键注意事项",
+            "reference_answer": f"{target}的核心原理；实际应用场景；关键注意事项",
             "concept": target,
             "difficulty": difficulty,
             "hints": [

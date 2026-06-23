@@ -328,7 +328,10 @@ async function submitQuizAnswer() {
     quizResult.value = {
       accuracy_score: 0.5,
       ai_confidence: 0.6,
+      score_breakdown: { key_points_coverage: 0.5, semantic_correctness: 0.5, depth_and_detail: 0.4, clarity_and_logic: 0.5 },
       feedback: '评估出错，请重试',
+      misconceptions: [],
+      missing_points: ['评估暂时不可用'],
       next_action: 'practice',
       concept_mastery_updated: 0.5,
       confidence_calibration: 0.2,
@@ -1380,17 +1383,21 @@ function renderMarkdown(text, type = '', conceptName = '') {
         <div v-if="quizState === 'adapting' && quizResult" class="flex-1 flex flex-col">
           <div class="card mb-4 space-y-3">
             <div class="flex items-center justify-between">
-              <h4 class="text-sm font-semibold">评估结果</h4>
-              <div class="flex items-center gap-2">
-                <span class="text-xs text-gray-500">AI置信度:</span>
-                <span class="text-sm font-bold" :class="quizScoreClass(quizResult.ai_confidence)">{{ (quizResult.ai_confidence * 100).toFixed(0) }}%</span>
+              <h4 class="text-sm font-semibold">语义评估</h4>
+            </div>
+
+            <!-- 多维度评分 -->
+            <div v-if="quizResult.score_breakdown" class="grid grid-cols-2 gap-2">
+              <div v-for="(val, key) in quizResult.score_breakdown" :key="key" class="bg-gray-50 rounded-lg p-2.5">
+                <p class="text-[10px] text-gray-500">{{ {key_points_coverage:'覆盖度',semantic_correctness:'正确性',depth_and_detail:'深度',clarity_and_logic:'逻辑性'}[key] || key }}</p>
+                <p class="text-sm font-bold mt-0.5" :class="val >= 0.7 ? 'text-green-600' : val >= 0.4 ? 'text-yellow-600' : 'text-red-600'">{{ (val * 100).toFixed(0) }}%</p>
               </div>
             </div>
 
             <div class="flex items-center gap-4">
               <div class="flex-1">
                 <div class="flex justify-between text-xs text-gray-500 mb-1">
-                  <span>得分</span>
+                  <span>总分</span>
                   <span :class="quizScoreClass(quizResult.accuracy_score)">{{ (quizResult.accuracy_score * 100).toFixed(0) }}%</span>
                 </div>
                 <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -1417,6 +1424,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
             <div class="text-sm text-gray-700 bg-gray-50 rounded-lg p-3">
               <p class="font-medium text-xs text-gray-500 mb-1">反馈:</p>
               <p>{{ quizResult.feedback }}</p>
+            </div>
+
+            <!-- 遗漏要点 -->
+            <div v-if="quizResult.missing_points?.length" class="bg-red-50 rounded-lg p-3">
+              <p class="font-medium text-xs text-red-600 mb-1">遗漏要点:</p>
+              <ul class="list-disc list-inside text-xs text-red-700 space-y-0.5">
+                <li v-for="(mp, mi) in quizResult.missing_points" :key="mi">{{ mp }}</li>
+              </ul>
+            </div>
+
+            <!-- 概念混淆 -->
+            <div v-if="quizResult.misconceptions?.length" class="bg-orange-50 rounded-lg p-3">
+              <p class="font-medium text-xs text-orange-600 mb-1">概念混淆:</p>
+              <ul class="list-disc list-inside text-xs text-orange-700 space-y-0.5">
+                <li v-for="(mc, ci) in quizResult.misconceptions" :key="ci">{{ mc }}</li>
+              </ul>
             </div>
 
             <div class="flex items-center gap-2">

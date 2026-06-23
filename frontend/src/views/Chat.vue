@@ -478,6 +478,11 @@ onMounted(async () => {
     startQuiz()
   }
 
+  // 注册全局视频触发方法
+  window.startInteractiveVideo = () => {
+    toggleVideoPanel()
+  }
+
   // 任务 7.8: 初始化认知画像，消除 MasteryRadar 渲染报错
   try {
     const profile = await getStudentProfile(props.studentId || 'default')
@@ -491,6 +496,7 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', handleMarkdownClick)
   window.startInteractiveQuiz = null
+  window.startInteractiveVideo = null
 })
 
 function handleMarkdownClick(e) {
@@ -899,6 +905,14 @@ function renderMarkdown(text, type = '', conceptName = '') {
     }
   }
 
+  // Protect SVG blocks from HTML escaping
+  const svgBlocks = []
+  cleaned = cleaned.replace(/(<svg[\s\S]*?<\/svg>)/gi, (match) => {
+    const idx = svgBlocks.length
+    svgBlocks.push(match)
+    return `@@SVGBLOCKTOKEN${idx}@@`
+  })
+
   let html = cleaned
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -1112,6 +1126,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
   }
 
   // 4. General inline Markdown replacements
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full max-h-[300px] object-contain rounded-xl my-3 shadow-sm border border-gray-100 bg-white p-1" />')
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-gray-900">$1</strong>')
   html = html.replace(/\*([^*]+)\*/g, '<em class="italic text-gray-800">$1</em>')
   html = html.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 bg-gray-100 text-red-600 rounded font-mono text-xs font-medium">$1</code>')
@@ -1180,7 +1195,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
       return `${base}<sup>${displayExp}</sup>`
     })
 
-  // 5. Restore block and inline math, and code blocks
+  // 5. Restore block and inline math, code blocks, and SVG blocks
   blockMath.forEach((item, idx) => {
     html = html.split(`@@BLOCKMATHTOKEN${idx}@@`).join(renderMath(item.math, true))
   })
@@ -1190,17 +1205,29 @@ function renderMarkdown(text, type = '', conceptName = '') {
   codeBlocks.forEach((block, idx) => {
     html = html.split(`@@CODEBLOCKTOKEN${idx}@@`).join(block)
   })
+  svgBlocks.forEach((block, idx) => {
+    html = html.split(`@@SVGBLOCKTOKEN${idx}@@`).join(block)
+  })
 
-  // 6. Append quiz CAT link button for assessor agent
+  // 6. Append quiz CAT link button for assessor agent or Video button for director agent
   const normalizedType = type.toLowerCase()
   if (normalizedType.includes('assess') || normalizedType.includes('quiz') || normalizedType.includes('考官') || normalizedType.includes('评测')) {
     const escapedConcept = (conceptName || '机器学习').replace(/'/g, "\\'")
-    html += `<div class="mt-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 flex items-center justify-between">
+    html += `<div class="mt-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 flex items-center justify-between animate-fade-in">
       <div class="text-xs text-blue-800">
         <strong>📝 评测联动已就绪：</strong>已为您准备了针对此概念的自适应多步评测。
       </div>
       <button onclick="window.startInteractiveQuiz && window.startInteractiveQuiz('${escapedConcept}')" class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all whitespace-nowrap">
         去测验板作答 (CAT) →
+      </button>
+    </div>`
+  } else if (normalizedType.includes('director') || normalizedType.includes('video') || normalizedType.includes('导演') || normalizedType.includes('视频')) {
+    html += `<div class="mt-4 p-3 bg-indigo-50/50 rounded-xl border border-indigo-100 flex items-center justify-between animate-fade-in">
+      <div class="text-xs text-indigo-800">
+        <strong>🎬 视频演示已就绪：</strong>已为您量身定制并合成了该知识点的教学短视频。
+      </div>
+      <button onclick="window.startInteractiveVideo && window.startInteractiveVideo()" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all whitespace-nowrap">
+        播放讲解视频 →
       </button>
     </div>`
   }

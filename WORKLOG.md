@@ -589,8 +589,14 @@
   - **连线颜色更深一级**：在 `CollapsibleMindmap.vue` 节点颜色字典 `getNodeColors(d)` 中，为 Root、Level 1 及 Level 2+ 层级各增设一个比原本 Stroke 边框色更深一级的 `line` 颜色（分别设为 Indigo-600 `#4f46e5`、Blue-600 `#2563eb` 和 Emerald-600 `#059669`），并将 D3.js 连线的 `stroke` 颜色统一替换为首端起点的 `line` 属性。
   - **线条粗细/不透明度层级渐细**：为了让连线形态更加清秀、主次分明，对连线的粗细与不透明度配置了视觉层级渐细效果（根节点线条宽 `2.2px`、不透明度 `0.85`；一级分支宽 `1.8px`、不透明度 `0.8`；二级及深层分支宽 `1.4px`、不透明度 `0.75`），并配合 `stroke-linecap: round` 使曲线相交边缘过渡更为平滑优雅。
 
+[x] **修复前端 Markdown 内嵌 SVG、Base64 图片与虚拟人视频播放联动**：
+  - **SVG 渲染保护**：在 `Chat.vue` 的 `renderMarkdown` 开头引入 SVG 标签正则保护，匹配并提取所有 `<svg[\s\S]*?<\/svg>` 块替换为 `@@SVGBLOCKTOKEN${idx}@@` 占位符，保护其在中间转义阶段不被转为 `&lt;svg&gt;` 实体字符，并在最终渲染前无缝还原，完美支持了大模型输出的原生 SVG 特征图直接渲染。
+  - **Base64 图片解析**：新增 Markdown 图片标记正则 `!\[([^\]]*)\]\(([^)]+)\)`，在行内渲染阶段自动将其替换为 `<img>` 标签，且完全兼容 Base64 格式的长数据流，彻底消除了测试题目中的矩阵演算图 Base64 源码外漏的 Bug。
+  - **虚拟人视频播放联动**：在 `Chat.vue` 消息列表中，对类型为“虚拟导演”或“视频”的卡片底部，动态挂载“🎬 播放讲解视频 →”按钮。该按钮通过 `window.startInteractiveVideo` 绑定并调用右下角 `toggleVideoPanel`，实现了一键开启 VideoRenderPanel 的可视化微课视频生成与播放联动。
+
 #### 2. 测试与编译校验
-* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 615ms (100% OK)**。
+* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 17.4s (100% OK)**。
 * 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed (100% OK)**。
 * 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**。对于中文、数学公式及空格等非标裸节点，自愈输出转换完全符合 Mermaid 语法预期。
+
 

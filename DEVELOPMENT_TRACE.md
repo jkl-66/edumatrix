@@ -578,4 +578,20 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 3,500 Input / 400 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 修复前端 Markdown 内嵌 SVG、Base64 图片与虚拟人视频播放联动
+- **任务编号**：`TASK_FRONTEND_MARKDOWN_RESOURCES_FIX`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (在 `renderMarkdown` 开头增加 SVG 标签正则保护防 HTML 实体编码转义，添加 Markdown 图片标签 `![alt](url)` 的正则解析渲染并完全兼容 base64 数据流格式，在 `onMounted` 与 `onUnmounted` 中绑定和清理 `window.startInteractiveVideo` 全局方法，并在大模型输出类型为“虚拟导演”时动态追加一键播放视频的交互按钮)。
+- **自愈重试记录**：
+  * 首轮编译即完美绿灯通过。解决大模型直接在正文中输出原生 SVG 图标变成纯文本展现的渲染逃逸问题，同时完成了测试图像的 Base64 格式自动还原。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 17.4s (100% OK)**。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 5,000 Input / 500 Output
+- **架构师（用户）终审反馈**：Approved
+
+
 

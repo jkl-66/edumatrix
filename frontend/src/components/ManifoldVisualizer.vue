@@ -215,7 +215,7 @@ function resize() {
   if (!canvasRef.value) return
   const parent = canvasRef.value.parentElement
   canvasRef.value.width = parent?.clientWidth || 400
-  canvasRef.value.height = Math.min(parent?.clientHeight || 400, 500)
+  canvasRef.value.height = 360
 }
 
 onMounted(async () => {

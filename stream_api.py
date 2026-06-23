@@ -94,8 +94,13 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 raise asyncio.CancelledError()
 
         try:
-            from models import StudentProfile
-            profile = swarm.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
+            from app.database import run_db_op
+            from app.crud import load_student_profile
+            
+            profile = swarm.profile_store.get(student_id)
+            if not profile:
+                profile = await run_db_op(load_student_profile, student_id)
+                swarm.profile_store[student_id] = profile
             alignment_report = None
 
             await check_disconnection()
@@ -385,8 +390,11 @@ async def stream_chat(request: Request) -> StreamingResponse:
                         self_confidence=None,
                         hint_count=0,
                     )
+                    from app.database import run_db_op
+                    from app.crud import save_student_profile
+                    await run_db_op(save_student_profile, p)
             except Exception as e:
-                print(f"  [StreamAPI] Failed to update profile history: {e}")
+                print(f"  [StreamAPI] Failed to update and save profile history: {e}")
 
             yield _sse("complete", {
                 "target": getattr(retrieval, "target", ""),

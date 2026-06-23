@@ -32,6 +32,11 @@ def _generate_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
+# 搜索缓存（内存）：相同关键词5分钟内复用结果
+_search_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
+_SEARCH_CACHE_TTL = 300  # 5分钟
+
+
 @router.post("/search")
 async def web_search(
     request: Request,
@@ -44,7 +49,23 @@ async def web_search(
     if not query:
         raise HTTPException(status_code=400, detail="搜索查询不能为空")
 
-    search_results = await _perform_web_search(query, max_results)
+    # 检查缓存
+    import time as _time
+    cache_key = query.lower().strip()
+    now = _time.time()
+    if cache_key in _search_cache:
+        ts, cached_results = _search_cache[cache_key]
+        if now - ts < _SEARCH_CACHE_TTL:
+            search_results = cached_results[:max_results]
+        else:
+            del _search_cache[cache_key]
+            search_results = await _perform_web_search(query, max_results)
+    else:
+        search_results = await _perform_web_search(query, max_results)
+
+    # 写缓存
+    if search_results:
+        _search_cache[cache_key] = (now, search_results)
 
     # Summarize search results with LLM
     llm = await _get_llm(request)

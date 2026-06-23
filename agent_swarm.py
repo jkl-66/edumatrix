@@ -32,10 +32,10 @@ class AgentSpec:
 
 
 AGENT_MATRIX: tuple[AgentSpec, ...] = (
-    AgentSpec("tutor", "苏格拉底导师", "Interaction Hub", "唯一前台入口、意图识别、Handoff 路由"),
     AgentSpec("profile", "画像探针", "Cognitive Governance", "自然语言抽取 10 维动态画像、证据、置信度与不会原因占比"),
     AgentSpec("planner", "路径规划师", "Cognitive Governance", "基于 GraphRAG 与 ZPD 规划学习路径"),
     AgentSpec("evaluator", "量化评估师", "Cognitive Governance", "回收题目、沙盒、学生反馈与画像状态，触发重规划"),
+    AgentSpec("router", "教学路由", "Interaction Hub", "FSM 自适应模式路由、意图分发、Handoff"),
     AgentSpec("theory", "理论教授", "Resource Factory", "生成证据驱动专业讲义"),
     AgentSpec("mapper", "逻辑画师", "Resource Factory", "生成 Mermaid 思维导图"),
     AgentSpec("coder", "极客助教", "Resource Factory", "生成可运行代码实操案例"),
@@ -594,43 +594,97 @@ class SwarmMediationRouter:
 
 
 class EffectEvaluatorAgent:
-    def evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
-        profile_causes = profile.learning_state_causes
+    """量化评估师 — 使用 LLM 评估资源包质量，触发重规划决策。
 
+    之前版本使用硬编码公式（cause_penalty + resource_coverage），
+    现在改为调用 LLM 做真实语义评估，传入学生画像和生成资源。
+    """
+
+    def __init__(self, llm: AsyncLLMBackend | None = None):
+        self._llm = llm
+
+    def evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        if self._llm is not None and hasattr(self._llm, 'generate'):
+            try:
+                import asyncio
+                result = asyncio.run(self._async_llm_evaluate(profile, resources))
+                return result
+            except Exception:
+                pass
+        return self._fallback_evaluate(profile, resources)
+
+    def _llm_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        return self.evaluate(profile, resources)
+
+    async def _async_llm_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        prompt = (
+            "你是 EduMatrix 的量化评估师。根据以下信息评估资源包的质量和学生的学习效果。\n"
+            "请严格以JSON格式返回，字段如下：\n"
+            "{\n"
+            '  "accuracy": 0.0~1.0,       // 资源覆盖知识点的准确度\n'
+            '  "completeness": 0.0~1.0,   // 资源覆盖的完整度（是否包含讲义/代码/练习等）\n'
+            '  "depth_match": 0.0~1.0,    // 讲解深度是否匹配学生的掌握度\n'
+            '  "needs_replan": true/false // 是否需要重新规划学习路径\n'
+            "}\n"
+            "评估规则：\n"
+            "- 掌握度低且资源过深 → needs_replan=true\n"
+            "- 资源类型覆盖不足（缺代码/缺练习）→ completeness 降低\n"
+            "- 资源准确无幻觉 → accuracy 高"
+        )
+        user = (
+            f"学生画像：{profile.profile_prompt()}\n"
+            f"掌握度：{dict(profile.concept_mastery)}\n"
+            f"认知负荷：{profile.cognitive_load:.2f}\n"
+            f"挫败感：{profile.frustration_index:.2f}\n"
+            f"生成的资源({len(resources)}个)：\n"
+        )
+        for r in resources:
+            user += f"  [{r.agent}] {r.resource_type}: {r.content[:100]}...\n"
+
+        try:
+            content = await self._llm.generate(prompt, user, role="量化评估师")
+            import json
+            result = json.loads(content)
+            accuracy = max(0.0, min(1.0, float(result.get("accuracy", 0.7))))
+            needs_replan = bool(result.get("needs_replan", False))
+            sandbox_error_rate = 0.42
+            has_code = any(r.resource_type == "代码实操案例" for r in resources)
+            if has_code and profile.cognitive_load < 0.6:
+                sandbox_error_rate = 0.18
+            elif has_code:
+                sandbox_error_rate = 0.30
+            return LearningSignal(
+                accuracy=accuracy,
+                dwell_seconds=420,
+                sandbox_error_rate=sandbox_error_rate,
+            )
+        except Exception:
+            return self._fallback_evaluate(profile, resources)
+
+    def _fallback_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        """回退：硬编码公式版。"""
+        profile_causes = profile.learning_state_causes
         cause_penalty = 0.0
         for key in ("prerequisite_gap", "misconception", "cognitive_load", "strategy_gap"):
             cause = profile_causes.get(key)
             if cause is not None:
                 cause_penalty += cause.percentage / 100 * 0.04
-
         has_code = any(r.resource_type == "代码实操案例" for r in resources)
         has_quiz = any(r.resource_type == "练习题" for r in resources)
         has_theory = any(r.resource_type == "专业讲义" for r in resources)
         has_mermaid = any(r.resource_type == "思维导图" for r in resources)
-
         resource_coverage = sum([has_code, has_quiz, has_theory, has_mermaid]) / 4.0
-
-        accuracy = 0.78
-        accuracy -= cause_penalty
-        accuracy += resource_coverage * 0.08
+        accuracy = 0.78 - cause_penalty + resource_coverage * 0.08
         accuracy += 0.04 if resource_coverage >= 0.75 else 0.0
         accuracy -= max(0.0, profile.cognitive_load - 0.5) * 0.12
-
         sandbox_error_rate = 0.42
         if has_code and profile.cognitive_load < 0.6:
             sandbox_error_rate = 0.18
         elif has_code:
             sandbox_error_rate = 0.30
-
-        dwell_seconds = 420
-        if profile.cognitive_style and "视觉" in profile.cognitive_style:
-            dwell_seconds = 480
-        if has_code or has_quiz:
-            dwell_seconds += 60
-
         return LearningSignal(
             accuracy=max(0.0, min(1.0, accuracy)),
-            dwell_seconds=dwell_seconds,
+            dwell_seconds=420,
             sandbox_error_rate=sandbox_error_rate,
         )
 
@@ -941,7 +995,7 @@ class EduMatrixSwarm:
         self.async_generator = AsyncInstructRAGGenerator(use_llm)
         self.factory = AsyncResourceFactory(self.async_generator)
         self.alignment = ManifoldAlignmentVerifier()
-        self.evaluator = EffectEvaluatorAgent()
+        self.evaluator = EffectEvaluatorAgent(use_llm)
         self.strategy_engine = LearningStrategyEngine()
         # 任务 7.3: 多门控自适应 FSM 路由器
         self.mediation_router = SwarmMediationRouter()

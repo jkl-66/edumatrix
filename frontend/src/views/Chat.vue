@@ -4,7 +4,7 @@ import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 import {
   processMessage, getHistory,
   generateQuiz, evaluateQuizAnswer, adaptQuiz,
-  webSearch, loadUrl,
+  webSearch, loadUrl, searchArxiv,
   runCode, getStudentProfile, regenerateComponent,
 } from '../api'
 import {
@@ -12,7 +12,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles,
-  RotateCcw, Download, FileText, Maximize2, Minimize2,
+  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
 import SandboxConsole from '../components/SandboxConsole.vue'
@@ -285,7 +285,8 @@ function toggleVideoPanel() {
 const quizState = ref('idle') // idle | generating | answering | evaluating | adapting
 const quizData = ref(null)
 const quizAnswer = ref('')
-const quizConfidence = ref(5)
+const quizConfidence = ref(parseInt(localStorage.getItem('edumatrix_quiz_confidence') || '5', 10))
+watch(quizConfidence, (v) => localStorage.setItem('edumatrix_quiz_confidence', String(v)))
 const quizResult = ref(null)
 const quizAttempt = ref(1)
 const quizConcept = ref('')
@@ -308,6 +309,10 @@ const searchLoading = ref(false)
 const urlInput = ref('')
 const urlLoading = ref(false)
 const urlResult = ref(null)
+const arxivQuery = ref('')
+const arxivLoading = ref(false)
+const arxivPapers = ref([])
+const arxivError = ref('')
 
 const presets = [
   '什么是机器学习？',
@@ -333,8 +338,29 @@ const codeVizHtml = computed(() => {
 async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
+  // 斜杠命令
+  if (text.startsWith('/quiz ')) {
+    quizConcept.value = text.slice(6).trim()
+    activeTab.value = 'quiz'
+    input.value = ''
+    await nextTick()
+    startQuiz()
+    return
+  }
+  if (text.startsWith('/search ')) {
+    searchQuery.value = text.slice(8).trim()
+    activeTab.value = 'websearch'
+    input.value = ''
+    await nextTick()
+    doWebSearch()
+    return
+  }
+  if (text.startsWith('/code')) {
+    activeTab.value = 'code'
+    input.value = ''
+    return
+  }
   input.value = ''
-  
   await nextTick()
   try {
     await chatStore.sendChatMessage(text, props.studentId)
@@ -473,7 +499,19 @@ function closeCodeViz() {
 
 function insertCodeSnippet(snippet) {
   codeInput.value = snippet
+  codeOutput.value = ''
+  codeError.value = ''
   showCodeViz.value = true
+}
+
+async function copyCode() {
+  try {
+    await navigator.clipboard.writeText(codeInput.value)
+  } catch (e) {
+    const ta = document.createElement('textarea')
+    ta.value = codeInput.value; document.body.appendChild(ta); ta.select()
+    document.execCommand('copy'); document.body.removeChild(ta)
+  }
 }
 
 // ======================== 任务 8.1: 行级/公式点击答疑 ========================
@@ -668,6 +706,80 @@ async function regenerateCard(messageIndex, resourceIndex) {
   }
 }
 
+function runResourceCode(messageIndex, resourceIndex) {
+  const msg = chatStore.messages[messageIndex]
+  if (!msg || !msg.resources) return
+  const res = msg.resources[resourceIndex]
+  if (!res) return
+  const content = res.content || ''
+  const m = content.match(/```(?:python)?\s*\n([\s\S]*?)```/)
+  codeInput.value = m ? m[1].trim() : content
+  activeTab.value = 'code'
+  codeOutput.value = ''
+  codeError.value = ''
+  nextTick(() => runUserCode())
+}
+
+// 概念代码浮窗
+const conceptCodePopup = ref(null) // { visible, loading, content, target }
+async function showConceptCode(msgIdx) {
+  const msg = chatStore.messages[msgIdx]
+  if (!msg || !msg.target) return
+  conceptCodePopup.value = { visible: true, loading: true, content: '', target: msg.target }
+  try {
+    // 找到对应的用户消息作为 query
+    let query = msg.target
+    for (let i = msgIdx - 1; i >= 0; i--) {
+      if (chatStore.messages[i].role === 'user') {
+        query = chatStore.messages[i].content
+        break
+      }
+    }
+    const data = await regenerateComponent(props.studentId || 'default', '极客助教', '代码实操案例', query)
+    if (data && data.status === 'success') {
+      conceptCodePopup.value.content = data.content
+    } else {
+      conceptCodePopup.value.content = '// 代码生成失败，请重试'
+    }
+  } catch (e) {
+    conceptCodePopup.value.content = '// 错误: ' + (e.message || '未知错误')
+  } finally {
+    conceptCodePopup.value.loading = false
+  }
+}
+function closeConceptCode() { conceptCodePopup.value = null }
+function runConceptCode() {
+  if (!conceptCodePopup.value) return
+  const content = conceptCodePopup.value.content || ''
+  const m = content.match(/```(?:python)?\s*\n([\s\S]*?)```/)
+  codeInput.value = m ? m[1].trim() : content
+  activeTab.value = 'code'
+  codeOutput.value = ''
+  codeError.value = ''
+  conceptCodePopup.value = null
+  nextTick(() => runUserCode())
+}
+
+function saveToNotes(msgIdx) {
+  const msg = chatStore.messages[msgIdx]
+  if (!msg) return
+  const title = msg.target || '学习笔记'
+  try {
+    fetch('/api/notes/create', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ student_id: props.studentId, title, content_markdown: (msg.content||'').slice(0,2000), concepts_covered: msg.target||'' }) })
+  } catch (e) { console.error('Note save failed:', e) }
+}
+
+async function generateReviewPlan(msgIdx) {
+  const msg = chatStore.messages[msgIdx]
+  if (!msg || !msg.target) return
+  try {
+    const resp = await fetch('/api/review/create', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ student_id: props.studentId, concept: msg.target, priority: 1 }) })
+    if (resp.ok) alert('复习计划已添加')
+  } catch (e) { console.error('Review plan failed:', e) }
+}
+
 /**
  * 导出完整讲义为 Markdown
  */
@@ -816,6 +928,25 @@ async function doLoadUrl() {
     urlResult.value = { error: e.message || '加载失败' }
   } finally {
     urlLoading.value = false
+  }
+}
+
+async function doArxivSearch() {
+  if (!arxivQuery.value.trim()) return
+  arxivLoading.value = true
+  arxivPapers.value = []
+  arxivError.value = ''
+  try {
+    const data = await searchArxiv(arxivQuery.value, 8)
+    if (data.status === 'success') {
+      arxivPapers.value = data.papers || []
+    } else {
+      arxivError.value = '搜索失败'
+    }
+  } catch (e) {
+    arxivError.value = e.message || '请求失败'
+  } finally {
+    arxivLoading.value = false
   }
 }
 
@@ -1285,9 +1416,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
   <div class="flex gap-4 h-full">
     <!-- Main content area -->
     <div class="flex-1 flex flex-col min-w-0">
-      <!-- Tabs -->
-      <div class="flex items-center justify-between mb-4 border-b border-gray-200 pb-2">
-        <div class="flex gap-1">
+      <!-- Premium Tabs -->
+      <div class="flex items-center justify-between mb-5 border-b border-gray-100 pb-0">
+        <div class="flex gap-0.5 bg-gray-50/80 backdrop-blur-sm rounded-xl p-0.5 shadow-sm">
           <button class="tab-btn" :class="{ active: activeTab === 'chat' }" @click="activeTab = 'chat'">
             <MessageSquare :size="14" /> 对话
           </button>
@@ -1348,6 +1479,18 @@ function renderMarkdown(text, type = '', conceptName = '') {
                   <div class="card chat-card-assistant">
                     <!-- 任务 8.3: 讲义操作栏 -->
                     <div class="flex items-center justify-end gap-1 mb-1 pb-1 border-b border-gray-100">
+                      <button v-if="msg.target" @click="showConceptCode(idx)" class="text-[10px] text-gray-400 hover:text-emerald-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-emerald-50 rounded transition-colors"
+                        title="查看此概念的代码实现">
+                        <Terminal :size="10" /> 代码
+                      </button>
+                      <button @click="saveToNotes(idx)" class="text-[10px] text-gray-400 hover:text-amber-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-amber-50 rounded transition-colors"
+                        title="保存到知识笔记">
+                        <BookOpen :size="10" /> 笔记
+                      </button>
+                      <button @click="generateReviewPlan(idx)" class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"
+                        title="生成复习计划">
+                        <Calendar :size="10" /> 复习
+                      </button>
                       <button @click="exportAsMarkdown(idx)" class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"
                         title="导出为 Markdown">
                         <Download :size="10" /> 导出
@@ -1355,6 +1498,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
                       <span class="text-[9px] text-gray-300">💡 点击代码块/公式可即时答疑</span>
                     </div>
                     <div class="prose prose-sm max-w-none text-sm" v-html="renderMarkdown(msg.content)"></div>
+                    <!-- 打字光标 -->
+                    <span v-if="idx === messages.length - 1 && chatStore.sending"
+                      class="inline-block w-[2px] h-4 bg-blue-500 animate-pulse ml-0.5 align-text-bottom" />
                   </div>
 
                   <!-- 任务 8.3: 资源卡片 + 局部重生成按钮 -->
@@ -1375,6 +1521,13 @@ function renderMarkdown(text, type = '', conceptName = '') {
                           </span>
                         </div>
                         <div class="flex items-center gap-2">
+                          <!-- 代码资源：运行按钮 -->
+                          <button v-if="(res.resource_type || res.type) === '代码实操案例'"
+                            @click.stop="runResourceCode(idx, ri)"
+                            class="text-xs text-emerald-600 hover:text-emerald-700 flex items-center gap-1 px-2 py-1 hover:bg-emerald-50 rounded-lg border border-emerald-200/60 shadow-sm transition-all"
+                            title="运行此代码">
+                            <Play :size="11" /> 运行
+                          </button>
                           <button @click.stop="regenerateCard(idx, ri)"
                             class="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1 px-2 py-1 hover:bg-white rounded-lg border border-gray-200/60 shadow-sm transition-all"
                             title="重新生成此模块">
@@ -1450,18 +1603,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
 
         <!-- Idle state -->
-        <div v-if="quizState === 'idle'" class="flex-1 flex flex-col items-center justify-center text-center text-gray-400">
-          <HelpCircle :size="48" class="mb-3 text-gray-300" />
-          <p class="text-sm font-medium text-gray-700 mb-3">选择知识点开始测验</p>
-          <div class="flex gap-2 mb-4">
+        <div v-if="quizState === 'idle'" class="flex-1 flex flex-col items-center justify-center text-center">
+          <div class="w-16 h-16 bg-gradient-to-br from-purple-50 to-purple-100 rounded-2xl flex items-center justify-center mb-4 shadow-sm">
+            <BrainCircuit :size="32" class="text-purple-500" />
+          </div>
+          <p class="text-sm font-semibold text-gray-700 mb-1">自适应测验</p>
+          <p class="text-xs text-gray-400 mb-5">选择知识点，AI 将动态生成针对性题目</p>
+          <div class="flex gap-2 mb-5 flex-wrap justify-center">
             <button v-for="concept in ['逻辑回归', '池化层', '过拟合', '反向传播', '卷积神经网络']" :key="concept"
-              class="btn btn-outline text-xs" @click="quizConcept = concept; startQuiz()">
+              class="px-3.5 py-2 text-xs font-medium rounded-xl border border-gray-200 bg-white hover:bg-purple-50 hover:border-purple-200 hover:text-purple-700 text-gray-600 transition-all shadow-sm"
+              @click="quizConcept = concept; startQuiz()">
               {{ concept }}
             </button>
           </div>
           <div class="flex gap-2 w-full max-w-md">
-            <input v-model="quizConcept" class="input flex-1" placeholder="输入自定义知识点..." @keydown.enter="startQuiz" />
-            <button class="btn btn-primary" :disabled="!quizConcept.trim()" @click="startQuiz">开始</button>
+            <input v-model="quizConcept" class="flex-1 px-4 py-2.5 text-sm rounded-xl border border-gray-200 bg-white focus:border-purple-300 focus:ring-2 focus:ring-purple-100 outline-none transition-all placeholder:text-gray-300" placeholder="输入自定义知识点..." @keydown.enter="startQuiz" />
+            <button class="px-5 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-700 hover:to-indigo-700 shadow-sm transition-all" :disabled="!quizConcept.trim()" @click="startQuiz">开始</button>
           </div>
         </div>
 
@@ -1472,27 +1629,29 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
         <!-- Answering -->
         <div v-if="quizState === 'answering' && quizData" class="flex-1 flex flex-col">
-          <div class="card mb-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="badge bg-purple-100 text-purple-700 text-xs">第 {{ quizAttempt }} 题</span>
-              <span class="badge bg-blue-100 text-blue-700 text-xs">{{ quizData.concept }}</span>
-              <span class="badge bg-gray-100 text-gray-600 text-xs">{{ quizData.difficulty }}</span>
+          <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 mb-4">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-purple-50 to-purple-100 text-purple-700">第 {{ quizAttempt }} 题</span>
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-blue-50 to-blue-100 text-blue-700">{{ quizData.concept }}</span>
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-gray-50 to-gray-100 text-gray-600">{{ quizData.difficulty }}</span>
             </div>
-            <p class="text-sm font-medium text-gray-800 mb-3">{{ quizData.question }}</p>
-            <div v-if="quizData.hints?.length" class="text-xs text-gray-500 space-y-1">
-              <p class="font-medium text-gray-600">提示：</p>
-              <p v-for="(hint, hi) in quizData.hints" :key="hi" class="pl-2 border-l-2 border-gray-200">提示{{ hi + 1 }}: {{ hint }}</p>
+            <p class="text-sm font-medium text-gray-800 leading-relaxed mb-4">{{ quizData.question }}</p>
+            <div v-if="quizData.hints?.length" class="bg-amber-50/80 border border-amber-100 rounded-xl p-3.5 space-y-2">
+              <p class="text-xs font-semibold text-amber-700 flex items-center gap-1.5">
+                <Lightbulb :size="13" /> 提示阶梯
+              </p>
+              <p v-for="(hint, hi) in quizData.hints" :key="hi" class="text-xs text-amber-700/80 pl-3 border-l-2 border-amber-200 leading-relaxed">{{ hint }}</p>
             </div>
           </div>
 
           <div class="flex-1" />
-          <textarea v-model="quizAnswer" class="input mb-3 min-h-[100px]" placeholder="输入你的答案..." />
-          <div class="flex items-center gap-3 mb-3">
-            <span class="text-xs text-gray-500 shrink-0">自评置信度:</span>
-            <input type="range" min="1" max="10" v-model.number="quizConfidence" class="flex-1" />
-            <span class="text-xs font-medium text-gray-700 w-8 text-right">{{ quizConfidence }}/10</span>
+          <textarea v-model="quizAnswer" class="w-full px-4 py-3 text-sm rounded-xl border border-gray-200 bg-white focus:border-purple-300 focus:ring-2 focus:ring-purple-100 outline-none transition-all resize-none min-h-[90px] placeholder:text-gray-300" placeholder="输入你的答案..." />
+          <div class="flex items-center gap-3 my-3 bg-gray-50/80 rounded-xl px-4 py-2.5">
+            <span class="text-xs text-gray-500 shrink-0 font-medium">自评置信度</span>
+            <input type="range" min="1" max="10" v-model.number="quizConfidence" class="flex-1 accent-purple-600 h-1.5" />
+            <span class="text-xs font-bold text-purple-700 w-8 text-right bg-purple-50 rounded-lg px-2 py-0.5">{{ quizConfidence }}/10</span>
           </div>
-          <button class="btn btn-primary w-full" :disabled="!quizAnswer.trim()" @click="submitQuizAnswer">
+          <button class="w-full py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-700 hover:to-indigo-700 shadow-sm transition-all flex items-center justify-center gap-2" :disabled="!quizAnswer.trim()" @click="submitQuizAnswer">
             <Send :size="14" /> 提交答案
           </button>
         </div>
@@ -1545,6 +1704,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
               <p>{{ quizResult.feedback }}</p>
             </div>
 
+            <!-- 逐点对比 -->
+            <div v-if="quizResult.student_answer || quizResult.reference_answer" class="grid grid-cols-2 gap-3">
+              <div class="bg-blue-50/80 rounded-xl p-3 border border-blue-100/50">
+                <p class="font-medium text-xs text-blue-700 mb-1.5 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-blue-500" /> 你的答案
+                </p>
+                <p class="text-xs text-blue-900/70 leading-relaxed whitespace-pre-wrap">{{ quizResult.student_answer || '(空)' }}</p>
+              </div>
+              <div class="bg-green-50/80 rounded-xl p-3 border border-green-100/50">
+                <p class="font-medium text-xs text-green-700 mb-1.5 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-green-500" /> 参考答案
+                </p>
+                <p class="text-xs text-green-900/70 leading-relaxed whitespace-pre-wrap">{{ quizResult.reference_answer || '(空)' }}</p>
+              </div>
+            </div>
+
             <div class="flex items-center gap-2">
               <span class="text-xs text-gray-500">下一动作:</span>
               <span class="badge" :class="quizResult.next_action === 'advance' ? 'bg-green-100 text-green-700' : quizResult.next_action === 'practice' ? 'bg-yellow-100 text-yellow-700' : 'bg-orange-100 text-orange-700'">
@@ -1566,32 +1741,43 @@ function renderMarkdown(text, type = '', conceptName = '') {
       <div v-if="activeTab === 'code'" class="flex flex-col flex-1 min-h-0 max-w-4xl">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-semibold text-gray-800 flex items-center gap-2">
-            <Terminal :size="16" class="text-green-600" /> Python 代码执行
+            <Terminal :size="16" class="text-emerald-600" /> Python 代码沙箱
           </h3>
           <div class="flex gap-1">
-            <button v-for="preset in codePresets" :key="preset.label" class="btn btn-outline text-[10px] py-1 px-2" @click="insertCodeSnippet(preset.code)">{{ preset.label }}</button>
+            <button v-for="preset in codePresets" :key="preset.label" class="px-2.5 py-1 text-[10px] font-medium rounded-lg border border-gray-200 bg-white hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 text-gray-500 transition-all" @click="insertCodeSnippet(preset.code)">{{ preset.label }}</button>
           </div>
         </div>
 
         <div class="flex-1 flex flex-col min-h-0">
-          <div class="flex-1 flex flex-col border border-gray-200 rounded-lg overflow-hidden">
-            <div class="bg-gray-900 text-gray-200 text-xs px-3 py-1.5 flex items-center justify-between">
-              <span>main.py</span>
-              <button class="btn text-[10px] py-0.5 px-2 bg-green-600 hover:bg-green-700 text-white" :disabled="!codeInput.trim() || codeRunning" @click="runUserCode">
+          <div class="flex-1 flex flex-col rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+            <div class="bg-gray-900 text-gray-300 text-xs px-4 py-2 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-red-400" />
+                <span class="w-2.5 h-2.5 rounded-full bg-yellow-400" />
+                <span class="w-2.5 h-2.5 rounded-full bg-green-400" />
+                <span class="ml-2 font-mono text-gray-400">sandbox.py</span>
+              </div>
+              <button class="px-3 py-1 text-[10px] font-semibold rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white transition-all flex items-center gap-1.5" :disabled="!codeInput.trim() || codeRunning" @click="runUserCode">
                 <Play :size="10" /> {{ codeRunning ? '运行中...' : '运行' }}
               </button>
             </div>
-            <textarea v-model="codeInput" class="flex-1 bg-gray-900 text-green-400 font-mono text-xs p-3 resize-none outline-none" placeholder="# 在这里输入 Python 代码..." spellcheck="false" />
+            <textarea v-model="codeInput" class="flex-1 bg-gray-900 text-emerald-300 font-mono text-xs p-4 resize-none outline-none leading-relaxed" placeholder="# 在这里输入 Python 代码..." spellcheck="false" />
+            <!-- 行号和复制按钮 -->
+            <div class="absolute top-9 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button class="p-1.5 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-all" title="复制代码" @click="copyCode">
+                <Copy :size="12" />
+              </button>
+            </div>
           </div>
 
-          <div v-if="codeOutput || codeError" class="mt-3 border border-gray-200 rounded-lg overflow-hidden">
-            <div class="bg-gray-100 text-xs px-3 py-1.5 text-gray-500 flex items-center justify-between">
-              <span>输出 ({{ codeExecTime }}ms)</span>
-              <button class="text-gray-400 hover:text-gray-600" @click="codeOutput = ''; codeError = ''"><Trash2 :size="12" /></button>
+          <div v-if="codeOutput || codeError" class="mt-3 rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+            <div class="bg-gray-100 text-xs px-4 py-2 text-gray-500 flex items-center justify-between">
+              <span class="font-medium flex items-center gap-1.5"><Terminal :size="12" /> 输出 ({{ codeExecTime }}ms)</span>
+              <button class="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-200 transition-all" @click="codeOutput = ''; codeError = ''"><Trash2 :size="12" /></button>
             </div>
-            <div class="bg-gray-50 p-3 max-h-48 overflow-y-auto">
-              <pre v-if="codeOutput" class="text-xs text-gray-800 whitespace-pre-wrap font-mono">{{ codeOutput }}</pre>
-              <pre v-if="codeError" class="text-xs text-red-600 whitespace-pre-wrap font-mono">{{ codeError }}</pre>
+            <div class="bg-gray-50 p-4 max-h-48 overflow-y-auto">
+              <pre v-if="codeOutput" class="text-xs text-gray-800 whitespace-pre-wrap font-mono leading-relaxed">{{ codeOutput }}</pre>
+              <pre v-if="codeError" class="text-xs text-red-600 whitespace-pre-wrap font-mono leading-relaxed">{{ codeError }}</pre>
             </div>
           </div>
         </div>
@@ -1599,39 +1785,56 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
       <!-- WEB SEARCH TAB -->
       <div v-if="activeTab === 'websearch'" class="flex flex-col flex-1 min-h-0 max-w-4xl">
-        <h3 class="text-sm font-semibold text-gray-800 flex items-center gap-2 mb-4">
-          <Globe :size="16" class="text-blue-600" /> 联网搜索与文档加载
-        </h3>
+        <div class="flex items-center gap-2 mb-4">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center">
+            <Globe :size="18" class="text-blue-500" />
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-gray-800">联网搜索</h3>
+            <p class="text-[10px] text-gray-400">检索互联网资源辅助学习</p>
+          </div>
+        </div>
 
         <div class="space-y-4">
-          <div class="card">
-            <p class="text-xs font-medium text-gray-600 mb-2">搜索网络</p>
+          <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <div class="flex gap-2">
-              <input v-model="searchQuery" class="input flex-1" placeholder="输入搜索关键词..." @keydown.enter="doWebSearch" />
-              <button class="btn btn-primary" :disabled="!searchQuery.trim() || searchLoading" @click="doWebSearch">
+              <div class="relative flex-1">
+                <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input v-model="searchQuery" class="w-full pl-9 pr-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white focus:border-blue-300 focus:ring-2 focus:ring-blue-100 outline-none transition-all placeholder:text-gray-300" placeholder="输入搜索关键词..." @keydown.enter="doWebSearch" />
+              </div>
+              <button class="px-4 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-sm transition-all flex items-center gap-1.5" :disabled="!searchQuery.trim() || searchLoading" @click="doWebSearch">
                 <Search :size="14" /> {{ searchLoading ? '搜索中...' : '搜索' }}
               </button>
             </div>
-            <div v-if="searchLoading" class="flex items-center gap-2 mt-3 text-gray-400 text-sm">
-              <Loader2 :size="14" class="animate-spin" /> 正在搜索并索引...
+            <div v-if="searchLoading" class="flex items-center gap-2 mt-3 text-gray-400 text-xs">
+              <div class="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+              正在搜索并索引...
             </div>
-            <div v-if="searchSummary" class="mt-3 text-sm text-gray-700 bg-blue-50 rounded-lg p-3 whitespace-pre-wrap">{{ searchSummary }}</div>
-            <div v-if="searchResults.length" class="mt-3 space-y-2">
-              <div v-for="(r, i) in searchResults" :key="i" class="flex items-start gap-2 p-2 hover:bg-gray-50 rounded-lg">
-                <ExternalLink :size="12" class="text-gray-400 mt-0.5 shrink-0" />
-                <div class="min-w-0">
-                  <a :href="r.url" target="_blank" class="text-xs font-medium text-blue-600 hover:underline truncate block">{{ r.title }}</a>
-                  <p class="text-[10px] text-gray-500 mt-0.5 line-clamp-2">{{ r.snippet }}</p>
+            <div v-if="searchSummary" class="mt-3 text-sm text-gray-700 bg-gradient-to-r from-blue-50 to-indigo-50/50 rounded-xl p-4 whitespace-pre-wrap border border-blue-100/50 leading-relaxed">{{ searchSummary }}</div>
+            <div v-if="searchResults.length" class="mt-3 space-y-1">
+              <div v-for="(r, i) in searchResults" :key="i" class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-all cursor-pointer" @click="window.open(r.url, '_blank')">
+                <div class="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center shrink-0 mt-0.5">
+                  <FileText :size="12" class="text-blue-500" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-xs font-semibold text-gray-800 hover:text-blue-600 truncate">{{ r.title }}</p>
+                  <p class="text-[10px] text-gray-400 mt-0.5 line-clamp-2 leading-relaxed">{{ r.snippet }}</p>
+                  <p v-if="r.url" class="text-[9px] text-gray-300 mt-0.5 truncate flex items-center gap-1">
+                    <Globe :size="8" class="shrink-0" />
+                    {{ new URL(r.url).hostname.replace('www.', '') }}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="card">
-            <p class="text-xs font-medium text-gray-600 mb-2">加载网页 URL</p>
+          <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <p class="text-xs font-semibold text-gray-600 mb-3 flex items-center gap-1.5">
+              <ExternalLink :size="13" class="text-indigo-500" /> 加载网页内容
+            </p>
             <div class="flex gap-2">
-              <input v-model="urlInput" class="input flex-1" placeholder="输入网页URL..." @keydown.enter="doLoadUrl" />
-              <button class="btn btn-primary" :disabled="!urlInput.trim() || urlLoading" @click="doLoadUrl">
+              <input v-model="urlInput" class="flex-1 px-4 py-2.5 text-sm rounded-xl border border-gray-200 bg-white focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 outline-none transition-all placeholder:text-gray-300" placeholder="输入网页URL..." @keydown.enter="doLoadUrl" />
+              <button class="px-4 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 text-white hover:from-indigo-700 hover:to-blue-700 shadow-sm transition-all flex items-center gap-1.5" :disabled="!urlInput.trim() || urlLoading" @click="doLoadUrl">
                 <ExternalLink :size="14" /> {{ urlLoading ? '加载中...' : '加载' }}
               </button>
             </div>
@@ -1647,12 +1850,45 @@ function renderMarkdown(text, type = '', conceptName = '') {
               </div>
             </div>
             <div v-if="urlResult?.error" class="mt-3 text-sm text-red-600 bg-red-50 rounded-lg p-3">{{ urlResult.error }}</div>
-            </div>
-            </div>
-            </div>
+          </div>
 
-            <!-- Right Visualization Sidebar -->
-            <div class="w-full max-w-4xl hidden xl:flex flex-col gap-6 overflow-y-auto scrollbar-none pb-4 shrink-0">
+          <!-- 学术论文搜索 -->
+          <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <p class="text-xs font-semibold text-gray-600 mb-3 flex items-center gap-1.5">
+              <FileText :size="13" class="text-rose-500" /> 学术论文 (arXiv)
+            </p>
+            <div class="flex gap-2">
+              <input v-model="arxivQuery" class="flex-1 px-4 py-2.5 text-sm rounded-xl border border-gray-200 bg-white focus:border-rose-300 focus:ring-2 focus:ring-rose-100 outline-none transition-all placeholder:text-gray-300" placeholder="搜索学术论文..." @keydown.enter="doArxivSearch" />
+              <button class="px-4 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 text-white hover:from-rose-700 hover:to-pink-700 shadow-sm transition-all flex items-center gap-1.5" :disabled="!arxivQuery.trim() || arxivLoading" @click="doArxivSearch">
+                <Search :size="14" /> {{ arxivLoading ? '搜索中...' : '论文' }}
+              </button>
+            </div>
+            <div v-if="arxivLoading" class="flex items-center gap-2 mt-3 text-gray-400 text-xs">
+              <div class="w-4 h-4 border-2 border-rose-400 border-t-transparent rounded-full animate-spin" />
+              正在检索 arXiv...
+            </div>
+            <div v-if="arxivPapers.length" class="mt-3 space-y-2">
+              <div v-for="(p, i) in arxivPapers" :key="i" class="flex items-start gap-3 p-3 rounded-xl hover:bg-rose-50 transition-all">
+                <div class="w-6 h-6 rounded-lg bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center shrink-0 mt-0.5">
+                  <FileText :size="12" class="text-rose-500" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-xs font-semibold text-gray-800">{{ p.title }}</p>
+                  <p class="text-[10px] text-gray-400 mt-0.5 line-clamp-2 leading-relaxed">{{ p.abstract?.replace(/^摘要: /,'')?.slice(0,200) }}{{ p.abstract?.length > 200 ? '...' : '' }}</p>
+                  <div class="flex items-center gap-2 mt-1 flex-wrap">
+                    <a v-if="p.pdf_url" :href="p.pdf_url" target="_blank" class="text-[9px] text-rose-500 hover:underline font-medium">📄 PDF</a>
+                    <a v-if="p.id" :href="'https://arxiv.org/abs/' + p.id.replace('arxiv-','')" target="_blank" class="text-[9px] text-gray-400 hover:underline">arXiv:{{ p.id.replace('arxiv-','') }}</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="arxivError" class="mt-3 text-xs text-red-500">{{ arxivError }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Visualization Sidebar -->
+      <div class="w-full max-w-4xl hidden xl:flex flex-col gap-6 overflow-y-auto scrollbar-none pb-4 shrink-0">
             <AvatarSpeech ref="avatarRef" class="shrink-0" />
             
             <div class="grid grid-cols-2 gap-6 shrink-0 items-stretch">
@@ -1723,6 +1959,32 @@ function renderMarkdown(text, type = '', conceptName = '') {
                 <pre v-if="codeError" class="text-xs text-red-600 whitespace-pre-wrap font-mono">{{ codeError }}</pre>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 概念代码浮窗 -->
+    <Teleport to="body">
+      <div v-if="conceptCodePopup" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30" @click.self="closeConceptCode">
+        <div class="bg-white rounded-2xl shadow-2xl w-[640px] max-h-[70vh] flex flex-col overflow-hidden">
+          <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+            <h3 class="text-sm font-semibold text-gray-800 flex items-center gap-2">
+              <Terminal :size="16" class="text-emerald-600" /> {{ conceptCodePopup.target }} 代码实现
+            </h3>
+            <button class="text-gray-400 hover:text-gray-600 text-lg leading-none" @click="closeConceptCode">&times;</button>
+          </div>
+          <div class="flex-1 overflow-y-auto p-5">
+            <div v-if="conceptCodePopup.loading" class="flex items-center justify-center py-12 text-gray-400">
+              <Loader2 :size="20" class="animate-spin mr-2" /> 正在生成代码...
+            </div>
+            <div v-else class="prose prose-sm max-w-none text-xs" v-html="renderMarkdown(conceptCodePopup.content)"></div>
+          </div>
+          <div v-if="!conceptCodePopup.loading" class="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100 bg-gray-50">
+            <button class="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 bg-white hover:bg-gray-100 transition-all" @click="closeConceptCode">关闭</button>
+            <button class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white transition-all flex items-center gap-1" @click="runConceptCode">
+              <Play :size="11" /> 运行代码
+            </button>
           </div>
         </div>
       </div>

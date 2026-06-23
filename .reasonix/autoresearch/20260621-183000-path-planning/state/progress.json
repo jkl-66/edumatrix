@@ -1,0 +1,23 @@
+{
+  "goal": "完整验证赛题重点三：个性化路径规划与资源推送",
+  "scope": "bkt_engine.py, agent_swarm.py, learning_strategy.py, frontend/LearningPathGraph.vue",
+  "started_at": "2026-06-21T18:30:00",
+  "completed_at": "2026-06-21T18:40:00",
+  "stale_count": 0,
+  "pivot_count": 0,
+  "completed": true,
+  "blocked": false,
+  "summary": {
+    "verification": [
+      "SC1: ZPD 三档分类 (below_zpd < 0.3, in_zpd 0.3~0.75, above_zpd > 0.75) ✅",
+      "SC2: 前置依赖回滚 (4场景: 低掌握度回滚/basic, ZPD区间/intermediate, 高掌握度/advanced, 高掌握度但前置不足回滚) ✅",
+      "SC3: 掌握度<50% → SIMPLIFIED_MODE 降维指令含\"降维解释\" ✅",
+      "SC4: 掌握度>80% → ADVANCED_MODE 进阶指令含\"ADVANCED_MODE\" ✅",
+      "SC5: LearningPathGraph.vue 存在, ECharts-Graph DAG 渲染 ✅",
+      "SC6: 20项自动化测试全部通过 (17原项 + 1硬拦截 + 1多智能体 + 1路径规划) ✅"
+    ],
+    "new_tests_added": 1,
+    "total_tests": 20,
+    "test_duration_sec": 9.26
+  }
+}

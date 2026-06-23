@@ -18,7 +18,32 @@ EduMatrix 智教矩阵 - 后端启动入口
 
 import os
 import sys
+import subprocess
 import uvicorn
+
+
+def _free_port(port: int) -> None:
+    """杀掉占用指定端口的旧进程，防止端口冲突导致启动失败。"""
+    import platform
+    if platform.system() == "Windows":
+        try:
+            result = subprocess.run(
+                f'netstat -ano | findstr "LISTENING" | findstr ":{port}"',
+                capture_output=True, text=True, shell=True
+            )
+            for line in result.stdout.strip().split("\n"):
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    pid = parts[-1]
+                    try:
+                        subprocess.run(["taskkill", "/F", "/PID", pid],
+                                       capture_output=True, timeout=3)
+                        print(f"  [端口] 已清理 PID {pid} 占用的端口 {port}")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
 
 HOST = os.getenv("EDUMATRIX_HOST", "0.0.0.0")
 PORT = int(os.getenv("EDUMATRIX_PORT", "8000"))
@@ -28,6 +53,9 @@ RELOAD = os.getenv("EDUMATRIX_RELOAD", "1") == "1"
 def main():
     provider = os.getenv("EDUMATRIX_LLM_PROVIDER", "openai")
     api_key = os.getenv("EDUMATRIX_LLM_API_KEY", "")
+
+    # 启动前清理旧进程
+    _free_port(PORT)
 
     print("=" * 56)
     print("  EduMatrix 智教矩阵 v1.0")

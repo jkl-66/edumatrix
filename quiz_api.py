@@ -23,6 +23,40 @@ register_default_subscribers()
 
 router = APIRouter(prefix="/api/quiz", tags=["quiz"])
 
+import json as _json_mod
+
+
+def _parse_llm_json(text: str) -> dict | None:
+    """从 LLM 响应中提取并解析 JSON，支持 markdown 包裹/杂音/单引号。"""
+    if not text:
+        return None
+    text = text.strip()
+    # 1) 直接解析
+    try:
+        return _json_mod.loads(text)
+    except _json_mod.JSONDecodeError:
+        pass
+    # 2) 提取 ```json 代码块
+    m = re.search(r'```(?:json)?\s*\n(.+?)\n```', text, re.DOTALL)
+    if m:
+        try:
+            return _json_mod.loads(m.group(1))
+        except _json_mod.JSONDecodeError:
+            pass
+    # 3) 提取最外层 {}
+    m = re.search(r'\{.*\}', text, re.DOTALL)
+    if m:
+        try:
+            return _json_mod.loads(m.group(0))
+        except _json_mod.JSONDecodeError:
+            pass
+    # 4) 单引号替换
+    try:
+        return _json_mod.loads(text.replace("'", '"'))
+    except _json_mod.JSONDecodeError:
+        pass
+    return None
+
 
 async def _get_llm(request: Request):
     swarm = build_swarm_from_headers(request.headers)
@@ -223,7 +257,7 @@ async def generate_quiz(
     payload = await request.json()
     student_id = str(payload.get("student_id", "default"))
     target_concept = str(payload.get("target_concept", "")).strip()
-    difficulty = str(payload.get("difficulty", "medium"))
+    req_difficulty = str(payload.get("difficulty", "")).strip().lower()
 
     profile = await run_db_op(load_student_profile, student_id)
     if not target_concept:
@@ -232,29 +266,56 @@ async def generate_quiz(
         else:
             target_concept = "机器学习基础"
 
+    # 动态难度：基于画像推算
+    mastery = profile.concept_mastery.get(target_concept, 0.45)
+    cognitive_load = profile.cognitive_load
+    frustration = profile.frustration_index
+    if req_difficulty in ('easy', 'medium', 'hard'):
+        difficulty = req_difficulty
+    elif frustration > 0.6 or cognitive_load > 0.7:
+        difficulty = 'easy'
+    elif mastery < 0.3:
+        difficulty = 'easy'
+    elif mastery < 0.6:
+        difficulty = 'medium'
+    elif mastery > 0.8:
+        difficulty = 'hard'
+    else:
+        difficulty = 'medium'
+
     llm = await _get_llm(request)
 
     system_prompt = (
-        "你是一个智能出题考官。根据给定的知识点和难度，生成一道简答题。\n"
+        "你是一个智能出题考官。根据给定的知识点、难度和学生画像，生成高度定制化的简答题。\n"
         "请以JSON格式返回，包含以下字段：\n"
-        "question: 题目文本\n"
-        "reference_answer: 参考答案要点（用逗号分隔的关键点）\n"
-        "concept: 考察的知识点\n"
-        "difficulty: easy/medium/hard\n"
-        "hints: 3个提示阶梯，从模糊到具体"
+        "{\n"
+        '  "question": "题目文本",\n'
+        '  "reference_answer": "分点列出参考答案（用分号分隔）",\n'
+        '  "concept": "考察的知识点",\n'
+        '  "difficulty": "easy/medium/hard",\n'
+        '  "hints": ["提示1（模糊引导）", "提示2（半具体）", "提示3（具体但非直接答案）"]\n'
+        "}\n"
+        "出题规则：\n"
+        "- 低掌握度（<0.4）：用最简单直白的语言，考察基本概念理解，提示要多且友好\n"
+        "- 中等掌握度（0.4~0.7）：考察概念应用和简单推理，提示逐步递进\n"
+        "- 高掌握度（>0.7）：考察综合分析和批判性思考，提示少而精\n"
+        "- 挫败感高（>0.5）时题目要带鼓励语气并设置可达成的子目标"
     )
     user_prompt = (
         f"知识点：{target_concept}\n"
         f"难度：{difficulty}\n"
-        f"学生画像：weak_points={profile.weak_points}, "
-        f"mastery={profile.concept_mastery.get(target_concept, 0.45):.2f}\n"
-        "请生成一道简答题，鼓励学生用自己的话回答，而不是单纯填空。"
+        f"掌握度：{mastery:.2f}\n"
+        f"认知负荷：{cognitive_load:.2f}\n"
+        f"挫败感：{frustration:.2f}\n"
+        f"学生画像全文：{profile.profile_prompt()}\n"
+        "请生成一道完全针对此学生定制的简答题，鼓励学生用自己的话回答。"
     )
 
     try:
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-        import json as json_lib
-        result = json_lib.loads(response)
+        result = _parse_llm_json(response)
+        if not result:
+            raise ValueError("parse failed")
         raw_hints = result.get("hints", [])
         result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
     except Exception:
@@ -321,32 +382,46 @@ async def evaluate_answer(
     llm = await _get_llm(request)
 
     system_prompt = (
-        "你是一个严格但友好的评估者。你需要：\n"
-        "1. 将学生的答案与参考答案对比\n"
-        "2. 给出accuracy_score (0.0-1.0) 的精确评分\n"
-        "3. 计算ai_confidence (0.0-1.0)，表示你对评分的确信度\n"
-        "4. 生成个性化的feedback，指出正确部分和需要改进的部分\n"
-        "5. 给出next_action: 'review'(需复习)/'practice'(需练习)/'advance'(可以进阶)\n"
-        "6. 给出metacognitive_gap: student_confidence与accuracy的差异提醒\n"
-        "请以JSON格式返回。"
+        "你是一个严谨的评估者。请从多个维度严格评估学生的答案。\n"
+        "请以JSON格式返回，字段如下：\n"
+        "{\n"
+        '  "accuracy_score": 0.0~1.0,  // 整体准确度\n'
+        '  "ai_confidence": 0.0~1.0,\n'
+        '  "score_breakdown": {\n'
+        '    "key_points_coverage": 0.0~1.0,  // 覆盖了多少参考答案关键点\n'
+        '    "semantic_correctness": 0.0~1.0, // 语义是否正确\n'
+        '    "depth_and_detail": 0.0~1.0,     // 深度和细节\n'
+        '    "clarity_and_logic": 0.0~1.0     // 逻辑清晰度\n'
+        "  },\n"
+        '  "feedback": "详细的个性化反馈，先肯定正确部分，再指出遗漏和误解",\n'
+        '  "misconceptions": ["具体误解1", "误解2"],\n'
+        '  "missing_points": ["遗漏要点1", "遗漏要点2"],\n'
+        '  "next_action": "review"|"practice"|"advance",\n'
+        '  "metacognitive_gap": "学生自评与真实表现的差异分析"\n'
+        "}\n"
+        "评分标准：accuracy_score < 0.4=严重不足, 0.4~0.7=部分正确, >0.7=良好。"
     )
     user_prompt = (
         f"问题：{quiz_record.question}\n"
         f"参考答案要点：{quiz_record.correct_answer}\n"
         f"学生答案：{student_answer}\n"
         f"学生自评置信度：{student_confidence:.2f}\n"
-        f"请严格评估并返回JSON。"
+        "请严格评估并返回JSON。"
     )
 
     try:
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-        import json as json_lib
-        result = json_lib.loads(response)
+        result = _parse_llm_json(response)
+        if not result:
+            raise ValueError("parse failed")
     except Exception:
         result = {
             "accuracy_score": 0.6,
             "ai_confidence": 0.7,
-            "feedback": f"你的答案包含一些正确要点。参考答案包含:{quiz_record.correct_answer[:100]}...",
+            "score_breakdown": {"key_points_coverage":0.5,"semantic_correctness":0.6,"depth_and_detail":0.5,"clarity_and_logic":0.6},
+            "feedback": f"你的答案包含一些正确要点。参考答案:{quiz_record.correct_answer[:100]}...",
+            "misconceptions": [],
+            "missing_points": ["请对照参考答案检查遗漏"],
             "next_action": "practice",
             "metacognitive_gap": "",
         }
@@ -407,6 +482,16 @@ async def evaluate_answer(
 
     concept_mastery_updated = await run_db_op(perform_eval_updates)
 
+    # === 触发画像探针 LLM 抽取 ===
+    try:
+        from swarm_factory import build_swarm_from_headers
+        swarm = build_swarm_from_headers(request.headers)
+        profile = swarm.profile_store.get(student_id)
+        if profile:
+            await swarm.profile_probe.async_update(profile, f"我回答了关于{quiz_record.target_concept}的问题: {student_answer}")
+    except Exception:
+        pass
+
     # === 任务 10.1: 发布答题事件到 LearningEventBus ===
     try:
         await publish_quiz_event(
@@ -445,9 +530,14 @@ async def evaluate_answer(
         "quiz_id": quiz_id,
         "accuracy_score": accuracy_score,
         "ai_confidence": ai_confidence,
+        "score_breakdown": result.get("score_breakdown", {}),
         "feedback": result.get("feedback", ""),
+        "misconceptions": result.get("misconceptions", []),
+        "missing_points": result.get("missing_points", []),
         "next_action": result.get("next_action", "practice"),
         "metacognitive_gap": result.get("metacognitive_gap", ""),
+        "student_answer": student_answer,
+        "reference_answer": quiz_record.correct_answer,
         "concept_mastery_updated": concept_mastery_updated,
         "student_confidence": student_confidence,
         "confidence_calibration": abs(student_confidence - accuracy_score),
@@ -485,23 +575,41 @@ async def adapt_quiz(
 
     # Generate follow-up quiz
     llm = await _get_llm(request)
+    # 动态难度：根据画像调整
+    cl = profile.cognitive_load; fr = profile.frustration_index; m = profile.concept_mastery.get(target, 0.45)
+    if difficulty == "hard" and (cl > 0.7 or fr > 0.6): difficulty = "medium"
+    elif difficulty == "easy" and m > 0.7: difficulty = "medium"
     system_prompt = (
-        "你是一个智能出题考官。根据学生上次的表现，生成一道针对性的跟进简答题。\n"
-        "以JSON格式返回: question, reference_answer, concept, difficulty, hints"
+        "你是一个智能出题考官。根据学生上次的表现和完整画像，生成一道高度定制的跟进简答题。\n"
+        "请以JSON格式返回：\n"
+        "{\n"
+        '  "question": "题目文本（根据画像调整问法和深度）",\n'
+        '  "reference_answer": "分点列出参考答案（用分号分隔）",\n'
+        '  "concept": "考察的知识点",\n'
+        '  "difficulty": "easy/medium/hard",\n'
+        '  "hints": ["提示1", "提示2", "提示3"]\n'
+        "}\n"
+        "出题规则：低掌握度从基础概念问起；高掌握度考综合应用；挫败感高时降低难度并鼓励。"
     )
     user_prompt = (
         f"目标概念：{target}\n"
         f"难度：{difficulty}\n"
-        f"上次表现后的建议动作：{previous_action}\n"
-        "请生成一道能检验学生是否真正理解的简答题。"
+        f"上次表现建议动作：{previous_action}\n"
+        f"掌握度：{m:.2f}\n"
+        f"认知负荷：{cl:.2f}\n"
+        f"挫败感：{fr:.2f}\n"
+        f"学生画像全文：{profile.profile_prompt()}\n"
+        "请生成一道能真正检验此学生理解的跟进题。"
     )
 
     try:
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-        import json as json_lib
-        result = json_lib.loads(response)
-        raw_hints = result.get("hints", [])
-        result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
+        result = _parse_llm_json(response)
+        if result:
+            raw_hints = result.get("hints", [])
+            result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
+        else:
+            raise ValueError("parse failed")
     except Exception:
         result = _get_fallback_quiz(target, difficulty)
 
@@ -642,8 +750,9 @@ async def generate_similar_quiz(
         attempts += 1
         try:
             response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-            import json as json_lib
-            result = json_lib.loads(response)
+            result = _parse_llm_json(response)
+            if not result:
+                result = {}
 
             # Step 3: 沙箱自校验
             python_code = result.get("python_validator", "")

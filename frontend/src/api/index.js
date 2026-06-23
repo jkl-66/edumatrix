@@ -178,6 +178,14 @@ export async function webSearch(query, studentId = 'default') {
   return r.data
 }
 
+export async function searchArxiv(query, maxResults = 5) {
+  const r = await api.get('/web/arxiv-search', {
+    params: { query, max_results: maxResults },
+    headers: buildHeaders(),
+  })
+  return r.data
+}
+
 export async function loadUrl(url, studentId = 'default') {
   const r = await api.post('/web/load-url', {
     url,

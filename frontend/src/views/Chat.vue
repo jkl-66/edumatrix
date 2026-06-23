@@ -829,9 +829,9 @@ function sanitizeMermaidCode(code) {
     }
 
     // 6. For plain nodes:
-    // If it contains special characters, wrap it in square brackets shape and generate a unique ID.
+    // If it contains special characters (any char other than a-z, A-Z, 0-9, _, -), wrap it in square brackets shape and generate a unique ID.
     // Otherwise, output as plain text without quotes.
-    const hasSpecial = /[\(\)\[\]\{\}"\\:&<>]/g.test(cleaned)
+    const hasSpecial = /[^a-zA-Z0-9_\-]/g.test(cleaned)
     if (hasSpecial) {
       nodeCounter++
       const nodeId = `node_${nodeCounter}`

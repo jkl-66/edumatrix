@@ -462,3 +462,21 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
   * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 12.36s (100% OK)**。
 - **Token 消耗估计**：约 10,000 Input / 1,000 Output
 - **架构师（用户）终审反馈**：Approved
+
+---
+
+### [2026-06-23] - 优化 Mermaid 思维导图特殊字符及裸节点自愈匹配
+- **任务编号**：`TASK_MINDMAP_REGEX_HEAL`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (重构 `hasSpecial` 正则判断，将其更换为更为严苛的 `/[^a-zA-Z0-9_\-]/g`，以实现所有非安全 plain-text ID 节点自动转换为双引号包裹的形状节点)。
+- **自愈重试记录**：
+  1. *第一次分析*：大模型在生成脑图节点时，节点内常包含空格及特殊数学符号（如 `y = wx + b` 或 `Իع $y = wx + b$`）。由于原 hasSpecial 判断正则仅关注了中括号、圆括号、大括号、引号及反斜杠等，忽略了空格、等号、加号及美刀等符号，导致这些非标 plain 节点直接输出为普通纯文本。这使得 Mermaid 脑图渲染时发生 `Parser error` 语法崩溃。
+  2. *修复方案*：重新设计并加固了 hasSpecial 判定。规定凡是包含除英文、数字、下划线、短横线之外（即 `/[^a-zA-Z0-9_\-]/g`）任何特殊字符（含空格、等号、加号、美刀、中文字符等）的裸节点，全部在 `sanitizeMermaidCode` 自愈逻辑中被拦截并转义，自动赋予唯一的 `node_x` ID 并以双引号形状包裹 `node_x["Display Text"]`，确保 100% 通过 Mermaid 脑图解析引擎的安全渲染。
+- **测试验证结果**：
+  * **脚本运行验证**：创建 `scratch/test_mindmap_regex.js` 验证各种非标节点自愈，输出结构中中文字符、空格、LaTeX 数学公式节点全部完美实现自动生成 ID 和双引号安全包装。
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 544ms (100% OK)**。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 8,000 Input / 800 Output
+- **架构师（用户）终审反馈**：Approved
+

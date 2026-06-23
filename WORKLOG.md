@@ -554,15 +554,19 @@
 ---
 
 ### 2026-06-23
-> **今日概述**：拉取并审查队友的最新代码，排查并成功修复了自适应测验出题接口中由于误删 JSON 解析赋值导致的隐藏 `NameError` 崩溃漏洞，保障了大模型出题主流程的高可用，并通过 Conventional Commit 将修复推送回滚上线。
+> **今日概述**：拉取并审查队友的最新代码，排查并成功修复了自适应测验出题接口中由于误删 JSON 解析赋值导致的隐藏 `NameError` 崩溃漏洞；同时针对大模型生成思维导图时部分节点带有空格、等号、加号及数学符号等导致脑图 Parser error 崩溃的问题，重新设计并升级了前端的特殊节点自愈正则，保障了思维导图的 100% 成功渲染及系统核心功能的稳定运行。
 
 #### 1. 计划/完成工作
 [x] **拉取并审查代码**：拉取了队友提交的清理自适应测验提示词前缀重复与 Swarm 引用 model.llm 报错的两个 commits。
 [x] **修复自适应测验 NameError 隐藏缺陷**：
-  - 队友在 `quiz_api.py` 的 `generate_quiz` 接口里新增了去除 `提示X:` 冗余前缀的后处理逻辑，但误删除了用于解析大模型响应的 JSON 赋值行 `result = json_lib.loads(response)`。
+  - 队友在 `quiz_api.py` 的 `generate_quiz` 接口里新增了去除 `提示X:` 冗余前缀的后处理逻辑，但误删除了用于解析大模型响应 of JSON 赋值行 `result = json_lib.loads(response)`。
   - 由于该接口有宽泛的 `except Exception` 异常拦截保护，虽然不会导致接口 500 崩溃，但会导致真实 LLM 调用链路永远因为 `NameError: name 'result' is not defined` 报错而退化走本地 Mock 的 fallback 讲义分支，使大模型真实测验功能失效。
   - 已在 `quiz_api.py` 中重新补充定义并正确赋值 `result = json_lib.loads(response)`。
+[x] **优化 Mermaid 思维导图特殊字符及裸节点匹配正则**：
+  - 针对大模型脑图输出中频繁包含空格、等号、加号、美刀符号、中文字符等 plain 节点引发的 Mermaid 解析语法错误（`Parser error`），在 `Chat.vue` 的 `sanitizeMermaidCode` 重构清洗器中，将 `hasSpecial` 正则判断加固为 `/[^a-zA-Z0-9_\-]/g.test(cleaned)`。
+  - 保证凡是包含任何非标 plain 字符的裸节点，全部在前端自愈过程中被拦截并转换为带有唯一 ID 的双引号形状节点 `node_x["Display Text"]` 写入脑图代码，完美打通了脑图的稳健渲染通道。
 
 #### 2. 测试与编译校验
-* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 12.36s (100% OK)**。
-* 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed in 11.97s (100% OK)**。
+* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 544ms (100% OK)**。
+* 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed (100% OK)**。
+* 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**。对于中文、数学公式及空格等非标裸节点，自愈输出转换完全符合 Mermaid 语法预期。

@@ -294,9 +294,13 @@ for extra in ("numpy", "np", "pandas", "pd", "matplotlib", "plt", "sklearn", "to
             if extra == "matplotlib":
                 import matplotlib
                 matplotlib.use("Agg")
+                matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', 'sans-serif']
+                matplotlib.rcParams['axes.unicode_minus'] = False
                 restricted_globals["matplotlib"] = matplotlib
             elif extra == "plt":
                 import matplotlib.pyplot as plt
+                plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', 'sans-serif']
+                plt.rcParams['axes.unicode_minus'] = False
                 restricted_globals["plt"] = plt
             elif extra in ("numpy", "np"):
                 import numpy as np

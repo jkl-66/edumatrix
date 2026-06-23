@@ -585,7 +585,12 @@
   - **Poincaré 双曲圆盘 Canvas 尺寸为 0 修复**：分析定位到侧边栏展开过渡期（transition）中，由于父容器 `clientWidth` 动态变化但 `window.resize` 事件未触发，导致 Canvas 实际渲染宽度被初始化为 0 的 Bug。在 `ManifoldVisualizer.vue` 中引入 `ResizeObserver` 动态监听父容器物理大小变化，并在过渡期自动调用 `resize()` 和 `initParticles()` 重绘，彻底解决了双曲线对齐画布显示为空白的问题。
   - **用户聊天气泡 1.5px 精致边框规范化**：修复了原气泡模板直接使用 Tailwind 不支持的 `border-1.5` 导致边框失效的 Bug。在 `style.css` 中为用户卡片定制了 `.chat-card-user` 样式类，配置了 `1.5px solid #3b82f6` 的加深蓝色精致边框、微光透明背景及阴影，并在 `Chat.vue` 中替换挂载，实现了精致对称的排版。
 
+[x] **思维导图连线层级颜色深度与渐细美化**：
+  - **连线颜色更深一级**：在 `CollapsibleMindmap.vue` 节点颜色字典 `getNodeColors(d)` 中，为 Root、Level 1 及 Level 2+ 层级各增设一个比原本 Stroke 边框色更深一级的 `line` 颜色（分别设为 Indigo-600 `#4f46e5`、Blue-600 `#2563eb` 和 Emerald-600 `#059669`），并将 D3.js 连线的 `stroke` 颜色统一替换为首端起点的 `line` 属性。
+  - **线条粗细/不透明度层级渐细**：为了让连线形态更加清秀、主次分明，对连线的粗细与不透明度配置了视觉层级渐细效果（根节点线条宽 `2.2px`、不透明度 `0.85`；一级分支宽 `1.8px`、不透明度 `0.8`；二级及深层分支宽 `1.4px`、不透明度 `0.75`），并配合 `stroke-linecap: round` 使曲线相交边缘过渡更为平滑优雅。
+
 #### 2. 测试与编译校验
-* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 599ms (100% OK)**。
+* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 615ms (100% OK)**。
 * 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed (100% OK)**。
 * 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**。对于中文、数学公式及空格等非标裸节点，自愈输出转换完全符合 Mermaid 语法预期。
+

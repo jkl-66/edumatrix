@@ -103,19 +103,22 @@ function getNodeColors(d) {
     return {
       fill: '#e8ecfb',        // Soft purple-blue root
       stroke: '#818cf8',      // Indigo border
-      text: '#4338ca'         // Indigo text
+      text: '#4338ca',        // Indigo text
+      line: '#4f46e5'         // Indigo-600 (one level darker than stroke #818cf8)
     }
   } else if (depth === 1) {
     return {
       fill: '#eff6ff',        // Soft sky blue
       stroke: '#3b82f6',      // Blue border
-      text: '#1e3a8a'         // Dark blue text
+      text: '#1e3a8a',        // Dark blue text
+      line: '#2563eb'         // Blue-600 (one level darker than stroke #3b82f6)
     }
   } else {
     return {
       fill: '#ecfdf5',        // Soft mint green
       stroke: '#10b981',      // Emerald border
-      text: '#064e3b'         // Dark emerald green text
+      text: '#064e3b',        // Dark emerald green text
+      line: '#059669'         // Emerald-600 (one level darker than stroke #10b981)
     }
   }
 }
@@ -175,6 +178,40 @@ function initAndRender() {
   centerLayout()
 }
 
+// 渲染节点 HTML (支持 KaTeX 行内渲染与 sub/sup 上下标 fallback 转换)
+function renderNodeHtml(text) {
+  if (!text) return ''
+
+  // 如果包含 $ 符号，尝试用 KaTeX 渲染
+  if (text.includes('$') && window.katex) {
+    try {
+      return text.replace(/\$([^$]+)\$/g, (_, math) => {
+        return window.katex.renderToString(math, {
+          throwOnError: false,
+          displayMode: false
+        })
+      })
+    } catch (e) {
+      console.error('KaTeX error in mindmap node:', e)
+    }
+  }
+
+  // 兜底的轻量级上下标及希腊字母正则转换
+  let rendered = text
+    .replace(/([a-zA-Z0-9])_\{([^}]+)\}/g, '$1<sub>$2</sub>')
+    .replace(/([a-zA-Z0-9])_([a-zA-Z0-9]+)/g, '$1<sub>$2</sub>')
+    .replace(/([a-zA-Z0-9])\^\{([^}]+)\}/g, '$1<sup>$2</sup>')
+    .replace(/([a-zA-Z0-9])\^([a-zA-Z0-9+-\\*\\partial]+)/g, '$1<sup>$2</sup>')
+    .replace(/\\sigma\b/g, 'σ')
+    .replace(/\\Sigma\b/g, '∑')
+    .replace(/\\alpha\b/g, 'α')
+    .replace(/\\beta\b/g, 'β')
+    .replace(/\\theta\b/g, 'θ')
+    .replace(/\\cdot/g, '·')
+
+  return rendered
+}
+
 function updateTree(source) {
   if (!d3Root || !d3G) return
 
@@ -195,7 +232,9 @@ function updateTree(source) {
     for (let char of name) {
       len += char.charCodeAt(0) > 127 ? 11 : 6.5
     }
-    d.halfWidth = (len + 20) / 2
+    // 对公式节点和包含 LaTeX 特征的文本，增加 25px 的 padding 缓冲值
+    const hasMath = name.includes('$') || name.includes('_') || name.includes('^') || name.includes('{') || name.includes('}') || name.includes('\\')
+    d.halfWidth = (len + (hasMath ? 45 : 20)) / 2
   })
 
   // --- Node Section ---
@@ -218,14 +257,24 @@ function updateTree(source) {
     .attr('stroke', '#818cf8')
     .attr('stroke-width', 1.5)
 
-  // Text label
-  nodeEnter.append('text')
-    .attr('dy', '0.31em')
-    .attr('text-anchor', 'middle')
+  // Text label via foreignObject (for rich text/LaTeX rendering)
+  const fo = nodeEnter.append('foreignObject')
+    .attr('class', 'node-fo')
+    .attr('height', 24)
+    .attr('y', -12)
+    .style('overflow', 'visible')
+
+  fo.append('xhtml:div')
+    .attr('class', 'mindmap-node-content')
+    .style('width', '100%')
+    .style('height', '100%')
+    .style('display', 'flex')
+    .style('align-items', 'center')
+    .style('justify-content', 'center')
     .style('font-size', '10px')
     .style('font-weight', '500')
     .style('user-select', 'none')
-    .text(d => d.data.name)
+    .style('line-height', '1.2')
 
   // Small circle toggle button `<` or `>` at the right edge center
   const toggleG = nodeEnter.append('g')
@@ -274,8 +323,14 @@ function updateTree(source) {
     .attr('stroke', d => getNodeColors(d).stroke)
     .attr('stroke-width', 1.5)
 
-  nodeUpdate.select('text')
-    .attr('fill', d => getNodeColors(d).text)
+  // Update foreignObject position and content
+  const foUpdate = nodeUpdate.select('foreignObject')
+    .attr('x', d => -d.halfWidth)
+    .attr('width', d => d.halfWidth * 2)
+
+  foUpdate.select('div.mindmap-node-content')
+    .html(d => renderNodeHtml(d.data.name))
+    .style('color', d => getNodeColors(d).text)
 
   // Update toggle button position and content
   const toggleUpdate = nodeUpdate.select('g.toggle-btn')
@@ -299,8 +354,8 @@ function updateTree(source) {
     .attr('width', 0)
     .attr('height', 0)
 
-  nodeExit.select('text')
-    .style('fill-opacity', 0)
+  nodeExit.select('foreignObject')
+    .style('opacity', 0)
 
   // --- Link Section ---
   const link = d3G.selectAll('path.link')
@@ -312,8 +367,10 @@ function updateTree(source) {
   const linkEnter = link.enter().insert('path', 'g')
     .attr('class', 'link')
     .attr('fill', 'none')
-    .attr('stroke', '#cbd5e1')
-    .attr('stroke-width', 1.5)
+    .attr('stroke', d => getNodeColors(d.source).line)
+    .attr('stroke-opacity', d => d.source.depth === 0 ? 0.85 : (d.source.depth === 1 ? 0.8 : 0.75))
+    .attr('stroke-width', d => d.source.depth === 0 ? 2.2 : (d.source.depth === 1 ? 1.8 : 1.4))
+    .style('stroke-linecap', 'round')
     .attr('d', d => {
       const o = { x: source.x0, y: source.y0 + source.halfWidth }
       return linkGenerator({ source: o, target: o })
@@ -323,7 +380,10 @@ function updateTree(source) {
   const linkUpdate = link.merge(linkEnter)
   linkUpdate.transition()
     .duration(300)
-    .attr('stroke', '#cbd5e1')
+    .attr('stroke', d => getNodeColors(d.source).line)
+    .attr('stroke-opacity', d => d.source.depth === 0 ? 0.85 : (d.source.depth === 1 ? 0.8 : 0.75))
+    .attr('stroke-width', d => d.source.depth === 0 ? 2.2 : (d.source.depth === 1 ? 1.8 : 1.4))
+    .style('stroke-linecap', 'round')
     .attr('d', d => {
       const s = { y: d.source.y + d.source.halfWidth, x: d.source.x }
       const t = { y: d.target.y - d.target.halfWidth, x: d.target.x }

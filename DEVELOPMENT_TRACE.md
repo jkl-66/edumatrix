@@ -563,3 +563,19 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 8,000 Input / 800 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 思维导图连线层级配色与美化升级 (LaTeX与线条升级)
+- **任务编号**：`TASK_MINDMAP_LATEX_AND_LINK_UPGRADE`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[CollapsibleMindmap.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/CollapsibleMindmap.vue) (在 `getNodeColors` 颜色映射中为各个层级新增 one level darker 的 `line` 配色属性，重构 `linkEnter` 与 `linkUpdate` 中连线 `stroke` 颜色为 `getNodeColors(d.source).line`，并根据连线源层级调整 `stroke-width` 和 `stroke-opacity`，配合 `stroke-linecap: round` 实现层级渐细的高保真连线效果)。
+- **自愈重试记录**：
+  * 无报错，首次集成即编译通过，渲染表现完美。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 615ms (100% OK)**。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 3,500 Input / 400 Output
+- **架构师（用户）终审反馈**：Approved
+
+

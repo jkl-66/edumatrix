@@ -99,6 +99,86 @@ function askDeeper() {
     '💡 可在主对话框中继续追问详细推导',
   ])
 }
+
+// 渲染 Markdown & LaTeX 公式 (复用与对齐主聊天框解析逻辑)
+function renderMarkdown(text) {
+  if (!text) return ''
+
+  let html = text.trim()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+  // 1. 提取公式块
+  const blockMath = []
+  html = html.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
+    const idx = blockMath.length
+    blockMath.push({ math: math.trim(), display: true })
+    return `@@BLOCKMATHTOKEN${idx}@@`
+  })
+  html = html.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
+    const idx = blockMath.length
+    blockMath.push({ math: math.trim(), display: true })
+    return `@@BLOCKMATHTOKEN${idx}@@`
+  })
+
+  const inlineMath = []
+  html = html.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
+    const idx = inlineMath.length
+    inlineMath.push({ math: math.trim(), display: false })
+    return `@@INLINEMATHTOKEN${idx}@@`
+  })
+  html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => {
+    const idx = inlineMath.length
+    inlineMath.push({ math: math.trim(), display: false })
+    return `@@INLINEMATHTOKEN${idx}@@`
+  })
+
+  // 2. 行内轻量级 Markdown 语法转换
+  html = html
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-white">$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em class="italic text-gray-200">$1</em>')
+    .replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 bg-gray-800 text-yellow-300 rounded font-mono text-xs">$1</code>')
+
+  // LaTeX 公式渲染辅助器
+  function renderMath(math, display) {
+    if (window.katex) {
+      try {
+        return window.katex.renderToString(math, {
+          displayMode: display,
+          throwOnError: false,
+          trust: true
+        })
+      } catch (err) {
+        console.error('KaTeX rendering error:', err)
+      }
+    }
+    return display
+      ? `<div class="my-2 p-2 bg-gray-800/80 text-center font-serif text-xs overflow-x-auto text-gray-200 border border-gray-700 rounded">${math}</div>`
+      : `<span class="font-serif italic px-1 bg-gray-850 rounded text-gray-200">${math}</span>`
+  }
+
+  // 格式化文本中残余的未处理 LaTeX 符号
+  html = html
+    .replace(/\\in\b/g, ' ∈ ')
+    .replace(/\\sigma\b/g, 'σ')
+    .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '<span style="text-decoration: overline">$1</span>')
+    .replace(/\\([{}])/g, '$1')
+    .replace(/([a-zA-Z0-9])_([a-zA-Z0-9_]+)/g, '$1<sub>$2</sub>')
+    .replace(/([a-zA-Z0-9])_\{([^}]+)\}/g, '$1<sub>$2</sub>')
+    .replace(/([a-zA-Z0-9])\^([a-zA-Z0-9+-\\*\\top\\partial]+)/g, (match, base, exp) => `${base}<sup>${exp}</sup>`)
+    .replace(/([a-zA-Z0-9])\^\{([^}]+)\}/g, (match, base, exp) => `${base}<sup>${exp}</sup>`)
+
+  // 3. 还原被保护的 LaTeX 公式 Token
+  blockMath.forEach((item, idx) => {
+    html = html.split(`@@BLOCKMATHTOKEN${idx}@@`).join(renderMath(item.math, true))
+  })
+  inlineMath.forEach((item, idx) => {
+    html = html.split(`@@INLINEMATHTOKEN${idx}@@`).join(renderMath(item.math, false))
+  })
+
+  return html
+}
 </script>
 
 <template>
@@ -131,9 +211,9 @@ function askDeeper() {
           </div>
           <div v-else class="space-y-2">
             <div v-for="(step, i) in steps" :key="i"
-              class="text-xs text-gray-300"
-              :class="{ 'text-purple-300 font-medium': step.startsWith('💡') }">
-              {{ step }}
+              class="text-xs text-gray-300 leading-relaxed"
+              :class="{ 'text-purple-300 font-medium': step.startsWith('💡') }"
+              v-html="renderMarkdown(step)">
             </div>
             <button @click="askDeeper"
               class="mt-3 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs transition-colors">

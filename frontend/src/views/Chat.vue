@@ -12,7 +12,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles,
-  RotateCcw, Download, FileText, Maximize2, Minimize2,
+  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
 import SandboxConsole from '../components/SandboxConsole.vue'
@@ -1240,9 +1240,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
   <div class="flex gap-4 h-full">
     <!-- Main content area -->
     <div class="flex-1 flex flex-col min-w-0">
-      <!-- Tabs -->
-      <div class="flex items-center justify-between mb-4 border-b border-gray-200 pb-2">
-        <div class="flex gap-1">
+      <!-- Premium Tabs -->
+      <div class="flex items-center justify-between mb-5 border-b border-gray-100 pb-0">
+        <div class="flex gap-0.5 bg-gray-50/80 backdrop-blur-sm rounded-xl p-0.5 shadow-sm">
           <button class="tab-btn" :class="{ active: activeTab === 'chat' }" @click="activeTab = 'chat'">
             <MessageSquare :size="14" /> 对话
           </button>
@@ -1258,7 +1258,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
         <button v-if="activeTab === 'chat' && rightPanelCollapsed"
           @click="rightPanelCollapsed = false"
-          class="px-2.5 py-1 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg flex items-center gap-1 transition-all">
+          class="px-2.5 py-1 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg flex items-center gap-1 transition-all">
           <Maximize2 :size="12" /> 展开可视化画板
         </button>
       </div>
@@ -1392,18 +1392,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
 
         <!-- Idle state -->
-        <div v-if="quizState === 'idle'" class="flex-1 flex flex-col items-center justify-center text-center text-gray-400">
-          <HelpCircle :size="48" class="mb-3 text-gray-300" />
-          <p class="text-sm font-medium text-gray-700 mb-3">选择知识点开始测验</p>
-          <div class="flex gap-2 mb-4">
+        <div v-if="quizState === 'idle'" class="flex-1 flex flex-col items-center justify-center text-center">
+          <div class="w-16 h-16 bg-gradient-to-br from-purple-50 to-purple-100 rounded-2xl flex items-center justify-center mb-4 shadow-sm">
+            <BrainCircuit :size="32" class="text-purple-500" />
+          </div>
+          <p class="text-sm font-semibold text-gray-700 mb-1">自适应测验</p>
+          <p class="text-xs text-gray-400 mb-5">选择知识点，AI 将动态生成针对性题目</p>
+          <div class="flex gap-2 mb-5 flex-wrap justify-center">
             <button v-for="concept in ['逻辑回归', '池化层', '过拟合', '反向传播', '卷积神经网络']" :key="concept"
-              class="btn btn-outline text-xs" @click="quizConcept = concept; startQuiz()">
+              class="px-3.5 py-2 text-xs font-medium rounded-xl border border-gray-200 bg-white hover:bg-purple-50 hover:border-purple-200 hover:text-purple-700 text-gray-600 transition-all shadow-sm"
+              @click="quizConcept = concept; startQuiz()">
               {{ concept }}
             </button>
           </div>
           <div class="flex gap-2 w-full max-w-md">
-            <input v-model="quizConcept" class="input flex-1" placeholder="输入自定义知识点..." @keydown.enter="startQuiz" />
-            <button class="btn btn-primary" :disabled="!quizConcept.trim()" @click="startQuiz">开始</button>
+            <input v-model="quizConcept" class="flex-1 px-4 py-2.5 text-sm rounded-xl border border-gray-200 bg-white focus:border-purple-300 focus:ring-2 focus:ring-purple-100 outline-none transition-all placeholder:text-gray-300" placeholder="输入自定义知识点..." @keydown.enter="startQuiz" />
+            <button class="px-5 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-700 hover:to-indigo-700 shadow-sm transition-all" :disabled="!quizConcept.trim()" @click="startQuiz">开始</button>
           </div>
         </div>
 
@@ -1414,27 +1418,29 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
         <!-- Answering -->
         <div v-if="quizState === 'answering' && quizData" class="flex-1 flex flex-col">
-          <div class="card mb-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="badge bg-purple-100 text-purple-700 text-xs">第 {{ quizAttempt }} 题</span>
-              <span class="badge bg-blue-100 text-blue-700 text-xs">{{ quizData.concept }}</span>
-              <span class="badge bg-gray-100 text-gray-600 text-xs">{{ quizData.difficulty }}</span>
+          <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 mb-4">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-purple-50 to-purple-100 text-purple-700">第 {{ quizAttempt }} 题</span>
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-blue-50 to-blue-100 text-blue-700">{{ quizData.concept }}</span>
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gradient-to-r from-gray-50 to-gray-100 text-gray-600">{{ quizData.difficulty }}</span>
             </div>
-            <p class="text-sm font-medium text-gray-800 mb-3">{{ quizData.question }}</p>
-            <div v-if="quizData.hints?.length" class="text-xs text-gray-500 space-y-1">
-              <p class="font-medium text-gray-600">提示：</p>
-              <p v-for="(hint, hi) in quizData.hints" :key="hi" class="pl-2 border-l-2 border-gray-200">提示{{ hi + 1 }}: {{ hint }}</p>
+            <p class="text-sm font-medium text-gray-800 leading-relaxed mb-4">{{ quizData.question }}</p>
+            <div v-if="quizData.hints?.length" class="bg-amber-50/80 border border-amber-100 rounded-xl p-3.5 space-y-2">
+              <p class="text-xs font-semibold text-amber-700 flex items-center gap-1.5">
+                <Lightbulb :size="13" /> 提示阶梯
+              </p>
+              <p v-for="(hint, hi) in quizData.hints" :key="hi" class="text-xs text-amber-700/80 pl-3 border-l-2 border-amber-200 leading-relaxed">{{ hint }}</p>
             </div>
           </div>
 
           <div class="flex-1" />
-          <textarea v-model="quizAnswer" class="input mb-3 min-h-[100px]" placeholder="输入你的答案..." />
-          <div class="flex items-center gap-3 mb-3">
-            <span class="text-xs text-gray-500 shrink-0">自评置信度:</span>
-            <input type="range" min="1" max="10" v-model.number="quizConfidence" class="flex-1" />
-            <span class="text-xs font-medium text-gray-700 w-8 text-right">{{ quizConfidence }}/10</span>
+          <textarea v-model="quizAnswer" class="w-full px-4 py-3 text-sm rounded-xl border border-gray-200 bg-white focus:border-purple-300 focus:ring-2 focus:ring-purple-100 outline-none transition-all resize-none min-h-[90px] placeholder:text-gray-300" placeholder="输入你的答案..." />
+          <div class="flex items-center gap-3 my-3 bg-gray-50/80 rounded-xl px-4 py-2.5">
+            <span class="text-xs text-gray-500 shrink-0 font-medium">自评置信度</span>
+            <input type="range" min="1" max="10" v-model.number="quizConfidence" class="flex-1 accent-purple-600 h-1.5" />
+            <span class="text-xs font-bold text-purple-700 w-8 text-right bg-purple-50 rounded-lg px-2 py-0.5">{{ quizConfidence }}/10</span>
           </div>
-          <button class="btn btn-primary w-full" :disabled="!quizAnswer.trim()" @click="submitQuizAnswer">
+          <button class="w-full py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-700 hover:to-indigo-700 shadow-sm transition-all flex items-center justify-center gap-2" :disabled="!quizAnswer.trim()" @click="submitQuizAnswer">
             <Send :size="14" /> 提交答案
           </button>
         </div>
@@ -1508,32 +1514,37 @@ function renderMarkdown(text, type = '', conceptName = '') {
       <div v-if="activeTab === 'code'" class="flex flex-col flex-1 min-h-0 max-w-4xl">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-semibold text-gray-800 flex items-center gap-2">
-            <Terminal :size="16" class="text-green-600" /> Python 代码执行
+            <Terminal :size="16" class="text-emerald-600" /> Python 代码沙箱
           </h3>
           <div class="flex gap-1">
-            <button v-for="preset in codePresets" :key="preset.label" class="btn btn-outline text-[10px] py-1 px-2" @click="insertCodeSnippet(preset.code)">{{ preset.label }}</button>
+            <button v-for="preset in codePresets" :key="preset.label" class="px-2.5 py-1 text-[10px] font-medium rounded-lg border border-gray-200 bg-white hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 text-gray-500 transition-all" @click="insertCodeSnippet(preset.code)">{{ preset.label }}</button>
           </div>
         </div>
 
         <div class="flex-1 flex flex-col min-h-0">
-          <div class="flex-1 flex flex-col border border-gray-200 rounded-lg overflow-hidden">
-            <div class="bg-gray-900 text-gray-200 text-xs px-3 py-1.5 flex items-center justify-between">
-              <span>main.py</span>
-              <button class="btn text-[10px] py-0.5 px-2 bg-green-600 hover:bg-green-700 text-white" :disabled="!codeInput.trim() || codeRunning" @click="runUserCode">
+          <div class="flex-1 flex flex-col rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+            <div class="bg-gray-900 text-gray-300 text-xs px-4 py-2 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-red-400" />
+                <span class="w-2.5 h-2.5 rounded-full bg-yellow-400" />
+                <span class="w-2.5 h-2.5 rounded-full bg-green-400" />
+                <span class="ml-2 font-mono text-gray-400">sandbox.py</span>
+              </div>
+              <button class="px-3 py-1 text-[10px] font-semibold rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white transition-all flex items-center gap-1.5" :disabled="!codeInput.trim() || codeRunning" @click="runUserCode">
                 <Play :size="10" /> {{ codeRunning ? '运行中...' : '运行' }}
               </button>
             </div>
-            <textarea v-model="codeInput" class="flex-1 bg-gray-900 text-green-400 font-mono text-xs p-3 resize-none outline-none" placeholder="# 在这里输入 Python 代码..." spellcheck="false" />
+            <textarea v-model="codeInput" class="flex-1 bg-gray-900 text-emerald-300 font-mono text-xs p-4 resize-none outline-none leading-relaxed" placeholder="# 在这里输入 Python 代码..." spellcheck="false" />
           </div>
 
-          <div v-if="codeOutput || codeError" class="mt-3 border border-gray-200 rounded-lg overflow-hidden">
-            <div class="bg-gray-100 text-xs px-3 py-1.5 text-gray-500 flex items-center justify-between">
-              <span>输出 ({{ codeExecTime }}ms)</span>
-              <button class="text-gray-400 hover:text-gray-600" @click="codeOutput = ''; codeError = ''"><Trash2 :size="12" /></button>
+          <div v-if="codeOutput || codeError" class="mt-3 rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+            <div class="bg-gray-100 text-xs px-4 py-2 text-gray-500 flex items-center justify-between">
+              <span class="font-medium flex items-center gap-1.5"><Terminal :size="12" /> 输出 ({{ codeExecTime }}ms)</span>
+              <button class="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-200 transition-all" @click="codeOutput = ''; codeError = ''"><Trash2 :size="12" /></button>
             </div>
-            <div class="bg-gray-50 p-3 max-h-48 overflow-y-auto">
-              <pre v-if="codeOutput" class="text-xs text-gray-800 whitespace-pre-wrap font-mono">{{ codeOutput }}</pre>
-              <pre v-if="codeError" class="text-xs text-red-600 whitespace-pre-wrap font-mono">{{ codeError }}</pre>
+            <div class="bg-gray-50 p-4 max-h-48 overflow-y-auto">
+              <pre v-if="codeOutput" class="text-xs text-gray-800 whitespace-pre-wrap font-mono leading-relaxed">{{ codeOutput }}</pre>
+              <pre v-if="codeError" class="text-xs text-red-600 whitespace-pre-wrap font-mono leading-relaxed">{{ codeError }}</pre>
             </div>
           </div>
         </div>
@@ -1541,39 +1552,53 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
       <!-- WEB SEARCH TAB -->
       <div v-if="activeTab === 'websearch'" class="flex flex-col flex-1 min-h-0 max-w-4xl">
-        <h3 class="text-sm font-semibold text-gray-800 flex items-center gap-2 mb-4">
-          <Globe :size="16" class="text-blue-600" /> 联网搜索与文档加载
-        </h3>
+        <div class="flex items-center gap-2 mb-4">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center">
+            <Globe :size="18" class="text-blue-500" />
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-gray-800">联网搜索</h3>
+            <p class="text-[10px] text-gray-400">检索互联网资源辅助学习</p>
+          </div>
+        </div>
 
         <div class="space-y-4">
-          <div class="card">
-            <p class="text-xs font-medium text-gray-600 mb-2">搜索网络</p>
+          <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <div class="flex gap-2">
-              <input v-model="searchQuery" class="input flex-1" placeholder="输入搜索关键词..." @keydown.enter="doWebSearch" />
-              <button class="btn btn-primary" :disabled="!searchQuery.trim() || searchLoading" @click="doWebSearch">
+              <div class="relative flex-1">
+                <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input v-model="searchQuery" class="w-full pl-9 pr-3 py-2.5 text-sm rounded-xl border border-gray-200 bg-white focus:border-blue-300 focus:ring-2 focus:ring-blue-100 outline-none transition-all placeholder:text-gray-300" placeholder="输入搜索关键词..." @keydown.enter="doWebSearch" />
+              </div>
+              <button class="px-4 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-sm transition-all flex items-center gap-1.5" :disabled="!searchQuery.trim() || searchLoading" @click="doWebSearch">
                 <Search :size="14" /> {{ searchLoading ? '搜索中...' : '搜索' }}
               </button>
             </div>
-            <div v-if="searchLoading" class="flex items-center gap-2 mt-3 text-gray-400 text-sm">
-              <Loader2 :size="14" class="animate-spin" /> 正在搜索并索引...
+            <div v-if="searchLoading" class="flex items-center gap-2 mt-3 text-gray-400 text-xs">
+              <div class="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+              正在搜索并索引...
             </div>
-            <div v-if="searchSummary" class="mt-3 text-sm text-gray-700 bg-blue-50 rounded-lg p-3 whitespace-pre-wrap">{{ searchSummary }}</div>
-            <div v-if="searchResults.length" class="mt-3 space-y-2">
-              <div v-for="(r, i) in searchResults" :key="i" class="flex items-start gap-2 p-2 hover:bg-gray-50 rounded-lg">
-                <ExternalLink :size="12" class="text-gray-400 mt-0.5 shrink-0" />
-                <div class="min-w-0">
-                  <a :href="r.url" target="_blank" class="text-xs font-medium text-blue-600 hover:underline truncate block">{{ r.title }}</a>
-                  <p class="text-[10px] text-gray-500 mt-0.5 line-clamp-2">{{ r.snippet }}</p>
+            <div v-if="searchSummary" class="mt-3 text-sm text-gray-700 bg-gradient-to-r from-blue-50 to-indigo-50/50 rounded-xl p-4 whitespace-pre-wrap border border-blue-100/50 leading-relaxed">{{ searchSummary }}</div>
+            <div v-if="searchResults.length" class="mt-3 space-y-1">
+              <div v-for="(r, i) in searchResults" :key="i" class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-all cursor-pointer" @click="window.open(r.url, '_blank')">
+                <div class="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center shrink-0 mt-0.5">
+                  <FileText :size="12" class="text-blue-500" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-xs font-semibold text-gray-800 hover:text-blue-600 truncate">{{ r.title }}</p>
+                  <p class="text-[10px] text-gray-400 mt-0.5 line-clamp-2 leading-relaxed">{{ r.snippet }}</p>
+                  <p v-if="r.url" class="text-[9px] text-gray-300 mt-0.5 truncate">{{ r.url }}</p>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="card">
-            <p class="text-xs font-medium text-gray-600 mb-2">加载网页 URL</p>
+          <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <p class="text-xs font-semibold text-gray-600 mb-3 flex items-center gap-1.5">
+              <ExternalLink :size="13" class="text-indigo-500" /> 加载网页内容
+            </p>
             <div class="flex gap-2">
-              <input v-model="urlInput" class="input flex-1" placeholder="输入网页URL..." @keydown.enter="doLoadUrl" />
-              <button class="btn btn-primary" :disabled="!urlInput.trim() || urlLoading" @click="doLoadUrl">
+              <input v-model="urlInput" class="flex-1 px-4 py-2.5 text-sm rounded-xl border border-gray-200 bg-white focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 outline-none transition-all placeholder:text-gray-300" placeholder="输入网页URL..." @keydown.enter="doLoadUrl" />
+              <button class="px-4 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 text-white hover:from-indigo-700 hover:to-blue-700 shadow-sm transition-all flex items-center gap-1.5" :disabled="!urlInput.trim() || urlLoading" @click="doLoadUrl">
                 <ExternalLink :size="14" /> {{ urlLoading ? '加载中...' : '加载' }}
               </button>
             </div>
@@ -1589,12 +1614,12 @@ function renderMarkdown(text, type = '', conceptName = '') {
               </div>
             </div>
             <div v-if="urlResult?.error" class="mt-3 text-sm text-red-600 bg-red-50 rounded-lg p-3">{{ urlResult.error }}</div>
-            </div>
-            </div>
-            </div>
+          </div>
+        </div>
+      </div>
 
-            <!-- Right Visualization Sidebar -->
-            <div class="w-80 hidden xl:flex flex-col gap-6 overflow-y-auto scrollbar-none pb-4 shrink-0">
+      <!-- Right Visualization Sidebar -->
+      <div class="w-80 hidden xl:flex flex-col gap-6 overflow-y-auto scrollbar-none pb-4 shrink-0">
             <AvatarSpeech ref="avatarRef" class="shrink-0" />
             
             <AgentTimeline 

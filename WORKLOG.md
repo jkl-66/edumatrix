@@ -652,6 +652,28 @@
   - **白名单警告拦截**：在 `code_exec_api.py` 的沙箱运行 wrapper 脚本中，将原本仅过滤非交互式警告的 `warnings.filterwarnings` 升级为全局 `warnings.filterwarnings("ignore")`，屏蔽了包括 Matplotlib 字体缺失、PyTorch 废弃 API 等对主干运行无实质伤害的 `UserWarning`。
   - **日志级别提升**：通过在沙箱中注入 `logging.getLogger("matplotlib").setLevel(logging.ERROR)`，拦截了由于系统缺失 SimHei/Microsoft YaHei 字体导致 Matplotlib 自动绘制负号时在 stderr 输出 `Font 'default' does not have a glyph for '\u2212'` 警告信息的现象，防止前端解析 stderr 时误将其判定为运行崩溃（“报错”）。
 
+---
+
+### 2026-06-23
+> **今日概述**：全面打通并升级了**测验题生成与路由切换状态的持久化及后台持续运行防断线支持**。通过引入全局 Pinia 测验 Store，实现了在离开当前页面（如切换侧边栏其他导航界面）时题目生成不中断、答卷状态与元数据不丢失的高可用体验。
+
+#### 1. 计划/完成工作
+[x] **测验题全局 Pinia 状态融合**：
+  - **Store 设计**：在 [frontend/src/stores/quiz.js](file:///d:/project-edumatrix/edumatrix-main/frontend/src/stores/quiz.js) [NEW] 中独立定义了测验专用的 Pinia Store，将测验状态 (`quizState`)、测验数据 (`quizData`)、用户答案 (`quizAnswer`)、自评置信度 (`quizConfidence`)、评估结果 (`quizResult`)、出题次数 (`quizAttempt`)、考核概念 (`quizConcept`) 和会话 ID (`quizSessionId`) 等核心状态收纳其中。
+  - **组件级对接**：在 [Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) 中彻底废弃了原有的局部测验 `ref` 变量，通过 `computed`（具备 get/set 双向绑定）无缝连通 Pinia 状态，既保留了前端 HTML 模板中已有的双向绑定与交互逻辑，又实现了状态的外部驻留。
+[x] **动作托管与后台生成非中断支持**：
+  - **Action 委托**：重构了 `Chat.vue` 中 `startQuiz`、`submitQuizAnswer`、`continueQuiz` 和 `resetQuiz` 等动作函数，统一重定向至 Pinia Store Actions 触发底层的 Axios API。
+  - **离开防断线**：将异步生成 Promise 注册至全局 Store 中，当用户切换至错题本、历史记录或画像大盘时，即便 `Chat.vue` 组件被 unmount 销毁，后台网络请求依然会继续执行并将结果妥善保存至单例内存。
+[x] **测验状态自愈激活与页面 Tab 智能切换**：
+  - **Tab 自适应激活**：在 `Chat.vue` 初始化时，将激活标签页 `activeTab` 改造为根据 `quizStore.quizState` 动态初始化：若测验状态非空闲 (`quizState !== 'idle'`)，则在 mounted 时自动激活跳转到测验 (`quiz`) 选项卡，为用户带来无缝连贯的答题体验。
+[x] **无用 API 引用清理**：
+  - 移除了 `Chat.vue` 头部对 `generateQuiz`, `evaluateQuizAnswer`, `adaptQuiz` 的直接 API 导入，消除了未引用变量警告，保持代码纯净。
+
+#### 2. 测试与编译校验
+* 前端开发与生产打包：`npm run build` ➡️ **Built successfully (100% OK)**。
+* 全量 32 项系统级测试：`python -m pytest test_edumatrix.py -v` ➡️ **32/32 passed in 26.19s (100% OK)**。
+* 代码提交与上云：已一键提交并推送至 GitHub 远程分支 `main` (Commit: `545bcae`)。
+
 
 
 

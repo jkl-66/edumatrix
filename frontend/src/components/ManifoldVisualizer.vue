@@ -209,6 +209,8 @@ function drawPoincareDisk() {
   animationFrame = requestAnimationFrame(drawPoincareDisk)
 }
 
+let resizeObserver = null
+
 function resize() {
   if (!canvasRef.value) return
   const parent = canvasRef.value.parentElement
@@ -219,6 +221,19 @@ function resize() {
 onMounted(async () => {
   resize()
   window.addEventListener('resize', resize)
+
+  // Use ResizeObserver to auto-detect width changes during slide-out transitions
+  if (canvasRef.value && typeof ResizeObserver !== 'undefined') {
+    const parent = canvasRef.value.parentElement
+    if (parent) {
+      resizeObserver = new ResizeObserver(() => {
+        resize()
+        initParticles()
+      })
+      resizeObserver.observe(parent)
+    }
+  }
+
   await nextTick()
   ctx = canvasRef.value?.getContext('2d')
   initParticles()
@@ -227,6 +242,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', resize)
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+  }
   if (animationFrame) cancelAnimationFrame(animationFrame)
 })
 

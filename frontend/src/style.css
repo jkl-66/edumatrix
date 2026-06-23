@@ -188,6 +188,21 @@ body {
   line-height: 1.8 !important;
 }
 
+/* 用户消息卡片定制美化：圆角矩形，加深蓝色精致边框，大行距，优雅字体 */
+.chat-card-user {
+  background: rgba(59, 130, 246, 0.02) !important;
+  border: 1.5px solid #3b82f6 !important;
+  border-radius: 1rem !important;
+  border-bottom-right-radius: 0.125rem !important;
+  padding: 0.65rem 1.15rem;
+  line-height: 1.6 !important;
+  font-family: 'Outfit', 'Inter', var(--font-sans) !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.chat-card-user:hover {
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.08) !important;
+}
+
 /* 思维导图（Mermaid Mindmap）节点气泡、连线与排版美化 */
 .mermaid svg {
   font-family: 'Outfit', 'Inter', var(--font-sans) !important;

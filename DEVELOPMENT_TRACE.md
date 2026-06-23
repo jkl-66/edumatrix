@@ -545,3 +545,21 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 8,500 Input / 900 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 修复 Poincaré 双曲对齐圆盘显示为空与用户聊天气泡 1.5px 边框
+- **任务编号**：`TASK_VISUALIZER_SIZE_AND_USER_BORDER_FIX`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[ManifoldVisualizer.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/ManifoldVisualizer.vue) (引入 ResizeObserver 自动处理过渡动画带来的 parent 宽度零尺寸问题并触发粒子重绘)，[style.css](file:///d:/project-edumatrix/edumatrix-main/frontend/src/style.css) (新增 `.chat-card-user` 边框样式类)，[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (将用户消息气泡挂载新样式，替换 Tailwind 1.5px 异常类)。
+- **自愈重试记录**：
+  1. *第一次报错*：用户反馈 Poincaré 双曲对齐圆盘没有任何粒子与测地线显示（完全空白），且用户聊天气泡没有蓝色边框。
+  2. *自愈与修复*：
+     - 分析定位到右侧画板的收缩/展开采用了 CSS 阻尼 width 变化 transition 过渡（从 `0px` 变到 `360px`）。当组件 mounted 时，由于父容器宽度为 0，Canvas 绘图区域尺寸被初始化为 0 且无 window resize 响应。通过引入 `ResizeObserver` 动态观察父容器宽度变动，在过渡发生时自动更新 Canvas 物理分辨率并重新初始化并重绘粒子，彻底解决了该空白 Bug。
+     - 排查到 Tailwind 默认不支持 `border-1.5`，导致用户气泡边框未匹配。在 `style.css` 中独立编写 `.chat-card-user` 类并挂载，完美恢复了 1.5px 的加深蓝色高保真边框效果。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 599ms (100% OK)**。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 8,000 Input / 800 Output
+- **架构师（用户）终审反馈**：Approved
+

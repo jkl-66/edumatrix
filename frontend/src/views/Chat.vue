@@ -1253,8 +1253,8 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
           <div v-for="(msg, idx) in messages" :key="idx">
             <div v-if="msg.role === 'user'" class="flex justify-end mb-3">
-              <!-- 用户消息气泡：圆角矩形，有色边框无实色填充，加大行距，优雅字体 -->
-              <div class="max-w-[75%] bg-blue-50/10 border-1.5 border-blue-500 text-blue-600 rounded-2xl rounded-br-sm px-4 py-2.5 shadow-sm font-sans">
+              <!-- 用户消息气泡：圆角矩形，加深蓝色精致边框，大行距，优雅字体 -->
+              <div class="max-w-[75%] chat-card-user text-blue-600 shadow-sm">
                 <p class="text-sm whitespace-pre-wrap leading-relaxed">{{ msg.content }}</p>
               </div>
             </div>

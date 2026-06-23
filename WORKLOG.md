@@ -581,7 +581,11 @@
   - **LaTeX 标签渲染污染修复**：定位并修复了 `renderMarkdown` 在还原代码块占位符之前，直接运行 LaTeX 纯文本下标正则 `([a-zA-Z0-9])_([a-zA-Z0-9_]+)` 导致未转义的 `node_1` 被误伤替换成 `node<sub>1</sub>` 的 Bug。将 math/code block tokens 重构为不带下划线的 `@@BLOCKMATHTOKEN${idx}@@` 格式，并将 LaTeX 下标格式化前置于 token 还原阶段之前，彻底杜绝了占位符还原后的正则表达式污染。
   - **D3 布局水平与垂直重叠消解**：在 `CollapsibleMindmap.vue` 中将 D3 树的 `nodeSize` 垂直间距由 48px 大幅增加至 80px，水平深度步长由 210px 增加至 340px，给长中文文本和数学公式提供了充裕的伸展宽度，确保 100% 绝无重叠。
 
+[x] **修复 Poincaré 双曲圆盘 Canvas 渲染尺寸为 0 导致不显示与用户气泡边框样式**：
+  - **Poincaré 双曲圆盘 Canvas 尺寸为 0 修复**：分析定位到侧边栏展开过渡期（transition）中，由于父容器 `clientWidth` 动态变化但 `window.resize` 事件未触发，导致 Canvas 实际渲染宽度被初始化为 0 的 Bug。在 `ManifoldVisualizer.vue` 中引入 `ResizeObserver` 动态监听父容器物理大小变化，并在过渡期自动调用 `resize()` 和 `initParticles()` 重绘，彻底解决了双曲线对齐画布显示为空白的问题。
+  - **用户聊天气泡 1.5px 精致边框规范化**：修复了原气泡模板直接使用 Tailwind 不支持的 `border-1.5` 导致边框失效的 Bug。在 `style.css` 中为用户卡片定制了 `.chat-card-user` 样式类，配置了 `1.5px solid #3b82f6` 的加深蓝色精致边框、微光透明背景及阴影，并在 `Chat.vue` 中替换挂载，实现了精致对称的排版。
+
 #### 2. 测试与编译校验
-* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 612ms (100% OK)**。
+* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 599ms (100% OK)**。
 * 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed (100% OK)**。
 * 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**。对于中文、数学公式及空格等非标裸节点，自愈输出转换完全符合 Mermaid 语法预期。

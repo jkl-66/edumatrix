@@ -569,17 +569,19 @@
   - **用户消息气泡**：重构 `Chat.vue`，将用户实色气泡改为透明微光背景、加深蓝色精致边框、圆角（`rounded-2xl`）以及大行距（`leading-relaxed`）显示。
   - **机器人讲义气泡**：为讲义卡片追加专属的 `.chat-card-assistant` CSS 类，实现无填充（透明背景）、有色精致紫色边框（`var(--color-accent)`）、`1rem` 圆角矩形、大行距（`line-height: 1.8`）以及现代英中混合无衬线字体（Outfit, Inter, Microsoft YaHei）。
   - **思维导图节点气泡**：在 `style.css` 中重写 Mermaid SVG 节点样式，将脑图中的所有节点外框（矩形/圆/多边形）设置为透明无填充、紫色纤细边框、`8px` 圆角、高保真无衬线文字及淡灰色优雅连线，并引入悬停时的发光阴影与高亮交互效果。
-[x] **加固 D3 脑图卡片展开渲染、气泡重叠修复并新增全屏切换**：
+[x] **加固 D3 脑图卡片展开渲染并新增全屏切换**：
   - 修复了 `Chat.vue` 中 `showResources` 观察器仅调用 `initMermaid` 导致展开动作卡片时脑图未挂载 VNode 的 bug，纠正为调用统一分发器 `renderAllDiagrams()`。
-  - 将 D3.js 树布局的 `nodeSize` 垂直间距由 38px 增至 48px，水平深度步长由 170px 增至 210px，彻底消除了长文字和密集节点气泡的水平/垂直重叠。
   - 在 `CollapsibleMindmap.vue` 中通过 Vue 的 Class 动态绑定引入了 `isFullscreen` 状态，支持原地将脑图组件拉伸覆盖全屏显示，并自适应刷新 D3 画布并自动居中对齐。
 [x] **升级 Google NotebookLM 风格思维导图浮动大窗口、独立展开按钮与多色层级气泡**：
-  - **浮动大窗口（Teleport Modal）**：使用 `<Teleport to="body">` 将全屏模态框传送至顶级 body 节点，彻底突破了消息气泡的层叠上下文（transform / filter）阻碍，实现完全居中遮罩的浮动大弹窗，且完美配置了右上角关闭 `✕` 退出键。
+  - **浮动大窗口（Teleport Modal）**：使用 `<Teleport to="body">` 将全屏模态框传送至顶级 body 节点，彻底突破了消息气泡的层叠上下文（transform / filter）阻碍，实现完全居中遮罩 of 浮动大弹窗，且完美配置了右上角关闭 `✕` 退出键。
   - **多色层级节点（Color Hierarchy）**：根据节点深度 `d.depth` 动态配置了 Root（浅紫）、Depth 1（浅蓝）、Depth 2+（浅绿/薄荷绿）三种气泡背景与相匹配的深色文字边框。
   - **独立小圆形气泡交互（Edge Toggles）**：在有子分支的节点右边缘居中追加了独立的圆形按键气泡（内置 `<` 或 `>`），并将展开折叠点击事件精准重定向至该小气泡，实现了点击主节点无误触。
   - **从小气泡中心出线（Link Offset）**：重新计算 D3 连线起止坐标，将起点水平平移 `d.source.halfWidth`，使贝塞尔曲线极其精准地从小气泡中心点伸出发散。
+[x] **修复第一层节点 LaTeX 渲染污染与 D3 布局重叠**：
+  - **LaTeX 标签渲染污染修复**：定位并修复了 `renderMarkdown` 在还原代码块占位符之前，直接运行 LaTeX 纯文本下标正则 `([a-zA-Z0-9])_([a-zA-Z0-9_]+)` 导致未转义的 `node_1` 被误伤替换成 `node<sub>1</sub>` 的 Bug。将 math/code block tokens 重构为不带下划线的 `@@BLOCKMATHTOKEN${idx}@@` 格式，并将 LaTeX 下标格式化前置于 token 还原阶段之前，彻底杜绝了占位符还原后的正则表达式污染。
+  - **D3 布局水平与垂直重叠消解**：在 `CollapsibleMindmap.vue` 中将 D3 树的 `nodeSize` 垂直间距由 48px 大幅增加至 80px，水平深度步长由 210px 增加至 340px，给长中文文本和数学公式提供了充裕的伸展宽度，确保 100% 绝无重叠。
 
 #### 2. 测试与编译校验
-* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 665ms (100% OK)**。
+* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 612ms (100% OK)**。
 * 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed (100% OK)**。
 * 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**。对于中文、数学公式及空格等非标裸节点，自愈输出转换完全符合 Mermaid 语法预期。

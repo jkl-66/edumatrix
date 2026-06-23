@@ -909,24 +909,24 @@ function renderMarkdown(text, type = '', conceptName = '') {
   html = html.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
     const idx = blockMath.length
     blockMath.push({ math: math.trim(), display: true })
-    return `@@BLOCK_MATH_TOKEN_${idx}@@`
+    return `@@BLOCKMATHTOKEN${idx}@@`
   })
   html = html.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
     const idx = blockMath.length
     blockMath.push({ math: math.trim(), display: true })
-    return `@@BLOCK_MATH_TOKEN_${idx}@@`
+    return `@@BLOCKMATHTOKEN${idx}@@`
   })
 
   const inlineMath = []
   html = html.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
     const idx = inlineMath.length
     inlineMath.push({ math: math.trim(), display: false })
-    return `@@INLINE_MATH_TOKEN_${idx}@@`
+    return `@@INLINEMATHTOKEN${idx}@@`
   })
   html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => {
     const idx = inlineMath.length
     inlineMath.push({ math: math.trim(), display: false })
-    return `@@INLINE_MATH_TOKEN_${idx}@@`
+    return `@@INLINEMATHTOKEN${idx}@@`
   })
 
   // 2. Code blocks extraction
@@ -943,7 +943,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
         .replace(/&quot;/g, '"')
         .replace(/&#39;/g, "'")
 
-      const tokenRegex = /@@INLINE_MATH_TOKEN_(\d+)@@/g
+      const tokenRegex = /@@INLINEMATHTOKEN(\d+)@@/g
       cleanCode = cleanCode.replace(tokenRegex, (match, idx) => {
         const item = inlineMath[parseInt(idx)]
         if (item) {
@@ -962,7 +962,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
         return ''
       })
 
-      const blockTokenRegex = /@@BLOCK_MATH_TOKEN_(\d+)@@/g
+      const blockTokenRegex = /@@BLOCKMATHTOKEN(\d+)@@/g
       cleanCode = cleanCode.replace(blockTokenRegex, (match, idx) => {
         const item = blockMath[parseInt(idx)]
         if (item) {
@@ -1019,7 +1019,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
     }
     const idx = codeBlocks.length
     codeBlocks.push(blockHtml)
-    return `@@CODE_BLOCK_TOKEN_${idx}@@`
+    return `@@CODEBLOCKTOKEN${idx}@@`
   })
 
   // 3. Line-by-line processing for Tables and Lists
@@ -1163,17 +1163,6 @@ function renderMarkdown(text, type = '', conceptName = '') {
     }
   }
 
-  // 5. Restore block and inline math, and code blocks
-  blockMath.forEach((item, idx) => {
-    html = html.split(`@@BLOCK_MATH_TOKEN_${idx}@@`).join(renderMath(item.math, true))
-  })
-  inlineMath.forEach((item, idx) => {
-    html = html.split(`@@INLINE_MATH_TOKEN_${idx}@@`).join(renderMath(item.math, false))
-  })
-  codeBlocks.forEach((block, idx) => {
-    html = html.split(`@@CODE_BLOCK_TOKEN_${idx}@@`).join(block)
-  })
-
   // Format any raw plain LaTeX variables left in text (not inside HTML tags or code blocks)
   html = html
     .replace(/\\in\b/g, ' ∈ ')
@@ -1190,6 +1179,17 @@ function renderMarkdown(text, type = '', conceptName = '') {
       const displayExp = exp === '\\top' || exp === 'top' ? 'T' : exp
       return `${base}<sup>${displayExp}</sup>`
     })
+
+  // 5. Restore block and inline math, and code blocks
+  blockMath.forEach((item, idx) => {
+    html = html.split(`@@BLOCKMATHTOKEN${idx}@@`).join(renderMath(item.math, true))
+  })
+  inlineMath.forEach((item, idx) => {
+    html = html.split(`@@INLINEMATHTOKEN${idx}@@`).join(renderMath(item.math, false))
+  })
+  codeBlocks.forEach((block, idx) => {
+    html = html.split(`@@CODEBLOCKTOKEN${idx}@@`).join(block)
+  })
 
   // 6. Append quiz CAT link button for assessor agent
   const normalizedType = type.toLowerCase()

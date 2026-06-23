@@ -149,8 +149,8 @@ function initAndRender() {
     })
   d3Svg.call(d3Zoom)
 
-  // Configure tree layout (vertical separation 48px, horizontal step 210px)
-  treeLayout = d3.tree().nodeSize([48, 210])
+  // Configure tree layout (vertical separation 80px, horizontal step 340px)
+  treeLayout = d3.tree().nodeSize([80, 340])
 
   // Convert hierarchy data
   d3Root = d3.hierarchy(treeData)
@@ -187,7 +187,7 @@ function updateTree(source) {
 
   // Normalize for fixed-depth and pre-calculate label widths.
   nodes.forEach(d => { 
-    d.y = d.depth * 210 + 60 
+    d.y = d.depth * 340 + 60 
     
     // Calculate node text length for halfWidth
     const name = d.data.name || ''

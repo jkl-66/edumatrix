@@ -12,7 +12,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles,
-  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy,
+  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
 import SandboxConsole from '../components/SandboxConsole.vue'
@@ -680,6 +680,7 @@ function runResourceCode(messageIndex, resourceIndex) {
   activeTab.value = 'code'
   codeOutput.value = ''
   codeError.value = ''
+  nextTick(() => runUserCode())
 }
 
 // 概念代码浮窗
@@ -719,6 +720,27 @@ function runConceptCode() {
   codeOutput.value = ''
   codeError.value = ''
   conceptCodePopup.value = null
+  nextTick(() => runUserCode())
+}
+
+function saveToNotes(msgIdx) {
+  const msg = chatStore.messages[msgIdx]
+  if (!msg) return
+  const title = msg.target || '学习笔记'
+  try {
+    fetch('/api/notes/create', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ student_id: props.studentId, title, content_markdown: (msg.content||'').slice(0,2000), concepts_covered: msg.target||'' }) })
+  } catch (e) { console.error('Note save failed:', e) }
+}
+
+async function generateReviewPlan(msgIdx) {
+  const msg = chatStore.messages[msgIdx]
+  if (!msg || !msg.target) return
+  try {
+    const resp = await fetch('/api/review/create', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ student_id: props.studentId, concept: msg.target, priority: 1 }) })
+    if (resp.ok) alert('复习计划已添加')
+  } catch (e) { console.error('Review plan failed:', e) }
 }
 
 /**
@@ -1408,6 +1430,14 @@ function renderMarkdown(text, type = '', conceptName = '') {
                       <button v-if="msg.target" @click="showConceptCode(idx)" class="text-[10px] text-gray-400 hover:text-emerald-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-emerald-50 rounded transition-colors"
                         title="查看此概念的代码实现">
                         <Terminal :size="10" /> 代码
+                      </button>
+                      <button @click="saveToNotes(idx)" class="text-[10px] text-gray-400 hover:text-amber-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-amber-50 rounded transition-colors"
+                        title="保存到知识笔记">
+                        <BookOpen :size="10" /> 笔记
+                      </button>
+                      <button @click="generateReviewPlan(idx)" class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"
+                        title="生成复习计划">
+                        <Calendar :size="10" /> 复习
                       </button>
                       <button @click="exportAsMarkdown(idx)" class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"
                         title="导出为 Markdown">

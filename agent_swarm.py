@@ -599,30 +599,17 @@ class EffectEvaluatorAgent:
         self._llm = llm
 
     def evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
-        # 如果有 LLM，使用真实评估
-        if self._llm is not None:
-            return self._llm_evaluate(profile, resources)
-        # 否则回退到硬编码公式
+        if self._llm is not None and hasattr(self._llm, 'generate'):
+            try:
+                import asyncio
+                result = asyncio.run(self._async_llm_evaluate(profile, resources))
+                return result
+            except Exception:
+                pass
         return self._fallback_evaluate(profile, resources)
 
     def _llm_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
-        """使用 LLM 评估资源质量和学生学习效果。"""
-        import asyncio
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        try:
-            if loop is None:
-                result = asyncio.run(self._async_llm_evaluate(profile, resources))
-                return result
-            else:
-                coro = self._async_llm_evaluate(profile, resources)
-                future = asyncio.run_coroutine_threadsafe(coro, loop)
-                return future.result(timeout=10)
-        except Exception:
-            pass
-        return self._fallback_evaluate(profile, resources)
+        return self.evaluate(profile, resources)
 
     async def _async_llm_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
         prompt = (

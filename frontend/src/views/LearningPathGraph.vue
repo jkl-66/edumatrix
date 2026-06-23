@@ -38,6 +38,9 @@ const KNOWLEDGE_DAG = {
   '过拟合': { level: 2, category: '模型评估' },
   '正则化': { level: 2, category: '模型评估' },
   '交叉验证': { level: 2, category: '模型评估' },
+  '数据预处理': { level: 1, category: '基础' },
+  '特征工程': { level: 2, category: '基础' },
+  '混淆矩阵': { level: 2, category: '模型评估' },
   '机器学习': { level: 0, category: '基础' },
   '监督学习': { level: 1, category: '基础' },
   '模型评估': { level: 1, category: '基础' },
@@ -59,11 +62,41 @@ const EDGES = [
   ['过拟合', '正则化'], ['过拟合', '交叉验证'],
   ['正则化', '线性回归'], ['交叉验证', '机器学习'],
   ['监督学习', '机器学习'], ['模型评估', '机器学习'],
+  ['数据预处理', '机器学习'], ['特征工程', '数据预处理'], ['混淆矩阵', '模型评估'],
   ['Transformer', '注意力机制'], ['Transformer', '反向传播'],
   ['注意力机制', '神经网络'],
   ['神经网络', '反向传播'], ['神经网络', '梯度下降'],
   ['卷积神经网络', '神经网络'], ['卷积神经网络', '卷积核'], ['卷积神经网络', '池化层'],
 ]
+
+const FIXED_COORDINATES = {
+  '平均池化': { x: 128, y: 230 },
+  '最大池化': { x: 136, y: 125 },
+  '卷积神经网络': { x: 137, y: 415 },
+  '池化层': { x: 204, y: 307 },
+  '特征图': { x: 256, y: 172 },
+  'Transformer': { x: 297, y: 366 },
+  '卷积核': { x: 340, y: 267 },
+  '注意力机制': { x: 356, y: 428 },
+  '神经网络': { x: 413, y: 493 },
+  '反向传播': { x: 470, y: 332 },
+  '过拟合': { x: 516, y: 186 },
+  '链式法则': { x: 537, y: 446 },
+  '逻辑回归': { x: 560, y: 308 },
+  '正则化': { x: 620, y: 276 },
+  '交叉验证': { x: 633, y: 138 },
+  '梯度下降': { x: 650, y: 495 },
+  '支持向量机': { x: 687, y: 210 },
+  '线性回归': { x: 738, y: 432 },
+  '决策树': { x: 740, y: 123 },
+  '特征工程': { x: 789, y: 474 },
+  '数据预处理': { x: 868, y: 407 },
+  '混淆矩阵': { x: 881, y: 478 },
+  '监督学习': { x: 882, y: 118 },
+  '模型评估': { x: 960, y: 407 },
+  '机器学习': { x: 1041, y: 251 }
+}
+
 
 const CATEGORIES = ['基础', '监督学习', '优化', '神经网络', '模型评估', '前沿']
 const CATEGORY_COLORS = ['#94a3b8', '#3b82f6', '#8b5cf6', '#f97316', '#10b981', '#ec4899']
@@ -91,9 +124,13 @@ const nodes = computed(() => {
       zpdZone = 'weak'
     }
 
+    const coord = FIXED_COORDINATES[name] || { x: 0, y: 0 }
+
     return {
       id: name,
       name,
+      x: coord.x,
+      y: coord.y,
       value: `${name}\n掌握度: ${(m * 100).toFixed(0)}%\n类别: ${info.category}\nZPD: ${zpdZone}`,
       category: CATEGORIES.indexOf(info.category),
       itemStyle: { color },
@@ -155,15 +192,9 @@ function buildChartOption() {
     animationEasingUpdate: 'quinticInOut',
     series: [{
       type: 'graph',
-      layout: 'force',
-      force: {
-        repulsion: 500,
-        edgeLength: [80, 200],
-        layoutAnimation: false,
-        friction: 0.1,
-      },
+      layout: 'none',
       roam: true,
-      draggable: true,
+      draggable: false,
       data: nodes.value,
       edges: edges.value,
       categories: CATEGORIES.map((name, i) => ({

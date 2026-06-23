@@ -237,6 +237,8 @@ def get_review_plan(db: Session, student_id: str) -> list[DBReviewPlan]:
 
 def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: float, interval_days: int) -> DBReviewPlan:
     from datetime import timedelta
+    # 确保学生画像已创建并保存，以防外键约束失败 (FOREIGN KEY constraint failed)
+    load_student_profile(db, student_id)
     existing = (
         db.query(DBReviewPlan)
         .filter(DBReviewPlan.student_id == student_id, DBReviewPlan.concept == concept)

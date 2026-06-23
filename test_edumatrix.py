@@ -644,6 +644,72 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertIn("逻辑回归", resolved)
         self.assertNotIn("它", resolved)
 
+    def test_automatic_review_plan_generation_on_chat(self):
+        """验证在对话框学习后自动在 review_plans 表生成复习安排的机制"""
+        from app.database import SessionLocal, DBReviewPlan
+        from app.crud import load_student_profile, save_student_profile
+        from models import StudentProfile
+        import uuid
+        
+        student_id = f"test-chat-rev-{uuid.uuid4().hex[:8]}"
+        
+        # 1. 模拟学生画像并保存
+        profile = StudentProfile(student_id=student_id)
+        profile.concept_mastery["线性回归"] = 0.6
+        
+        session = SessionLocal()
+        try:
+            save_student_profile(session, profile)
+            
+            # 2. 模拟 stream_api 的逻辑，自动调用 upsert_review_plan
+            from app.crud import upsert_review_plan
+            upsert_review_plan(session, student_id, "线性回归", 0.6, 1)
+            
+            # 3. 验证数据库中是否成功产生复习计划
+            plan = session.query(DBReviewPlan).filter_by(student_id=student_id, concept="线性回归").first()
+            self.assertIsNotNone(plan)
+            self.assertEqual(plan.mastery, 0.6)
+            self.assertEqual(plan.interval_days, 1)
+            
+            # 4. 清理
+            session.delete(plan)
+            session.commit()
+        finally:
+            session.close()
+
+    def test_manual_review_plan_creation_without_preexisting_profile(self):
+        """验证在学生画像表尚无记录时，手动创建复习计划也能安全自愈通过"""
+        from app.database import SessionLocal, DBReviewPlan, DBStudentProfile
+        from app.crud import upsert_review_plan
+        import uuid
+        
+        student_id = f"test-manual-no-prof-{uuid.uuid4().hex[:8]}"
+        
+        session = SessionLocal()
+        try:
+            # 1. 验证该学生在 student_profiles 表中确实不存在
+            prof_exist = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            self.assertIsNone(prof_exist)
+            
+            # 2. 直接调用 upsert_review_plan，不应抛出 IntegrityError
+            plan = upsert_review_plan(session, student_id, "支持向量机", 0.7, 3)
+            
+            # 3. 验证复习计划记录已成功创建
+            self.assertIsNotNone(plan)
+            self.assertEqual(plan.concept, "支持向量机")
+            self.assertEqual(plan.interval_days, 3)
+            
+            # 4. 验证系统也已自动创建了 student_profile 母表记录以维系外键
+            prof_now = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            self.assertIsNotNone(prof_now)
+            
+            # 5. 清理
+            session.delete(plan)
+            session.delete(prof_now)
+            session.commit()
+        finally:
+            session.close()
+
 
 if __name__ == "__main__":
     unittest.main()

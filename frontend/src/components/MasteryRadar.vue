@@ -98,8 +98,8 @@ watch(() => props.concepts, (newVal) => {
 </script>
 
 <template>
-  <div v-show="props.concepts && props.concepts.length > 0" ref="chartRef" class="w-full h-full min-h-[250px]" />
-  <div v-if="!props.concepts || props.concepts.length === 0" class="flex flex-col items-center justify-center min-h-[250px] text-xs text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200 p-4 text-center">
+  <div v-show="props.concepts && props.concepts.length > 0" ref="chartRef" class="w-full h-full min-h-[300px]" />
+  <div v-if="!props.concepts || props.concepts.length === 0" class="flex flex-col items-center justify-center min-h-[300px] text-xs text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200 p-4 text-center">
     <span class="font-medium text-slate-500 mb-1">能力掌握度雷达图</span>
     <span>完成对话后将动态更新您的能力状态</span>
   </div>

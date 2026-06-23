@@ -96,30 +96,131 @@ function parseIndentTextToTree(codeText) {
   return null
 }
 
-// --- 2. Color Mapper based on Depth ---
+// --- 2. Color Mapper based on Depth (Premium Multi-layer Styling for Complex Mindmaps) ---
 function getNodeColors(d) {
   const depth = d.depth
-  if (depth === 0) {
-    return {
-      fill: '#e8ecfb',        // Soft purple-blue root
-      stroke: '#818cf8',      // Indigo border
-      text: '#4338ca',        // Indigo text
-      line: '#4f46e5'         // Indigo-600 (one level darker than stroke #818cf8)
-    }
-  } else if (depth === 1) {
-    return {
-      fill: '#eff6ff',        // Soft sky blue
-      stroke: '#3b82f6',      // Blue border
-      text: '#1e3a8a',        // Dark blue text
-      line: '#2563eb'         // Blue-600 (one level darker than stroke #3b82f6)
-    }
-  } else {
-    return {
-      fill: '#ecfdf5',        // Soft mint green
-      stroke: '#10b981',      // Emerald border
-      text: '#064e3b',        // Dark emerald green text
-      line: '#059669'         // Emerald-600 (one level darker than stroke #10b981)
-    }
+  switch (depth) {
+    case 0: // Root - Deep Indigo
+      return {
+        fill: '#e0e7ff',
+        stroke: '#4f46e5',
+        text: '#312e81',
+        line: '#4f46e5',
+        lineWidth: 3.2,
+        lineOpacity: 0.95,
+        lineDash: 'none',
+        nodeStrokeWidth: 2.2
+      }
+    case 1: // Azure / Sea Blue
+      return {
+        fill: '#e0f2fe',
+        stroke: '#0284c7',
+        text: '#0c4a6e',
+        line: '#0284c7',
+        lineWidth: 2.6,
+        lineOpacity: 0.9,
+        lineDash: 'none',
+        nodeStrokeWidth: 1.8
+      }
+    case 2: // Forest Emerald Green
+      return {
+        fill: '#ecfdf5',
+        stroke: '#059669',
+        text: '#064e3b',
+        line: '#059669',
+        lineWidth: 2.0,
+        lineOpacity: 0.85,
+        lineDash: 'none',
+        nodeStrokeWidth: 1.5
+      }
+    case 3: // Warm Amber / Honey
+      return {
+        fill: '#fffbeb',
+        stroke: '#d97706',
+        text: '#78350f',
+        line: '#d97706',
+        lineWidth: 1.6,
+        lineOpacity: 0.8,
+        lineDash: '6, 3',
+        nodeStrokeWidth: 1.3
+      }
+    case 4: // Sunset Coral / Rose
+      return {
+        fill: '#fff1f2',
+        stroke: '#e11d48',
+        text: '#881337',
+        line: '#e11d48',
+        lineWidth: 1.3,
+        lineOpacity: 0.75,
+        lineDash: '4, 2, 1, 2',
+        nodeStrokeWidth: 1.2
+      }
+    case 5: // Minty Teal / Turquoise
+      return {
+        fill: '#f0fdfa',
+        stroke: '#0d9488',
+        text: '#115e59',
+        line: '#0d9488',
+        lineWidth: 1.1,
+        lineOpacity: 0.7,
+        lineDash: '2, 2',
+        nodeStrokeWidth: 1.1
+      }
+    case 6: // Royal Fuchsia / Orchid
+      return {
+        fill: '#fdf4ff',
+        stroke: '#c026d3',
+        text: '#701a75',
+        line: '#c026d3',
+        lineWidth: 1.0,
+        lineOpacity: 0.65,
+        lineDash: '5, 2, 1, 2, 1, 2',
+        nodeStrokeWidth: 1.0
+      }
+    case 7: // Citrus Lime
+      return {
+        fill: '#f7fee7',
+        stroke: '#65a30d',
+        text: '#3f6212',
+        line: '#65a30d',
+        lineWidth: 0.9,
+        lineOpacity: 0.6,
+        lineDash: '1, 2',
+        nodeStrokeWidth: 1.0
+      }
+    case 8: // Cool Slate / Gray-Blue
+      return {
+        fill: '#f8fafc',
+        stroke: '#475569',
+        text: '#1e293b',
+        line: '#475569',
+        lineWidth: 0.8,
+        lineOpacity: 0.55,
+        lineDash: '1, 3',
+        nodeStrokeWidth: 0.9
+      }
+    case 9: // Plum Violet
+      return {
+        fill: '#faf5ff',
+        stroke: '#7c3aed',
+        text: '#581c87',
+        line: '#7c3aed',
+        lineWidth: 0.7,
+        lineOpacity: 0.5,
+        lineDash: '1, 4',
+        nodeStrokeWidth: 0.8
+      }
+    default: // Tangerine Orange
+      return {
+        fill: '#fff7ed',
+        stroke: '#ea580c',
+        text: '#7c2d12',
+        line: '#ea580c',
+        lineWidth: 0.6,
+        lineOpacity: 0.45,
+        lineDash: '1, 5',
+        nodeStrokeWidth: 0.8
+      }
   }
 }
 
@@ -255,7 +356,7 @@ function updateTree(source) {
     .attr('ry', 8)
     .attr('fill', 'transparent')
     .attr('stroke', '#818cf8')
-    .attr('stroke-width', 1.5)
+    .attr('stroke-width', d => getNodeColors(d).nodeStrokeWidth || 1.5)
 
   // Text label via foreignObject (for rich text/LaTeX rendering)
   const fo = nodeEnter.append('foreignObject')
@@ -321,7 +422,7 @@ function updateTree(source) {
     .attr('x', d => -d.halfWidth)
     .attr('fill', d => getNodeColors(d).fill)
     .attr('stroke', d => getNodeColors(d).stroke)
-    .attr('stroke-width', 1.5)
+    .attr('stroke-width', d => getNodeColors(d).nodeStrokeWidth || 1.5)
 
   // Update foreignObject position and content
   const foUpdate = nodeUpdate.select('foreignObject')
@@ -339,6 +440,7 @@ function updateTree(source) {
 
   toggleUpdate.select('circle')
     .attr('stroke', d => getNodeColors(d).stroke)
+    .attr('stroke-width', d => (getNodeColors(d).nodeStrokeWidth || 1.5) * 0.8)
 
   toggleUpdate.select('text')
     .attr('fill', d => getNodeColors(d).text)
@@ -368,8 +470,9 @@ function updateTree(source) {
     .attr('class', 'link')
     .attr('fill', 'none')
     .attr('stroke', d => getNodeColors(d.source).line)
-    .attr('stroke-opacity', d => d.source.depth === 0 ? 0.85 : (d.source.depth === 1 ? 0.8 : 0.75))
-    .attr('stroke-width', d => d.source.depth === 0 ? 2.2 : (d.source.depth === 1 ? 1.8 : 1.4))
+    .attr('stroke-opacity', d => getNodeColors(d.source).lineOpacity)
+    .attr('stroke-width', d => getNodeColors(d.source).lineWidth)
+    .style('stroke-dasharray', d => getNodeColors(d.source).lineDash)
     .style('stroke-linecap', 'round')
     .attr('d', d => {
       const o = { x: source.x0, y: source.y0 + source.halfWidth }
@@ -381,8 +484,9 @@ function updateTree(source) {
   linkUpdate.transition()
     .duration(300)
     .attr('stroke', d => getNodeColors(d.source).line)
-    .attr('stroke-opacity', d => d.source.depth === 0 ? 0.85 : (d.source.depth === 1 ? 0.8 : 0.75))
-    .attr('stroke-width', d => d.source.depth === 0 ? 2.2 : (d.source.depth === 1 ? 1.8 : 1.4))
+    .attr('stroke-opacity', d => getNodeColors(d.source).lineOpacity)
+    .attr('stroke-width', d => getNodeColors(d.source).lineWidth)
+    .style('stroke-dasharray', d => getNodeColors(d.source).lineDash)
     .style('stroke-linecap', 'round')
     .attr('d', d => {
       const s = { y: d.source.y + d.source.halfWidth, x: d.source.x }

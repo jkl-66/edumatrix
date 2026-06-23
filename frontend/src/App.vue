@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar, Presentation, Clock, GraduationCap, Library, Settings, UserCheck, GitBranch } from '@lucide/vue'
+import { BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar, Presentation, Clock, GraduationCap, Library, Settings, UserCheck, GitBranch, Flame } from '@lucide/vue'
 import { abortAllStreams } from './api'
 
 const route = useRoute()
@@ -29,8 +29,11 @@ const sidebarCollapsed = ref(false)
 const navItems = [
   { path: '/', label: '学习仪表盘', icon: LayoutDashboard },
   { path: '/learn', label: '智能对话', icon: MessageSquare },
+  { path: '/learning-path', label: '学习路径图', icon: GitBranch },
+  { path: '/wrong-questions', label: '错题本', icon: BookOpen },
   { path: '/notes', label: '学习笔记', icon: StickyNote },
   { path: '/review', label: '复习计划', icon: Calendar },
+  { path: '/revision-calendar', label: '复习日历', icon: Flame },
   { path: '/history', label: '对话历史', icon: Clock },
   { path: '/knowledge', label: '知识库', icon: Library },
   { path: '/profile', label: '学习画像', icon: UserCheck },
@@ -42,8 +45,11 @@ const pageTitle = computed(() => {
   const map = {
     '/': '学习仪表盘',
     '/learn': '智能对话',
+    '/learning-path': '学习路径图',
+    '/wrong-questions': '错题本',
     '/notes': '学习笔记',
     '/review': '复习计划',
+    '/revision-calendar': '复习日历',
     '/history': '对话历史',
     '/knowledge': '知识库',
     '/profile': '学习画像',

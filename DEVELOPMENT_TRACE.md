@@ -593,5 +593,20 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 5,000 Input / 500 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 实现对话历史自动保存与一键清空功能
+- **任务编号**：`TASK_CHAT_SAVING_AND_CLEAR`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`, `oma-refactor`
+- **开发场景**：[chat.js](file:///d:/project-edumatrix/edumatrix-main/frontend/src/stores/chat.js) (状态初始化从 `localStorage` 加载数据，实现 `saveMessages` 并由 `addMessage` 自动触发，添加 `clearHistory` 清空逻辑)，[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (在 `regenerateCard` 组件局部重生成成功后同步触发 `saveMessages`，在选项卡顶部挂载“🗑️ 清空对话”按钮，配合 `clearChat` 确认提示清空对话历史)。
+- **自愈重试记录**：
+  - 无报错，首次开发与重构即一次性编译绿灯通过。解决了卡片局部重生成后 localStorage 消息不同步的隐蔽 Bug，实现了对话历史自动保存/持久化和防误触清空的完美物理闭环。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 594ms (100% OK)**。
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **31/31 tests passed (100% OK)**。
+- **Token 消耗估计**：约 9,000 Input / 900 Output
+- **架构师（用户）终审反馈**：Approved
+
 
 

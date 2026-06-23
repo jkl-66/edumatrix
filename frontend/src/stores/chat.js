@@ -3,7 +3,14 @@ import { streamChat, abortStream } from '../api'
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
-    messages: [],
+    messages: (() => {
+      try {
+        const raw = localStorage.getItem('edumatrix_chat_messages')
+        return raw ? JSON.parse(raw) : []
+      } catch {
+        return []
+      }
+    })(),
     sending: false,
     streamingProgress: 0,
     streamingStatus: '',
@@ -25,8 +32,26 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
+    saveMessages() {
+      try {
+        localStorage.setItem('edumatrix_chat_messages', JSON.stringify(this.messages))
+      } catch (e) {
+        console.error('Failed to persist chat messages:', e)
+      }
+    },
+
     addMessage(msg) {
       this.messages.push(msg)
+      this.saveMessages()
+    },
+
+    clearHistory() {
+      this.messages = []
+      try {
+        localStorage.removeItem('edumatrix_chat_messages')
+      } catch (e) {
+        console.error('Failed to clear chat history:', e)
+      }
     },
 
     /**

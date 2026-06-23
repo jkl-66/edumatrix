@@ -396,6 +396,22 @@ async def stream_chat(request: Request) -> StreamingResponse:
             except Exception as e:
                 print(f"  [StreamAPI] Failed to update and save profile history: {e}")
 
+            # === 自动为本次学习的知识点生成/更新复习安排 ===
+            try:
+                target_concept = getattr(retrieval, "target", "")
+                if target_concept and target_concept != "未知" and not getattr(retrieval, "low_confidence", False):
+                    p = swarm.profile_store.get(student_id)
+                    mastery = p.concept_mastery.get(target_concept, 0.5) if p and hasattr(p, "concept_mastery") else 0.5
+                    
+                    from app.crud import upsert_review_plan
+                    from app.database import run_db_op
+                    
+                    # 默认初始复习间隔为 1 天
+                    await run_db_op(upsert_review_plan, student_id, target_concept, mastery, 1)
+                    print(f"  [StreamAPI] Automatically created/updated review plan for concept: {target_concept}")
+            except Exception as e:
+                print(f"  [StreamAPI] Failed to automatically create/update review plan: {e}")
+
             yield _sse("complete", {
                 "target": getattr(retrieval, "target", ""),
                 "content": final_content,

@@ -614,11 +614,23 @@
 [x] **代码沙箱运行环境补充与 PyTorch 预导入加固**：
   - **PyTorch (torch/nn) 安全引入**：在 `code_exec_api.py` 的沙箱隔离机制 `_get_wrapper_script` 中，在额外的白名单预设中新增对 `torch` 和 `torch.nn as nn` 的匹配与导入。当用户代码中包含相关包时，自动在 restricted_globals 作用域中完成安全装载，并对环境做 `ImportError` 保护。
   - ** whl CPU 轻量库安装**：在本地 Python 宿主运行环境中，使用 PyTorch 官方轻量化 whl 源完成了 `torch-2.12.1+cpu` 的安装（体积远小于 CUDA 库），使子进程沙箱执行器能够秒级唤起并正确执行所有带有神经网络矩阵前向传播/反向传播的代码示例，彻底解决了 `ModuleNotFoundError: No module named 'torch'` 的异常断裂。
+[x] **知识图谱静态布局优化与 100% 平面网状化重构**：
+  - **0 交叉拓扑优化**：通过线段相交检测算法（CCW 面积法）以及模拟退火迭代对 25 个节点、33 条连线进行寻优计算，达到了连线完全不相交的平面图（Planar Graph）最优拓扑。
+  - **静态坐标绑定**：在 `LearningPathGraph.vue` 中定义并应用了包含所有 25 个知识点的静态布局物理坐标字典 `FIXED_COORDINATES`，设定节点最小安全间距 $\ge 65\text{px}$、点线净空间距 $\ge 35\text{px}$，彻底消除了每次点击进入位置随机及节点漂移。
+  - **前沿节点补齐**：将 `数据预处理`、`特征工程` 及 `混淆矩阵` 正式补齐到图谱节点 and 连线定义中，达成前后端大纲 100% 对齐。
+  - **拖拽控制与自由漫游**：将 ECharts 布局设置为 `layout: 'none'`，关闭节点拖拽 `draggable: false`，但保留全局画布 `roam: true`，支持缩放与平移，结构长效稳固。
+[x] **对话学习自适应排程复习计划与画像自愈写入防崩**：
+  - **画像存在性拦截自愈**：在 `app/crud.py` 的 `upsert_review_plan` 写入函数中，前置添加了 `load_student_profile` 的画像拉取校验，对于无任何聊天历史的新用户，执行手动添加复习计划时会自动为其建档建表，从物理层锁死外键依赖，彻底清除了 SQLite `FOREIGN KEY constraint failed` 报错 500 的恶性缺陷。
+  - **对话学习自动排程**：在 `stream_api.py` 讲义对话接口结束流发送时，异步抽取本次对话概念，自动通过 `upsert_review_plan` 注册到学生的遗忘曲线日程表（默认 1 天后到期复习），实现了学习 ➡️ 抗遗忘排程的完美生态闭环。
+  - **回归测试覆盖**：在 `test_edumatrix.py` 中补充并写入了针对对话自动计划排程以及新用户直接手动创建计划的防错自愈测试用例。
+[x] **对话历史持久化自动保存与一键清空**：
+  - **状态持久化与恢复**：重构 `chat.js`，在 Pinia 初始化 state 时自动从 `localStorage` 同步反序列化并读取 `edumatrix_chat_messages` 键值。在 `addMessage` 与卡片重生成成功回调中同步调用 `saveMessages()` 将数组保存至本地，刷新网页或重新进入均可实现记录自恢复。
+  - **一键清空与防误触确认**：在 `chat.js` 中开发了 `clearHistory` 方法。在 `Chat.vue` 的对话框页面顶部挂载了 “🗑️ 清空对话” 按键，触发时弹出原生 confirm 提示框防止误删，清空时一并安全移除 `localStorage` 缓存。
 
 #### 2. 测试与编译校验
 * 前端开发与生产打包：`npm run build` ➡️ **Built successfully (100% OK)**。
-* 全量 29 项系统级测试：`test_edumatrix.py` ➡️ **29/29 passed (100% OK)**。
-* 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**；运行 `node scratch/test_markdown_image.js` ➡️ **验证通过**。对于中文、数学公式、空格、换行、特殊符号等极端 Markdown 图片结构以及多模态资源列表，自愈与重排转换完全符合预期。
+* 全量 31 项系统级测试：`test_edumatrix.py` ➡️ **31/31 passed in 12.39s (100% OK)**。
+* 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**；运行 `node scratch/test_markdown_image.js` ➡️ **验证通过**。对于中文、数学公式、空格、换行、特殊符号等极端 Markdown 图片结构以及多模态资源列表，自愈与排载转换完全符合预期。
 
 
 

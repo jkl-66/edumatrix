@@ -210,6 +210,13 @@ onUnmounted(() => {
   cleanupCustomMindmaps()
 })
 
+function clearChat() {
+  if (confirm('确认清空所有对话历史吗？该操作不可撤销。')) {
+    chatStore.clearHistory()
+  }
+}
+
+
 // Watch for new assistant messages to trigger TTS
 watch(messages, (newMsgs, oldMsgs) => {
   if (newMsgs.length > (oldMsgs?.length || 0)) {
@@ -653,6 +660,7 @@ async function regenerateCard(messageIndex, resourceIndex) {
     )
     if (data && data.status === 'success') {
       res.content = data.content
+      chatStore.saveMessages()
     }
   } catch (e) {
     console.error('Error regenerating component:', e)
@@ -1294,11 +1302,18 @@ function renderMarkdown(text, type = '', conceptName = '') {
             <Globe :size="14" /> 联网
           </button>
         </div>
-        <button v-if="activeTab === 'chat' && rightPanelCollapsed"
-          @click="rightPanelCollapsed = false"
-          class="px-2.5 py-1 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg flex items-center gap-1 transition-all">
-          <Maximize2 :size="12" /> 展开可视化画板
-        </button>
+        <div class="flex items-center gap-2">
+          <button v-if="activeTab === 'chat' && messages.length > 0"
+            @click="clearChat"
+            class="px-2.5 py-1 text-xs font-semibold text-red-400 hover:text-red-300 bg-red-950/30 hover:bg-red-900/40 rounded-lg flex items-center gap-1 transition-all border border-red-900/30">
+            <Trash2 :size="12" /> 清空对话
+          </button>
+          <button v-if="activeTab === 'chat' && rightPanelCollapsed"
+            @click="rightPanelCollapsed = false"
+            class="px-2.5 py-1 text-xs font-semibold text-blue-400 hover:text-blue-300 bg-blue-950/30 hover:bg-blue-900/40 rounded-lg flex items-center gap-1 transition-all border border-blue-900/30">
+            <Maximize2 :size="12" /> 展开可视化画板
+          </button>
+        </div>
       </div>
 
       <!-- CHAT TAB -->
@@ -1638,21 +1653,30 @@ function renderMarkdown(text, type = '', conceptName = '') {
             </div>
 
             <!-- Right Visualization Sidebar -->
-            <div class="w-80 hidden xl:flex flex-col gap-6 overflow-y-auto scrollbar-none pb-4 shrink-0">
+            <div class="w-full max-w-4xl hidden xl:flex flex-col gap-6 overflow-y-auto scrollbar-none pb-4 shrink-0">
             <AvatarSpeech ref="avatarRef" class="shrink-0" />
             
-            <AgentTimeline 
-            class="shrink-0"
-            :progress="chatStore.streamingProgress" 
-            :status="chatStore.streamingStatus" 
-            :agents="chatStore.streamingAgents" 
-            />
-
-            <MasteryRadar 
-            class="shrink-0"
-            :concepts="radarConcepts" 
-            :student-id="props.studentId" 
-            />
+            <div class="grid grid-cols-2 gap-6 shrink-0 items-stretch">
+              <AgentTimeline 
+                class="w-full shrink-0"
+                :progress="chatStore.streamingProgress" 
+                :status="chatStore.streamingStatus" 
+                :agents="chatStore.streamingAgents" 
+              />
+              <div class="card p-4 bg-white border border-gray-200 shadow-sm flex flex-col justify-center min-h-[360px] shrink-0">
+                <h3 class="text-xs font-bold text-gray-700 mb-2 flex items-center gap-1.5 justify-center border-b border-gray-100 pb-2">
+                  <BrainCircuit :size="14" class="text-blue-500" />
+                  <span>能力掌握度雷达图</span>
+                </h3>
+                <div class="flex-1 flex items-center justify-center">
+                  <MasteryRadar 
+                    class="w-full h-full"
+                    :concepts="radarConcepts" 
+                    :student-id="props.studentId" 
+                  />
+                </div>
+              </div>
+            </div>
 
             <div class="p-5 border border-indigo-600/35 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-700 text-white shadow-lg mt-auto">
             <div class="flex items-center gap-2 mb-3">

@@ -74,7 +74,7 @@ async def generate_quiz(
     payload = await request.json()
     student_id = str(payload.get("student_id", "default"))
     target_concept = str(payload.get("target_concept", "")).strip()
-    difficulty = str(payload.get("difficulty", "medium"))
+    req_difficulty = str(payload.get("difficulty", "")).strip().lower()
 
     profile = await run_db_op(load_student_profile, student_id)
     if not target_concept:
@@ -83,22 +83,49 @@ async def generate_quiz(
         else:
             target_concept = "机器学习基础"
 
+    # 动态难度：基于画像推算
+    mastery = profile.concept_mastery.get(target_concept, 0.45)
+    cognitive_load = profile.cognitive_load
+    frustration = profile.frustration_index
+    if req_difficulty in ('easy', 'medium', 'hard'):
+        difficulty = req_difficulty
+    elif frustration > 0.6 or cognitive_load > 0.7:
+        difficulty = 'easy'
+    elif mastery < 0.3:
+        difficulty = 'easy'
+    elif mastery < 0.6:
+        difficulty = 'medium'
+    elif mastery > 0.8:
+        difficulty = 'hard'
+    else:
+        difficulty = 'medium'
+
     llm = await _get_llm(request)
 
     system_prompt = (
-        "你是一个智能出题考官。根据给定的知识点和难度，生成一道简答题。\n"
+        "你是一个智能出题考官。根据给定的知识点、难度和学生画像，生成高度定制化的简答题。\n"
         "请以JSON格式返回，包含以下字段：\n"
-        "question: 题目文本\n"
-        "reference_answer: 参考答案要点（用逗号分隔的关键点）\n"
-        "concept: 考察的知识点\n"
-        "difficulty: easy/medium/hard\n"
-        "hints: 3个提示阶梯，从模糊到具体"
+        "{\n"
+        '  "question": "题目文本",\n'
+        '  "reference_answer": "分点列出参考答案（用分号分隔）",\n'
+        '  "concept": "考察的知识点",\n'
+        '  "difficulty": "easy/medium/hard",\n'
+        '  "hints": ["提示1（模糊引导）", "提示2（半具体）", "提示3（具体但非直接答案）"]\n'
+        "}\n"
+        "出题规则：\n"
+        "- 低掌握度（<0.4）：用最简单直白的语言，考察基本概念理解，提示要多且友好\n"
+        "- 中等掌握度（0.4~0.7）：考察概念应用和简单推理，提示逐步递进\n"
+        "- 高掌握度（>0.7）：考察综合分析和批判性思考，提示少而精\n"
+        "- 挫败感高（>0.5）时题目要带鼓励语气并设置可达成的子目标"
     )
     user_prompt = (
         f"知识点：{target_concept}\n"
         f"难度：{difficulty}\n"
-        f"学生画像：{profile.profile_prompt()}\n"
-        "请生成一道简答题，鼓励学生用自己的话回答，而不是单纯填空。"
+        f"掌握度：{mastery:.2f}\n"
+        f"认知负荷：{cognitive_load:.2f}\n"
+        f"挫败感：{frustration:.2f}\n"
+        f"学生画像全文：{profile.profile_prompt()}\n"
+        "请生成一道完全针对此学生定制的简答题，鼓励学生用自己的话回答。"
     )
 
     try:
@@ -379,15 +406,31 @@ async def adapt_quiz(
 
     # Generate follow-up quiz
     llm = await _get_llm(request)
+    # 动态难度：根据画像调整
+    cl = profile.cognitive_load; fr = profile.frustration_index; m = profile.concept_mastery.get(target, 0.45)
+    if difficulty == "hard" and (cl > 0.7 or fr > 0.6): difficulty = "medium"
+    elif difficulty == "easy" and m > 0.7: difficulty = "medium"
     system_prompt = (
-        "你是一个智能出题考官。根据学生上次的表现，生成一道针对性的跟进简答题。\n"
-        "以JSON格式返回: question, reference_answer, concept, difficulty, hints"
+        "你是一个智能出题考官。根据学生上次的表现和完整画像，生成一道高度定制的跟进简答题。\n"
+        "请以JSON格式返回：\n"
+        "{\n"
+        '  "question": "题目文本（根据画像调整问法和深度）",\n'
+        '  "reference_answer": "分点列出参考答案（用分号分隔）",\n'
+        '  "concept": "考察的知识点",\n'
+        '  "difficulty": "easy/medium/hard",\n'
+        '  "hints": ["提示1", "提示2", "提示3"]\n'
+        "}\n"
+        "出题规则：低掌握度从基础概念问起；高掌握度考综合应用；挫败感高时降低难度并鼓励。"
     )
     user_prompt = (
         f"目标概念：{target}\n"
         f"难度：{difficulty}\n"
-        f"上次表现后的建议动作：{previous_action}\n"
-        "请生成一道能检验学生是否真正理解的简答题。"
+        f"上次表现建议动作：{previous_action}\n"
+        f"掌握度：{m:.2f}\n"
+        f"认知负荷：{cl:.2f}\n"
+        f"挫败感：{fr:.2f}\n"
+        f"学生画像全文：{profile.profile_prompt()}\n"
+        "请生成一道能真正检验此学生理解的跟进题。"
     )
 
     try:

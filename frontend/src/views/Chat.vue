@@ -215,6 +215,20 @@ function clearChat() {
   }
 }
 
+const messageListRef = ref(null)
+
+function scrollToTop() {
+  if (messageListRef.value) {
+    messageListRef.value.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+}
+
+function scrollToBottom() {
+  if (messageListRef.value) {
+    messageListRef.value.scrollTo({ top: messageListRef.value.scrollHeight, behavior: 'smooth' })
+  }
+}
+
 
 // Watch for new assistant messages to trigger TTS
 watch(messages, (newMsgs, oldMsgs) => {
@@ -1447,14 +1461,14 @@ function renderMarkdown(text, type = '', conceptName = '') {
       </div>
 
       <!-- CHAT TAB -->
-      <div v-if="activeTab === 'chat'" class="flex flex-col flex-1 min-h-0 max-w-4xl">
+      <div v-if="activeTab === 'chat'" class="relative flex flex-col flex-1 min-h-0 max-w-4xl">
         <div class="flex flex-wrap gap-2 mb-4">
           <button v-for="preset in presets" :key="preset" class="btn btn-outline text-xs py-1.5" @click="usePreset(preset)">
             {{ preset.slice(0, 20) }}{{ preset.length > 20 ? '...' : '' }}
           </button>
         </div>
 
-        <div class="flex-1 overflow-y-auto space-y-4 mb-4 scrollbar-thin">
+        <div ref="messageListRef" class="flex-1 overflow-y-auto space-y-4 mb-4 scrollbar-thin">
           <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center text-gray-400">
             <Bot :size="48" class="mb-3 text-gray-300" />
             <p class="text-sm font-medium">输入问题开始学习</p>
@@ -1585,6 +1599,16 @@ function renderMarkdown(text, type = '', conceptName = '') {
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- 一键回到顶端/底端悬浮按钮 -->
+        <div v-if="messages.length > 0" class="absolute right-4 bottom-20 flex flex-col gap-2 z-20">
+          <button @click="scrollToTop" class="w-8 h-8 rounded-full bg-white/80 hover:bg-white text-gray-500 hover:text-blue-600 border border-gray-200/80 shadow-md hover:shadow-lg transition-all flex items-center justify-center backdrop-blur-sm" title="回到最顶端">
+            <ChevronUp :size="16" />
+          </button>
+          <button @click="scrollToBottom" class="w-8 h-8 rounded-full bg-white/80 hover:bg-white text-gray-500 hover:text-blue-600 border border-gray-200/80 shadow-md hover:shadow-lg transition-all flex items-center justify-center backdrop-blur-sm" title="回到最底端">
+            <ChevronDown :size="16" />
+          </button>
         </div>
 
         <div class="flex items-end gap-2 bg-white border border-gray-200 rounded-xl p-2">

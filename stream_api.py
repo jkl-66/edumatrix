@@ -130,6 +130,66 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 yield _sse("error", {"step": "rag", "message": f"检索失败: {str(e)[:100]}"})
                 return
 
+            # === 任务 8.1 / 低置信度幻觉拦截 ===
+            if getattr(retrieval, "low_confidence", False):
+                refusal_msg = "抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉，建议您在‘课件管理’页面中上传包含该概念的教学资料。"
+                await check_disconnection()
+                yield _sse("progress", {"step": "complete", "message": "置信度过低，已被安全拦截。", "progress": 100})
+                
+                profile_data = None
+                try:
+                    p = swarm.profile_store.get(student_id)
+                    if p and hasattr(p, "weak_points"):
+                        profile_data = {
+                            "weak_points": getattr(p, "weak_points", [])[:5],
+                            "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
+                            "cognitive_style": getattr(p, "cognitive_style", ""),
+                            "learning_goals": getattr(p, "learning_goals", [])[:3],
+                            "dimensions": {
+                                k: {"score": round(v.score, 2), "status": v.status, "label": v.label}
+                                for k, v in list(getattr(p, "dimension_states", {}).items())[:10]
+                            },
+                            "causes": {
+                                k: {"percentage": round(v.percentage, 1), "label": v.label}
+                                for k, v in list(getattr(p, "learning_state_causes", {}).items())[:7]
+                            },
+                        }
+                except Exception:
+                    pass
+
+                # === 将低置信度拒绝回复写入学生画像历史中 ===
+                try:
+                    p = swarm.profile_store.get(student_id)
+                    if p and hasattr(p, "update_from_feedback"):
+                        p.update_from_feedback(
+                            feedback=refusal_msg,
+                            accuracy=None,
+                            self_confidence=None,
+                            hint_count=0,
+                        )
+                except Exception:
+                    pass
+
+                yield _sse("complete", {
+                    "target": "未知",
+                    "content": f"## ⚠️ 置信度拦截提示\n\n{refusal_msg}",
+                    "resources": [],
+                    "safety": {
+                        "passed": True,
+                        "issues_count": 0,
+                    },
+                    "profile": profile_data,
+                    "alignment": {
+                        "passed": True,
+                        "distance": 0.0,
+                        "threshold": 0.65,
+                        "conflicts": [],
+                        "advice": "低置信度拦截，跳过对齐生成"
+                    },
+                    "strategy_plan": None,
+                })
+                return
+
             await check_disconnection()
             yield _sse("progress", {"step": "generating", "message": "5个智能体正在并行生成资源...", "progress": 50})
 
@@ -296,12 +356,44 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     "advice": alignment_report.advice
                 }
 
+            # === 按照 理论-思维导图-代码-题目-视频 顺序进行重排序 ===
+            order_map = {
+                "专业讲义": 0, "理论教授": 0,
+                "思维导图": 1, "逻辑画师": 1,
+                "代码实操案例": 2, "极客助教": 2,
+                "练习题": 3, "考官智能体": 3,
+                "虚拟人视频脚本": 4, "虚拟导演": 4
+            }
+            def get_order_key(r):
+                rtype = getattr(r, "resource_type", "")
+                role = getattr(r, "agent", "")
+                if rtype in order_map:
+                    return order_map[rtype]
+                if role in order_map:
+                    return order_map[role]
+                return 99
+
+            sorted_parts = sorted(streamed_parts, key=get_order_key)
+
+            # === 将系统生成的讲义回复记录写入学生画像历史中，以维持多轮滑动上下文的交替结构 ===
+            try:
+                p = swarm.profile_store.get(student_id)
+                if p and hasattr(p, "update_from_feedback"):
+                    p.update_from_feedback(
+                        feedback=final_content,
+                        accuracy=1.0,
+                        self_confidence=None,
+                        hint_count=0,
+                    )
+            except Exception as e:
+                print(f"  [StreamAPI] Failed to update profile history: {e}")
+
             yield _sse("complete", {
                 "target": getattr(retrieval, "target", ""),
                 "content": final_content,
                 "resources": [
                     {"agent": getattr(r, "agent", ""), "type": getattr(r, "resource_type", ""), "content": getattr(r, "content", "") or ""}
-                    for r in streamed_parts[:8]
+                    for r in sorted_parts[:8]
                 ],
                 "safety": {
                     "passed": safety_result["passed"],

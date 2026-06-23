@@ -593,10 +593,33 @@
   - **SVG 渲染保护**：在 `Chat.vue` 的 `renderMarkdown` 开头引入 SVG 标签正则保护，匹配并提取所有 `<svg[\s\S]*?<\/svg>` 块替换为 `@@SVGBLOCKTOKEN${idx}@@` 占位符，保护其在中间转义阶段不被转为 `&lt;svg&gt;` 实体字符，并在最终渲染前无缝还原，完美支持了大模型输出的原生 SVG 特征图直接渲染。
   - **Base64 图片解析**：新增 Markdown 图片标记正则 `!\[([^\]]*)\]\(([^)]+)\)`，在行内渲染阶段自动将其替换为 `<img>` 标签，且完全兼容 Base64 格式的长数据流，彻底消除了测试题目中的矩阵演算图 Base64 源码外漏的 Bug。
   - **虚拟人视频播放联动**：在 `Chat.vue` 消息列表中，对类型为“虚拟导演”或“视频”的卡片底部，动态挂载“🎬 播放讲解视频 →”按钮。该按钮通过 `window.startInteractiveVideo` 绑定并调用右下角 `toggleVideoPanel`，实现了一键开启 VideoRenderPanel 的可视化微课视频生成与播放联动。
+[x] **多模态 Base64 Markdown 图片自愈渲染与匹配升级**：
+  - **跨行与空格自愈**：在 `Chat.vue` 的 `renderMarkdown` 以及 `Chat.vue`/`SandboxConsole.vue` 内部提取 `![可视化输出]` 处，升级正则表达式为 `!\[([^\]]*)\]\s*\(([^)]+)\)`，解决 brackets `]` 和 parentheses `(` 之间存在空格或换行符时导致无法匹配的 Bug。
+  - **Base64 字符串清洗**：在替换匹配的 callback 中，使用 `.replace(/\s+/g, '')` 统一清洗捕获的 Base64 编码流，过滤掉换行符与空格，使生成的图片 `<img>` 标签的 `src` 物理连续，解决了大模型在折行输出 Base64 数据时的渲染崩溃和源码暴露。
+  - **新增测试脚本**：在 `scratch/test_markdown_image.js` 中覆盖测试了各种带有空格、换行的 Markdown 图片及超长 Base64 格式串。
+[x] **多模态自适应资源加载顺序一致性排序优化**：
+  - **强制拓扑顺序**：在 `stream_api.py` 最终发送 complete 事件前，通过预定义的 `order_map` 和排序函数，对并发生成并推进来的资源列表进行按顺序重排，修正了之前因为 `asyncio.as_completed` 任务响应先后顺序不同导致前端卡片完全乱序呈现的缺陷，使其严格遵循“讲义（理论）-> 脑图 -> 代码 -> 练习 -> 视频”的教学逻辑。
+
+[x] **修复垃圾词打断后的多轮对话指代消解退化缺陷**：
+  - **历史交替对齐**：在 `stream_api.py` 中，在正常讲义回复生成与低置信度拒答逻辑中补全 `update_from_feedback` 调用，使其被正确追加到 `profile.history` 中，恢复了“学生➔系统➔学生➔系统”的标准问答交替结构，消除了滑动窗口格式错位的 Bug。
+  - **画像级概念兜底**：在 `agent_swarm.py` 的指代消解核心函数 `_resolve_coreference` 中，当滑动窗口因垃圾词挤占未能提取出任何活跃概念时，强行从 `existing_concepts[-1]` 中获取画像中最近更新/学习的核心概念作为指代替换目标，形成坚实的安全兜底防线。
+  - **新增回归测试**：在 `test_edumatrix.py` 中补写了 `test_coreference_resolution_with_garbage_words` 单元测试，并在包含垃圾词打断、拒答拦截及后续代词追问场景下跑测成功。
+[x] **实现代码一键挂载至沙箱控制台功能**：
+  - **组件级挂载按钮**：在 `Chat.vue` 中渲染资源卡片时，当检测到为 `极客助教` 角色时，额外在卡片底部渲染“💻 挂载至沙箱”动作按钮。同时利用自定义的正则和提取函数 `extractCodeFromMarkdown` 自动剥离 Markdown 代码块标记（如 ````python ... ````），避免 Markdown 语法直接污染编辑器。
+  - **消息级悬浮挂载按钮**：在 `renderMarkdown` 处理普通代码块时，为生成的 `<pre>` 外层包覆 `.group` 容器，并绝对定位“💻 挂载至沙箱”悬浮按钮（Hover 时渐显）。点击后触发 `window.mountCodeToSandbox` 将 unescaped 代码内容自动载入右侧代码沙箱。
+  - **沙箱联动机制**：将右侧沙箱 `SandboxConsole` 的 `:initialCode` 属性与 Reactive 状态 `sandboxInitialCode` 绑定，当触发挂载时自动解开折叠并切换右侧至沙箱视图，将提取后的纯代码一键填装至编辑器中，实现高内聚高保真 E2E 通关测试的完美衔接。
+[x] **右侧代码沙箱滚动跟随与终端自动滚底优化**：
+  - **右侧画板粘性定位（Sticky Positioning）**：在 `Chat.vue` 中，将右侧阻尼自适应面板的包裹层修改为 `sticky top-6 self-start`。通过将 `align-self` 改为 `flex-start` 释放拉伸限制，并使用 `calc(100vh - 120px)` 计算视口可用高度，完美实现了当左侧聊天列表因多轮对话无限变长时，右侧代码沙箱与可视化画板始终跟随鼠标滚轮滑动而平滑悬浮贴顶，永远停留在视口区域，解决了侧栏滚出屏幕的视觉死角。
+  - **沙箱终端输出自动滚底（Terminal Scroll Anchor）**：在 `SandboxConsole.vue` 中，在输出终端容器上绑定 `ref="terminalRef"`，并通过 `watch` 深度追踪 output 和 errorMsg 响应状态。在每次产生运算输出流时调用 `nextTick` 结合 `scrollTop = scrollHeight`，使终端信息始终自动滚到底部，确保能第一时间直观看到最近一次 print 信息或异常栈。
+[x] **代码沙箱运行环境补充与 PyTorch 预导入加固**：
+  - **PyTorch (torch/nn) 安全引入**：在 `code_exec_api.py` 的沙箱隔离机制 `_get_wrapper_script` 中，在额外的白名单预设中新增对 `torch` 和 `torch.nn as nn` 的匹配与导入。当用户代码中包含相关包时，自动在 restricted_globals 作用域中完成安全装载，并对环境做 `ImportError` 保护。
+  - ** whl CPU 轻量库安装**：在本地 Python 宿主运行环境中，使用 PyTorch 官方轻量化 whl 源完成了 `torch-2.12.1+cpu` 的安装（体积远小于 CUDA 库），使子进程沙箱执行器能够秒级唤起并正确执行所有带有神经网络矩阵前向传播/反向传播的代码示例，彻底解决了 `ModuleNotFoundError: No module named 'torch'` 的异常断裂。
 
 #### 2. 测试与编译校验
-* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 17.4s (100% OK)**。
-* 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed (100% OK)**。
-* 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**。对于中文、数学公式及空格等非标裸节点，自愈输出转换完全符合 Mermaid 语法预期。
+* 前端开发与生产打包：`npm run build` ➡️ **Built successfully (100% OK)**。
+* 全量 29 项系统级测试：`test_edumatrix.py` ➡️ **29/29 passed (100% OK)**。
+* 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**；运行 `node scratch/test_markdown_image.js` ➡️ **验证通过**。对于中文、数学公式、空格、换行、特殊符号等极端 Markdown 图片结构以及多模态资源列表，自愈与重排转换完全符合预期。
+
+
 
 

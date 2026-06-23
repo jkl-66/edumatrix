@@ -288,7 +288,7 @@ for mod_name in ("math", "json", "random", "statistics", "collections", "itertoo
         pass
 restricted_globals.update(safe_modules)
 
-for extra in ("numpy", "np", "pandas", "pd", "matplotlib", "plt", "sklearn"):
+for extra in ("numpy", "np", "pandas", "pd", "matplotlib", "plt", "sklearn", "torch", "nn"):
     if extra in code_to_run:
         try:
             if extra == "matplotlib":
@@ -309,6 +309,12 @@ for extra in ("numpy", "np", "pandas", "pd", "matplotlib", "plt", "sklearn"):
             elif extra == "sklearn":
                 import sklearn
                 restricted_globals["sklearn"] = sklearn
+            elif extra == "torch":
+                import torch
+                restricted_globals["torch"] = torch
+            elif extra == "nn":
+                import torch.nn as nn
+                restricted_globals["nn"] = nn
         except ImportError:
             pass
 

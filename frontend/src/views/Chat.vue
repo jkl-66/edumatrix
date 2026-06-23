@@ -247,6 +247,23 @@ const socraticPopup = ref({
 // --- 任务 8.4: 双栏阻尼排版 ---
 const rightPanelCollapsed = ref(false)
 const showSandbox = ref(false)
+const sandboxInitialCode = ref("import numpy as np\nprint('Hello, EduMatrix!')")
+
+function extractCodeFromMarkdown(mdText) {
+  if (!mdText) return ''
+  const match = mdText.match(/```(?:python|javascript|js)?\s*([\s\S]*?)```/i)
+  if (match) {
+    return match[1].trim()
+  }
+  return mdText.trim()
+}
+
+function mountToSandbox(rawContent) {
+  const code = extractCodeFromMarkdown(rawContent)
+  sandboxInitialCode.value = code
+  showSandbox.value = true
+  rightPanelCollapsed.value = false
+}
 
 // 任务 8.5: 视频渲染面板状态
 const showVideoPanel = ref(false)
@@ -297,8 +314,11 @@ const codeVizHtml = computed(() => {
   const out = codeOutput.value
   if (!out.includes('![可视化输出]')) return out.replace(/\n/g, '<br>')
   return out.replace(
-    /!\[可视化输出\]\(data:image\/png;base64,([^)]+)\)/g,
-    (_, b64) => `<img src="data:image/png;base64,${b64}" style="max-width:100%;border-radius:8px;margin:8px 0" />`
+    /!\[可视化输出\]\s*\(data:image\/png;base64,([^)]+)\)/gi,
+    (_, b64) => {
+      const cleanB64 = b64.replace(/\s+/g, '')
+      return `<img src="data:image/png;base64,${cleanB64}" style="max-width:100%;border-radius:8px;margin:8px 0" />`
+    }
   )
 })
 
@@ -471,6 +491,15 @@ onMounted(async () => {
   // 委托监听：捕获 Markdown 卡片内的代码块和公式点击
   document.addEventListener('click', handleMarkdownClick)
 
+  window.mountCodeToSandbox = (btn) => {
+    const parent = btn.closest('.relative')
+    const pre = parent ? parent.querySelector('pre') : null
+    if (pre) {
+      const rawCode = pre.textContent || ''
+      mountToSandbox(rawCode)
+    }
+  }
+
   // 注册全局 CAT 自适应测验板触发方法
   window.startInteractiveQuiz = (conceptName) => {
     activeTab.value = 'quiz'
@@ -497,6 +526,7 @@ onUnmounted(() => {
   document.removeEventListener('click', handleMarkdownClick)
   window.startInteractiveQuiz = null
   window.startInteractiveVideo = null
+  window.mountCodeToSandbox = null
 })
 
 function handleMarkdownClick(e) {
@@ -1029,7 +1059,12 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>`
       }
     } else {
-      blockHtml = `<pre class="my-3 p-3 bg-gray-900 text-green-400 rounded-lg overflow-x-auto font-mono text-xs leading-relaxed">${code.trim()}</pre>`
+      blockHtml = `<div class="relative group my-3">
+        <pre class="p-3 bg-gray-900 text-green-400 rounded-lg overflow-x-auto font-mono text-xs leading-relaxed">${code.trim()}</pre>
+        <button onclick="window.mountCodeToSandbox && window.mountCodeToSandbox(this)" class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity px-2.5 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-[10px] flex items-center gap-1 shadow-sm font-semibold transition-all">
+          💻 挂载至沙箱
+        </button>
+      </div>`
     }
     const idx = codeBlocks.length
     codeBlocks.push(blockHtml)
@@ -1126,7 +1161,10 @@ function renderMarkdown(text, type = '', conceptName = '') {
   }
 
   // 4. General inline Markdown replacements
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full max-h-[300px] object-contain rounded-xl my-3 shadow-sm border border-gray-100 bg-white p-1" />')
+  html = html.replace(/!\[([^\]]*)\]\s*\(([^)]+)\)/g, (match, alt, url) => {
+    const cleanUrl = url.replace(/\s+/g, '')
+    return `<img src="${cleanUrl}" alt="${alt}" class="max-w-full max-h-[300px] object-contain rounded-xl my-3 shadow-sm border border-gray-100 bg-white p-1" />`
+  })
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-gray-900">$1</strong>')
   html = html.replace(/\*([^*]+)\*/g, '<em class="italic text-gray-800">$1</em>')
   html = html.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 bg-gray-100 text-red-600 rounded font-mono text-xs font-medium">$1</code>')
@@ -1336,6 +1374,12 @@ function renderMarkdown(text, type = '', conceptName = '') {
                       </div>
                       <div v-if="showResources.has(`${idx}-${ri}`)" class="px-5 py-4 border-t border-gray-100 bg-white">
                         <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(res.content, res.type || res.resource_type || res.agent, msg.target)"></div>
+                        <!-- 如果是极客助教资源，添加一键挂载至沙箱按钮 -->
+                        <div v-if="getAgentConfig(res.agent, res.resource_type || res.type).label === '极客助教'" class="mt-3 flex justify-end">
+                          <button @click="mountToSandbox(res.content)" class="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg text-xs font-semibold shadow-sm transition-all flex items-center gap-1">
+                            <Terminal :size="12" /> 挂载至沙箱 →
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1663,9 +1707,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
     <!-- ========== 任务 8.4: 双栏阻尼自适应排版（右侧画板） ========== -->
     <div v-if="activeTab === 'chat'"
-      class="transition-all duration-300 overflow-hidden shrink-0 border-l border-gray-200"
+      class="sticky top-6 self-start transition-all duration-300 overflow-hidden shrink-0 border-l border-gray-200"
       :class="shouldShowRightPanel ? 'w-[360px] lg:w-[420px]' : 'w-0 border-l-0'">
-      <div v-if="shouldShowRightPanel" class="h-full flex flex-col p-3">
+      <div v-if="shouldShowRightPanel" class="h-[calc(100vh-120px)] flex flex-col p-3">
         <!-- 面板切换栏 -->
         <div class="flex items-center justify-between mb-3">
           <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
@@ -1687,7 +1731,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
         <!-- 代码沙箱（切换） -->
         <SandboxConsole v-if="showSandbox"
           :studentId="props.studentId"
-          :initialCode="'import numpy as np\nprint(\'Hello, EduMatrix!\')'" />
+          :initialCode="sandboxInitialCode" />
 
         <!-- 绘图区域 + 空白画布自适应收缩 -->
         <div v-else class="flex-1 flex flex-col">

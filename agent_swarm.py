@@ -112,6 +112,11 @@ def _resolve_coreference(
     # 策略2：对独立的模糊代词 "它" "这个" "这类" 进行上下文推断
     # 从历史上下文中提取最后3个提及的知识点
     history_concepts = [c for c in existing_concepts if c.lower() in history_context.lower()]
+    if not history_concepts and existing_concepts:
+        # 兜底：如果滑动窗口中由于垃圾词或者长度被挤压没有提取出任何概念，
+        # 则直接使用用户画像中最近更新/学习的那个概念（即列表末尾元素）作为代词替换指代目标。
+        history_concepts = [existing_concepts[-1]]
+
     for pronoun in ("它", "这个", "这类"):
         # 仅当代词以独立词出现时才替换（非嵌入在其他词中）
         # 使用 re.ASCII 确保 \w 仅匹配 [a-zA-Z0-9_]，不匹配中文

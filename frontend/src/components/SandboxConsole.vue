@@ -39,8 +39,11 @@ const vizHtml = computed(() => {
   const out = output.value
   if (!out.includes('![可视化输出]')) return ''
   return out.replace(
-    /!\[可视化输出\]\(data:image\/png;base64,([^)]+)\)/g,
-    (_, b64) => `<img src="data:image/png;base64,${b64}" style="max-width:100%;border-radius:8px;margin:8px 0" />`
+    /!\[可视化输出\]\s*\(data:image\/png;base64,([^)]+)\)/gi,
+    (_, b64) => {
+      const cleanB64 = b64.replace(/\s+/g, '')
+      return `<img src="data:image/png;base64,${cleanB64}" style="max-width:100%;border-radius:8px;margin:8px 0" />`
+    }
   )
 })
 
@@ -98,6 +101,20 @@ function handleKeydown(e) {
     run()
   }
 }
+
+const terminalRef = ref(null)
+
+function scrollToBottom() {
+  nextTick(() => {
+    if (terminalRef.value) {
+      terminalRef.value.scrollTop = terminalRef.value.scrollHeight
+    }
+  })
+}
+
+watch([output, errorMsg], () => {
+  scrollToBottom()
+})
 
 watch(() => props.initialCode, (v) => {
   if (v) code.value = v
@@ -163,7 +180,7 @@ watch(() => props.initialCode, (v) => {
 
       <!-- 输出终端 -->
       <div class="flex flex-col">
-        <div class="flex-1 h-48 overflow-y-auto bg-gray-950 p-3 font-mono text-xs">
+        <div ref="terminalRef" class="flex-1 h-48 overflow-y-auto bg-gray-950 p-3 font-mono text-xs">
           <div v-if="!output && !errorMsg" class="text-gray-600 italic">输出将在此显示...</div>
           <div v-if="errorMsg" class="text-red-400 whitespace-pre-wrap mb-2">{{ errorMsg }}</div>
           <div v-if="output" class="text-gray-200 whitespace-pre-wrap">

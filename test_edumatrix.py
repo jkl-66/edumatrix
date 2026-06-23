@@ -613,6 +613,37 @@ class EduMatrixPipelineTests(unittest.TestCase):
         finally:
             session.close()
 
+    def test_coreference_resolution_with_garbage_words(self):
+        """验证口语指代消解在垃圾词打断场景下的自愈与兜底机制"""
+        from agent_swarm import _resolve_coreference
+        from models import StudentProfile
+        
+        # 1. 正常问一个问题："逻辑回归损失函数"
+        profile = StudentProfile(student_id="test_coref")
+        profile.update_from_message("逻辑回归的损失函数是什么")
+        profile.concept_mastery["逻辑回归"] = 0.5 # 确保在 concept_mastery 中
+        
+        # 2. 模拟系统回复
+        profile.update_from_feedback(feedback="逻辑回归的损失函数是交叉熵损失函数。")
+        
+        # 3. 输入一段垃圾词："这这那那，今天天气真好"
+        profile.update_from_message("这这那那，今天天气真好")
+        profile.update_from_feedback(feedback="抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉...")
+        
+        # 此时滑动历史上下文
+        from agent_swarm import ProfileProbeAgent
+        probe = ProfileProbeAgent()
+        sliding_context = probe._get_sliding_context(profile, window_size=3)
+        
+        # 4. 再次提问没有明确代词指代的问题："那它的代码该怎么写"
+        message = "那它的代码该怎么写"
+        existing_concepts = list(profile.concept_mastery.keys())
+        
+        resolved = _resolve_coreference(message, existing_concepts, sliding_context)
+        # 应将 "它" 替换为 "逻辑回归"
+        self.assertIn("逻辑回归", resolved)
+        self.assertNotIn("它", resolved)
+
 
 if __name__ == "__main__":
     unittest.main()

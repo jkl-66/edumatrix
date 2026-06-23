@@ -446,3 +446,19 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
   * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 593ms (100% OK)**。
 - **Token 消耗估计**：约 25,000 Input / 2,200 Output
 - **架构师（用户）终审反馈**：Approved
+
+---
+
+### [2026-06-23] - 拉取更新并修复自适应测验 NameError 隐藏缺陷
+- **任务编号**：`TASK_QUIZ_NAMEERROR_HEAL`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-backend`, `oma-debug`, `oma-qa`
+- **开发场景**：拉取队友提交的关于测验提示词重复和 Swarm 属性修复的 commits，在分析及校验过程中定位到 `quiz_api.py` 的全新 `NameError` 隐藏 Bug 并修复。
+- **自愈重试记录**：
+  1. *第一次分析*：队友在 `quiz_api.py` 的 `generate_quiz` 接口里新增了去除 `提示X:` 冗余前缀的后处理逻辑，但误删除了用于解析大模型响应的 JSON 赋值行 `result = json_lib.loads(response)`。由于下方使用了宽泛的 `except Exception` 异常拦截保护，虽然不会引起服务闪退，但会导致真实 LLM 调用链路永远因为 `NameError: name 'result' is not defined` 报错而退化走本地 Mock 的 fallback 讲义分支，使大模型真实测验功能名存实亡。
+  2. *修复方案*：在 `quiz_api.py` L73 重新补充定义并正确赋值 `result = json_lib.loads(response)`。
+- **测试验证结果**：
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 12.36s (100% OK)**。
+- **Token 消耗估计**：约 10,000 Input / 1,000 Output
+- **架构师（用户）终审反馈**：Approved

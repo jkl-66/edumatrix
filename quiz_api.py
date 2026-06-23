@@ -71,6 +71,7 @@ async def generate_quiz(
     try:
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
         import json as json_lib
+        result = json_lib.loads(response)
         raw_hints = result.get("hints", [])
         result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
     except Exception:

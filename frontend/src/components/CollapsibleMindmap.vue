@@ -10,6 +10,7 @@ const props = defineProps({
 })
 
 const svgRef = ref(null)
+const fullscreenSvgRef = ref(null)
 const containerRef = ref(null)
 const isFullscreen = ref(false)
 
@@ -95,7 +96,31 @@ function parseIndentTextToTree(codeText) {
   return null
 }
 
-// --- 2. D3 Tree Rendering Engine ---
+// --- 2. Color Mapper based on Depth ---
+function getNodeColors(d) {
+  const depth = d.depth
+  if (depth === 0) {
+    return {
+      fill: '#e8ecfb',        // Soft purple-blue root
+      stroke: '#818cf8',      // Indigo border
+      text: '#4338ca'         // Indigo text
+    }
+  } else if (depth === 1) {
+    return {
+      fill: '#eff6ff',        // Soft sky blue
+      stroke: '#3b82f6',      // Blue border
+      text: '#1e3a8a'         // Dark blue text
+    }
+  } else {
+    return {
+      fill: '#ecfdf5',        // Soft mint green
+      stroke: '#10b981',      // Emerald border
+      text: '#064e3b'         // Dark emerald green text
+    }
+  }
+}
+
+// --- 3. D3 Tree Rendering Engine ---
 let d3Root = null
 let d3Zoom = null
 let d3Svg = null
@@ -104,13 +129,13 @@ let treeLayout = null
 
 function initAndRender() {
   const treeData = parseIndentTextToTree(props.code)
-  if (!treeData || !svgRef.value) return
+  const svgEl = isFullscreen.value ? fullscreenSvgRef.value : svgRef.value
+  if (!treeData || !svgEl) return
 
-  const width = containerRef.value?.clientWidth || 500
-  const height = isFullscreen.value ? (window.innerHeight - 48) : 320
+  const height = isFullscreen.value ? (window.innerHeight - 80) : 320
 
   // Select SVG and clear previous contents
-  d3Svg = d3.select(svgRef.value)
+  d3Svg = d3.select(svgEl)
   d3Svg.selectAll('*').remove()
 
   // Setup main group
@@ -118,14 +143,13 @@ function initAndRender() {
 
   // Setup zoom behaviour
   d3Zoom = d3.zoom()
-    .scaleExtent([0.2, 4])
+    .scaleExtent([0.15, 4])
     .on('zoom', (event) => {
       d3G.attr('transform', event.transform)
     })
   d3Svg.call(d3Zoom)
 
-  // Configure tree layout
-  // vertical separation 48px, horizontal step 210px (wider gap prevents overlapping)
+  // Configure tree layout (vertical separation 48px, horizontal step 210px)
   treeLayout = d3.tree().nodeSize([48, 210])
 
   // Convert hierarchy data
@@ -133,7 +157,7 @@ function initAndRender() {
   d3Root.x0 = height / 2
   d3Root.y0 = 60
 
-  // Collapse deep nodes initially (collapse children starting from depth 2)
+  // Collapse deep nodes initially (depth >= 2)
   const collapseDeep = (d) => {
     if (d.depth >= 2 && d.children) {
       d._children = d.children
@@ -161,8 +185,18 @@ function updateTree(source) {
   const nodes = treeData.descendants()
   const links = treeData.links()
 
-  // Normalize for fixed-depth.
-  nodes.forEach(d => { d.y = d.depth * 210 + 60 })
+  // Normalize for fixed-depth and pre-calculate label widths.
+  nodes.forEach(d => { 
+    d.y = d.depth * 210 + 60 
+    
+    // Calculate node text length for halfWidth
+    const name = d.data.name || ''
+    let len = 0
+    for (let char of name) {
+      len += char.charCodeAt(0) > 127 ? 11 : 6.5
+    }
+    d.halfWidth = (len + 20) / 2
+  })
 
   // --- Node Section ---
   const node = d3G.selectAll('g.node')
@@ -171,8 +205,35 @@ function updateTree(source) {
   // Enter any new nodes at the parent's previous position.
   const nodeEnter = node.enter().append('g')
     .attr('class', 'node')
-    .attr('transform', d => `translate(${source.y0},${source.x0})`)
+    .attr('transform', d => `translate(${source.y0 + source.halfWidth},${source.x0})`)
+    // No click on the main node to prevent expansion misclicks, clicks are routed to toggle-btn.
+    .style('cursor', 'default')
+
+  // Node shape: Rounded rectangle
+  nodeEnter.append('rect')
+    .attr('class', 'node-rect')
+    .attr('rx', 8)
+    .attr('ry', 8)
+    .attr('fill', 'transparent')
+    .attr('stroke', '#818cf8')
+    .attr('stroke-width', 1.5)
+
+  // Text label
+  nodeEnter.append('text')
+    .attr('dy', '0.31em')
+    .attr('text-anchor', 'middle')
+    .style('font-size', '10px')
+    .style('font-weight', '500')
+    .style('user-select', 'none')
+    .text(d => d.data.name)
+
+  // Small circle toggle button `<` or `>` at the right edge center
+  const toggleG = nodeEnter.append('g')
+    .attr('class', 'toggle-btn')
+    .attr('transform', d => `translate(${d.halfWidth}, 0)`)
+    .style('cursor', 'pointer')
     .on('click', (event, d) => {
+      event.stopPropagation()
       if (d.children) {
         d._children = d.children
         d.children = null
@@ -182,26 +243,20 @@ function updateTree(source) {
       }
       updateTree(d)
     })
-    .style('cursor', 'pointer')
 
-  // Node shape: Rounded rectangle
-  nodeEnter.append('rect')
-    .attr('class', 'node-rect')
-    .attr('rx', 8)
-    .attr('ry', 8)
-    .attr('fill', 'transparent')
-    .attr('stroke', '#8b5cf6')
+  // Circular toggle background
+  toggleG.append('circle')
+    .attr('r', 8)
+    .attr('fill', '#ffffff')
     .attr('stroke-width', 1.5)
 
-  // Text label
-  nodeEnter.append('text')
+  // Circular toggle label
+  toggleG.append('text')
     .attr('dy', '0.31em')
     .attr('text-anchor', 'middle')
-    .attr('fill', '#1e293b')
-    .style('font-size', '10px')
-    .style('font-weight', '500')
+    .style('font-size', '8px')
+    .style('font-weight', 'bold')
     .style('user-select', 'none')
-    .text(d => d.data.name)
 
   // Transition nodes to their new position.
   const nodeUpdate = node.merge(nodeEnter)
@@ -211,33 +266,33 @@ function updateTree(source) {
 
   // Update rect sizes dynamically based on text length
   nodeUpdate.select('rect')
-    .attr('width', d => {
-      const name = d.data.name || ''
-      let len = 0
-      for (let char of name) {
-        len += char.charCodeAt(0) > 127 ? 11 : 6.5
-      }
-      return len + 20
-    })
-    .attr('height', 22)
-    .attr('y', -11)
-    .attr('x', d => {
-      const name = d.data.name || ''
-      let len = 0
-      for (let char of name) {
-        len += char.charCodeAt(0) > 127 ? 11 : 6.5
-      }
-      return -(len + 20) / 2
-    })
-    // Accent indicator for parent node with collapsed children
-    .attr('stroke', d => d._children ? '#4f46e5' : '#8b5cf6')
-    .attr('stroke-width', d => d._children ? 2.5 : 1.5)
-    .attr('fill', d => d._children ? 'rgba(139, 92, 246, 0.04)' : 'transparent')
+    .attr('width', d => d.halfWidth * 2)
+    .attr('height', 24)
+    .attr('y', -12)
+    .attr('x', d => -d.halfWidth)
+    .attr('fill', d => getNodeColors(d).fill)
+    .attr('stroke', d => getNodeColors(d).stroke)
+    .attr('stroke-width', 1.5)
+
+  nodeUpdate.select('text')
+    .attr('fill', d => getNodeColors(d).text)
+
+  // Update toggle button position and content
+  const toggleUpdate = nodeUpdate.select('g.toggle-btn')
+    .attr('transform', d => `translate(${d.halfWidth}, 0)`)
+    .style('display', d => (d.children || d._children) ? 'block' : 'none')
+
+  toggleUpdate.select('circle')
+    .attr('stroke', d => getNodeColors(d).stroke)
+
+  toggleUpdate.select('text')
+    .attr('fill', d => getNodeColors(d).text)
+    .text(d => d.children ? '<' : '>')
 
   // Transition exiting nodes to the parent's new position.
   const nodeExit = node.exit().transition()
     .duration(300)
-    .attr('transform', d => `translate(${source.y},${source.x})`)
+    .attr('transform', d => `translate(${source.y + source.halfWidth},${source.x})`)
     .remove()
 
   nodeExit.select('rect')
@@ -251,15 +306,17 @@ function updateTree(source) {
   const link = d3G.selectAll('path.link')
     .data(links, d => d.target.id)
 
+  const linkGenerator = d3.linkHorizontal().x(d => d.y).y(d => d.x)
+
   // Enter any new links at the parent's previous position.
   const linkEnter = link.enter().insert('path', 'g')
     .attr('class', 'link')
     .attr('fill', 'none')
-    .attr('stroke', '#e2e8f0')
+    .attr('stroke', '#cbd5e1')
     .attr('stroke-width', 1.5)
     .attr('d', d => {
-      const o = { x: source.x0, y: source.y0 }
-      return d3.linkHorizontal().x(d => d.y).y(d => d.x)({ source: o, target: o })
+      const o = { x: source.x0, y: source.y0 + source.halfWidth }
+      return linkGenerator({ source: o, target: o })
     })
 
   // Transition links to their new position.
@@ -267,14 +324,18 @@ function updateTree(source) {
   linkUpdate.transition()
     .duration(300)
     .attr('stroke', '#cbd5e1')
-    .attr('d', d3.linkHorizontal().x(d => d.y).y(d => d.x))
+    .attr('d', d => {
+      const s = { y: d.source.y + d.source.halfWidth, x: d.source.x }
+      const t = { y: d.target.y - d.target.halfWidth, x: d.target.x }
+      return linkGenerator({ source: s, target: t })
+    })
 
   // Transition exiting nodes to the parent's new position.
   link.exit().transition()
     .duration(300)
     .attr('d', d => {
-      const o = { x: source.x, y: source.y }
-      return d3.linkHorizontal().x(d => d.y).y(d => d.x)({ source: o, target: o })
+      const o = { x: source.x, y: source.y + source.halfWidth }
+      return linkGenerator({ source: o, target: o })
     })
     .remove()
 
@@ -286,12 +347,11 @@ function updateTree(source) {
 }
 
 function centerLayout() {
-  if (!d3Svg || !d3Zoom || !d3Root) return
-  const svgEl = svgRef.value
-  if (!svgEl) return
+  const svgEl = isFullscreen.value ? fullscreenSvgRef.value : svgRef.value
+  if (!d3Svg || !d3Zoom || !d3Root || !svgEl) return
 
   const width = svgEl.clientWidth || 500
-  const height = isFullscreen.value ? (window.innerHeight - 48) : 320
+  const height = isFullscreen.value ? (window.innerHeight - 80) : 320
 
   // Calculate hierarchical bounds
   let minX = Infinity, maxX = -Infinity
@@ -300,14 +360,13 @@ function centerLayout() {
     if (d.x > maxX) maxX = d.x
   })
 
-  // Midpoint of nodes tree layout
   const treeMidpoint = (minX + maxX) / 2
-  const targetX = isFullscreen.value ? 100 : 40 // Left padding
+  const targetX = isFullscreen.value ? 100 : 40 
   const targetY = height / 2 - treeMidpoint
 
   const initialTransform = d3.zoomIdentity
     .translate(targetX, targetY)
-    .scale(isFullscreen.value ? 1.15 : 0.95)
+    .scale(isFullscreen.value ? 1.1 : 0.9)
 
   d3Svg.transition()
     .duration(500)
@@ -366,40 +425,73 @@ onMounted(() => {
 </script>
 
 <template>
-  <div ref="containerRef" 
-    class="collapsible-mindmap w-full relative border border-purple-100 rounded-2xl bg-white overflow-hidden shadow-sm my-3 p-1 transition-all duration-300"
-    :class="isFullscreen ? 'fixed inset-0 z-50 w-screen h-screen m-0 rounded-none' : 'w-full'">
+  <div ref="containerRef" class="collapsible-mindmap w-full relative border border-purple-100 rounded-2xl bg-white overflow-hidden shadow-sm my-3 p-1 transition-all duration-300">
     
-    <!-- Header panel -->
-    <div class="w-full flex items-center justify-between px-3 py-2 border-b border-gray-50 bg-gray-50/20 z-10 relative">
-      <div class="flex items-center gap-1.5">
-        <span class="text-base">📊</span>
-        <span class="font-bold text-gray-800 text-xs">交互式思维导图</span>
-        <span class="text-[9px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-mono font-medium">可折叠分支</span>
+    <!-- 1. Card View (When NOT Fullscreen) -->
+    <div v-show="!isFullscreen" class="w-full">
+      <!-- Card Header -->
+      <div class="w-full flex items-center justify-between px-3 py-2 border-b border-gray-50 bg-gray-50/20 z-10 relative">
+        <div class="flex items-center gap-1.5">
+          <span class="text-base">📊</span>
+          <span class="font-bold text-gray-800 text-xs">概念思维导图</span>
+          <span class="text-[9px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-mono font-medium">可折叠分支</span>
+        </div>
+        <div class="flex items-center gap-1.5 text-xs">
+          <button @click="expandAll" class="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded text-[10px] font-semibold transition-all">
+            展开
+          </button>
+          <button @click="collapseAll" class="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded text-[10px] font-semibold transition-all">
+            折叠
+          </button>
+          <button @click="resetZoom" class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded text-[10px] font-semibold transition-all">
+            居中
+          </button>
+          <button @click="toggleFullscreen" class="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-[10px] font-semibold transition-all shadow-sm">
+            🔍 放大/全屏
+          </button>
+        </div>
       </div>
-      <div class="flex items-center gap-1.5 text-xs">
-        <button @click="expandAll" class="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded text-[10px] font-semibold transition-all">
-          展开
-        </button>
-        <button @click="collapseAll" class="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded text-[10px] font-semibold transition-all">
-          折叠
-        </button>
-        <button @click="resetZoom" class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded text-[10px] font-semibold transition-all">
-          居中
-        </button>
-        <button @click="toggleFullscreen" class="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-[10px] font-semibold transition-all shadow-sm">
-          {{ isFullscreen ? '退出全屏' : '🔍 放大/全屏' }}
-        </button>
+      
+      <!-- Card SVG Container -->
+      <div class="w-full h-[320px] bg-white relative">
+        <svg ref="svgRef" class="w-full h-full cursor-grab active:cursor-grabbing select-none"></svg>
+        <div class="absolute bottom-2 right-3 text-[9px] text-gray-400 select-none pointer-events-none">
+          💡 点击右侧按键折叠/展开 • 拖拽画布移动 • 滚轮缩放
+        </div>
       </div>
     </div>
-    
-    <!-- SVG Mindmap container -->
-    <div class="w-full bg-white relative" :style="{ height: isFullscreen ? 'calc(100vh - 48px)' : '320px' }">
-      <svg ref="svgRef" class="w-full h-full cursor-grab active:cursor-grabbing select-none"></svg>
-      <div class="absolute bottom-2 right-3 text-[9px] text-gray-400 select-none pointer-events-none">
-        💡 点击节点折叠/展开 • 拖拽画布移动 • 滚轮缩放
+
+    <!-- 2. Fullscreen Modal View (Teleported to Body) -->
+    <Teleport to="body">
+      <div v-if="isFullscreen" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6" @click.self="toggleFullscreen">
+        <div class="w-full max-w-6xl h-[85vh] bg-white rounded-3xl overflow-hidden shadow-2xl flex flex-col relative animate-fade-in">
+          <!-- Modal Header -->
+          <div class="w-full flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+            <div class="flex items-center gap-2.5">
+              <span class="text-xl">📊</span>
+              <h3 class="font-bold text-gray-800 text-base">概念思维导图</h3>
+              <span class="text-xs bg-purple-50 text-purple-600 px-2 py-0.5 rounded font-mono font-medium">全屏交互画布</span>
+            </div>
+            <div class="flex items-center gap-3 text-xs">
+              <button @click="expandAll" class="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-lg font-semibold transition-all">展开分支</button>
+              <button @click="collapseAll" class="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-lg font-semibold transition-all">折叠分支</button>
+              <button @click="resetZoom" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-semibold transition-all">视图居中</button>
+              <button @click="toggleFullscreen" class="p-1.5 bg-gray-100 hover:bg-red-50 hover:text-red-500 rounded-lg transition-all" title="关闭全屏">
+                <span class="text-sm font-bold px-2 select-none">✕</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Modal SVG Container -->
+          <div class="flex-1 bg-white relative">
+            <svg ref="fullscreenSvgRef" class="w-full h-full cursor-grab active:cursor-grabbing select-none"></svg>
+            <div class="absolute bottom-4 right-6 text-xs text-gray-400 select-none pointer-events-none">
+              💡 点击右侧按键折叠/展开 • 拖拽画布移动 • 滚轮无级缩放
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
@@ -414,8 +506,15 @@ onMounted(() => {
   transition: stroke 0.2s, stroke-width 0.2s, fill 0.2s;
 }
 .node:hover .node-rect {
-  stroke: #4f46e5 !important;
-  stroke-width: 2.2px !important;
-  fill: rgba(139, 92, 246, 0.08) !important;
+  filter: drop-shadow(0 2px 6px rgba(99, 102, 241, 0.12));
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.25s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
 }
 </style>

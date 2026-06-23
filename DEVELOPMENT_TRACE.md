@@ -512,3 +512,18 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 8,000 Input / 800 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 升级 Google NotebookLM 风格思维导图浮动模态框及独立点击连线交互
+- **任务编号**：`TASK_MINDMAP_NOTEBOOKLM_STYLE`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[CollapsibleMindmap.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/CollapsibleMindmap.vue) (使用 Vue 3 `<Teleport to="body">` 实现浮动弹窗、配置 depth 0/1/2 专属的浅紫/浅蓝/浅绿背景与深色字体、在节点右侧添加独立的 `<` 和 `>` 圆形指示器气泡按键、调整连线起点向右平移 `halfWidth` 以从小气泡中心伸出线条)。
+- **自愈重试记录**：
+  - 首轮编译即完美绿灯通过。由于采用了 Teleport 定位，脑图全屏视图直接挂载到顶级 body，彻底挣脱了消息卡片的 transform 层叠限制，右上角关闭按钮完美浮出，消除了无法退出的 Bug。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 665ms (100% OK)**。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 10,000 Input / 1,000 Output
+- **架构师（用户）终审反馈**：Approved
+

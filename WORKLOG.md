@@ -573,8 +573,13 @@
   - 修复了 `Chat.vue` 中 `showResources` 观察器仅调用 `initMermaid` 导致展开动作卡片时脑图未挂载 VNode 的 bug，纠正为调用统一分发器 `renderAllDiagrams()`。
   - 将 D3.js 树布局的 `nodeSize` 垂直间距由 38px 增至 48px，水平深度步长由 170px 增至 210px，彻底消除了长文字和密集节点气泡的水平/垂直重叠。
   - 在 `CollapsibleMindmap.vue` 中通过 Vue 的 Class 动态绑定引入了 `isFullscreen` 状态，支持原地将脑图组件拉伸覆盖全屏显示，并自适应刷新 D3 画布并自动居中对齐。
+[x] **升级 Google NotebookLM 风格思维导图浮动大窗口、独立展开按钮与多色层级气泡**：
+  - **浮动大窗口（Teleport Modal）**：使用 `<Teleport to="body">` 将全屏模态框传送至顶级 body 节点，彻底突破了消息气泡的层叠上下文（transform / filter）阻碍，实现完全居中遮罩的浮动大弹窗，且完美配置了右上角关闭 `✕` 退出键。
+  - **多色层级节点（Color Hierarchy）**：根据节点深度 `d.depth` 动态配置了 Root（浅紫）、Depth 1（浅蓝）、Depth 2+（浅绿/薄荷绿）三种气泡背景与相匹配的深色文字边框。
+  - **独立小圆形气泡交互（Edge Toggles）**：在有子分支的节点右边缘居中追加了独立的圆形按键气泡（内置 `<` 或 `>`），并将展开折叠点击事件精准重定向至该小气泡，实现了点击主节点无误触。
+  - **从小气泡中心出线（Link Offset）**：重新计算 D3 连线起止坐标，将起点水平平移 `d.source.halfWidth`，使贝塞尔曲线极其精准地从小气泡中心点伸出发散。
 
 #### 2. 测试与编译校验
-* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 583ms (100% OK)**。
+* 前端开发与生产打包：`npm run build` ➡️ **Built successfully in 665ms (100% OK)**。
 * 全量 28 项系统级测试：`test_edumatrix.py` ➡️ **28/28 passed (100% OK)**。
 * 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**。对于中文、数学公式及空格等非标裸节点，自愈输出转换完全符合 Mermaid 语法预期。

@@ -12,6 +12,7 @@
     "@lucide/vue": "^1.16.0",
     "@tailwindcss/vite": "^4.3.0",
     "axios": "^1.16.1",
+    "d3": "^7.9.0",
     "echarts": "^6.1.0",
     "pinia": "^3.0.4",
     "tailwindcss": "^4.3.0",

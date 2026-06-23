@@ -1,5 +1,6 @@
 <script setup>
-import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, nextTick, computed, onMounted, onUnmounted, watch, createApp } from 'vue'
+import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 import {
   processMessage, getHistory,
   generateQuiz, evaluateQuizAnswer, adaptQuiz,
@@ -97,6 +98,40 @@ watch(() => zoomModal.value.code, (newVal) => {
   }
 })
 
+function mountCustomMindmaps() {
+  nextTick(() => {
+    try {
+      const placeholders = document.querySelectorAll('.custom-mindmap-placeholder:not([data-mounted="true"])')
+      placeholders.forEach((el) => {
+        const rawCode = decodeURIComponent(el.getAttribute('data-code') || '')
+        const app = createApp(CollapsibleMindmap, { code: rawCode })
+        app.mount(el)
+        el.setAttribute('data-mounted', 'true')
+        el.__vue_app__ = app
+      })
+    } catch (err) {
+      console.error('Mount custom mindmaps error:', err)
+    }
+  })
+}
+
+function cleanupCustomMindmaps() {
+  const elements = document.querySelectorAll('.custom-mindmap-placeholder[data-mounted="true"]')
+  elements.forEach((el) => {
+    if (el.__vue_app__) {
+      try {
+        el.__vue_app__.unmount()
+      } catch (e) {}
+      delete el.__vue_app__
+    }
+  })
+}
+
+function renderAllDiagrams() {
+  initMermaid()
+  mountCustomMindmaps()
+}
+
 function initMermaid() {
   if (typeof window.mermaid !== 'undefined') {
     nextTick(() => {
@@ -130,16 +165,16 @@ function initMermaid() {
 }
 
 watch(messages, () => {
-  initMermaid()
+  renderAllDiagrams()
 }, { deep: true })
 
 watch(() => chatStore.sending, () => {
-  initMermaid()
+  renderAllDiagrams()
 })
 
 
 onMounted(() => {
-  initMermaid()
+  renderAllDiagrams()
 })
 
 const nameToRole = {
@@ -172,6 +207,7 @@ watch(sending, async (newVal, oldVal) => {
 // 任务 8.2: 页面销毁时释放流式连接
 onUnmounted(() => {
   chatStore.cleanup()
+  cleanupCustomMindmaps()
 })
 
 // Watch for new assistant messages to trigger TTS
@@ -950,30 +986,34 @@ function renderMarkdown(text, type = '', conceptName = '') {
       // We HTML-escape the raw Mermaid code inside data-code attribute to prevent issues
       const escapedCode = encodeURIComponent(cleanCode)
 
-      blockHtml = `<div class="my-3 p-4 bg-white border border-gray-200 rounded-xl text-xs flex flex-col items-center shadow-sm max-w-full">
-        <div class="w-full flex items-center justify-between mb-3 pb-2 border-b border-gray-100">
-          <div class="flex items-center gap-1.5">
-            <span class="text-base">📊</span>
-            <span class="font-bold text-gray-800 text-xs">概念思维导图</span>
+      if (cleanCode.includes('mindmap')) {
+        blockHtml = `<div class="custom-mindmap-placeholder" data-code="${escapedCode}"></div>`
+      } else {
+        blockHtml = `<div class="my-3 p-4 bg-white border border-gray-200 rounded-xl text-xs flex flex-col items-center shadow-sm max-w-full">
+          <div class="w-full flex items-center justify-between mb-3 pb-2 border-b border-gray-100">
+            <div class="flex items-center gap-1.5">
+              <span class="text-base">📊</span>
+              <span class="font-bold text-gray-800 text-xs">概念思维导图</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="window.zoomMindmap && window.zoomMindmap(this)" class="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-[10px] font-semibold transition-all flex items-center gap-0.5 shadow-sm">
+                🔍 放大/全屏
+              </button>
+              <span class="text-[9px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-mono font-medium">Mermaid</span>
+            </div>
           </div>
-          <div class="flex items-center gap-2">
-            <button onclick="window.zoomMindmap && window.zoomMindmap(this)" class="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-[10px] font-semibold transition-all flex items-center gap-0.5 shadow-sm">
-              🔍 放大/全屏
-            </button>
-            <span class="text-[9px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-mono font-medium">Mermaid</span>
+          <div class="mermaid-container w-full overflow-auto flex justify-center py-2 bg-white max-h-[300px]" style="cursor: zoom-in;" onclick="window.zoomMindmap && window.zoomMindmap(this)">
+            <div class="mermaid w-full flex justify-center" data-code="${escapedCode}">${cleanCode}</div>
           </div>
-        </div>
-        <div class="mermaid-container w-full overflow-auto flex justify-center py-2 bg-white max-h-[300px]" style="cursor: zoom-in;" onclick="window.zoomMindmap && window.zoomMindmap(this)">
-          <div class="mermaid w-full flex justify-center" data-code="${escapedCode}">${cleanCode}</div>
-        </div>
-        <!-- 调试面板：折叠展示原始及清洗后的代码 -->
-        <details class="w-full mt-2 pt-2 border-t border-gray-100 text-[10px] text-gray-400 cursor-pointer">
-          <summary class="hover:text-gray-600 select-none text-[9px] font-semibold">🔍 查看 Mermaid 源码与自愈调试信息</summary>
-          <div class="mt-2 p-2 bg-gray-50 rounded font-mono text-[9px] whitespace-pre overflow-x-auto text-left text-gray-600">
+          <!-- 调试面板：折叠展示原始及清洗后的代码 -->
+          <details class="w-full mt-2 pt-2 border-t border-gray-100 text-[10px] text-gray-400 cursor-pointer">
+            <summary class="hover:text-gray-600 select-none text-[9px] font-semibold">🔍 查看 Mermaid 源码与自愈调试信息</summary>
+            <div class="mt-2 p-2 bg-gray-50 rounded font-mono text-[9px] whitespace-pre overflow-x-auto text-left text-gray-600">
 <strong>[自愈清洗后代码]:</strong>\n${cleanCode}\n\n<strong>[大模型原始输出]:</strong>\n${code.trim()}
-          </div>
-        </details>
-      </div>`
+            </div>
+          </details>
+        </div>`
+      }
     } else {
       blockHtml = `<pre class="my-3 p-3 bg-gray-900 text-green-400 rounded-lg overflow-x-auto font-mono text-xs leading-relaxed">${code.trim()}</pre>`
     }

@@ -480,3 +480,20 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 8,000 Input / 800 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 动态 D3 折叠思维导图组件开发与多端气泡美化
+- **任务编号**：`TASK_MINDMAP_D3_COLLAPSIBLE`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`, `oma-refactor`
+- **开发场景**：[CollapsibleMindmap.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/CollapsibleMindmap.vue) (新建 D3.js 树布局可折叠脑图组件)、[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (在 renderMarkdown 中拦截 mindmap 并路由至 custom 占位符，在 nextTick 生命期通过 createApp 动态挂载 Vue 脑图组件，并在 onUnmounted 进行卸载，重构用户半透明气泡)、[style.css](file:///d:/project-edumatrix/edumatrix-main/frontend/src/style.css) (追加机器人专属 .chat-card-assistant 有色无填充边框，并重写脑图 SVG 节点和连线的 Outlined 样式).
+- **自愈重试记录**：
+  1. *第一次报错*：前端重新运行 `npm run build` 打包时抛出 Rolldown 错误：`Rolldown failed to resolve import "d3" from CollapsibleMindmap.vue`。
+  2. *自愈与修复*：排查发现虽然前置报告提及项目已有 D3 基建，但实际 `package.json` 中并无该 npm 包（庞加莱画板是基于纯 Canvas 和数学公式手写的渲染器）。立即在 `frontend` 目录下运行 `npm install d3` 安装依赖并成功解决打包阻断，使 Vite 构建全面恢复绿灯。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 5.14s (100% OK)**，无任何警告与未解析引用。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 15,000 Input / 1,500 Output
+- **架构师（用户）终审反馈**：Approved
+
+

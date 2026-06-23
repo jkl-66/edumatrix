@@ -637,6 +637,11 @@
 * 前端开发与生产打包：`npm run build` ➡️ **Built successfully (100% OK)**。
 * 全量 31 项系统级测试：`test_edumatrix.py` ➡️ **31/31 passed in 12.39s (100% OK)**。
 * 脚本沙箱测试：运行 `node scratch/test_mindmap_regex.js` ➡️ **验证通过**；运行 `node scratch/test_markdown_image.js` ➡️ **验证通过**。对于中文、数学公式、空格、换行、特殊符号等极端 Markdown 图片结构以及多模态资源列表，自愈与排载转换完全符合预期。
+[x] **代码沙箱超时限制放宽与可配置化**：
+  - **支持深度学习/PyTorch**：将沙箱代码执行的硬超时从固定的 `3.0` 秒调整为可以通过环境变量自定义的 `10.0` 秒，为 PyTorch 神经网络前向/反向传播与 Matplotlib 科学绘图预留了更充裕的计算耗时，防止意外误杀。
+  - **新增配置项**：在 `config.py` 中增加了 `sandbox_timeout` (默认为 `10.0`s) 配置，支持在 `.env` 中使用 `EDUMATRIX_SANDBOX_TIMEOUT` 自定义。
+  - **动态单元测试**：升级了 `test_edumatrix.py` 中的 `test_sandbox_resource_limits_and_timeout`，测试用例中的休眠等待与执行断言时间改由 `CONFIG.sandbox_timeout` 动态计算，确保了全量 31 项单元测试全绿运行通过。
+
 
 
 

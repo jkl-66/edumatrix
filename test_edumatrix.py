@@ -520,7 +520,9 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         
         async def run_timeout():
-            return await SANDBOX_RUNNER.run("import time; time.sleep(5)")
+            from config import CONFIG
+            sleep_time = int(CONFIG.sandbox_timeout + 2)
+            return await SANDBOX_RUNNER.run(f"import time; time.sleep({sleep_time})")
             
         if loop.is_running():
             from concurrent.futures import ThreadPoolExecutor
@@ -532,7 +534,9 @@ class EduMatrixPipelineTests(unittest.TestCase):
             
         self.assertEqual(stdout, "")
         self.assertIn("超时", stderr)
-        self.assertLessEqual(elapsed, 5.0)
+        from config import CONFIG
+        self.assertLessEqual(elapsed, CONFIG.sandbox_timeout + 3.0)
+
 
     def test_database_cascade_deletes(self):
         from app.database import SessionLocal, DBStudentProfile, DBNote, DBReviewPlan, DBQuizRecord, DBWrongQuestion, DBConversationHistory

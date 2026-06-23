@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 
 from app.database import DBCodeExecution, run_db_op
+from config import CONFIG
 
 router = APIRouter(prefix="/api/code", tags=["code_execution"])
 
@@ -112,7 +113,7 @@ class SandboxProcessRunner:
             )
 
         try:
-            exit_code, output = await asyncio.wait_for(execute_in_thread(), timeout=3.0)
+            exit_code, output = await asyncio.wait_for(execute_in_thread(), timeout=CONFIG.sandbox_timeout)
             output_str = output.decode('utf-8', errors='replace')
             
             if "===STDERR_SEPARATOR===" in output_str:
@@ -139,7 +140,7 @@ class SandboxProcessRunner:
                 self.containers.append(new_container)
 
             exec_time = time.time() - start_time
-            return "", "错误: 代码运行超时 (超过 3.0 秒被强制熔断)", exec_time
+            return "", f"错误: 代码运行超时 (超过 {CONFIG.sandbox_timeout} 秒被强制熔断)", exec_time
         except Exception as e:
             # Cleanup on failure and return container
             async with self._lock:
@@ -176,7 +177,7 @@ class SandboxProcessRunner:
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     process.communicate(),
-                    timeout=3.0
+                    timeout=CONFIG.sandbox_timeout
                 )
                 stdout = stdout_bytes.decode('utf-8', errors='replace')
                 stderr = stderr_bytes.decode('utf-8', errors='replace')
@@ -196,7 +197,7 @@ class SandboxProcessRunner:
                     pass
                 await process.wait()
                 exec_time = time.time() - start_time
-                return "", "错误: 代码运行超时 (超过 3.0 秒被强制熔断)", exec_time
+                return "", f"错误: 代码运行超时 (超过 {CONFIG.sandbox_timeout} 秒被强制熔断)", exec_time
 
         except (NotImplementedError, AttributeError):
             # 如果事件循环不支持异步子进程（如 Windows 上的 SelectorEventLoop），
@@ -209,7 +210,7 @@ class SandboxProcessRunner:
                     res = subprocess.run(
                         [sys.executable, "-c", exec_command],
                         capture_output=True,
-                        timeout=3.0,
+                        timeout=CONFIG.sandbox_timeout,
                         env=env
                     )
                     return res.returncode, res.stdout, res.stderr
@@ -223,7 +224,7 @@ class SandboxProcessRunner:
                 )
                 if ret_code == -1 and stderr_bytes == b"timeout":
                     exec_time = time.time() - start_time
-                    return "", "错误: 代码运行超时 (超过 3.0 秒被强制熔断)", exec_time
+                    return "", f"错误: 代码运行超时 (超过 {CONFIG.sandbox_timeout} 秒被强制熔断)", exec_time
 
                 stdout = stdout_bytes.decode('utf-8', errors='replace')
                 stderr = stderr_bytes.decode('utf-8', errors='replace')

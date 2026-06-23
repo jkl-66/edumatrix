@@ -64,5 +64,9 @@ class EduMatrixConfig:
     auth_algorithm: str = os.getenv("EDUMATRIX_AUTH_ALGORITHM", "HS256")
     auth_access_token_expire_minutes: int = int(os.getenv("EDUMATRIX_AUTH_TOKEN_EXPIRE_MINS", "1440")) # Default 24 hours
 
+    # Sandbox Settings
+    sandbox_timeout: float = float(os.getenv("EDUMATRIX_SANDBOX_TIMEOUT", "10.0"))
+
+
 
 CONFIG = EduMatrixConfig()

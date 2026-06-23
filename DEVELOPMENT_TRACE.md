@@ -638,5 +638,20 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 2,500 Input / 250 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 代码沙箱超时时间调整与可配置化
+- **任务编号**：`TASK_SANDBOX_TIMEOUT_CONFIG`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-backend`, `oma-qa`, `oma-debug`
+- **开发场景**：[config.py](file:///d:/project-edumatrix/edumatrix-main/config.py) (添加 `sandbox_timeout` 配置项)、[code_exec_api.py](file:///d:/project-edumatrix/edumatrix-main/code_exec_api.py) (用 `CONFIG.sandbox_timeout` 替换全部硬编码 `3.0`s 限时)、[test_edumatrix.py](file:///d:/project-edumatrix/edumatrix-main/test_edumatrix.py) (使 `test_sandbox_resource_limits_and_timeout` 单元测试动态计算超时和断言限额)。
+- **自愈重试记录**：
+  - 在修改代码执行超时后，直接跑测试发现由于测试脚本中仍固定使用 `time.sleep(5)` 去触发超时，导致加长后的沙箱无法在该案例中超时而引发测试失败。随即动态将测试休眠时间修改为 `CONFIG.sandbox_timeout + 2`，并将断言判定放宽至 `CONFIG.sandbox_timeout + 3` 秒，完美自愈。
+- **测试验证结果**：
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **31/31 tests passed (100% OK)**。
+- **Token 消耗估计**：约 2,000 Input / 200 Output
+- **架构师（用户）终审反馈**：Approved
+
+
 
 

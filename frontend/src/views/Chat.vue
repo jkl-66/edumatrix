@@ -3,7 +3,6 @@ import { ref, nextTick, computed, onMounted, onUnmounted, watch, createApp } fro
 import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 import {
   processMessage, getHistory,
-  generateQuiz, evaluateQuizAnswer, adaptQuiz,
   webSearch, loadUrl, searchArxiv,
   runCode, getStudentProfile, regenerateComponent,
 } from '../api'
@@ -15,6 +14,7 @@ import {
   RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
+import { useQuizStore } from '../stores/quiz'
 import SandboxConsole from '../components/SandboxConsole.vue'
 import InlineSocraticPopup from '../components/InlineSocraticPopup.vue'
 import GraphicFallback from '../components/GraphicFallback.vue'
@@ -26,6 +26,7 @@ import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
+const quizStore = useQuizStore()
 const avatarRef = ref(null)
 
 // --- Chat State ---
@@ -256,7 +257,7 @@ const showResources = ref(new Set())
 watch(showResources, () => {
   renderAllDiagrams()
 }, { deep: true })
-const activeTab = ref('chat') // chat | quiz | code | websearch
+const activeTab = ref(quizStore.quizState !== 'idle' ? 'quiz' : 'chat') // chat | quiz | code | websearch
 
 // --- 任务 8.1: 行级/公式悬浮答疑状态 ---
 const socraticPopup = ref({
@@ -304,16 +305,24 @@ function toggleVideoPanel() {
   }
 }
 
-// --- Quiz State ---
-const quizState = ref('idle') // idle | generating | answering | evaluating | adapting
-const quizData = ref(null)
-const quizAnswer = ref('')
-const quizConfidence = ref(parseInt(localStorage.getItem('edumatrix_quiz_confidence') || '5', 10))
-watch(quizConfidence, (v) => localStorage.setItem('edumatrix_quiz_confidence', String(v)))
-const quizResult = ref(null)
-const quizAttempt = ref(1)
-const quizConcept = ref('')
-const quizSessionId = ref('')
+// --- Quiz State (Pinia Integrated) ---
+const quizState = computed(() => quizStore.quizState)
+const quizData = computed(() => quizStore.quizData)
+const quizAnswer = computed({
+  get: () => quizStore.quizAnswer,
+  set: (val) => { quizStore.quizAnswer = val }
+})
+const quizConfidence = computed({
+  get: () => quizStore.quizConfidence,
+  set: (val) => { quizStore.setConfidence(val) }
+})
+const quizResult = computed(() => quizStore.quizResult)
+const quizAttempt = computed(() => quizStore.quizAttempt)
+const quizConcept = computed({
+  get: () => quizStore.quizConcept,
+  set: (val) => { quizStore.quizConcept = val }
+})
+const quizSessionId = computed(() => quizStore.quizSessionId)
 
 // --- Code State ---
 const codeInput = ref('')
@@ -405,79 +414,19 @@ function handleKeydown(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDef
 // ======================== QUIZ ========================
 
 async function startQuiz() {
-  if (!quizConcept.value.trim()) return
-  quizState.value = 'generating'
-  quizResult.value = null
-  quizAnswer.value = ''
-  quizConfidence.value = 5
-  quizAttempt.value = 1
-  quizSessionId.value = 'session-' + Date.now()
-
-  try {
-    const data = await generateQuiz(props.studentId, quizConcept.value, 'medium', quizSessionId.value)
-    quizData.value = data
-    quizState.value = 'answering'
-  } catch (e) {
-    quizState.value = 'idle'
-    quizData.value = { question: `请解释 ${quizConcept.value} 的核心概念`, hints: ['想想基本定义'] }
-    quizState.value = 'answering'
-  }
+  await quizStore.startQuizAction(props.studentId, quizConcept.value)
 }
 
 async function submitQuizAnswer() {
-  if (!quizAnswer.value.trim() || !quizData.value) return
-  quizState.value = 'evaluating'
-
-  try {
-    const result = await evaluateQuizAnswer(
-      quizData.value.quiz_id, props.studentId,
-      quizAnswer.value, quizConfidence.value / 10, quizAttempt.value,
-    )
-    quizResult.value = result
-    quizState.value = 'adapting'
-  } catch (e) {
-    quizResult.value = {
-      accuracy_score: 0.5,
-      ai_confidence: 0.6,
-      feedback: '评估出错，请重试',
-      next_action: 'practice',
-      concept_mastery_updated: 0.5,
-      confidence_calibration: 0.2,
-    }
-    quizState.value = 'adapting'
-  }
+  await quizStore.submitQuizAnswerAction(props.studentId)
 }
 
 async function continueQuiz() {
-  if (!quizData.value || !quizResult.value) return
-  quizState.value = 'generating'
-  quizAttempt.value++
-
-  try {
-    const data = await adaptQuiz(
-      props.studentId,
-      quizData.value.quiz_id,
-      quizResult.value.next_action,
-      quizData.value.concept,
-      quizAttempt.value,
-      quizSessionId.value,
-    )
-    quizData.value = data
-    quizAnswer.value = ''
-    quizConfidence.value = 5
-    quizResult.value = null
-    quizState.value = 'answering'
-  } catch (e) {
-    quizState.value = 'answering'
-  }
+  await quizStore.continueQuizAction(props.studentId)
 }
 
 function resetQuiz() {
-  quizState.value = 'idle'
-  quizData.value = null
-  quizResult.value = null
-  quizAnswer.value = ''
-  quizConcept.value = ''
+  quizStore.resetQuiz()
 }
 
 function quizScoreClass(score) {

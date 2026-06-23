@@ -204,9 +204,8 @@ watch(sending, async (newVal, oldVal) => {
   }
 })
 
-// 任务 8.2: 页面销毁时释放流式连接
+// 任务 8.2: 页面销毁时不释放流式连接，以支持路由切换导航时后台继续生成
 onUnmounted(() => {
-  chatStore.cleanup()
   cleanupCustomMindmaps()
 })
 

@@ -46,6 +46,7 @@ export const useChatStore = defineStore('chat', {
     },
 
     clearHistory() {
+      this.cleanup()
       this.messages = []
       try {
         localStorage.removeItem('edumatrix_chat_messages')

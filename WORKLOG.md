@@ -626,6 +626,9 @@
 [x] **对话历史持久化自动保存与一键清空**：
   - **状态持久化与恢复**：重构 `chat.js`，在 Pinia 初始化 state 时自动从 `localStorage` 同步反序列化并读取 `edumatrix_chat_messages` 键值。在 `addMessage` 与卡片重生成成功回调中同步调用 `saveMessages()` 将数组保存至本地，刷新网页或重新进入均可实现记录自恢复。
   - **一键清空与防误触确认**：在 `chat.js` 中开发了 `clearHistory` 方法。在 `Chat.vue` 的对话框页面顶部挂载了 “🗑️ 清空对话” 按键，触发时弹出原生 confirm 提示框防止误删，清空时一并安全移除 `localStorage` 缓存。
+[x] **路由导航切换时对话在后台继续生成**：
+  - **屏蔽销毁强制中断**：修改 `Chat.vue` 的 `onUnmounted`，移除对 `chatStore.cleanup()` 的调用。用户切换到仪表盘、画像等其他页面时，流式连接将静默于后台继续加载接收，切回对话视图时能完整恢复时序状态和渲染结果。
+  - **清空历史自愈退出**：在 `chat.js` 的 `clearHistory()` 开头注入 `this.cleanup()`，保证用户在主动清除对话时能立刻销毁并彻底中断后台未完成的生成连接。
 
 #### 2. 测试与编译校验
 * 前端开发与生产打包：`npm run build` ➡️ **Built successfully (100% OK)**。

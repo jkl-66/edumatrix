@@ -608,5 +608,20 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 9,000 Input / 900 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 实现路由导航切换时对话在后台继续生成功能
+- **任务编号**：`TASK_BACKGROUND_STREAMING`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (在 `onUnmounted` 销毁钩子中取消调用 `chatStore.cleanup()`，以支持用户在侧边栏路由跳转或进行其他界面操作时，流式连接仍在后台静默下载生成并与 Pinia Store 进行双向同步记录)，[chat.js](file:///d:/project-edumatrix/edumatrix-main/frontend/src/stores/chat.js) (在 `clearHistory()` 中注入 `this.cleanup()`，确保用户主动清除对话时能立刻阻断和销毁正在进行的生成流)。
+- **自愈重试记录**：
+  - 无异常。通过屏蔽页面卸载时的强行中断，EventSource 将继续在后台拉取讲义与多模态数据，用户切回对话视图时能完美进行状态回显，并在完成时将数据追加回本地 `localStorage`，兼顾了体验与逻辑严密性。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 622ms (100% OK)**。
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **31/31 tests passed (100% OK)**。
+- **Token 消耗估计**：约 3,500 Input / 350 Output
+- **架构师（用户）终审反馈**：Approved
+
 
 

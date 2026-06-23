@@ -97,8 +97,7 @@ async def generate_quiz(
     user_prompt = (
         f"知识点：{target_concept}\n"
         f"难度：{difficulty}\n"
-        f"学生画像：weak_points={profile.weak_points}, "
-        f"mastery={profile.concept_mastery.get(target_concept, 0.45):.2f}\n"
+        f"学生画像：{profile.profile_prompt()}\n"
         "请生成一道简答题，鼓励学生用自己的话回答，而不是单纯填空。"
     )
 
@@ -111,15 +110,28 @@ async def generate_quiz(
         result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
     except Exception:
         tc = target_concept
+        # 根据知识点类型生成不同的 fallback 题目，避免千篇一律
+        if any(kw in tc for kw in ['回归', '分类', '聚类', '降维', 'SVM', '决策树']):
+            q = f"请用自己的话解释 {tc} 的核心思想，并说明它和哪些前置概念有紧密联系"
+            ref = f"{tc}的基本定义和数学形式；适用场景和局限性；与前置概念的关系"
+        elif any(kw in tc for kw in ['卷积', '池化', 'RNN', 'LSTM', 'Transformer', '注意力', '神经网络']):
+            q = f"请解释 {tc} 的工作原理，画出关键计算步骤的流程描述"
+            ref = f"{tc}的输入输出形式；核心计算步骤；参数和超参数的作用；典型应用"
+        elif any(kw in tc for kw in ['梯度', '损失', '激活', '正则', '过拟合', '优化']):
+            q = f"请解释 {tc} 的作用原理，以及在实际训练中如何调节它"
+            ref = f"{tc}的定义和数学表达式；对模型训练的影响；调参策略和注意事项"
+        else:
+            q = f"请从基本定义、核心原理和实际应用三个角度解释 {tc}"
+            ref = f"{tc}的基本定义；核心原理和关键公式；主要应用场景和实践注意事项"
         result = {
-            "question": f"请解释 {tc} 的核心概念和关键特点",
-            "reference_answer": f"{tc}的基本定义,核心原理,主要应用场景",
+            "question": q,
+            "reference_answer": ref,
             "concept": tc,
             "difficulty": difficulty,
             "hints": [
-                f"想想{tc}的基本定义是什么",
-                f"{tc}有哪些关键特征和组成部分",
-                f"结合实际例子来说明{tc}的工作原理"
+                f"回想一下{tc}的基本定义是什么",
+                f"{tc}在实际问题中如何应用",
+                f"能否举一个具体例子说明{tc}的工作过程"
             ],
         }
 
@@ -184,21 +196,31 @@ async def evaluate_answer(
     llm = await _get_llm(request)
 
     system_prompt = (
-        "你是一个严格但友好的评估者。你需要：\n"
-        "1. 将学生的答案与参考答案对比\n"
-        "2. 给出accuracy_score (0.0-1.0) 的精确评分\n"
-        "3. 计算ai_confidence (0.0-1.0)，表示你对评分的确信度\n"
-        "4. 生成个性化的feedback，指出正确部分和需要改进的部分\n"
-        "5. 给出next_action: 'review'(需复习)/'practice'(需练习)/'advance'(可以进阶)\n"
-        "6. 给出metacognitive_gap: student_confidence与accuracy的差异提醒\n"
-        "请以JSON格式返回。"
+        "你是一个严谨的评估者。请从多个维度严格评估学生的答案。\n"
+        "请以JSON格式返回，字段如下：\n"
+        "{\n"
+        '  "accuracy_score": 0.0~1.0,  // 整体准确度\n'
+        '  "ai_confidence": 0.0~1.0,\n'
+        '  "score_breakdown": {\n'
+        '    "key_points_coverage": 0.0~1.0,  // 覆盖了多少参考答案关键点\n'
+        '    "semantic_correctness": 0.0~1.0, // 语义是否正确\n'
+        '    "depth_and_detail": 0.0~1.0,     // 深度和细节\n'
+        '    "clarity_and_logic": 0.0~1.0     // 逻辑清晰度\n'
+        "  },\n"
+        '  "feedback": "详细的个性化反馈，先肯定正确部分，再指出遗漏和误解",\n'
+        '  "misconceptions": ["具体误解1", "误解2"],\n'
+        '  "missing_points": ["遗漏要点1", "遗漏要点2"],\n'
+        '  "next_action": "review"|"practice"|"advance",\n'
+        '  "metacognitive_gap": "学生自评与真实表现的差异分析"\n'
+        "}\n"
+        "评分标准：accuracy_score < 0.4=严重不足, 0.4~0.7=部分正确, >0.7=良好。"
     )
     user_prompt = (
         f"问题：{quiz_record.question}\n"
         f"参考答案要点：{quiz_record.correct_answer}\n"
         f"学生答案：{student_answer}\n"
         f"学生自评置信度：{student_confidence:.2f}\n"
-        f"请严格评估并返回JSON。"
+        "请严格评估并返回JSON。"
     )
 
     try:
@@ -210,7 +232,10 @@ async def evaluate_answer(
         result = {
             "accuracy_score": 0.6,
             "ai_confidence": 0.7,
-            "feedback": f"你的答案包含一些正确要点。参考答案包含:{quiz_record.correct_answer[:100]}...",
+            "score_breakdown": {"key_points_coverage":0.5,"semantic_correctness":0.6,"depth_and_detail":0.5,"clarity_and_logic":0.6},
+            "feedback": f"你的答案包含一些正确要点。参考答案:{quiz_record.correct_answer[:100]}...",
+            "misconceptions": [],
+            "missing_points": ["请对照参考答案检查遗漏"],
             "next_action": "practice",
             "metacognitive_gap": "",
         }
@@ -309,7 +334,10 @@ async def evaluate_answer(
         "quiz_id": quiz_id,
         "accuracy_score": accuracy_score,
         "ai_confidence": ai_confidence,
+        "score_breakdown": result.get("score_breakdown", {}),
         "feedback": result.get("feedback", ""),
+        "misconceptions": result.get("misconceptions", []),
+        "missing_points": result.get("missing_points", []),
         "next_action": result.get("next_action", "practice"),
         "metacognitive_gap": result.get("metacognitive_gap", ""),
         "student_answer": student_answer,
@@ -371,15 +399,27 @@ async def adapt_quiz(
         else:
             raise ValueError("parse failed")
     except Exception:
+        if any(kw in target for kw in ['回归', '分类', '聚类', '降维', 'SVM', '决策树']):
+            qi = f"请用自己的话解释 {target} 的核心思想及其与前置概念的关系"
+            ri = f"{target}的定义；数学形式；适用场景；局限性和改进方向"
+        elif any(kw in target for kw in ['卷积', '池化', 'RNN', 'LSTM', 'Transformer', '注意力', '神经网络']):
+            qi = f"请描述 {target} 的完整工作流程，包括输入输出和关键参数"
+            ri = f"{target}的架构；核心计算步骤；参数含义；训练注意事项"
+        elif any(kw in target for kw in ['梯度', '损失', '激活', '正则', '过拟合', '优化']):
+            qi = f"请解释 {target} 的原理、作用和调节方法"
+            ri = f"{target}的定义；数学表达式；对训练的影响；实践经验"
+        else:
+            qi = f"请从定义、原理和应用三方面解释 {target}"
+            ri = f"{target}的定义；原理；应用场景"
         result = {
-            "question": f"请用你自己的话解释 {target} 的核心原理，并给出一个实际例子",
-            "reference_answer": f"{target}的核心原理,实际应用场景,关键注意事项",
+            "question": qi,
+            "reference_answer": ri,
             "concept": target,
             "difficulty": difficulty,
             "hints": [
-                f"想想{target}的核心思想是什么",
-                f"{target}在实际中有哪些应用",
-                f"结合实际例子来说明"
+                f"回忆{target}的基本概念",
+                f"{target}在实际中的应用方式",
+                f"给出一个具体例子说明{target}的运作过程"
             ],
         }
 

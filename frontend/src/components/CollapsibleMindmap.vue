@@ -11,6 +11,7 @@ const props = defineProps({
 
 const svgRef = ref(null)
 const containerRef = ref(null)
+const isFullscreen = ref(false)
 
 // --- 1. Parser: Convert Indented Mermaid-like Mindmap text to Hierarchical JSON ---
 function parseIndentTextToTree(codeText) {
@@ -106,7 +107,7 @@ function initAndRender() {
   if (!treeData || !svgRef.value) return
 
   const width = containerRef.value?.clientWidth || 500
-  const height = 320
+  const height = isFullscreen.value ? (window.innerHeight - 48) : 320
 
   // Select SVG and clear previous contents
   d3Svg = d3.select(svgRef.value)
@@ -117,15 +118,15 @@ function initAndRender() {
 
   // Setup zoom behaviour
   d3Zoom = d3.zoom()
-    .scaleExtent([0.3, 3])
+    .scaleExtent([0.2, 4])
     .on('zoom', (event) => {
       d3G.attr('transform', event.transform)
     })
   d3Svg.call(d3Zoom)
 
   // Configure tree layout
-  // vertical separation 38px, horizontal step 170px
-  treeLayout = d3.tree().nodeSize([38, 170])
+  // vertical separation 48px, horizontal step 210px (wider gap prevents overlapping)
+  treeLayout = d3.tree().nodeSize([48, 210])
 
   // Convert hierarchy data
   d3Root = d3.hierarchy(treeData)
@@ -161,7 +162,7 @@ function updateTree(source) {
   const links = treeData.links()
 
   // Normalize for fixed-depth.
-  nodes.forEach(d => { d.y = d.depth * 170 + 60 })
+  nodes.forEach(d => { d.y = d.depth * 210 + 60 })
 
   // --- Node Section ---
   const node = d3G.selectAll('g.node')
@@ -290,7 +291,7 @@ function centerLayout() {
   if (!svgEl) return
 
   const width = svgEl.clientWidth || 500
-  const height = 320
+  const height = isFullscreen.value ? (window.innerHeight - 48) : 320
 
   // Calculate hierarchical bounds
   let minX = Infinity, maxX = -Infinity
@@ -301,12 +302,12 @@ function centerLayout() {
 
   // Midpoint of nodes tree layout
   const treeMidpoint = (minX + maxX) / 2
-  const targetX = 40 // Left padding
+  const targetX = isFullscreen.value ? 100 : 40 // Left padding
   const targetY = height / 2 - treeMidpoint
 
   const initialTransform = d3.zoomIdentity
     .translate(targetX, targetY)
-    .scale(0.95)
+    .scale(isFullscreen.value ? 1.15 : 0.95)
 
   d3Svg.transition()
     .duration(500)
@@ -344,6 +345,13 @@ function resetZoom() {
   centerLayout()
 }
 
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value
+  nextTick(() => {
+    initAndRender()
+  })
+}
+
 watch(() => props.code, () => {
   nextTick(() => {
     initAndRender()
@@ -358,7 +366,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="collapsible-mindmap w-full relative border border-purple-100 rounded-2xl bg-white overflow-hidden shadow-sm my-3 p-1">
+  <div ref="containerRef" 
+    class="collapsible-mindmap w-full relative border border-purple-100 rounded-2xl bg-white overflow-hidden shadow-sm my-3 p-1 transition-all duration-300"
+    :class="isFullscreen ? 'fixed inset-0 z-50 w-screen h-screen m-0 rounded-none' : 'w-full'">
+    
     <!-- Header panel -->
     <div class="w-full flex items-center justify-between px-3 py-2 border-b border-gray-50 bg-gray-50/20 z-10 relative">
       <div class="flex items-center gap-1.5">
@@ -366,7 +377,7 @@ onMounted(() => {
         <span class="font-bold text-gray-800 text-xs">交互式思维导图</span>
         <span class="text-[9px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-mono font-medium">可折叠分支</span>
       </div>
-      <div class="flex items-center gap-1.5">
+      <div class="flex items-center gap-1.5 text-xs">
         <button @click="expandAll" class="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded text-[10px] font-semibold transition-all">
           展开
         </button>
@@ -376,11 +387,14 @@ onMounted(() => {
         <button @click="resetZoom" class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded text-[10px] font-semibold transition-all">
           居中
         </button>
+        <button @click="toggleFullscreen" class="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-[10px] font-semibold transition-all shadow-sm">
+          {{ isFullscreen ? '退出全屏' : '🔍 放大/全屏' }}
+        </button>
       </div>
     </div>
     
     <!-- SVG Mindmap container -->
-    <div class="w-full h-[320px] bg-white relative">
+    <div class="w-full bg-white relative" :style="{ height: isFullscreen ? 'calc(100vh - 48px)' : '320px' }">
       <svg ref="svgRef" class="w-full h-full cursor-grab active:cursor-grabbing select-none"></svg>
       <div class="absolute bottom-2 right-3 text-[9px] text-gray-400 select-none pointer-events-none">
         💡 点击节点折叠/展开 • 拖拽画布移动 • 滚轮缩放

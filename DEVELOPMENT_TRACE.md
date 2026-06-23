@@ -496,4 +496,19 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 15,000 Input / 1,500 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 解决 D3 脑图卡片展开挂载失效、气泡重叠与新增原地全屏放大功能
+- **任务编号**：`TASK_MINDMAP_D3_UPGRADE`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[CollapsibleMindmap.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/CollapsibleMindmap.vue) (把垂直节点间距从 38px 增至 48px，水平深度步长从 170px 增至 210px；新增 `isFullscreen` 状态与 Teleport 原地全屏拉伸逻辑)、[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (在 `showResources` 观察器里将 `initMermaid` 纠正调用为 `renderAllDiagrams`，彻底解决资源卡片展开时脑图未挂载的 bug)。
+- **自愈重试记录**：
+  1. *第一次报错*：用户反馈点击展开资源卡片时脑图是一片空白无法生成。
+  2. *自愈与修复*：排查定位到资源卡片折叠面板是 `v-if` 条件渲染。在首次未展开时，DOM 中并不存在占位符，而当用户展开卡片时，触发了 `showResources` 状态变更，但对应的 watcher 只调用了旧的 `initMermaid()`，遗漏了自定义组件的挂载。通过将其更新为调用统一分发器 `renderAllDiagrams()` 完美疏通了展开挂载流。同时针对节点气泡重叠，通过等比放大 D3.js 树布局的 `nodeSize` 间距消除了碰撞。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 583ms (100% OK)**。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 8,000 Input / 800 Output
+- **架构师（用户）终审反馈**：Approved
 

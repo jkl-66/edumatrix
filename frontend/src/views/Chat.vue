@@ -230,7 +230,7 @@ watch(messages, (newMsgs, oldMsgs) => {
 const input = ref('')
 const showResources = ref(new Set())
 watch(showResources, () => {
-  initMermaid()
+  renderAllDiagrams()
 }, { deep: true })
 const activeTab = ref('chat') // chat | quiz | code | websearch
 

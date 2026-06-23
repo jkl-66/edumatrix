@@ -341,7 +341,9 @@ for extra in ("numpy", "np", "pandas", "pd", "matplotlib", "plt", "sklearn", "to
 
 try:
     import warnings
-    warnings.filterwarnings("ignore", message=".*FigureCanvasAgg is non-interactive.*")
+    warnings.filterwarnings("ignore")
+    import logging
+    logging.getLogger("matplotlib").setLevel(logging.ERROR)
     compiled = compile(code_to_run, "<sandbox>", "exec")
     with redirect_stdout(output_buffer), redirect_stderr(error_buffer):
         exec(compiled, restricted_globals)

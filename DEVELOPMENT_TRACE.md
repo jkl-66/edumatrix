@@ -682,6 +682,21 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 1,500 Input / 180 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 代码沙箱运行环境警告及日志噪音拦截
+- **任务编号**：`TASK_SANDBOX_WARNING_SILENCE`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-backend`, `oma-qa`, `oma-debug`
+- **开发场景**：[code_exec_api.py](file:///d:/project-edumatrix/edumatrix-main/code_exec_api.py) (在 exec 执行层配置 `warnings.filterwarnings("ignore")` 忽略所有 UserWarning/DeprecationWarning；配置 `logging.getLogger("matplotlib").setLevel(logging.ERROR)` 拦截 Matplotlib 字体及负号警告以净化 stderr 输出)。
+- **自愈重试记录**：
+  - 无自愈重试，首次编写并验证通过。
+- **测试验证结果**：
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **32/32 tests passed (100% OK)**。
+- **Token 消耗估计**：约 1,200 Input / 150 Output
+- **架构师（用户）终审反馈**：Approved
+
+
 
 
 

@@ -648,6 +648,10 @@
 [x] **实现多代码块自动拼接合并运行逻辑**：
   - **拼装算法支持**：重构了 `Chat.vue` 的代码块提取函数 `extractCodeFromMarkdown`，将其原有的仅捕获首个代码块的 `match` 方式，改造为使用全局正则匹配 `exec` 循环抓取，自动将该讲义或卡片内出现的所有独立代码块（如 Imports 块、模型定义块、训练循环块）合并拼装为带有双换行隔离的物理连续 Python 脚本。
   - **端点并网**：更新了 `runResourceCode` (卡片运行)、`runConceptCode` (概念大浮窗运行) 以及 `mountToSandbox` (一键挂载到沙箱) 接口，统一使用升级后的多块拼装算法，彻底解决了由于代码分步讲解时单块代码因缺失 imports 或依赖定义而执行报错的缺陷。
+[x] **代码沙箱运行环境警告及日志噪音拦截**：
+  - **白名单警告拦截**：在 `code_exec_api.py` 的沙箱运行 wrapper 脚本中，将原本仅过滤非交互式警告的 `warnings.filterwarnings` 升级为全局 `warnings.filterwarnings("ignore")`，屏蔽了包括 Matplotlib 字体缺失、PyTorch 废弃 API 等对主干运行无实质伤害的 `UserWarning`。
+  - **日志级别提升**：通过在沙箱中注入 `logging.getLogger("matplotlib").setLevel(logging.ERROR)`，拦截了由于系统缺失 SimHei/Microsoft YaHei 字体导致 Matplotlib 自动绘制负号时在 stderr 输出 `Font 'default' does not have a glyph for '\u2212'` 警告信息的现象，防止前端解析 stderr 时误将其判定为运行崩溃（“报错”）。
+
 
 
 

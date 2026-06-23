@@ -275,9 +275,14 @@ const sandboxInitialCode = ref("import numpy as np\nprint('Hello, EduMatrix!')")
 
 function extractCodeFromMarkdown(mdText) {
   if (!mdText) return ''
-  const match = mdText.match(/```(?:python|javascript|js)?\s*([\s\S]*?)```/i)
-  if (match) {
-    return match[1].trim()
+  const regex = /```(?:python|javascript|js|py)?\s*\n([\s\S]*?)```/gi
+  const codes = []
+  let match
+  while ((match = regex.exec(mdText)) !== null) {
+    codes.push(match[1].trim())
+  }
+  if (codes.length > 0) {
+    return codes.join('\n\n')
   }
   return mdText.trim()
 }
@@ -730,8 +735,7 @@ function runResourceCode(messageIndex, resourceIndex) {
   const res = msg.resources[resourceIndex]
   if (!res) return
   const content = res.content || ''
-  const m = content.match(/```(?:python)?\s*\n([\s\S]*?)```/)
-  codeInput.value = m ? m[1].trim() : content
+  codeInput.value = extractCodeFromMarkdown(content)
   activeTab.value = 'code'
   codeOutput.value = ''
   codeError.value = ''
@@ -769,8 +773,7 @@ function closeConceptCode() { conceptCodePopup.value = null }
 function runConceptCode() {
   if (!conceptCodePopup.value) return
   const content = conceptCodePopup.value.content || ''
-  const m = content.match(/```(?:python)?\s*\n([\s\S]*?)```/)
-  codeInput.value = m ? m[1].trim() : content
+  codeInput.value = extractCodeFromMarkdown(content)
   activeTab.value = 'code'
   codeOutput.value = ''
   codeError.value = ''

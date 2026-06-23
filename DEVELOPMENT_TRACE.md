@@ -667,6 +667,22 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 2,000 Input / 250 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 极客助教多代码块自动拼装运行支持
+- **任务编号**：`TASK_SANDBOX_CONCAT_CODE`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (重构 `extractCodeFromMarkdown` 实现全局代码块正则匹配提取与换行拼装；更新 `runResourceCode`, `runConceptCode` 与 `mountToSandbox` 统一指向拼装算法)。
+- **自愈重试记录**：
+  - 无报错。拼装算法能自动识别 `python`, `py`, `javascript` 等代码围栏，并剔除前缀，用 `\n\n` 安全拼接，保证在多步骤教学场景下一键挂载即可获取包含 Imports 定义和完整依赖的代码全集。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 601ms (100% OK)**。
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **32/32 tests passed (100% OK)**。
+- **Token 消耗估计**：约 1,500 Input / 180 Output
+- **架构师（用户）终审反馈**：Approved
+
+
 
 
 

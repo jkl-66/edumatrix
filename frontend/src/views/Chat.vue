@@ -4,7 +4,7 @@ import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 import {
   processMessage, getHistory,
   generateQuiz, evaluateQuizAnswer, adaptQuiz,
-  webSearch, loadUrl,
+  webSearch, loadUrl, searchArxiv,
   runCode, getStudentProfile, regenerateComponent,
 } from '../api'
 import {
@@ -286,6 +286,10 @@ const searchLoading = ref(false)
 const urlInput = ref('')
 const urlLoading = ref(false)
 const urlResult = ref(null)
+const arxivQuery = ref('')
+const arxivLoading = ref(false)
+const arxivPapers = ref([])
+const arxivError = ref('')
 
 const presets = [
   '什么是机器学习？',
@@ -665,6 +669,58 @@ async function regenerateCard(messageIndex, resourceIndex) {
   }
 }
 
+function runResourceCode(messageIndex, resourceIndex) {
+  const msg = chatStore.messages[messageIndex]
+  if (!msg || !msg.resources) return
+  const res = msg.resources[resourceIndex]
+  if (!res) return
+  const content = res.content || ''
+  const m = content.match(/```(?:python)?\s*\n([\s\S]*?)```/)
+  codeInput.value = m ? m[1].trim() : content
+  activeTab.value = 'code'
+  codeOutput.value = ''
+  codeError.value = ''
+}
+
+// 概念代码浮窗
+const conceptCodePopup = ref(null) // { visible, loading, content, target }
+async function showConceptCode(msgIdx) {
+  const msg = chatStore.messages[msgIdx]
+  if (!msg || !msg.target) return
+  conceptCodePopup.value = { visible: true, loading: true, content: '', target: msg.target }
+  try {
+    // 找到对应的用户消息作为 query
+    let query = msg.target
+    for (let i = msgIdx - 1; i >= 0; i--) {
+      if (chatStore.messages[i].role === 'user') {
+        query = chatStore.messages[i].content
+        break
+      }
+    }
+    const data = await regenerateComponent(props.studentId || 'default', '极客助教', '代码实操案例', query)
+    if (data && data.status === 'success') {
+      conceptCodePopup.value.content = data.content
+    } else {
+      conceptCodePopup.value.content = '// 代码生成失败，请重试'
+    }
+  } catch (e) {
+    conceptCodePopup.value.content = '// 错误: ' + (e.message || '未知错误')
+  } finally {
+    conceptCodePopup.value.loading = false
+  }
+}
+function closeConceptCode() { conceptCodePopup.value = null }
+function runConceptCode() {
+  if (!conceptCodePopup.value) return
+  const content = conceptCodePopup.value.content || ''
+  const m = content.match(/```(?:python)?\s*\n([\s\S]*?)```/)
+  codeInput.value = m ? m[1].trim() : content
+  activeTab.value = 'code'
+  codeOutput.value = ''
+  codeError.value = ''
+  conceptCodePopup.value = null
+}
+
 /**
  * 导出完整讲义为 Markdown
  */
@@ -813,6 +869,25 @@ async function doLoadUrl() {
     urlResult.value = { error: e.message || '加载失败' }
   } finally {
     urlLoading.value = false
+  }
+}
+
+async function doArxivSearch() {
+  if (!arxivQuery.value.trim()) return
+  arxivLoading.value = true
+  arxivPapers.value = []
+  arxivError.value = ''
+  try {
+    const data = await searchArxiv(arxivQuery.value, 8)
+    if (data.status === 'success') {
+      arxivPapers.value = data.papers || []
+    } else {
+      arxivError.value = '搜索失败'
+    }
+  } catch (e) {
+    arxivError.value = e.message || '请求失败'
+  } finally {
+    arxivLoading.value = false
   }
 }
 
@@ -1330,6 +1405,10 @@ function renderMarkdown(text, type = '', conceptName = '') {
                   <div class="card chat-card-assistant">
                     <!-- 任务 8.3: 讲义操作栏 -->
                     <div class="flex items-center justify-end gap-1 mb-1 pb-1 border-b border-gray-100">
+                      <button v-if="msg.target" @click="showConceptCode(idx)" class="text-[10px] text-gray-400 hover:text-emerald-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-emerald-50 rounded transition-colors"
+                        title="查看此概念的代码实现">
+                        <Terminal :size="10" /> 代码
+                      </button>
                       <button @click="exportAsMarkdown(idx)" class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"
                         title="导出为 Markdown">
                         <Download :size="10" /> 导出
@@ -1360,6 +1439,13 @@ function renderMarkdown(text, type = '', conceptName = '') {
                           </span>
                         </div>
                         <div class="flex items-center gap-2">
+                          <!-- 代码资源：运行按钮 -->
+                          <button v-if="(res.resource_type || res.type) === '代码实操案例'"
+                            @click.stop="runResourceCode(idx, ri)"
+                            class="text-xs text-emerald-600 hover:text-emerald-700 flex items-center gap-1 px-2 py-1 hover:bg-emerald-50 rounded-lg border border-emerald-200/60 shadow-sm transition-all"
+                            title="运行此代码">
+                            <Play :size="11" /> 运行
+                          </button>
                           <button @click.stop="regenerateCard(idx, ri)"
                             class="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1 px-2 py-1 hover:bg-white rounded-lg border border-gray-200/60 shadow-sm transition-all"
                             title="重新生成此模块">
@@ -1677,6 +1763,39 @@ function renderMarkdown(text, type = '', conceptName = '') {
             </div>
             <div v-if="urlResult?.error" class="mt-3 text-sm text-red-600 bg-red-50 rounded-lg p-3">{{ urlResult.error }}</div>
           </div>
+
+          <!-- 学术论文搜索 -->
+          <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <p class="text-xs font-semibold text-gray-600 mb-3 flex items-center gap-1.5">
+              <FileText :size="13" class="text-rose-500" /> 学术论文 (arXiv)
+            </p>
+            <div class="flex gap-2">
+              <input v-model="arxivQuery" class="flex-1 px-4 py-2.5 text-sm rounded-xl border border-gray-200 bg-white focus:border-rose-300 focus:ring-2 focus:ring-rose-100 outline-none transition-all placeholder:text-gray-300" placeholder="搜索学术论文..." @keydown.enter="doArxivSearch" />
+              <button class="px-4 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 text-white hover:from-rose-700 hover:to-pink-700 shadow-sm transition-all flex items-center gap-1.5" :disabled="!arxivQuery.trim() || arxivLoading" @click="doArxivSearch">
+                <Search :size="14" /> {{ arxivLoading ? '搜索中...' : '论文' }}
+              </button>
+            </div>
+            <div v-if="arxivLoading" class="flex items-center gap-2 mt-3 text-gray-400 text-xs">
+              <div class="w-4 h-4 border-2 border-rose-400 border-t-transparent rounded-full animate-spin" />
+              正在检索 arXiv...
+            </div>
+            <div v-if="arxivPapers.length" class="mt-3 space-y-2">
+              <div v-for="(p, i) in arxivPapers" :key="i" class="flex items-start gap-3 p-3 rounded-xl hover:bg-rose-50 transition-all">
+                <div class="w-6 h-6 rounded-lg bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center shrink-0 mt-0.5">
+                  <FileText :size="12" class="text-rose-500" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-xs font-semibold text-gray-800">{{ p.title }}</p>
+                  <p class="text-[10px] text-gray-400 mt-0.5 line-clamp-2 leading-relaxed">{{ p.abstract?.replace(/^摘要: /,'')?.slice(0,200) }}{{ p.abstract?.length > 200 ? '...' : '' }}</p>
+                  <div class="flex items-center gap-2 mt-1 flex-wrap">
+                    <a v-if="p.pdf_url" :href="p.pdf_url" target="_blank" class="text-[9px] text-rose-500 hover:underline font-medium">📄 PDF</a>
+                    <a v-if="p.id" :href="'https://arxiv.org/abs/' + p.id.replace('arxiv-','')" target="_blank" class="text-[9px] text-gray-400 hover:underline">arXiv:{{ p.id.replace('arxiv-','') }}</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="arxivError" class="mt-3 text-xs text-red-500">{{ arxivError }}</div>
+          </div>
         </div>
       </div>
 
@@ -1743,6 +1862,32 @@ function renderMarkdown(text, type = '', conceptName = '') {
                 <pre v-if="codeError" class="text-xs text-red-600 whitespace-pre-wrap font-mono">{{ codeError }}</pre>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 概念代码浮窗 -->
+    <Teleport to="body">
+      <div v-if="conceptCodePopup" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30" @click.self="closeConceptCode">
+        <div class="bg-white rounded-2xl shadow-2xl w-[640px] max-h-[70vh] flex flex-col overflow-hidden">
+          <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+            <h3 class="text-sm font-semibold text-gray-800 flex items-center gap-2">
+              <Terminal :size="16" class="text-emerald-600" /> {{ conceptCodePopup.target }} 代码实现
+            </h3>
+            <button class="text-gray-400 hover:text-gray-600 text-lg leading-none" @click="closeConceptCode">&times;</button>
+          </div>
+          <div class="flex-1 overflow-y-auto p-5">
+            <div v-if="conceptCodePopup.loading" class="flex items-center justify-center py-12 text-gray-400">
+              <Loader2 :size="20" class="animate-spin mr-2" /> 正在生成代码...
+            </div>
+            <div v-else class="prose prose-sm max-w-none text-xs" v-html="renderMarkdown(conceptCodePopup.content)"></div>
+          </div>
+          <div v-if="!conceptCodePopup.loading" class="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100 bg-gray-50">
+            <button class="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 bg-white hover:bg-gray-100 transition-all" @click="closeConceptCode">关闭</button>
+            <button class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white transition-all flex items-center gap-1" @click="runConceptCode">
+              <Play :size="11" /> 运行代码
+            </button>
           </div>
         </div>
       </div>

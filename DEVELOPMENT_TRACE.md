@@ -527,3 +527,21 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 10,000 Input / 1,000 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 修复 D3 脑图文字 LaTeX 标签污染与气泡重叠
+- **任务编号**：`TASK_MINDMAP_MARKUP_POLLUTION_AND_OVERLAP_FIX`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`, `oma-refactor`
+- **开发场景**：[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (重命名代码块/公式占位符 token 格式，剔除下划线以防 LaTeX 下标正则误伤，调整 LaTeX 纯文本替换运行顺序至还原占位符之前)，[CollapsibleMindmap.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/CollapsibleMindmap.vue) (增加 D3 树的 `nodeSize` 垂直间距到 80px，水平深度步距增加到 340px)。
+- **自愈重试记录**：
+  1. *第一次报错*：用户反馈第一层脑图气泡节点文字显示为 contaminated HTML 标签（如 `node<sub>1</sub>["什么是逻辑回归"]`），并且长文本情况下节点气泡发生水平和垂直重叠。
+  2. *自愈与修复*：
+     - 分析发现 LaTeX 下划线标转换正则 `/([a-zA-Z0-9])_([a-zA-Z0-9_]+)/g` 是在还原 math/code tokens 之后执行，这导致脑图占位符 `data-code` 中的 `node_1` 等标记被误伤转换成了 `node<sub>1</sub>`，从而破坏了 D3 组件解析规则导致中括号源码外露。通过将 tokens 重构为不带下划线的 `@@BLOCKMATHTOKEN${idx}@@` 等格式，且将该正则匹配前置在 token 还原之前，彻底解决了此渲染污染 Bug。
+     - 针对重叠，将 D3 树 nodeSize 垂直间距拉宽到 80px，水平跨度从 210px 增至 340px，为较长的中文节点及 LaTeX 表达式提供极其宽敞的容器空间，100% 解决重叠。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 612ms (100% OK)**。
+  * **主集成测试**：运行 `python -m unittest test_edumatrix.py` ➡️ **28/28 tests passed (100% OK)**。
+- **Token 消耗估计**：约 8,500 Input / 900 Output
+- **架构师（用户）终审反馈**：Approved
+

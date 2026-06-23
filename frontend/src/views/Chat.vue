@@ -12,7 +12,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles,
-  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb,
+  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
 import SandboxConsole from '../components/SandboxConsole.vue'
@@ -262,7 +262,8 @@ function toggleVideoPanel() {
 const quizState = ref('idle') // idle | generating | answering | evaluating | adapting
 const quizData = ref(null)
 const quizAnswer = ref('')
-const quizConfidence = ref(5)
+const quizConfidence = ref(parseInt(localStorage.getItem('edumatrix_quiz_confidence') || '5', 10))
+watch(quizConfidence, (v) => localStorage.setItem('edumatrix_quiz_confidence', String(v)))
 const quizResult = ref(null)
 const quizAttempt = ref(1)
 const quizConcept = ref('')
@@ -307,8 +308,29 @@ const codeVizHtml = computed(() => {
 async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
+  // 斜杠命令
+  if (text.startsWith('/quiz ')) {
+    quizConcept.value = text.slice(6).trim()
+    activeTab.value = 'quiz'
+    input.value = ''
+    await nextTick()
+    startQuiz()
+    return
+  }
+  if (text.startsWith('/search ')) {
+    searchQuery.value = text.slice(8).trim()
+    activeTab.value = 'websearch'
+    input.value = ''
+    await nextTick()
+    doWebSearch()
+    return
+  }
+  if (text.startsWith('/code')) {
+    activeTab.value = 'code'
+    input.value = ''
+    return
+  }
   input.value = ''
-  
   await nextTick()
   try {
     await chatStore.sendChatMessage(text, props.studentId)
@@ -447,7 +469,19 @@ function closeCodeViz() {
 
 function insertCodeSnippet(snippet) {
   codeInput.value = snippet
+  codeOutput.value = ''
+  codeError.value = ''
   showCodeViz.value = true
+}
+
+async function copyCode() {
+  try {
+    await navigator.clipboard.writeText(codeInput.value)
+  } catch (e) {
+    const ta = document.createElement('textarea')
+    ta.value = codeInput.value; document.body.appendChild(ta); ta.select()
+    document.execCommand('copy'); document.body.removeChild(ta)
+  }
 }
 
 // ======================== 任务 8.1: 行级/公式点击答疑 ========================
@@ -1303,6 +1337,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
                       <span class="text-[9px] text-gray-300">💡 点击代码块/公式可即时答疑</span>
                     </div>
                     <div class="prose prose-sm max-w-none text-sm" v-html="renderMarkdown(msg.content)"></div>
+                    <!-- 打字光标 -->
+                    <span v-if="idx === messages.length - 1 && chatStore.sending"
+                      class="inline-block w-[2px] h-4 bg-blue-500 animate-pulse ml-0.5 align-text-bottom" />
                   </div>
 
                   <!-- 任务 8.3: 资源卡片 + 局部重生成按钮 -->
@@ -1493,6 +1530,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
               <p>{{ quizResult.feedback }}</p>
             </div>
 
+            <!-- 逐点对比 -->
+            <div v-if="quizResult.student_answer || quizResult.reference_answer" class="grid grid-cols-2 gap-3">
+              <div class="bg-blue-50/80 rounded-xl p-3 border border-blue-100/50">
+                <p class="font-medium text-xs text-blue-700 mb-1.5 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-blue-500" /> 你的答案
+                </p>
+                <p class="text-xs text-blue-900/70 leading-relaxed whitespace-pre-wrap">{{ quizResult.student_answer || '(空)' }}</p>
+              </div>
+              <div class="bg-green-50/80 rounded-xl p-3 border border-green-100/50">
+                <p class="font-medium text-xs text-green-700 mb-1.5 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-green-500" /> 参考答案
+                </p>
+                <p class="text-xs text-green-900/70 leading-relaxed whitespace-pre-wrap">{{ quizResult.reference_answer || '(空)' }}</p>
+              </div>
+            </div>
+
             <div class="flex items-center gap-2">
               <span class="text-xs text-gray-500">下一动作:</span>
               <span class="badge" :class="quizResult.next_action === 'advance' ? 'bg-green-100 text-green-700' : quizResult.next_action === 'practice' ? 'bg-yellow-100 text-yellow-700' : 'bg-orange-100 text-orange-700'">
@@ -1535,6 +1588,12 @@ function renderMarkdown(text, type = '', conceptName = '') {
               </button>
             </div>
             <textarea v-model="codeInput" class="flex-1 bg-gray-900 text-emerald-300 font-mono text-xs p-4 resize-none outline-none leading-relaxed" placeholder="# 在这里输入 Python 代码..." spellcheck="false" />
+            <!-- 行号和复制按钮 -->
+            <div class="absolute top-9 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button class="p-1.5 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-all" title="复制代码" @click="copyCode">
+                <Copy :size="12" />
+              </button>
+            </div>
           </div>
 
           <div v-if="codeOutput || codeError" class="mt-3 rounded-xl border border-gray-200 overflow-hidden shadow-sm">
@@ -1586,7 +1645,10 @@ function renderMarkdown(text, type = '', conceptName = '') {
                 <div class="min-w-0 flex-1">
                   <p class="text-xs font-semibold text-gray-800 hover:text-blue-600 truncate">{{ r.title }}</p>
                   <p class="text-[10px] text-gray-400 mt-0.5 line-clamp-2 leading-relaxed">{{ r.snippet }}</p>
-                  <p v-if="r.url" class="text-[9px] text-gray-300 mt-0.5 truncate">{{ r.url }}</p>
+                  <p v-if="r.url" class="text-[9px] text-gray-300 mt-0.5 truncate flex items-center gap-1">
+                    <Globe :size="8" class="shrink-0" />
+                    {{ new URL(r.url).hostname.replace('www.', '') }}
+                  </p>
                 </div>
               </div>
             </div>

@@ -23,6 +23,40 @@ register_default_subscribers()
 
 router = APIRouter(prefix="/api/quiz", tags=["quiz"])
 
+import json as _json_mod
+
+
+def _parse_llm_json(text: str) -> dict | None:
+    """从 LLM 响应中提取并解析 JSON，支持 markdown 包裹/杂音/单引号。"""
+    if not text:
+        return None
+    text = text.strip()
+    # 1) 直接解析
+    try:
+        return _json_mod.loads(text)
+    except _json_mod.JSONDecodeError:
+        pass
+    # 2) 提取 ```json 代码块
+    m = re.search(r'```(?:json)?\s*\n(.+?)\n```', text, re.DOTALL)
+    if m:
+        try:
+            return _json_mod.loads(m.group(1))
+        except _json_mod.JSONDecodeError:
+            pass
+    # 3) 提取最外层 {}
+    m = re.search(r'\{.*\}', text, re.DOTALL)
+    if m:
+        try:
+            return _json_mod.loads(m.group(0))
+        except _json_mod.JSONDecodeError:
+            pass
+    # 4) 单引号替换
+    try:
+        return _json_mod.loads(text.replace("'", '"'))
+    except _json_mod.JSONDecodeError:
+        pass
+    return None
+
 
 async def _get_llm(request: Request):
     swarm = build_swarm_from_headers(request.headers)
@@ -70,8 +104,9 @@ async def generate_quiz(
 
     try:
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-        import json as json_lib
-        result = json_lib.loads(response)
+        result = _parse_llm_json(response)
+        if not result:
+            raise ValueError("parse failed")
         raw_hints = result.get("hints", [])
         result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
     except Exception:
@@ -168,8 +203,9 @@ async def evaluate_answer(
 
     try:
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-        import json as json_lib
-        result = json_lib.loads(response)
+        result = _parse_llm_json(response)
+        if not result:
+            raise ValueError("parse failed")
     except Exception:
         result = {
             "accuracy_score": 0.6,
@@ -276,6 +312,8 @@ async def evaluate_answer(
         "feedback": result.get("feedback", ""),
         "next_action": result.get("next_action", "practice"),
         "metacognitive_gap": result.get("metacognitive_gap", ""),
+        "student_answer": student_answer,
+        "reference_answer": quiz_record.correct_answer,
         "concept_mastery_updated": concept_mastery_updated,
         "student_confidence": student_confidence,
         "confidence_calibration": abs(student_confidence - accuracy_score),
@@ -326,10 +364,12 @@ async def adapt_quiz(
 
     try:
         response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-        import json as json_lib
-        result = json_lib.loads(response)
-        raw_hints = result.get("hints", [])
-        result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
+        result = _parse_llm_json(response)
+        if result:
+            raw_hints = result.get("hints", [])
+            result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
+        else:
+            raise ValueError("parse failed")
     except Exception:
         result = {
             "question": f"请用你自己的话解释 {target} 的核心原理，并给出一个实际例子",
@@ -480,8 +520,9 @@ async def generate_similar_quiz(
         attempts += 1
         try:
             response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-            import json as json_lib
-            result = json_lib.loads(response)
+            result = _parse_llm_json(response)
+            if not result:
+                result = {}
 
             # Step 3: 沙箱自校验
             python_code = result.get("python_validator", "")

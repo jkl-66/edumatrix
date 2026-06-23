@@ -652,6 +652,22 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 2,000 Input / 200 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 修复代码沙箱定义类与 super 相关的 NameError 故障
+- **任务编号**：`TASK_SANDBOX_CLASS_SUPPORT`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-backend`, `oma-debug`, `oma-qa`
+- **开发场景**：[code_exec_api.py](file:///d:/project-edumatrix/edumatrix-main/code_exec_api.py) (在 `restricted_globals["__builtins__"]` 中补充 `__build_class__`、`super` 及其他常用元编程方法白名单；在 `restricted_globals` 中定义 `__name__` = `"__main__"` 模块属性)、[test_edumatrix.py](file:///d:/project-edumatrix/edumatrix-main/test_edumatrix.py) (新增 `test_sandbox_class_execution` 单元测试).
+- **自愈重试记录**：
+  - *第一次报错*：运行新增的 class 支持测试时，抛出 `NameError: name '__name__' is not defined`。定位发现 Python 在编译执行 `class` 语句体时会向 globals 作用域查询 `__name__` 用于对齐 `__module__` 属性。
+  - *自愈与修复*：在 `restricted_globals` 顶级字典中显式补全了 `__name__: "__main__"`、`__doc__: None` 与 `__package__: None` 定义，再次运行测试顺利通过。
+- **测试验证结果**：
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **32/32 tests passed (100% OK)**。
+- **Token 消耗估计**：约 2,000 Input / 250 Output
+- **架构师（用户）终审反馈**：Approved
+
+
 
 
 

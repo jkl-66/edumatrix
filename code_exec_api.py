@@ -249,6 +249,7 @@ class SandboxProcessRunner:
 import sys
 import io
 import traceback
+import builtins
 from contextlib import redirect_stdout, redirect_stderr
 
 code_to_run = sys.stdin.read()
@@ -257,6 +258,9 @@ output_buffer = io.StringIO()
 error_buffer = io.StringIO()
 
 restricted_globals = {
+    "__name__": "__main__",
+    "__doc__": None,
+    "__package__": None,
     "__builtins__": {
         "abs": abs, "all": all, "any": any, "bool": bool,
         "dict": dict, "dir": dir, "enumerate": enumerate,
@@ -278,6 +282,18 @@ restricted_globals = {
         "ImportError": ImportError, "ModuleNotFoundError": ModuleNotFoundError,
         "ZeroDivisionError": ZeroDivisionError,
         "__import__": __import__,
+        "__build_class__": builtins.__build_class__,
+        "super": builtins.super,
+        "callable": builtins.callable,
+        "hash": builtins.hash,
+        "setattr": builtins.setattr,
+        "getattr": builtins.getattr,
+        "hasattr": builtins.hasattr,
+        "delattr": builtins.delattr,
+        "iter": builtins.iter,
+        "classmethod": builtins.classmethod,
+        "staticmethod": builtins.staticmethod,
+        "property": builtins.property,
     }
 }
 

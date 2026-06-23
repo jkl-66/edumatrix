@@ -641,6 +641,11 @@
   - **支持深度学习/PyTorch**：将沙箱代码执行的硬超时从固定的 `3.0` 秒调整为可以通过环境变量自定义的 `10.0` 秒，为 PyTorch 神经网络前向/反向传播与 Matplotlib 科学绘图预留了更充裕的计算耗时，防止意外误杀。
   - **新增配置项**：在 `config.py` 中增加了 `sandbox_timeout` (默认为 `10.0`s) 配置，支持在 `.env` 中使用 `EDUMATRIX_SANDBOX_TIMEOUT` 自定义。
   - **动态单元测试**：升级了 `test_edumatrix.py` 中的 `test_sandbox_resource_limits_and_timeout`，测试用例中的休眠等待与执行断言时间改由 `CONFIG.sandbox_timeout` 动态计算，确保了全量 31 项单元测试全绿运行通过。
+[x] **修复代码沙箱不支持定义类与 `super` 方法的 Bug**：
+  - **白名单补全**：在 `code_exec_api.py` 的沙箱限制名单 `restricted_globals["__builtins__"]` 中补全了 `__build_class__`（类编译构建）、`super`（父类构造调用）以及 `classmethod`、`staticmethod`、`property`、`callable`、`hash`、`setattr`、`getattr`、`hasattr`、`delattr` 和 `iter` 等核心元编程内置方法，打通了自定义类与 PyTorch `nn.Module` 的正常承袭链路。
+  - **模块环境变量缺失补齐**：在 `restricted_globals` 的顶级成员中增加并定义了 `"__name__": "__main__"`、`"__doc__": None` 和 `"__package__": None`。这解决了由于 `__name__` 和 `__module__` 缺失而在编译 class 命名空间时触发 `NameError: name '__name__' is not defined` 的崩溃，并成功支持了 `if __name__ == "__main__":` 的标准条件判定。
+  - **测试覆盖**：在 `test_edumatrix.py` 中新增 `test_sandbox_class_execution` 单元测试，覆盖基类与子类继承、`super()` 构造调用及 `classmethod` 静态工厂方法的动态执行校验。
+
 
 
 

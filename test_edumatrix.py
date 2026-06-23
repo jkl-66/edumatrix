@@ -538,6 +538,47 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertLessEqual(elapsed, CONFIG.sandbox_timeout + 3.0)
 
 
+    def test_sandbox_class_execution(self):
+        import asyncio
+        from code_exec_api import SANDBOX_RUNNER
+        
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        code = """
+class Base:
+    def __init__(self, val):
+        self.val = val
+
+class Sub(Base):
+    def __init__(self, val):
+        super().__init__(val)
+    
+    @classmethod
+    def create(cls, val):
+        return cls(val)
+
+s = Sub.create(42)
+print("Val:", s.val)
+"""
+        async def run_code():
+            return await SANDBOX_RUNNER.run(code)
+            
+        if loop.is_running():
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, run_code())
+                stdout, stderr, elapsed = future.result()
+        else:
+            stdout, stderr, elapsed = loop.run_until_complete(run_code())
+            
+        self.assertEqual(stderr.strip(), "")
+        self.assertIn("Val: 42", stdout)
+
+
     def test_database_cascade_deletes(self):
         from app.database import SessionLocal, DBStudentProfile, DBNote, DBReviewPlan, DBQuizRecord, DBWrongQuestion, DBConversationHistory
         from app.crud import save_student_profile

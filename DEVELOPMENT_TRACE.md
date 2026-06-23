@@ -623,5 +623,20 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 3,500 Input / 350 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-23] - 新增消息列表一键移至最顶端/最底端悬浮按钮
+- **任务编号**：`TASK_SCROLL_TO_TOP_BOTTOM`
+- **对应智能体**：`Antigravity (IDE Helper)`
+- **绑定 Skill**：`oma-frontend`, `oma-qa`
+- **开发场景**：[Chat.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Chat.vue) (在消息列表外层组件层绑定 `messageListRef`，添加 `scrollToTop` 与 `scrollToBottom` 平滑滚动方法；在模板中绝对定位悬浮按钮组，配合 `ChevronUp` 与 `ChevronDown` 图标以及毛玻璃微光背景实现高级感 UI 呈现)。
+- **自愈重试记录**：
+  - 无报错。微光毛玻璃背景及 Hover 状态阴影反馈使组件极具动效，滚动使用原生的 `{ behavior: 'smooth' }` 实现视口平滑过渡，性能损耗为零。
+- **测试验证结果**：
+  * **编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully in 585ms (100% OK)**。
+  * **主集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **31/31 tests passed (100% OK)**。
+- **Token 消耗估计**：约 2,500 Input / 250 Output
+- **架构师（用户）终审反馈**：Approved
+
 
 

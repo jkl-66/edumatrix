@@ -629,6 +629,9 @@
 [x] **路由导航切换时对话在后台继续生成**：
   - **屏蔽销毁强制中断**：修改 `Chat.vue` 的 `onUnmounted`，移除对 `chatStore.cleanup()` 的调用。用户切换到仪表盘、画像等其他页面时，流式连接将静默于后台继续加载接收，切回对话视图时能完整恢复时序状态和渲染结果。
   - **清空历史自愈退出**：在 `chat.js` 的 `clearHistory()` 开头注入 `this.cleanup()`，保证用户在主动清除对话时能立刻销毁并彻底中断后台未完成的生成连接。
+[x] **消息列表一键移至最顶端/最底端悬浮按钮**：
+  - **平滑滚动控制**：在 `Chat.vue` 模板的消息列表容器上绑定 `ref="messageListRef"`，并在 JavaScript 中开发了 `scrollToTop()` 和 `scrollToBottom()` 两个原生 `.scrollTo({ behavior: 'smooth' })` 平滑滚动方法。
+  - **毛玻璃浮动 UI**：在消息列表底部右侧绝对定位了悬浮按钮组，采用 `ChevronUp` 与 `ChevronDown` 图标、半透明背景及磨砂模糊背景，具备优雅的悬停高亮缩放与发光阴影反馈。仅在 `messages.length > 0` 时动态显示，提升长对话浏览体验。
 
 #### 2. 测试与编译校验
 * 前端开发与生产打包：`npm run build` ➡️ **Built successfully (100% OK)**。

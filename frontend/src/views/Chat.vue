@@ -244,6 +244,10 @@ watch(messages, (newMsgs, oldMsgs) => {
       
       avatarRef.value.speak(cleanText)
     }
+    // Auto scroll to bottom when new message arrives
+    nextTick(() => {
+      scrollToBottom()
+    })
   }
 }, { deep: true })
 
@@ -1602,12 +1606,12 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
 
         <!-- 一键回到顶端/底端悬浮按钮 -->
-        <div v-if="messages.length > 0" class="absolute right-4 bottom-20 flex flex-col gap-2 z-20">
-          <button @click="scrollToTop" class="w-8 h-8 rounded-full bg-white/80 hover:bg-white text-gray-500 hover:text-blue-600 border border-gray-200/80 shadow-md hover:shadow-lg transition-all flex items-center justify-center backdrop-blur-sm" title="回到最顶端">
-            <ChevronUp :size="16" />
+        <div v-if="messages.length > 0" class="absolute right-4 bottom-20 flex flex-col gap-2.5 z-20">
+          <button @click="scrollToTop" class="w-9 h-9 rounded-full bg-white/90 hover:bg-gradient-to-br hover:from-blue-500 hover:to-indigo-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-indigo-500/20 transition-all duration-300 hover:scale-110 active:scale-95 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最顶端">
+            <ChevronUp :size="18" />
           </button>
-          <button @click="scrollToBottom" class="w-8 h-8 rounded-full bg-white/80 hover:bg-white text-gray-500 hover:text-blue-600 border border-gray-200/80 shadow-md hover:shadow-lg transition-all flex items-center justify-center backdrop-blur-sm" title="回到最底端">
-            <ChevronDown :size="16" />
+          <button @click="scrollToBottom" class="w-9 h-9 rounded-full bg-white/90 hover:bg-gradient-to-br hover:from-blue-500 hover:to-indigo-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-indigo-500/20 transition-all duration-300 hover:scale-110 active:scale-95 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最底端">
+            <ChevronDown :size="18" />
           </button>
         </div>
 

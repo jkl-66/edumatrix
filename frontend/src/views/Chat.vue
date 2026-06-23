@@ -1213,8 +1213,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
           <div v-for="(msg, idx) in messages" :key="idx">
             <div v-if="msg.role === 'user'" class="flex justify-end mb-3">
-              <div class="max-w-[75%] bg-blue-600 text-white rounded-2xl rounded-br-sm px-4 py-2.5">
-                <p class="text-sm whitespace-pre-wrap">{{ msg.content }}</p>
+              <!-- 用户消息气泡：圆角矩形，有色边框无实色填充，加大行距，优雅字体 -->
+              <div class="max-w-[75%] bg-blue-50/10 border-1.5 border-blue-500 text-blue-600 rounded-2xl rounded-br-sm px-4 py-2.5 shadow-sm font-sans">
+                <p class="text-sm whitespace-pre-wrap leading-relaxed">{{ msg.content }}</p>
               </div>
             </div>
 
@@ -1225,7 +1226,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
                   <Bot :size="16" class="text-white" />
                 </div>
                 <div class="flex-1 min-w-0">
-                  <div class="card">
+                  <div class="card chat-card-assistant">
                     <!-- 任务 8.3: 讲义操作栏 -->
                     <div class="flex items-center justify-end gap-1 mb-1 pb-1 border-b border-gray-100">
                       <button @click="exportAsMarkdown(idx)" class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"

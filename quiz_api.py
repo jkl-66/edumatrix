@@ -323,6 +323,16 @@ async def evaluate_answer(
 
     concept_mastery_updated = await run_db_op(perform_eval_updates)
 
+    # === 触发画像探针 LLM 抽取 ===
+    try:
+        from swarm_factory import build_swarm_from_headers
+        swarm = build_swarm_from_headers(request.headers)
+        profile = swarm.profile_store.get(student_id)
+        if profile:
+            await swarm.profile_probe.async_update(profile, f"我回答了关于{quiz_record.target_concept}的问题: {student_answer}")
+    except Exception:
+        pass
+
     # === 任务 10.1: 发布答题事件到 LearningEventBus ===
     try:
         await publish_quiz_event(

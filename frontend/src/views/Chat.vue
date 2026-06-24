@@ -534,10 +534,11 @@ function openSocraticPopup(targetText, contextBefore, contextAfter, lineIndex, m
  * 在 Chat 组件挂载后需绑定点击事件到渲染内容
  */
 onMounted(async () => {
-  // 动态锁定全局 `<main>` 的 overflow，使得 Chat 内部能够撑满并滚动，其余页面正常页面滚动
+  // 动态锁定全局 `<main>` 的 overflow 并使其成为 flex 布局容器、剥离 padding，使得 Chat 能够继承高度并内部滚动
   const mainEl = document.querySelector('main')
   if (mainEl) {
-    mainEl.style.overflow = 'hidden'
+    mainEl.classList.remove('overflow-y-auto', 'p-6')
+    mainEl.classList.add('overflow-hidden', 'flex', 'flex-col', 'h-full')
   }
 
   // 委托监听：捕获 Markdown 卡片内的代码块和公式点击
@@ -575,10 +576,11 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  // 恢复全局 `<main>` 的 overflow
+  // 恢复全局 `<main>` 的布局和滚动
   const mainEl = document.querySelector('main')
   if (mainEl) {
-    mainEl.style.overflow = ''
+    mainEl.classList.add('overflow-y-auto', 'p-6')
+    mainEl.classList.remove('overflow-hidden', 'flex', 'flex-col', 'h-full')
   }
 
   if (scrollTimer) {

@@ -5,6 +5,7 @@ import {
   processMessage, getHistory,
   webSearch, loadUrl, searchArxiv,
   runCode, getStudentProfile, regenerateComponent,
+  aiPolishNote, createNote, createReviewPlan,
 } from '../api'
 import {
   Send, Bot, User, Loader2, BookOpen, Code2, LayoutGrid, HelpCircle, Video,
@@ -35,6 +36,11 @@ const sending = computed(() => chatStore.sending)
 
 const capturedInitialProfile = ref(null)
 const latestProfile = ref(null)
+
+// --- AI 笔记提炼预览舱状态 ---
+const showNoteModal = ref(false)
+const noteModalLoading = ref(false)
+const noteModalForm = ref({ content: '', tags: '', concepts: '', source: '对话同步' })
 
 // --- 思维导图放大模态框状态 ---
 const zoomModal = ref({
@@ -131,6 +137,11 @@ function cleanupCustomMindmaps() {
 function renderAllDiagrams() {
   initMermaid()
   mountCustomMindmaps()
+  if (typeof window.Prism !== 'undefined') {
+    nextTick(() => {
+      window.Prism.highlightAll()
+    })
+  }
 }
 
 function initMermaid() {
@@ -153,6 +164,10 @@ function initMermaid() {
         const elements = document.querySelectorAll('.mermaid:not([data-processed="true"])')
         elements.forEach((el) => {
           try {
+            const rawCode = decodeURIComponent(el.getAttribute('data-code') || '')
+            if (rawCode) {
+              el.textContent = rawCode
+            }
             window.mermaid.init(undefined, el)
           } catch (err) {
             console.error('Individual Mermaid render error:', err)
@@ -745,24 +760,80 @@ function runConceptCode() {
   nextTick(() => runUserCode())
 }
 
-function saveToNotes(msgIdx) {
+async function openSaveNoteModal(msgIdx) {
   const msg = chatStore.messages[msgIdx]
   if (!msg) return
-  const title = msg.target || '学习笔记'
+  showNoteModal.value = true
+  noteModalLoading.value = true
+  noteModalForm.value = {
+    content: '正在调用 AI 智能提炼这堂课的精要笔记大纲与数学推导公式...',
+    tags: '',
+    concepts: msg.target || '',
+    source: '对话同步'
+  }
   try {
-    fetch('/api/notes/create', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ student_id: props.studentId, title, content_markdown: (msg.content||'').slice(0,2000), concepts_covered: msg.target||'' }) })
-  } catch (e) { console.error('Note save failed:', e) }
+    // 结合主回复内容以及所有子智能体生成的讲义与资源，传给后端提炼
+    let fullContext = msg.content || ''
+    if (msg.resources && msg.resources.length > 0) {
+      fullContext += '\n\n### 关联教学资源及讲义详情：\n'
+      msg.resources.forEach((r) => {
+        fullContext += `\n#### 【${r.resource_type || r.type || r.agent}】\n${r.content}\n`
+      })
+    }
+    const data = await aiPolishNote({ content: fullContext })
+    if (data && data.polished_content) {
+      noteModalForm.value.content = data.polished_content
+      noteModalForm.value.tags = (data.tags || []).join(', ')
+      noteModalForm.value.concepts = (data.concepts || []).join(', ') || msg.target || ''
+    } else {
+      noteModalForm.value.content = fullContext
+    }
+  } catch (e) {
+    console.error('AI 智能提炼失败，降级为原始排版:', e)
+    // 降级时也使用合并后的内容，保证内容全面
+    let fallbackContext = msg.content || ''
+    if (msg.resources && msg.resources.length > 0) {
+      fallbackContext += '\n\n### 关联教学资源及讲义详情：\n'
+      msg.resources.forEach((r) => {
+        fallbackContext += `\n#### 【${r.resource_type || r.type || r.agent}】\n${r.content}\n`
+      })
+    }
+    noteModalForm.value.content = fallbackContext
+  } finally {
+    noteModalLoading.value = false
+  }
+}
+
+async function confirmSaveNote() {
+  try {
+    const tagsArray = noteModalForm.value.tags.split(/[,，]/).map(t => t.trim()).filter(Boolean)
+    const conceptsArray = noteModalForm.value.concepts.split(/[,，]/).map(c => c.trim()).filter(Boolean)
+    await createNote(props.studentId, {
+      content: noteModalForm.value.content,
+      source: noteModalForm.value.source,
+      tags: tagsArray,
+      concepts: conceptsArray
+    })
+    showNoteModal.value = false
+    alert('精要笔记已成功保存到您的笔记本中！')
+  } catch (e) {
+    alert('保存笔记失败: ' + (e.message || e))
+  }
 }
 
 async function generateReviewPlan(msgIdx) {
   const msg = chatStore.messages[msgIdx]
   if (!msg || !msg.target) return
   try {
-    const resp = await fetch('/api/review/create', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ student_id: props.studentId, concept: msg.target, priority: 1 }) })
-    if (resp.ok) alert('复习计划已添加')
-  } catch (e) { console.error('Review plan failed:', e) }
+    await createReviewPlan(props.studentId, {
+      concept: msg.target,
+      priority: 1.0
+    })
+    alert('艾宾浩斯复习计划已添加')
+  } catch (e) {
+    console.error('添加复习计划失败:', e)
+    alert('添加复习计划失败')
+  }
 }
 
 /**
@@ -996,7 +1067,7 @@ function sanitizeMermaidCode(code) {
     for (const pair of delimPairs) {
       const escapedOpen = pair.open.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
       const escapedClose = pair.close.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
-      const regex = new RegExp(`^([a-zA-Z0-9_-]+)\\s*(${escapedOpen})\\s*(.*?)\\s*(${escapedClose})$`)
+      const regex = new RegExp(`^([^({[\\]\\s]+)\\s*(${escapedOpen})\\s*(.*?)\\s*(${escapedClose})$`)
       const match = cleaned.match(regex)
       if (match) {
         id = match[1]
@@ -1046,6 +1117,17 @@ function renderMarkdown(text, type = '', conceptName = '') {
   if (!text) return ''
 
   let cleaned = text.trim()
+  
+  // 自动闭合未闭合的代码块 (```) 与双美元公式块 ($$)，防止内容被截断时导致排版崩溃
+  const openTicksCount = (cleaned.match(/```/g) || []).length
+  if (openTicksCount % 2 !== 0) {
+    cleaned += '\n```'
+  }
+  const doubleDollarCount = (cleaned.match(/\$\$/g) || []).length
+  if (doubleDollarCount % 2 !== 0) {
+    cleaned += '\n$$'
+  }
+
   if (cleaned.startsWith('```markdown') && cleaned.endsWith('```')) {
     cleaned = cleaned.slice(11, -3).trim()
   } else if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
@@ -1170,7 +1252,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
             </div>
           </div>
           <div class="mermaid-container w-full overflow-auto flex justify-center py-2 bg-white max-h-[300px]" style="cursor: zoom-in;" onclick="window.zoomMindmap && window.zoomMindmap(this)">
-            <div class="mermaid w-full flex justify-center" data-code="${escapedCode}">${cleanCode}</div>
+            <div class="mermaid w-full flex justify-center" data-code="${escapedCode}"><div class="mermaid-loading flex flex-col items-center justify-center gap-1.5 py-6 text-gray-400 select-none"><div class="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div><span class="text-[10px] text-indigo-500 font-semibold animate-pulse">正在绘制思维导图...</span></div></div>
           </div>
           <!-- 调试面板：折叠展示原始及清洗后的代码 -->
           <details class="w-full mt-2 pt-2 border-t border-gray-100 text-[10px] text-gray-400 cursor-pointer">
@@ -1182,13 +1264,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>`
       }
     } else {
+      const cleanLang = (lang || 'python').trim().toLowerCase()
       blockHtml = `<div class="relative group my-3">
-        <pre class="p-3 bg-gray-900 text-green-400 rounded-lg overflow-x-auto font-mono text-xs leading-relaxed">${code.trim()}</pre>
+        <pre class="p-3 bg-gray-900 rounded-lg overflow-x-auto text-xs leading-relaxed language-${cleanLang}"><code class="language-${cleanLang}">${code.trim()}</code></pre>
         <button onclick="window.mountCodeToSandbox && window.mountCodeToSandbox(this)" class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity px-2.5 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-[10px] flex items-center gap-1 shadow-sm font-semibold transition-all">
           💻 挂载至沙箱
         </button>
       </div>`
     }
+    const idx = codeBlocks.length
+    codeBlocks.push(blockHtml)
+    return `@@CODEBLOCKTOKEN${idx}@@`
+  })
+
+  // Extract single-backtick inline code blocks to protect them from subscript mangling
+  html = html.replace(/`([^`\n]+)`/g, (_, code) => {
+    const blockHtml = `<code class="px-1.5 py-0.5 bg-gray-100 text-red-600 rounded font-mono text-xs font-medium">${code}</code>`
     const idx = codeBlocks.length
     codeBlocks.push(blockHtml)
     return `@@CODEBLOCKTOKEN${idx}@@`
@@ -1290,7 +1381,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
   })
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-gray-900">$1</strong>')
   html = html.replace(/\*([^*]+)\*/g, '<em class="italic text-gray-800">$1</em>')
-  html = html.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 bg-gray-100 text-red-600 rounded font-mono text-xs font-medium">$1</code>')
+  // Inline code is already extracted and protected as @@CODEBLOCKTOKEN@@ above
   html = html.replace(/^### (.*$)/gim, '<h4 class="text-xs font-bold text-gray-800 mt-4 mb-1.5 flex items-center gap-1">$1</h4>')
   html = html.replace(/^## (.*$)/gim, '<h3 class="text-sm font-semibold text-gray-900 mt-5 mb-2 border-b border-gray-100 pb-1 flex items-center gap-1.5">$1</h3>')
   html = html.replace(/^# (.*$)/gim, '<h2 class="text-base font-bold text-gray-900 mt-6 mb-3 flex items-center gap-2">$1</h2>')
@@ -1464,11 +1555,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
                   <div class="card chat-card-assistant">
                     <!-- 任务 8.3: 讲义操作栏 -->
                     <div class="flex items-center justify-end gap-1 mb-1 pb-1 border-b border-gray-100">
-                      <button v-if="msg.target" @click="showConceptCode(idx)" class="text-[10px] text-gray-400 hover:text-emerald-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-emerald-50 rounded transition-colors"
-                        title="查看此概念的代码实现">
-                        <Terminal :size="10" /> 代码
-                      </button>
-                      <button @click="saveToNotes(idx)" class="text-[10px] text-gray-400 hover:text-amber-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-amber-50 rounded transition-colors"
+                      <button @click="openSaveNoteModal(idx)" class="text-[10px] text-gray-400 hover:text-amber-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-amber-50 rounded transition-colors"
                         title="保存到知识笔记">
                         <BookOpen :size="10" /> 笔记
                       </button>
@@ -2102,6 +2189,47 @@ function renderMarkdown(text, type = '', conceptName = '') {
             >
               <div class="mermaid flex justify-center">{{ zoomModal.code }}</div>
             </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ========== AI 笔记提炼预览舱 Modal ========== -->
+    <Teleport to="body">
+      <div v-if="showNoteModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showNoteModal = false">
+        <div class="bg-white rounded-2xl shadow-2xl w-[600px] max-h-[85vh] flex flex-col overflow-hidden border border-gray-100">
+          <div class="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-blue-50/20 shrink-0">
+            <h3 class="text-sm font-bold text-gray-800 flex items-center gap-1.5">
+              <Sparkles :size="15" class="text-blue-600" />
+              <span>AI 笔记智能提炼舱</span>
+            </h3>
+            <button class="text-gray-400 hover:text-gray-600 text-lg leading-none" @click="showNoteModal = false"><X :size="16" /></button>
+          </div>
+          <div class="flex-1 overflow-y-auto p-5 space-y-4">
+            <div v-if="noteModalLoading" class="flex flex-col items-center justify-center py-12 text-gray-400">
+              <Loader2 :size="24" class="animate-spin text-blue-500 mb-2" />
+              <span class="text-xs">量化评估师正在梳理这堂课的知识脉络与核心推导...</span>
+            </div>
+            <div v-else class="space-y-4">
+              <div class="flex flex-col gap-1">
+                <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">提炼后的 Markdown 笔记</label>
+                <textarea v-model="noteModalForm.content" class="w-full h-64 p-3 font-mono text-xs rounded-xl border border-gray-200 bg-slate-900 text-slate-200 focus:border-blue-300 focus:ring-2 focus:ring-blue-100 outline-none transition-all resize-none" />
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div class="flex flex-col gap-1">
+                  <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">关联概念</label>
+                  <input v-model="noteModalForm.concepts" class="w-full px-3 py-2 text-xs rounded-xl border border-gray-200 bg-white focus:border-blue-300 focus:ring-2 focus:ring-blue-100 outline-none transition-all" placeholder="核心概念(英文逗号隔开)" />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">推荐标签</label>
+                  <input v-model="noteModalForm.tags" class="w-full px-3 py-2 text-xs rounded-xl border border-gray-200 bg-white focus:border-blue-300 focus:ring-2 focus:ring-blue-100 outline-none transition-all" placeholder="推荐标签(英文逗号隔开)" />
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100 bg-gray-50 shrink-0">
+            <button class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-xs font-semibold transition-all" @click="showNoteModal = false">取消</button>
+            <button class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all" :disabled="noteModalLoading" @click="confirmSaveNote">确认保存到笔记本</button>
           </div>
         </div>
       </div>

@@ -29,6 +29,8 @@ from app.crud import (
     upsert_review_plan,
     record_conversation,
     get_conversation_history,
+    update_note,
+    append_wrong_question_reflection,
 )
 from app.auth import authenticate_user, create_access_token, get_current_user, get_password_hash
 from knowledge_api import router as knowledge_router
@@ -500,10 +502,164 @@ async def submit_feedback(request: Request):
     }
 
 
+@app.post("/api/notes/ai-polish")
+async def polish_note(request: Request):
+    try:
+        payload = await request.json()
+        content = str(payload.get("content", "")).strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="content is required")
+        
+        # 1. 提取与保护原始笔记中的代码块（Mermaid 思维导图除外），防止大段代码消耗过多 Token 导致生成截断
+        import re
+        code_blocks = []
+        def code_block_repl(match):
+            block_content = match.group(0)
+            first_line = block_content.split('\n')[0].lower()
+            if 'mermaid' in first_line:
+                # 不保护 mermaid 块，允许大模型在润色时进行优化
+                return block_content
+            # 保护其他代码块，存入列表中，替换为占位符
+            placeholder = f"[CODE_BLOCK_PLACEHOLDER_{len(code_blocks)}]"
+            code_blocks.append(block_content)
+            return placeholder
+
+        placeholder_content = re.sub(r"```[\s\S]*?```", code_block_repl, content)
+
+        # 从请求头中构建专属 Swarm 实例以获取用户自定义 of API Key/Endpoint/Model (防 500 熔断)
+        active_swarm = build_swarm_from_headers(request.headers)
+        
+        system_prompt = (
+            "你是一个顶级的全栈教育学者与机器学习专家。请对用户提供的原始笔记或对话提炼内容进行深度的整理、扩写与学术级排版。\n"
+            "【核心任务目标】：\n"
+            "- 【去芜存菁，过滤对话噪点】：必须完全过滤和去除所有无意义的口水话、寒暄语、引导词（例如'好的，我来为您...'，'没问题'等）。\n"
+            "- 【严禁无端缩减笔记，必须深度扩写丰富】：绝对不能将核心内容精简或缩水！相反，你应当以学术级标准对原有的知识点进行系统性扩写与深度补充，丰富核心原理的来龙去脉、物理意义、应用场景与公式推导。\n"
+            "- 【保留代码占位符】：如果输入文本中包含 `[CODE_BLOCK_PLACEHOLDER_N]`（如 `[CODE_BLOCK_PLACEHOLDER_0]`）形式的占位符，请在输出的对应位置（通常在正文的“实践示例与核心代码”或相关版块中）原封不动地保留该占位符。千万不要尝试自行重写或生成代码，也不要删除这些占位符，因为我们会在后处理中自动将它们还原为原始代码。这可以极大节省 token 空间并防止大模型被截断。\n"
+            "- 【自动设计嵌入概念思维导图】：在笔记正文的第一部分，自动设计并嵌入一个能够直观表示本笔记知识框架的 ```mermaid 思维导图（必须是 mindmap 格式，例如：\n"
+            "  ```mermaid\n"
+            "  mindmap\n"
+            "    root((\"核心主题\"))\n"
+            "      分支1[\"子概念A\"]\n"
+            "        叶子1(\"细节描述1\")\n"
+            "      分支2[\"子概念B\"]\n"
+            "  ```\n"
+            "  特别注意：在 Mermaid 节点文字中若包含中文、空格、小括号或任何特殊字符，**必须全部用双引号包裹**（如：root((\"卷积神经网络 (CNN)\"))），且思维导图内不得包含 LaTeX 格式公式，只用纯文本，以确保渲染器完美渲染，不发生任何解析错误）。\n\n"
+            "【输出格式规范】：\n"
+            "1. 【思维导图优先】：在笔记正文最开头，以独立的 ```mermaid 代码块展示刚才设计的 mindmap 思维导图。\n"
+            "2. 【深度正文展开】：正文须使用标题清晰、层次分明的 Markdown 格式展开。建议分为以下几个大板块：\n"
+            "   - ### 核心概念定义及背景：详尽补充前置基础知识、核心公式与背景。\n"
+            "   - ### 实践示例与核心代码（如有）：在相应位置写上对应的 `[CODE_BLOCK_PLACEHOLDER_N]` 占位符以保留原始代码。\n"
+            "   - ### 详细逻辑推导与核心要点：把推导逻辑层层展开，不省略数学步骤。\n"
+            "3. 【数学公式排版】：所有的数学变量、参数和方程必须应用标准的 LaTeX 格式进行排版，行内使用单个 $ 包裹（如：$w$, $x$, $\\theta$），独立公式或推导块必须使用双美元符号 $$ 包裹，且公式中的乘号使用 \\cdot 或 \\times，求和使用 \\sum 等标准 LaTeX 符号，确保在页面中完美渲染。\n"
+            "4. 在笔记内容的【最后一行】，输出自动分析并推荐的关联标签 and 概念列表，格式必须严格固定为：\n"
+            "===TAGS_AND_CONCEPTS===\n"
+            "Tags: tag1, tag2\n"
+            "Concepts: concept1, concept2\n"
+            "========================\n"
+            "注意：Tags 和 Concepts 必须是提取出的精炼实体，Concepts 需尽量匹配机器学习核心概念。"
+        )
+        user_prompt = f"以下是学生的原始笔记内容：\n\n{placeholder_content}"
+        
+        try:
+            polished = await active_swarm.llm.generate(system_prompt, user_prompt, role="笔记整理官")
+        except Exception as e:
+            polished = f"// AI 润色暂时不可用: {str(e)}\n\n{content}"
+        
+        # 2. 还原被保护的原始代码块
+        restored_indices = set()
+        for i, original_code in enumerate(code_blocks):
+            pattern = rf"\[\s*CODE_BLOCK_PLACEHOLDER_{i}\s*\]|CODE_BLOCK_PLACEHOLDER_{i}"
+            if re.search(pattern, polished, re.IGNORECASE):
+                polished = re.sub(pattern, lambda m: original_code, polished, flags=re.IGNORECASE)
+                restored_indices.add(i)
+        
+        # 3. 安全垫：如果大模型在生成中漏掉了某个代码占位符，将其追加到最后（Tags_AND_CONCEPTS 前）
+        lost_blocks = [code_blocks[i] for i in range(len(code_blocks)) if i not in restored_indices]
+        if lost_blocks:
+            meta_marker = "===TAGS_AND_CONCEPTS==="
+            if meta_marker in polished:
+                parts = polished.split(meta_marker)
+                parts[0] = parts[0].strip() + "\n\n### 实践示例与核心代码（自动备份）\n" + "\n\n".join(lost_blocks) + "\n\n"
+                polished = meta_marker.join(parts)
+            else:
+                polished = polished.strip() + "\n\n### 实践示例与核心代码（自动备份）\n" + "\n\n".join(lost_blocks)
+
+        # 解析标签和概念
+        tags, concepts = [], []
+        clean_content = polished
+        meta_match = re.search(r"===TAGS_AND_CONCEPTS===\s*\nTags:\s*(.*?)\s*\nConcepts:\s*(.*?)\s*\n========================", polished, re.S | re.M)
+        if meta_match:
+            tag_str = meta_match.group(1)
+            concept_str = meta_match.group(2)
+            tags = [t.strip() for t in tag_str.split(",") if t.strip()]
+            concepts = [c.strip() for c in concept_str.split(",") if c.strip()]
+            clean_content = polished.replace(meta_match.group(0), "").strip()
+        else:
+            tag_line = re.search(r"^Tags:\s*(.*)$", polished, re.M | re.I)
+            concept_line = re.search(r"^Concepts:\s*(.*)$", polished, re.M | re.I)
+            if tag_line:
+                tags = [t.strip() for t in tag_line.group(1).split(",") if t.strip()]
+                clean_content = clean_content.replace(tag_line.group(0), "").strip()
+            if concept_line:
+                concepts = [c.strip() for c in concept_line.group(1).split(",") if c.strip()]
+                clean_content = clean_content.replace(concept_line.group(0), "").strip()
+        
+        tags = [t for t in tags if t.lower() != 'none']
+        concepts = [c for c in concepts if c.lower() != 'none']
+        
+        return {
+            "polished_content": clean_content.strip(),
+            "tags": tags,
+            "concepts": concepts
+        }
+    except Exception as outer_e:
+        import traceback
+        with open("scratch/debug_polish.log", "w", encoding="utf-8") as f:
+            f.write(traceback.format_exc())
+        raise outer_e
+
+
+@app.post("/api/notes/append-reflection")
+async def append_reflection(request: Request):
+    payload = await request.json()
+    student_id = str(payload.get("student_id", "")).strip()
+    concept = str(payload.get("concept", "")).strip()
+    quiz_record_id = str(payload.get("quiz_record_id", "")).strip()
+    wrong_reason = str(payload.get("wrong_reason", "misconception")).strip()
+    
+    if not student_id or not concept or not quiz_record_id:
+        raise HTTPException(status_code=400, detail="student_id, concept, and quiz_record_id are required")
+        
+    note = await run_db_op(
+        append_wrong_question_reflection,
+        student_id=student_id,
+        concept=concept,
+        quiz_record_id=quiz_record_id,
+        wrong_reason=wrong_reason
+    )
+    return {"id": note.id, "updated_at": note.updated_at.isoformat()}
+
+
+@app.post("/api/notes/update/{note_id}")
+async def update_existing_note(note_id: str, request: Request):
+    payload = await request.json()
+    content = str(payload.get("content", "")).strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    
+    note = await run_db_op(
+        update_note, note_id, content=content,
+        tags=payload.get("tags"), concepts=payload.get("concepts")
+    )
+    if not note:
+        raise HTTPException(status_code=404, detail="note not found")
+    return {"id": note.id, "updated_at": note.updated_at.isoformat()}
+
+
 @app.get("/api/notes/{student_id}")
 async def list_notes(student_id: str):
     notes = await run_db_op(get_notes, student_id)
-    return {"student_id": student_id, "notes": [{"id": n.id, "source": n.source, "content": n.content[:300], "tags": n.tags, "concepts": n.concepts, "created_at": n.created_at.isoformat()} for n in notes]}
+    return {"student_id": student_id, "notes": [{"id": n.id, "source": n.source, "content": n.content, "tags": n.tags, "concepts": n.concepts, "created_at": n.created_at.isoformat()} for n in notes]}
 
 
 @app.post("/api/notes/{student_id}")
@@ -578,11 +734,13 @@ async def get_review(student_id: str):
         "student_id": student_id,
         "due_reviews": [
             {
+                "id": p.id,
                 "concept": p.concept,
                 "interval_days": p.interval_days,
                 "next_review_at": p.next_review_at.isoformat(),
                 "mastery": p.mastery,
                 "review_count": p.review_count,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
             }
             for p in plans
         ],
@@ -594,15 +752,17 @@ async def update_review(student_id: str, request: Request):
     payload = await request.json()
     concept = str(payload.get("concept", "")).strip()
     mastery = float(payload.get("mastery", 0.5))
+    interval_days = int(payload.get("interval_days", 1))
     if not concept:
         raise HTTPException(status_code=400, detail="concept is required")
-    scheduler = ReviewScheduler()
-    plan = await run_db_op(upsert_review_plan, student_id, concept, mastery, scheduler.INTERVALS[0])
+    plan = await run_db_op(upsert_review_plan, student_id, concept, mastery, interval_days)
     return {
+        "id": plan.id,
         "concept": plan.concept,
         "next_review_at": plan.next_review_at.isoformat(),
         "interval_days": plan.interval_days,
         "mastery": plan.mastery,
+        "created_at": plan.created_at.isoformat() if plan.created_at else None,
     }
 
 

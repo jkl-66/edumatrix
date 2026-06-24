@@ -76,13 +76,28 @@ export async function createNote(studentId, data) {
   return r.data
 }
 
+export async function updateNote(noteId, data) {
+  const r = await api.post(`/notes/update/${noteId}`, data, { headers: buildHeaders() })
+  return r.data
+}
+
 export async function deleteNote(noteId) {
   await api.delete(`/notes/${noteId}`, { headers: buildHeaders() })
 }
 
+export async function aiPolishNote(data) {
+  const r = await api.post('/notes/ai-polish', data, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function appendWrongQuestionReflection(data) {
+  const r = await api.post('/notes/append-reflection', data, { headers: buildHeaders() })
+  return r.data
+}
+
 export async function getReviewPlans(studentId) {
   const r = await api.get(`/review/${studentId}`, { headers: buildHeaders() })
-  return r.data
+  return r.data.due_reviews || r.data.plans || r.data
 }
 
 export async function createReviewPlan(studentId, data) {
@@ -332,6 +347,12 @@ export async function checkinReview(studentId, concept = '', durationMinutes = 1
 
 export async function getCheckinStreak(studentId) {
   const r = await api.get(`/quiz/checkin/streak/${studentId}`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function getCheckinHistory(studentId, concept = '') {
+  const params = concept ? { concept } : {}
+  const r = await api.get(`/quiz/checkin/history/${studentId}`, { params, headers: buildHeaders() })
   return r.data
 }
 

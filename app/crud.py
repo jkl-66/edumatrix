@@ -224,12 +224,121 @@ def delete_note(db: Session, note_id: str) -> bool:
     return True
 
 
+def update_note(db: Session, note_id: str, content: str, tags: list[str] | None = None, concepts: list[str] | None = None) -> DBNote | None:
+    db_note = db.query(DBNote).filter(DBNote.id == note_id).first()
+    if not db_note:
+        return None
+    db_note.content = content
+    if tags is not None:
+        db_note.tags = tags
+    if concepts is not None:
+        db_note.concepts = concepts
+    db_note.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(db_note)
+    return db_note
+
+
+def append_wrong_question_reflection(db: Session, student_id: str, concept: str, quiz_record_id: str, wrong_reason: str) -> DBNote:
+    from app.database import DBQuizRecord
+    record = db.query(DBQuizRecord).filter(DBQuizRecord.id == quiz_record_id).first()
+    
+    time_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    q_text = (record.question or "自适应测试题").strip() if record else "自适应测试题"
+    std_ans = (record.student_answer or "未提交").strip() if record else "未提交"
+    ref_ans = (record.correct_answer or "未提供").strip() if record else "未提供"
+    
+    diag_feedback = (record.feedback or "未提供诊断反馈").strip() if (record and record.feedback) else "未提供诊断反馈"
+    
+    # 格式化我的回答，防止多行或代码块错乱
+    if "\n" in std_ans or "```" in std_ans:
+        formatted_std_ans = f"\n```\n{std_ans}\n```"
+    else:
+        formatted_std_ans = f"`{std_ans}`"
+        
+    category_labels = {
+        "review": "需复习",
+        "practice": "需练习",
+        "advance": "可进阶",
+        "misconception": "概念误解",
+        "outlier_sensitivity": "对异常值敏感",
+        "calculation_error": "计算错误",
+        "carelessness": "粗心大意",
+    }
+    reason_label = category_labels.get(wrong_reason, wrong_reason)
+
+    reflection_md = (
+        f"\n\n---\n\n"
+        f"### ❌ 错题反思小记 ({time_str})\n\n"
+        f"> [!IMPORTANT]\n"
+        f"> **💡 系统诊断反馈**\n"
+        f"> {diag_feedback}\n\n"
+        f"- **核心概念**：`{concept}`\n"
+        f"- **错因分类**：`{reason_label}` ({wrong_reason})\n\n"
+        f"#### **📝 错题题目**\n"
+        f"{q_text}\n\n"
+        f"#### **👤 我的回答**\n"
+        f"{formatted_std_ans}\n\n"
+        f"#### **🎯 参考答案与解析**\n"
+        f"{ref_ans}\n\n"
+        f"---\n"
+    )
+    
+    # 查找此概念对应的现有错题集笔记（通过 source="错题本反思" 来隔离普通笔记）
+    notes = db.query(DBNote).filter(
+        DBNote.student_id == student_id,
+        DBNote.source == "错题本反思"
+    ).all()
+    existing_note = None
+    
+    # 1. 优先精确匹配 concepts (忽略大小写)
+    for n in notes:
+        if n.concepts and any(concept.strip().lower() == c.strip().lower() for c in n.concepts):
+            existing_note = n
+            break
+            
+    # 2. 其次匹配 tags (忽略大小写)
+    if not existing_note:
+        for n in notes:
+            if n.tags and any(concept.strip().lower() == t.strip().lower() for t in n.tags):
+                existing_note = n
+                break
+                
+    # 3. 再次匹配标题或内容的前几行 (首行通常是标题)
+    if not existing_note:
+        for n in notes:
+            first_lines = n.content.split('\n')[:5]
+            if any(concept.strip().lower() in line.lower() for line in first_lines if line.strip()):
+                existing_note = n
+                break
+            
+    if existing_note:
+        existing_note.content += reflection_md
+        existing_note.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing_note)
+        return existing_note
+    else:
+        import hashlib
+        note_id = hashlib.sha256(f"{student_id}:{concept}:{datetime.utcnow().isoformat()}".encode()).hexdigest()[:16]
+        new_note = DBNote(
+            id=note_id,
+            student_id=student_id,
+            source="错题本反思",
+            content=f"# {concept} 错题集\n\n该笔记由错题本反思自动初始化。{reflection_md}",
+            tags=["错题整理", "反思"],
+            concepts=[concept],
+        )
+        db.add(new_note)
+        db.commit()
+        db.refresh(new_note)
+        return new_note
+
+
 def get_review_plan(db: Session, student_id: str) -> list[DBReviewPlan]:
-    from datetime import datetime as dt
     return (
         db.query(DBReviewPlan)
         .filter(DBReviewPlan.student_id == student_id)
-        .filter(DBReviewPlan.next_review_at <= dt.utcnow())
         .order_by(DBReviewPlan.next_review_at.asc())
         .all()
     )
@@ -259,6 +368,7 @@ def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: floa
         )
         db.add(existing)
     db.commit()
+    db.refresh(existing)
     return existing
 
 

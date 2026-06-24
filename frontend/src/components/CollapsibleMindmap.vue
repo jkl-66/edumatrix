@@ -13,6 +13,7 @@ const svgRef = ref(null)
 const fullscreenSvgRef = ref(null)
 const containerRef = ref(null)
 const isFullscreen = ref(false)
+const rendering = ref(true)
 
 // --- 1. Parser: Convert Indented Mermaid-like Mindmap text to Hierarchical JSON ---
 function parseIndentTextToTree(codeText) {
@@ -48,7 +49,7 @@ function parseIndentTextToTree(codeText) {
     for (const pair of delimPairs) {
       const escapedOpen = pair.open.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
       const escapedClose = pair.close.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
-      const regex = new RegExp(`^[a-zA-Z0-9_-]+\\s*${escapedOpen}\\s*(.*?)\\s*${escapedClose}$`)
+      const regex = new RegExp(`^[^({[\\]\\s]+\\s*${escapedOpen}\\s*(.*?)\\s*${escapedClose}$`)
       const match = cleaned.match(regex)
       if (match) {
         displayText = match[1].trim()
@@ -232,51 +233,63 @@ let d3G = null
 let treeLayout = null
 
 function initAndRender() {
-  const treeData = parseIndentTextToTree(props.code)
-  const svgEl = isFullscreen.value ? fullscreenSvgRef.value : svgRef.value
-  if (!treeData || !svgEl) return
+  rendering.value = true
+  setTimeout(() => {
+    try {
+      const treeData = parseIndentTextToTree(props.code)
+      const svgEl = isFullscreen.value ? fullscreenSvgRef.value : svgRef.value
+      if (!treeData || !svgEl) {
+        rendering.value = false
+        return
+      }
 
-  const height = isFullscreen.value ? (window.innerHeight - 80) : 320
+      const height = isFullscreen.value ? (window.innerHeight - 80) : 320
 
-  // Select SVG and clear previous contents
-  d3Svg = d3.select(svgEl)
-  d3Svg.selectAll('*').remove()
+      // Select SVG and clear previous contents
+      d3Svg = d3.select(svgEl)
+      d3Svg.selectAll('*').remove()
 
-  // Setup main group
-  d3G = d3Svg.append('g').attr('class', 'mindmap-container-g')
+      // Setup main group
+      d3G = d3Svg.append('g').attr('class', 'mindmap-container-g')
 
-  // Setup zoom behaviour
-  d3Zoom = d3.zoom()
-    .scaleExtent([0.15, 4])
-    .on('zoom', (event) => {
-      d3G.attr('transform', event.transform)
-    })
-  d3Svg.call(d3Zoom)
+      // Setup zoom behaviour
+      d3Zoom = d3.zoom()
+        .scaleExtent([0.15, 4])
+        .on('zoom', (event) => {
+          d3G.attr('transform', event.transform)
+        })
+      d3Svg.call(d3Zoom)
 
-  // Configure tree layout (vertical separation 80px, horizontal step 340px)
-  treeLayout = d3.tree().nodeSize([80, 340])
+      // Configure tree layout (vertical separation 80px, horizontal step 340px)
+      treeLayout = d3.tree().nodeSize([80, 340])
 
-  // Convert hierarchy data
-  d3Root = d3.hierarchy(treeData)
-  d3Root.x0 = height / 2
-  d3Root.y0 = 60
+      // Convert hierarchy data
+      d3Root = d3.hierarchy(treeData)
+      d3Root.x0 = height / 2
+      d3Root.y0 = 60
 
-  // Collapse deep nodes initially (depth >= 2)
-  const collapseDeep = (d) => {
-    if (d.depth >= 2 && d.children) {
-      d._children = d.children
-      d.children = null
+      // Collapse deep nodes initially (depth >= 2)
+      const collapseDeep = (d) => {
+        if (d.depth >= 2 && d.children) {
+          d._children = d.children
+          d.children = null
+        }
+        if (d.children) d.children.forEach(collapseDeep)
+        if (d._children) d._children.forEach(collapseDeep)
+      }
+      collapseDeep(d3Root)
+
+      // Trigger initial update
+      updateTree(d3Root)
+      
+      // Center the layout
+      centerLayout()
+    } catch (e) {
+      console.error('D3 mindmap render error:', e)
+    } finally {
+      rendering.value = false
     }
-    if (d.children) d.children.forEach(collapseDeep)
-    if (d._children) d._children.forEach(collapseDeep)
-  }
-  collapseDeep(d3Root)
-
-  // Trigger initial update
-  updateTree(d3Root)
-  
-  // Center the layout
-  centerLayout()
+  }, 100)
 }
 
 // 渲染节点 HTML (支持 KaTeX 行内渲染与 sub/sup 上下标 fallback 转换)
@@ -590,6 +603,11 @@ onMounted(() => {
 
 <template>
   <div ref="containerRef" class="collapsible-mindmap w-full relative border border-purple-100 rounded-2xl bg-white overflow-hidden shadow-sm my-3 p-1 transition-all duration-300">
+    <!-- Loading spinner overlay -->
+    <div v-if="rendering" class="absolute inset-0 bg-white/80 backdrop-blur-[1px] flex flex-col items-center justify-center gap-2 z-20">
+      <div class="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+      <span class="text-[10px] text-purple-600 font-semibold animate-pulse">正在绘制思维导图...</span>
+    </div>
     
     <!-- 1. Card View (When NOT Fullscreen) -->
     <div v-show="!isFullscreen" class="w-full">

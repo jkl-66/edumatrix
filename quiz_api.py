@@ -915,29 +915,46 @@ async def checkin_review(
     concept = str(payload.get("concept", ""))
     duration_minutes = int(payload.get("duration_minutes", 10))
 
-    from datetime import date, datetime
+    from datetime import date, datetime, timezone
 
     def do_checkin(session):
         from app.database import DBCheckinLog
 
-        today = date.today()
-        existing = session.query(DBCheckinLog).filter(
+        # 使用 UTC 时间进行计算以保持数据一致性
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        today_utc = now_utc.date()
+        
+        start_of_today = datetime.combine(today_utc, datetime.min.time())
+        end_of_today = datetime.combine(today_utc, datetime.max.time())
+
+        existing_list = session.query(DBCheckinLog).filter(
             DBCheckinLog.student_id == student_id,
-            DBCheckinLog.checkin_date == today,
-        ).first()
+            DBCheckinLog.checkin_date >= start_of_today,
+            DBCheckinLog.checkin_date <= end_of_today,
+        ).all()
+
+        existing = None
+        if concept:
+            c_clean = concept.strip().lower()
+            for r in existing_list:
+                reviewed_list = [c.strip().lower() for c in (r.concepts_reviewed or [])]
+                if c_clean in reviewed_list:
+                    existing = r
+                    break
+        else:
+            for r in existing_list:
+                if not r.concepts_reviewed:
+                    existing = r
+                    break
 
         if existing:
             existing.duration_minutes += duration_minutes
-            if concept:
-                existing.concepts_reviewed = list(set(
-                    (existing.concepts_reviewed or []) + [concept]
-                ))
             session.commit()
             return {"checked_in": True, "streak": _calc_streak(session, student_id), "first_today": False}
         else:
             log = DBCheckinLog(
                 student_id=student_id,
-                checkin_date=today,
+                checkin_date=now_utc,
                 duration_minutes=duration_minutes,
                 concepts_reviewed=[concept] if concept else [],
             )
@@ -959,10 +976,40 @@ async def get_checkin_streak(student_id: str) -> dict:
     return await run_db_op(fetch_streak)
 
 
+@router.get("/checkin/history/{student_id}")
+async def get_checkin_history(student_id: str, concept: str = "") -> list[dict]:
+    """获取学生的所有签到打卡记录，支持按特定知识点筛选。"""
+    from app.database import DBCheckinLog
+
+    def fetch_history(session):
+        query = session.query(DBCheckinLog).filter(
+            DBCheckinLog.student_id == student_id
+        )
+        records = query.order_by(DBCheckinLog.checkin_date.asc()).all()
+
+        results = []
+        for r in records:
+            if concept:
+                c_clean = concept.strip().lower()
+                reviewed_list = [c.strip().lower() for c in (r.concepts_reviewed or [])]
+                if c_clean not in reviewed_list:
+                    continue
+
+            results.append({
+                "id": r.id,
+                "checkin_date": r.checkin_date.isoformat() if r.checkin_date else "",
+                "duration_minutes": r.duration_minutes,
+                "concepts_reviewed": r.concepts_reviewed or [],
+            })
+        return results
+
+    return await run_db_op(fetch_history)
+
+
 def _calc_streak(session, student_id: str) -> int:
     """计算连续打卡天数。"""
     from app.database import DBCheckinLog
-    from datetime import date, timedelta
+    from datetime import date, datetime, timezone, timedelta
 
     records = (
         session.query(DBCheckinLog.checkin_date)
@@ -973,9 +1020,25 @@ def _calc_streak(session, student_id: str) -> int:
     if not records:
         return 0
 
+    today_utc = datetime.now(timezone.utc).replace(tzinfo=None).date()
+    expected = today_utc
+
+    # 提取唯一的打卡日期，按降序排列
+    unique_dates = sorted(
+        list({
+            r[0].date() if isinstance(r[0], datetime) else r[0]
+            for r in records if r[0]
+        }),
+        reverse=True
+    )
+
+    if unique_dates:
+        # 如果今天还没打卡，但是昨天打卡了，允许从昨天算起连续打卡天数
+        if unique_dates[0] == today_utc - timedelta(days=1):
+            expected = today_utc - timedelta(days=1)
+
     streak = 0
-    expected = date.today()
-    for (d,) in records:
+    for d in unique_dates:
         if d == expected:
             streak += 1
             expected -= timedelta(days=1)

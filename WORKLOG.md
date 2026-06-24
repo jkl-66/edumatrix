@@ -704,6 +704,73 @@
 * 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **32/32 tests passed (100% OK)**。
 * 版本推送：已将所有修复推送至 GitHub `main` 分支。
 
+---
+
+### 2026-06-24 (下午追加)
+> **今日概述**：全面优化并打通了**学习笔记双栏工作站的 AI 润色防截断保护与 PrismJS 语法高亮系统**。解决了原始长代码在 AI 润色过程中耗尽 Token 空间导致内容截断、代码块与脑图标签缺失受损的痼疾，提升了数学推导公式和编程代码的排版美观度。
+
+#### 1. 计划/完成工作
+[x] **代码占位符保护机制（Code Block Placeholder Protection）**：
+  - **前置提取**：在后端 `/api/notes/ai-polish` 端点中，调用大模型前自动正则提取所有非 Mermaid 代码块，替换为轻量化的 `[CODE_BLOCK_PLACEHOLDER_N]`。
+  - **精准还原**：大模型仅需扩写数学推导、实体标签和脑图框架，输出结束后在后端高保真还原原始代码。
+  - **安全备份垫**：若大模型在生成时漏掉了占位符，后端在将解析出的 Tags/Concepts 保存前，会自动将该原始代码块追加到正文末尾作为备份，实现代码 100% 不丢失。
+[x] **PrismJS 语法高亮系统并网（Syntax Highlighting）**：
+  - **CDN 加载**：在 `index.html` 引入了 PrismJS Tomorrow Night 深色主题 CSS 与 Autoloader 脚本 CDN，支持多种编程语言的高亮支持。
+  - **元素适配**：更新 `Notes.vue` 与 `Chat.vue` 的 `renderMarkdown` 语法解析，将提取的代码块以 `<pre class="language-...">` 和 `<code class="language-...">` 进行包裹输出。
+  - **主动触发渲染**：在两个页面视图组件渲染周期中的 `renderAllDiagrams` 方法中，注入 `Prism.highlightAll()` 由 Vue 的 `nextTick` 自动扫描渲染，彻底告别单色代码。
+[x] **一键 AI 润色双轨确认交互流（UX Optimization）**：
+  - **双轨保存**：在 `Notes.vue` 润色完成后，设计并提供了确认框：“确定”将直接异步持久化至 SQLite 数据库并切换回预览态，立即可见渲染排版完美的公式、脑图与代码高亮；“取消”则将文本载入编辑器中保持编辑态，允许学生手动进行细粒度微调。
+
+#### 2. 测试与编译校验
+* 前端打包编译：`npm run build` ➡️ **Built successfully in 648ms (100% OK)**。
+* 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **33/33 tests passed (100% OK)**（包含 `test_note_matrix_closed_loop` 并网集成测试）。
+
+---
+
+### 2026-06-24 (傍晚追加)
+> **今日概述**：全面优化并打通了**学习笔记与错题本闭环并网，实现错题本专属的独立错题集笔记隔离，并修复了间隔复习计划创建时由于脱水对象导致的 500 异常**。同时针对思维导图加载和刷新挂载自愈问题，加装了强制刷新按钮并解决了渲染周期的竞态条件 Bug。
+
+#### 1. 计划/完成工作
+[x] **错题集隔离与动态渲染优化**：
+  - **物理隔离**：在 `append_wrong_question_reflection` 中使用 `source="错题本反思"` 专门创建和匹配独立的 `{concept} 错题集` 笔记，防止错题内容污染学生手动记录的常规笔记。
+  - **视觉渲染**：在前端 `Notes.vue` 侧边栏和工作区中，对 `source === '错题本反思'` 的笔记在展示标题时动态补充 `错题集` 后缀。这保持了 concepts 底层结构中真实的 `concept` 值，确保“一键测评”等基于概念的深度业务功能可以顺利运行。
+  - **错题反馈同步**：自动将记入笔记反思的 `诊断错因` 标签和内容升级为 `诊断反馈` 和真实的做题反馈记录 `feedback` 文本内容。
+[x] **脑图刷新与渲染周期竞态自愈**：
+  - **刷新按钮**：在 `Notes.vue` 工作区顶部标题右下侧加装 `RotateCw` 手动刷新按钮，随时可触发重绘和 KaTeX 还原。
+  - **渲染生命周期自愈**：将 `watch` 监听器中的渲染引擎启动包裹在 `nextTick()` 中，保证 Vue 彻底完成 Markdown 和占位符 DOM 渲染及补丁插入后，脑图挂载器才去扫描并生成 D3 与 Mermaid 导图，彻底消除切换/编辑保存时脑图时常显示不出的竞态条件 Bug。
+[x] **复习计划创建 500 错误自愈 (DetachedInstanceError)**：
+  - **数据强载入**：在 `app/crud.py` 的 `upsert_review_plan` 中完成数据库 `commit()` 之后，立即添加 `db.refresh(existing)`。这解决了由于 SQLAlchemy 会话提交并关闭后对象自动过期所引发的 `DetachedInstanceError` 500 服务器错误。
+
+#### 2. 测试与编译校验
+* 前端打包编译：`npm run build` ➡️ **Built successfully (100% OK)**。
+* 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **33/33 tests passed (100% OK)**。
+
+---
+
+### 2026-06-24 (晚上追加)
+> **今日概述**：全面修复并升级了**抗遗忘复习日历打卡功能、连续打卡天数（Streak）计算自愈逻辑、知识点复习历史可视化弹窗、自定义搜索打卡下拉限制以及紧急复习项判定逻辑**。打通了前端图表可视化与后端物理概念隔离打卡的全部流程。
+
+#### 1. 计划/完成工作
+[x] **打卡记录区间范围查询与概念物理隔离**：
+  - **区间范围校验**：重构 `checkin_review` 接口的今日签到查询，使用 UTC 今日零点至深夜的区间范围代替原等值匹配 `date.today()`，彻底解决了 SQLite DateTime 字段格式比较异常导致的签到记录获取为空 Bug。
+  - **概念打卡物理隔离**：在当天打卡日志检索中，基于 `concept` 进行精确的忽略大小写比对，如果打卡不同概念则在数据库中分别创建独立记录，防止打卡时长和复习概念混合在一起。
+[x] **连续打卡天数（Streak）计算跨类型自愈**：
+  - **类型转换修复**：将 `_calc_streak` 中数据库提取的 `datetime.datetime` 转换为 `datetime.date`，排除了 Python 中不同日期时间类型直接等值比较恒为假导致的天数归零 Bug。
+  - **天数天级别去重与跨日自愈**：引入天级别去重（`unique_dates`），排除单日多次签到的干扰；在今日未打卡但昨日已打卡时，允许从昨日向前累积天数，避免连续天数在当天未签到时瞬间变为零。
+[x] **知识点复习历史可视化图表弹窗与后端 API 支持**：
+  - **接口开发**：新增 `GET /api/v1/quiz/checkin/history/{student_id}` 接口，支持以可选 concept 模糊不区分大小写匹配筛选该学生历史打卡数据。
+  - **前端 ECharts Modal**：点击任一复习计划卡片时，弹出一个模糊毛玻璃背景的 Modal，利用 ECharts 绘制折线趋势图展示复习时长，并以滚动表格展示每次打卡的详细日志，配合 `chartInstance.dispose()` 进行生命周期解构防内存泄漏。
+[x] **复习日历今日打卡 Combobox 升级与搜索限制**：
+  - **合二为一的交互式下拉菜单**：移除了原本分列两侧的搜索输入框与原生 Select 框，重构为一体化自定义 Combobox 结构，支持 Click-outside 外部点击自动关闭及 ESC 键收起。
+  - **内嵌式实时搜索**：将搜索栏置于下拉面板顶部，并利用 `watch` 和 `nextTick` 在面板打开时自动获得焦点（Focus），支持实时对计划选项进行拼音和中文模糊过滤。选项中直观展示概念名称与当前的掌握度百分比，点击即可选中并折叠。
+[x] **紧急复习项判定逻辑纠正**：
+  - **仅基于掌握度判定**：修改 `RevisionCalendar.vue` 中的 `urgentReviews` 计算属性，去除了错误的优先级判断 `|| (p.priority || 1.0) < 1.5`，仅根据 `(p.mastery ?? 0) < 0.5` 进行过滤。这消除了默认优先级为 `1.0` 的高掌握度复习计划被错误归入紧急复习的 Bug，使列表数据同“掌握度低于 50%”的标题和红颜色标识完全一致。
+
+#### 2. 测试与编译校验
+* 前端打包编译：`npm run build` ➡️ **Built successfully (100% OK)**。
+* 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **35/35 tests passed (100% OK)** (包含了新增的 `test_checkin_flow_and_streak` 和 `test_checkin_history_filtering` 单元测试)。
+
+
 
 
 

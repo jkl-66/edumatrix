@@ -54,10 +54,8 @@ function masteryColor(m) {
 }
 
 function nextReviewDate(plan) {
-  if (!plan.created_at) return '待安排'
-  const d = new Date(plan.created_at)
-  d.setDate(d.getDate() + (plan.interval_days || 1))
-  return d.toLocaleDateString('zh-CN')
+  if (!plan.next_review_at) return '待安排'
+  return new Date(plan.next_review_at).toLocaleDateString('zh-CN')
 }
 
 onMounted(load)
@@ -95,16 +93,17 @@ onMounted(load)
               <button
                 v-for="d in intervals"
                 :key="d"
-                class="btn btn-outline text-xs py-1"
-                :class="{ 'bg-blue-50 border-blue-300': form.interval_days === d }"
-                @click="form.interval_days = d"
+                type="button"
+                class="btn text-xs py-1"
+                :class="form.interval_days === d ? 'btn-primary' : 'btn-outline'"
+                @click.prevent="form.interval_days = d"
               >{{ d }}天</button>
             </div>
           </div>
         </div>
         <div class="flex gap-2 justify-end">
-          <button class="btn btn-outline text-xs" @click="showForm = false">取消</button>
-          <button class="btn btn-primary text-xs" @click="addPlan">创建</button>
+          <button type="button" class="btn btn-outline text-xs" @click.prevent="showForm = false">取消</button>
+          <button type="button" class="btn btn-primary text-xs" @click.prevent="addPlan">创建</button>
         </div>
       </div>
     </div>

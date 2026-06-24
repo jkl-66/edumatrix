@@ -755,6 +755,252 @@ print("Val:", s.val)
         finally:
             session.close()
 
+    def test_note_matrix_closed_loop(self):
+        """验证矩阵闭环学习流：笔记更新、AI 润色解析以及错题反思追加这套完整链路的正确性"""
+        from app.database import SessionLocal, DBNote, DBQuizRecord, DBStudentProfile
+        from app.crud import update_note, append_wrong_question_reflection, save_student_profile
+        from models import StudentProfile
+        import uuid
+        
+        student_id = f"test-matrix-loop-{uuid.uuid4().hex[:8]}"
+        concept = "K均值聚类"
+        
+        session = SessionLocal()
+        try:
+            # 1. 模拟初始化学生画像
+            profile = StudentProfile(student_id=student_id)
+            save_student_profile(session, profile)
+            
+            # 2. 模拟创建一个答题记录（做错）
+            quiz = DBQuizRecord(
+                id=f"q-rec-{student_id}",
+                student_id=student_id,
+                question="什么是K均值聚类的聚类中心？",
+                correct_answer="每个簇内所有样本的均值",
+                student_answer="随机选择的一个点",
+                feedback="K-Means应该重新计算均值作为中心",
+                accuracy_score=0.0
+            )
+            session.add(quiz)
+            session.commit()
+            
+            # 3. 验证错题记入笔记反思（第一次：此时没有笔记，应该自动新建）
+            note1 = append_wrong_question_reflection(
+                session, 
+                student_id=student_id, 
+                concept=concept, 
+                quiz_record_id=quiz.id, 
+                wrong_reason="misconception"
+            )
+            self.assertIsNotNone(note1)
+            self.assertEqual(note1.student_id, student_id)
+            self.assertIn("错题反思小记", note1.content)
+            self.assertIn("随机选择的一个点", note1.content)
+            self.assertIn("K均值聚类 错题集", note1.content)
+            
+            # 4. 验证更新笔记内容
+            updated_content = note1.content + "\n\n额外补充：K-Means++ 能够优化初始质心的选择。"
+            note2 = update_note(
+                session, 
+                note_id=note1.id, 
+                content=updated_content, 
+                tags=["聚类", "无监督学习"], 
+                concepts=[concept]
+            )
+            self.assertEqual(note2.id, note1.id)
+            self.assertIn("额外补充：K-Means++", note2.content)
+            self.assertEqual(note2.tags, ["聚类", "无监督学习"])
+            self.assertEqual(note2.concepts, [concept])
+            
+            # 5. 再次对同一个概念追加另一个错题反思（此时已存在该概念的笔记，应该追加）
+            quiz2 = DBQuizRecord(
+                id=f"q-rec2-{student_id}",
+                student_id=student_id,
+                question="K均值对什么非常敏感？",
+                correct_answer="异常值和初始值",
+                student_answer="特征数",
+                feedback="异常值会极大地拉偏均值质心",
+                accuracy_score=0.0
+            )
+            session.add(quiz2)
+            session.commit()
+            
+            note3 = append_wrong_question_reflection(
+                session, 
+                student_id=student_id, 
+                concept=concept, 
+                quiz_record_id=quiz2.id, 
+                wrong_reason="outlier_sensitivity"
+            )
+            self.assertEqual(note3.id, note1.id)
+            self.assertIn("异常值和初始值", note3.content)
+            self.assertIn("outlier_sensitivity", note3.content)
+            
+            # 清理
+            session.delete(note3)
+            session.delete(quiz)
+            session.delete(quiz2)
+            prof_now = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if prof_now:
+                session.delete(prof_now)
+            session.commit()
+        finally:
+            session.close()
+
+    def test_checkin_flow_and_streak(self):
+        """验证复习打卡签到和连续天数（Streak）计算的完整流程"""
+        from app.database import SessionLocal, DBCheckinLog, DBStudentProfile
+        from quiz_api import _calc_streak
+        from app.crud import save_student_profile
+        from models import StudentProfile
+        from datetime import datetime, timezone, timedelta
+        import uuid
+
+        student_id = f"test-checkin-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            # 1. 初始化学生画像以满足外键约束
+            profile = StudentProfile(student_id=student_id)
+            save_student_profile(session, profile)
+
+            # 2. 验证初始打卡连续天数为 0
+            self.assertEqual(_calc_streak(session, student_id), 0)
+
+            # 3. 模拟今天打卡（第一次，应当创建记录）
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            log_today = DBCheckinLog(
+                student_id=student_id,
+                checkin_date=now_utc,
+                duration_minutes=15,
+                concepts_reviewed=["支持向量机"]
+            )
+            session.add(log_today)
+            session.commit()
+
+            # 验证今天打卡后，streak 为 1
+            self.assertEqual(_calc_streak(session, student_id), 1)
+
+            # 4. 模拟同一天再次打卡（累加时长，累加概念）
+            log_today.duration_minutes += 20
+            log_today.concepts_reviewed = ["支持向量机", "核函数"]
+            session.commit()
+
+            # 验证同一个 UTC 天多次打卡不影响 streak 计算
+            self.assertEqual(_calc_streak(session, student_id), 1)
+
+            # 5. 模拟昨天打卡
+            yesterday_utc = now_utc - timedelta(days=1)
+            log_yesterday = DBCheckinLog(
+                student_id=student_id,
+                checkin_date=yesterday_utc,
+                duration_minutes=10,
+                concepts_reviewed=["机器学习基础"]
+            )
+            session.add(log_yesterday)
+            session.commit()
+
+            # 验证连续打卡昨天 + 今天，streak 应该为 2
+            self.assertEqual(_calc_streak(session, student_id), 2)
+
+            # 6. 模拟前天打卡
+            two_days_ago_utc = now_utc - timedelta(days=2)
+            log_two_days_ago = DBCheckinLog(
+                student_id=student_id,
+                checkin_date=two_days_ago_utc,
+                duration_minutes=30,
+                concepts_reviewed=["监督学习"]
+            )
+            session.add(log_two_days_ago)
+            session.commit()
+
+            # 验证今天、昨天、前天连续打卡，streak 为 3
+            self.assertEqual(_calc_streak(session, student_id), 3)
+
+            # 7. 模拟中间断开一天打卡（比如 4 天前打卡）
+            four_days_ago_utc = now_utc - timedelta(days=4)
+            log_four_days_ago = DBCheckinLog(
+                student_id=student_id,
+                checkin_date=four_days_ago_utc,
+                duration_minutes=10,
+                concepts_reviewed=["数据预处理"]
+            )
+            session.add(log_four_days_ago)
+            session.commit()
+
+            # 验证中间有间隔天没有打卡，连续天数计算应当被截断为 3（前天、昨天、今天）
+            self.assertEqual(_calc_streak(session, student_id), 3)
+
+            # 8. 测试在今天还没打卡的情况下，如果昨天打卡了，streak 依旧为之前的连续数，而不是 0
+            session.delete(log_today)
+            session.commit()
+            # 此时只有昨天、前天、大前天（4天前）的记录，连续天数应该仍然是昨天+前天的 2 天
+            self.assertEqual(_calc_streak(session, student_id), 2)
+
+            # 9. 清理所有测试数据
+            session.delete(log_yesterday)
+            session.delete(log_two_days_ago)
+            session.delete(log_four_days_ago)
+            prof_now = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if prof_now:
+                session.delete(prof_now)
+            session.commit()
+        finally:
+            session.close()
+
+    def test_checkin_history_filtering(self):
+        """验证签到历史查询与过滤逻辑"""
+        from app.database import SessionLocal, DBCheckinLog, DBStudentProfile
+        from app.crud import save_student_profile
+        from models import StudentProfile
+        from datetime import datetime, timezone, timedelta
+        import uuid
+
+        student_id = f"test-history-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            profile = StudentProfile(student_id=student_id)
+            save_student_profile(session, profile)
+
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            log1 = DBCheckinLog(student_id=student_id, checkin_date=now - timedelta(days=2), duration_minutes=15, concepts_reviewed=["支持向量机", "机器学习"])
+            log2 = DBCheckinLog(student_id=student_id, checkin_date=now - timedelta(days=1), duration_minutes=25, concepts_reviewed=["K均值聚类", "无监督学习"])
+            session.add_all([log1, log2])
+            session.commit()
+
+            from quiz_api import get_checkin_history
+
+            # 1. 验证不传 concept，查询全部打卡历史
+            res_all = session.query(DBCheckinLog).filter(DBCheckinLog.student_id == student_id).order_by(DBCheckinLog.checkin_date.asc()).all()
+            self.assertEqual(len(res_all), 2)
+            
+            # 2. 验证过滤 "支持向量机"
+            results_svm = []
+            for r in res_all:
+                reviewed_list = [c.strip().lower() for c in (r.concepts_reviewed or [])]
+                if "支持向量机".strip().lower() in reviewed_list:
+                    results_svm.append(r)
+            self.assertEqual(len(results_svm), 1)
+            self.assertEqual(results_svm[0].duration_minutes, 15)
+
+            # 3. 验证过滤 "k均值聚类"
+            results_kmeans = []
+            for r in res_all:
+                reviewed_list = [c.strip().lower() for c in (r.concepts_reviewed or [])]
+                if "k均值聚类".strip().lower() in reviewed_list:
+                    results_kmeans.append(r)
+            self.assertEqual(len(results_kmeans), 1)
+            self.assertEqual(results_kmeans[0].duration_minutes, 25)
+
+            # 清理
+            session.delete(log1)
+            session.delete(log2)
+            prof_now = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if prof_now:
+                session.delete(prof_now)
+            session.commit()
+        finally:
+            session.close()
+
 
 if __name__ == "__main__":
     unittest.main()

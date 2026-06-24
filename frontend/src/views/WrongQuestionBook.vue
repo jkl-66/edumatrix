@@ -2,7 +2,8 @@
 import { ref, onMounted, computed } from 'vue'
 import { 
   getWrongQuestions, getWrongConcepts, 
-  generateFlashcard, generateSimilarQuiz, evaluateQuizAnswer 
+  generateFlashcard, generateSimilarQuiz, evaluateQuizAnswer,
+  appendWrongQuestionReflection
 } from '../api'
 import { 
   XCircle, AlertTriangle, Search, Filter, ChevronDown, ChevronUp, BookOpen,
@@ -150,6 +151,30 @@ function getCategoryColor(cat) {
   return colors[cat] || 'bg-gray-50 text-gray-600'
 }
 
+// 矩阵闭环学习流：记入笔记反思相关状态与方法
+const reflectionLoading = ref({})
+const reflectionAppended = ref({})
+
+async function appendReflectionToNote(q) {
+  const id = q.id
+  reflectionLoading.value[id] = true
+  try {
+    await appendWrongQuestionReflection({
+      student_id: props.studentId,
+      concept: q.concept_name,
+      quiz_record_id: q.quiz_record_id,
+      wrong_reason: q.wrong_reason_category || 'misconception'
+    })
+    reflectionAppended.value[id] = true
+    alert(`已成功将错题反思自动追加到 [${q.concept_name} 错题集] 笔记中！`)
+  } catch (e) {
+    console.error('记入笔记反思失败:', e)
+    alert('记入笔记反思失败: ' + (e.response?.data?.detail || e.message || e))
+  } finally {
+    reflectionLoading.value[id] = false
+  }
+}
+
 onMounted(loadData)
 </script>
 
@@ -275,6 +300,30 @@ onMounted(loadData)
                 {{ ((q.quiz_detail.accuracy_score || 0) * 100).toFixed(0) }}%
               </span>
             </div>
+          </div>
+
+          <!-- 矩阵闭环学习流：记入笔记反思 -->
+          <div class="flex justify-between items-center bg-slate-50 rounded-lg p-3 border border-slate-100 mt-2">
+            <div class="flex flex-col">
+              <span class="text-xs font-semibold text-slate-700 flex items-center gap-1">
+                <Sparkles :size="12" class="text-indigo-500" />
+                <span>矩阵闭环学习流：错题记入笔记反思</span>
+              </span>
+              <span class="text-[10px] text-slate-400 mt-0.5">将错题、解析及系统错因诊断一键沉淀为该概念的学习笔记</span>
+            </div>
+            <button
+              @click="appendReflectionToNote(q)"
+              :disabled="reflectionLoading[q.id] || reflectionAppended[q.id]"
+              class="py-1.5 px-4 text-xs font-semibold rounded-lg shadow-sm transition-all active:scale-95 flex items-center gap-1.5 shrink-0"
+              :class="reflectionAppended[q.id] 
+                ? 'bg-emerald-50 border border-emerald-200 text-emerald-600 cursor-not-allowed'
+                : 'bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50'"
+            >
+              <Loader2 v-if="reflectionLoading[q.id]" :size="12" class="animate-spin" />
+              <CheckCircle v-else-if="reflectionAppended[q.id]" :size="12" />
+              <BookOpen v-else :size="12" />
+              <span>{{ reflectionAppended[q.id] ? '已记入笔记反思' : '一键记入笔记反思' }}</span>
+            </button>
           </div>
 
           <!-- 自适应 3D Anki 闪卡与相似题挑战区域 -->

@@ -696,6 +696,45 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 1,200 Input / 150 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-24] - 学习笔记与错题本闭环并网优化及复习计划异常自愈
+- **任务编号**：`TASK_NOTE_CLOSED_LOOP`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-frontend`, `oma-backend`, `oma-qa`, `oma-debug`
+- **开发场景**：
+  - `app/crud.py`: `append_wrong_question_reflection` (隔离错题本反思笔记，使其仅追加至带有 `source="错题本反思"` 且标题为 `{concept} 错题集` 的专属笔记中；修改错因呈现为个性化的 `诊断反馈` 并拉取 `feedback` 真实内容)；`upsert_review_plan` (在提交后执行 `db.refresh(existing)` 避免 `DetachedInstanceError` 500 服务器错误)
+  - `test_edumatrix.py`: 更新 `test_note_matrix_closed_loop` 单元测试，将 "学习笔记" 断言变更为 "错题集" 断言以支持隔离笔记功能。
+  - `frontend/src/views/Notes.vue`: 在左侧笔记列表和右侧工作区标题上，针对 `source === '错题本反思'` 的笔记动态追加 `错题集` 后缀以做视觉隔离；添加 `RotateCw` 刷新脑图按钮，并将渲染周期移入 `nextTick()` 彻底解决切换笔记时脑图偶尔未按期显示的竞态条件 Bug。
+  - `frontend/src/views/WrongQuestionBook.vue`: 优化错题一键反思入记成功弹窗文本。
+- **自愈重试记录**：
+  1. *第一次报错*：测试中提示 `AssertionError: 'K均值聚类 学习笔记' not found in ...`。
+     - *自愈与修复*：定位为测试用例仍断言旧有笔记标题名，由于隔离机制已正确建立独立的 `K均值聚类 错题集`，将测试的字符串断言做对称式升级为 `K均值聚类 错题集`，再次跑测瞬间成功。
+  2. *第二次报错*：前端点击“创建复习计划”时弹出 `Request failed with status code 500`。排查后台日志发现是由于 Session 关闭后，对象过期触发 SQLAlchemy 延迟加载导致的 `DetachedInstanceError`。
+     - *自愈与修复*：在 `upsert_review_plan` 中的 `db.commit()` 下方添加 `db.refresh(existing)`，将持久化完毕的数据强行加载进内存，完美解决 500 脱水对象报错。
+- **测试验证结果**：
+  - **后端集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **33/33 tests passed (100% OK)**。
+  - **前端编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully (100% OK)**，无任何警告与语法阻碍。
+- **Token 消耗估计**：约 22,000 Input / 1,800 Output
+- **架构师（用户）终审反馈**：Approved
+
+### [2026-06-24] - 复习日历打卡功能优化、可视化图表及搜索下拉限制与紧急复习项逻辑修复
+- **任务编号**：`TASK_CHECKIN_STREAK_VISUAL_AND_COMBOBOX`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-frontend`, `oma-backend`, `oma-qa`, `oma-debug`
+- **开发场景**：
+  - `quiz_api.py`: `checkin_review` (重构签到查询，使用 UTC 今日零点至深夜的区间范围查询以解决 DateTime 等值匹配不成功的 SQLite Bug，并根据 concept 进行日级别物理隔离，实现不同概念独立打卡)；`_calc_streak` (将打卡日期统一转为 `datetime.date` 消除 Python 跨类型比较 Bug，天级别去重以避免一天多次打卡干扰，且在今日未签到时自动从昨天向前累计天数，实现 Streak 连续天数计算自愈)；新增 `GET /checkin/history/{student_id}` 接口支持按 concept 模糊查询打卡历史。
+  - `frontend/src/api/index.js`: 封装并导出 `getCheckinHistory` 接口。
+  - `frontend/src/views/RevisionCalendar.vue`:
+    - 修改 `urgentReviews` 计算属性，仅基于 `(p.mastery ?? 0) < 0.5` 进行过滤判断，移除了不正确的优先级条件，使紧急复习项与 50% 掌握度标题完全对齐。
+    - 点击复习计划卡片时，弹出一个模糊毛玻璃背景的弹窗，利用 ECharts 折线图绘制打卡时长趋势图，并提供详细打卡日志表格。
+    - 重构今日打卡表单，将原分列两侧的搜索输入框与原生 Select 框合二为一，替换为精致的自定义搜索下拉框（Custom Searchable Combobox）。支持 Click-outside 点击外部关闭、ESC 键关闭，且面板展开时搜索框自动 focus，并以高亮显示选中概念及掌握度百分比。
+  - `test_edumatrix.py`: 新增 `test_checkin_flow_and_streak` 单元测试（校验单次打卡、今日内多次打卡去重/累加、昨日连续打卡对当前 Streak 累积、今日未签到时的天数保留）以及 `test_checkin_history_filtering` 单元测试（校验全量打卡日志拉取、特定知识点模糊过滤、首尾空白与大小写容错）。
+- **测试验证结果**：
+  - **后端集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **35/35 tests passed (100% OK)**。
+  - **前端编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully (100% OK)**，无编译与打包错误。
+- **架构师（用户）终审反馈**：Approved
+
 
 
 

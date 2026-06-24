@@ -694,14 +694,15 @@
 [x] **动态锁定 `<main>` 滚动与高度继承自适应自愈**：
   - **滚动环境切换**：恢复 `App.vue` 中的全局 `<main>` 容器为默认的 `overflow-y-auto`，仅在 `Chat.vue` 的 `onMounted` 时动态通过 `classList` 去除 `overflow-y-auto` 和 `p-6`，添加 `overflow-hidden flex flex-col h-full` 强约束，在 `onUnmounted` 时恢复，确保其他 11 个模块能够像平常一样全页滚动。
   - **高度继承修复**：给 `App.vue` 中路由异常拦截包裹 `div` 添加 `class="h-full flex flex-col min-h-0"`。这一改动让 `Chat.vue` 的 `h-full` 在 main `overflow-hidden` 状态下能向上继承精确的高度空间，彻底解决了由于高度未限制导致子视图无限膨胀、页面无法滚动的冻结问题。
-[x] **新消息流式自适应滚动落底**：
-  - **双向监听与定时器滚动**：新增对 `sending` 状态的监听。在生成中时开启 250ms 定时器轮询调用 `scrollToBottom()`，使并行生成进展墙始终可见。
-  - **异步组件渲染落底自愈**：当生成结束时，清除定时器，并以多段延迟（10ms、100ms、300ms、600ms、1000ms）轮询触发 `scrollToBottom()`。这一策略完美抵消了 Mermaid 脑图、KaTeX 公式和图表在流式结束后因异步计算、加载导致的高度的二次延迟膨胀，实现完全一致的视口贴合。
+[x] **新消息流式自适应滚动落底优化（移除轮询，仅在开始和结束时单次触发）**：
+  - **移除轮询定时器**：移除了中间生成过程的 periodic 250ms 定时器强制滚底逻辑，彻底释放生成过程中的视口滚动控制权。
+  - **精准单次触发**：重构为仅在对话刚开始 (`sending` 变为 true 瞬间) 以及生成完全完毕 (`sending` 变为 false 瞬间) 触发单次和多段延迟（10ms、100ms、300ms、600ms、1000ms）落底，从而能顺利抵消 Mermaid/KaTeX 异步渲染对高度的二次膨胀。
+  - **生成期间自由滑动**：在 `watch(messages)` 对话监听器中加装 `if (!sending.value)` 安全拦截，确保在资源生成长文或跑进度条期间，用户自由向上翻阅历史消息或调试代码沙箱时，视口绝不会被再次粗暴拉回底部，全面提升多轮对话与自主实操体验。
 
 #### 2. 测试与编译校验
 * 前端打包编译：`npm run build` ➡️ **Built successfully (100% OK)**。
 * 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **32/32 tests passed (100% OK)**。
-* 版本推送：已将所有修复推送至 GitHub `main` 分支 (Commit: `1b68020`)。
+* 版本推送：已将所有修复推送至 GitHub `main` 分支。
 
 
 

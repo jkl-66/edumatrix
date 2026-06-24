@@ -195,19 +195,21 @@ const radarConcepts = computed(() => {
 })
 
 watch(sending, async (newVal, oldVal) => {
-  if (oldVal === true && newVal === false) {
+  if (newVal && !oldVal) {
+    // 开始对话时（sending 从 false 变为 true）立即跳到底端一次
+    scrollToBottom()
+  } else if (!newVal && oldVal) {
+    // 生成完毕时（sending 从 true 变为 false）
     try {
       const profile = await getStudentProfile(props.studentId)
       latestProfile.value = profile
     } catch (e) {
       console.error('更新最新学生画像失败:', e)
     }
-    // Auto scroll to bottom after rendering completes
-    nextTick(() => {
-      setTimeout(() => {
-        scrollToBottom()
-      }, 300)
-    })
+    // 用多段延迟平滑落底，处理 Mermaid/KaTeX/图片异步排版扩展的高度
+    for (const delay of [10, 100, 300, 600, 1000]) {
+      setTimeout(scrollToBottom, delay)
+    }
   }
 })
 
@@ -256,24 +258,14 @@ watch(messages, (newMsgs, oldMsgs) => {
       
       avatarRef.value.speak(cleanText)
     }
-    // Auto scroll to bottom when new message arrives
-    nextTick(() => {
-      scrollToBottom()
-    })
-  }
-}, { deep: true })
-
-watch(sending, (val) => {
-  if (val) {
-    // 开始对话时跳到底端一次
-    scrollToBottom()
-  } else {
-    // 生成完毕时跳到底端（用延迟步长处理脑图/公式/卡片异步展开）
-    for (const delay of [10, 100, 300, 600, 1000]) {
-      setTimeout(scrollToBottom, delay)
+    // 仅在非资源生成期间，新消息到达才自动滚动落底
+    if (!sending.value) {
+      nextTick(() => {
+        scrollToBottom()
+      })
     }
   }
-})
+}, { deep: true })
 
 const input = ref('')
 const showResources = ref(new Set())

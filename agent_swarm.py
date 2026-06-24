@@ -603,12 +603,27 @@ class EffectEvaluatorAgent:
     def __init__(self, llm: AsyncLLMBackend | None = None):
         self._llm = llm
 
+    async def evaluate_async(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        if self._llm is not None and hasattr(self._llm, 'generate'):
+            try:
+                return await self._async_llm_evaluate(profile, resources)
+            except Exception:
+                pass
+        return self._fallback_evaluate(profile, resources)
+
     def evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
         if self._llm is not None and hasattr(self._llm, 'generate'):
             try:
                 import asyncio
-                result = asyncio.run(self._async_llm_evaluate(profile, resources))
-                return result
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                
+                if loop and loop.is_running():
+                    return self._fallback_evaluate(profile, resources)
+                else:
+                    return asyncio.run(self.evaluate_async(profile, resources))
             except Exception:
                 pass
         return self._fallback_evaluate(profile, resources)
@@ -1062,7 +1077,7 @@ class EduMatrixSwarm:
                     conflicts=[],
                     advice="低置信度自动拦截",
                 )
-                learning_signal = self.evaluator.evaluate(profile, resources)
+                learning_signal = await self.evaluator.evaluate_async(profile, resources)
                 TELEMETRY.record_metric("learning.estimated_accuracy", learning_signal.accuracy, target=retrieval.target)
                 if learning_signal.needs_replan:
                     profile.cognitive_load = min(1.0, profile.cognitive_load + 0.08)
@@ -1182,7 +1197,7 @@ class EduMatrixSwarm:
                 resources = tuple(new_resources)
 
             assert alignment_report is not None
-            learning_signal = self.evaluator.evaluate(profile, resources)
+            learning_signal = await self.evaluator.evaluate_async(profile, resources)
             TELEMETRY.record_metric("learning.estimated_accuracy", learning_signal.accuracy, target=retrieval.target)
             if learning_signal.needs_replan:
                 profile.cognitive_load = min(1.0, profile.cognitive_load + 0.08)

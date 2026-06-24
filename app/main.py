@@ -393,13 +393,25 @@ async def socratic_explain_direct(request: Request) -> dict[str, Any]:
     context_before = str(payload.get("context_before", ""))
     context_after = str(payload.get("context_after", ""))
     student_id = str(payload.get("student_id", "default"))
-    if not target_text:
+    follow_up = str(payload.get("follow_up", "")).strip()  # 多轮追问
+    history = payload.get("history", "")  # 之前的对话
+    if not target_text and not follow_up:
         raise HTTPException(status_code=400, detail="target_text 不能为空")
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
     is_formula = any(c in target_text for c in ['\\', '∂', '∫', '∑', 'π', 'θ', 'lim', 'frac', 'partial'])
     is_code = 'def ' in target_text or 'import ' in target_text or 'class ' in target_text or '=' in target_text
-    if is_formula:
+
+    if follow_up and history:
+        # 多轮追问模式
+        system = ("你是一位温和的苏格拉底导师。你正在与学生进行一段持续的苏格拉底式对话。\n"
+                  "根据之前的对话历史和用户最新的追问，继续深入引导，不要重复已经讲过的内容。\n"
+                  "规则：\n1) 先肯定学生的问题\n"
+                  "2) 针对追问的核心深入讲解\n"
+                  "3) 最后再抛出一个新的引导性问题\n"
+                  "4) 使用中文回复，保持简洁友善")
+        user = f"【原始内容】{target_text}\n【历史对话】{history}\n【学生追问】{follow_up}"
+    elif is_formula:
         system = ("你是一位温和的苏格拉底导师。用户点击了一个数学公式，"
                   "请用启发式分步推导解释这个公式。\n\n"
                   "规则：\n1) 先问学生这个公式中每个符号表示什么\n"

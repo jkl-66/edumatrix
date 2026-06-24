@@ -728,11 +728,15 @@ async def get_history(student_id: str):
         "history": [
             {
                 "id": c.id,
-                "query": c.query[:500],
+                "query": c.query,
+                "message": c.query,  # For compatibility with frontend h.message
+                "response_summary": c.response_summary,
+                "response": c.response_summary,  # For compatibility with frontend h.response
                 "target": c.target,
+                "resources": c.resources_count,  # For compatibility with frontend h.resources
                 "resources_count": c.resources_count,
                 "alignment_passed": c.alignment_passed,
-                "created_at": c.created_at.isoformat(),
+                "created_at": c.created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
             for c in conversations
         ],

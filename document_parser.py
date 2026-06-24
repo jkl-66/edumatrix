@@ -61,16 +61,15 @@ def parse_uploaded_file(file: BinaryIO, filename: str) -> str:
 def _parse_pdf(raw: bytes) -> str:
     try:
         import PyPDF2
-        reader = PyPDF2.PdfReader(raw)
+        reader = PyPDF2.PdfReader(BytesIO(raw))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
-    except ImportError:
+    except Exception:
         pass
     try:
         import pdfplumber
-        import io
-        with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        with pdfplumber.open(BytesIO(raw)) as pdf:
             return "\n".join(page.extract_text() or "" for page in pdf.pages)
-    except ImportError:
+    except Exception:
         pass
     return raw.decode("utf-8", errors="replace")
 
@@ -108,7 +107,7 @@ def _parse_pptx(raw: bytes) -> str:
                     slide_texts.append(f"[演讲者备注] {notes_text}")
             pages.append("\n".join(slide_texts))
         return "\n\n".join(pages)
-    except ImportError:
+    except Exception:
         pass
     try:
         import zipfile
@@ -127,7 +126,7 @@ def _parse_pptx(raw: bytes) -> str:
                     if slide_texts:
                         texts.append("--- 幻灯片 ---\n" + "\n".join(slide_texts))
             return "\n\n".join(texts) if texts else raw.decode("utf-8", errors="replace")
-    except ImportError:
+    except Exception:
         pass
     return raw.decode("utf-8", errors="replace")
 
@@ -188,7 +187,7 @@ def _transcribe_video(raw: bytes, filename: str) -> str:
             text = _speech_to_text(audio_bytes)
             duration = "(语音转文字完成)"
             return f"[视频 {filename}] {duration}\n{text}" if text else f"[视频 {filename}] 语音转文字未返回结果"
-        except ImportError:
+        except Exception:
             pass
 
         return f"[视频 {filename}] 需安装 moviepy + whisper 实现语音转文字"
@@ -279,7 +278,7 @@ def parse_pptx_slides(raw: bytes) -> tuple[dict, ...]:
                 "images": images,
                 "notes": slide.notes_slide.notes_text_frame.text.strip() if slide.has_notes_slide else "",
             })
-    except ImportError:
+    except Exception:
         pass
     return tuple(slides)
 

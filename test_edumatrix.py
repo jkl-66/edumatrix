@@ -1001,6 +1001,157 @@ print("Val:", s.val)
         finally:
             session.close()
 
+    def test_conversation_history_endpoint(self):
+        """验证对话历史接口的数据返回和属性映射"""
+        from app.database import SessionLocal, DBConversationHistory, DBStudentProfile
+        from app.crud import save_student_profile, record_conversation
+        from models import StudentProfile
+        from fastapi.testclient import TestClient
+        from app.main import app
+        import uuid
+
+        student_id = f"test-chat-history-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            profile = StudentProfile(student_id=student_id)
+            save_student_profile(session, profile)
+
+            # 写入对话记录
+            record = record_conversation(
+                session, student_id,
+                query="如何理解卷积神经网络的池化层？",
+                response_summary="CoordinatorAgent:text; DiagnosticianAgent:profile",
+                target="池化层",
+                resources_count=2,
+                alignment_passed=True
+            )
+
+            client = TestClient(app)
+            response = client.get(f"/api/history/{student_id}")
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["student_id"], student_id)
+            self.assertTrue(len(data["history"]) >= 1)
+
+            # 验证返回项包含了 query, message, response_summary, response, resources 和 resources_count
+            history_item = next(h for h in data["history"] if h["id"] == record.id)
+            self.assertEqual(history_item["query"], "如何理解卷积神经网络的池化层？")
+            self.assertEqual(history_item["message"], "如何理解卷积神经网络的池化层？")
+            self.assertEqual(history_item["response_summary"], "CoordinatorAgent:text; DiagnosticianAgent:profile")
+            self.assertEqual(history_item["response"], "CoordinatorAgent:text; DiagnosticianAgent:profile")
+            self.assertEqual(history_item["target"], "池化层")
+            self.assertEqual(history_item["resources"], 2)
+            self.assertEqual(history_item["resources_count"], 2)
+            self.assertEqual(history_item["alignment_passed"], True)
+
+            # 清理
+            session.delete(record)
+            prof_now = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if prof_now:
+                session.delete(prof_now)
+            session.commit()
+        finally:
+            session.close()
+
+    def test_stream_chat_records_conversation_in_history(self):
+        """验证流式对话接口 (/api/stream/chat) 会正确将对话写入数据库中"""
+        from app.database import SessionLocal, DBConversationHistory, DBStudentProfile
+        from app.crud import save_student_profile
+        from models import StudentProfile
+        from fastapi.testclient import TestClient
+        from app.main import app
+        import uuid
+
+        student_id = f"test-stream-history-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            profile = StudentProfile(student_id=student_id)
+            save_student_profile(session, profile)
+
+            client = TestClient(app)
+            # 发起流式对话请求，模拟正常聊天
+            # 由于使用的是 Mock LLM，该请求会完成生成 5 个资源并自动调用 record_conversation
+            response = client.post(
+                "/api/stream/chat",
+                json={"message": "请解释最大池化层", "student_id": student_id}
+            )
+            self.assertEqual(response.status_code, 200)
+
+            # 从数据库读取该学生的对话记录
+            records = session.query(DBConversationHistory).filter_by(student_id=student_id).all()
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].query, "请解释最大池化层")
+            self.assertEqual(records[0].target, "池化层")
+            self.assertEqual(records[0].resources_count, 5)
+
+            # 清理
+            session.delete(records[0])
+            prof_now = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if prof_now:
+                session.delete(prof_now)
+            session.commit()
+        finally:
+            session.close()
+
+    def test_pdf_upload_and_parsing(self):
+        """验证 PDF 上传和解析不会因 BytesIO/seek 属性缺失而导致 500 崩溃"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal, DBKnowledgeDocument, DBStudentProfile
+        from app.crud import save_student_profile
+        from models import StudentProfile
+        import uuid
+
+        student_id = f"test-pdf-upload-{uuid.uuid4().hex[:8]}"
+        client = TestClient(app)
+        
+        session = SessionLocal()
+        try:
+            profile = StudentProfile(student_id=student_id)
+            save_student_profile(session, profile)
+        finally:
+            session.close()
+        
+        # 模拟 PDF 文件的二进制数据
+        pdf_content = b"%PDF-1.4\n%...\n%%EOF\nThis is a mock PDF for testing convolutional neural networks."
+        file_payload = {"file": ("test_cnn_layer.pdf", pdf_content, "application/pdf")}
+        
+        response = client.post(
+            f"/api/knowledge/upload?student_id={student_id}",
+            files=file_payload
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["file_type"], "pdf")
+        self.assertTrue(data["chunk_count"] >= 0)
+        
+        # 清理数据库和物理文件
+        session = SessionLocal()
+        try:
+            doc = session.query(DBKnowledgeDocument).filter_by(id=data["id"]).first()
+            if doc:
+                session.delete(doc)
+            prof_now = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if prof_now:
+                session.delete(prof_now)
+            session.commit()
+        finally:
+            session.close()
+
+        # 清除物理上传的文件和目录
+        file_path = os.path.join("data", "uploads", student_id, f"{data['id']}.pdf")
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+        dir_path = os.path.join("data", "uploads", student_id)
+        if os.path.exists(dir_path):
+            try:
+                os.rmdir(dir_path)
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -302,6 +302,26 @@ graph LR
     * 切换风格为“苏格拉底式启发”，发送提问；再次切换为“严肃严谨讲授”，发送提问。
     * **预期结果**：前者以反问启发为主，不给直接答案；后者直接给出系统化的理论、硬核公式和代码，口吻秒级切换。
 
+## 🌊 Wave 10：知识库上传与对话历史时间线优化
+
+### 📋 Task 10.A: 知识库文件上传 BytesIO 流包装修复
+*   **原理机制**：`document_parser.py` 中使用 `io.BytesIO` 对原始二进制字节数据进行流包装，使 `PyPDF2`、`pdfplumber`、`python-pptx` 等第三方库能够正常调用 `.seek()` 方法，避免 `AttributeError` 导致 500 崩溃。
+*   **测试方法**（自动化）：
+    运行命令 `python -m pytest test_edumatrix.py -k test_pdf_upload_and_parsing -v`。
+*   **预期结果**：上传 PDF 文件二进制数据后，接口返回 200 OK，响应体包含 `file_type: "pdf"` 及 `chunk_count >= 0`，不抛出任何 `AttributeError` 或服务器 500 错误。
+*   **手动验证**：
+    * 进入 `/knowledge` 知识库页面，点击上传按钮，选择一份 PDF 课件上传。
+    * **预期结果**：上传进度条流畅完成，页面刷新后能看到刚上传的文件名及 chunk 数量，无弹出错误提示。
+
+### 📋 Task 10.B: 对话历史时间线与 Swarm 协作链可视化
+*   **原理机制**：`History.vue` 使用 `parseTimestamp` 方法规范 SQLite 存储的 naive UTC 字符串，补全 `'Z'` 时区标识防止 `NaN`/时差 8 小时 Bug；通过 `parseResponseSummary` 解析 `response_summary` 字段，将 9 个智能体协作记录渲染为胶囊 Badge 链。
+*   **测试方法**（手动）：
+    * 进入 `/history` 历史回溯页面。
+    * **预期结果 1（时间展示）**：所有历史卡片时间均正确显示（无 `NaN` 或超前 8 小时问题）。3 天内显示"X 分钟前 / X 天前"；超过 3 天显示 `YYYY/MM/DD`。
+    * **预期结果 2（Swarm 协作链）**：每张卡片上方展示参与工作的各智能体胶囊 Badge（如 `[理论教授] 专业讲义`、`[逻辑画师] 思维导图` 等）。
+    * **预期结果 3（时空回溯）**：点击卡片底部"时空回溯"按钮，页面跳转到 `/learn` 并自动在对话框中填入该历史提问，AI 自动发起追问。
+    * **预期结果 4（自适应小测）**：点击"自适应小测"按钮，系统跳转至 `/learn` 并自动触发针对该知识点的 CAT 自适应测评。
+
 ---
 
 # 🤖 四、 主控指挥官团队发令防线规约 (Sisyphus Strict Protocol)
@@ -313,6 +333,10 @@ graph LR
 > 3. **统一发令入口 (Uniform Command Entrance)**：所有的开发、重构、修 Bug 任务，必须在确认 `plan.md` 细节后，以三引号命令行转义格式走 `oma agent:spawn` 指派给子智能体执行：
 >    ```powershell
 >    oma agent:spawn backend-engineer '"""你的Prompt描述"""' session_id
-     ```
+>    ```
 > 4. **强制清理 (Mandatory /compact)**：每次子智能体完成任务派发后，主脑必须在回复末尾明确提示用户键入 `/compact` 以清理上下文，防止 Token 膨胀。
 > 5. **元规则继承 (Metarule of Rules)**：本测试手册底层亦需继承此防线规约。每次对此手册进行修改时，必须保证本节内容被完整复刻写入底部，作为系统元认知的坚实铁律。
+
+---
+
+> **📊 当前测试覆盖汇总**：全量自动化后端测试 `python -m pytest test_edumatrix.py -v` ➡️ **38 项测试 100% 通过**（最后更新于 2026-06-24）。

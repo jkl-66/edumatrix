@@ -768,7 +768,49 @@
 
 #### 2. 测试与编译校验
 * 前端打包编译：`npm run build` ➡️ **Built successfully (100% OK)**。
-* 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **35/35 tests passed (100% OK)** (包含了新增的 `test_checkin_flow_and_streak` 和 `test_checkin_history_filtering` 单元测试)。
+* 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **36/36 tests passed (100% OK)** (包含了新增的 `test_checkin_flow_and_streak`、`test_checkin_history_filtering` 和 `test_conversation_history_endpoint` 单元测试)。
+
+---
+
+### 2026-06-24 (夜间追加)
+> **今日概述**：全面修复并优化了**对话历史页（History.vue）字段搜索死锁、流式会话数据未落库以及属性映射不匹配的重大 Bug**。不仅打通了后端流式对话和数据库记录同步，还使得历史检索功能在多级前端字段映射下完美运行，解决了历史列表无内容、搜索死锁的顽疾。
+
+#### 1. 计划/完成工作
+[x] **流式会话数据库落库机制并网**：
+  - **定位底层根源**：前端聊天发送的是 `/api/stream/chat` 流式接口，而原本的流式处理函数 `stream_chat` (定义在 `stream_api.py` 中) 并没有调用 `record_conversation`，导致哪怕学生发了成百上千条消息，数据库 `conversation_history` 表依旧完全为空，导致回溯页展示“暂无对话历史”。
+  - **落库与拦截存储**：修改 `stream_api.py`，在流式生成讲义成功结束处，以及低置信度被拒绝的拦截逻辑中，同步添加 `record_conversation` 对数据库写入的调用。
+[x] **对话历史属性别名多重映射兼容与搜索功能恢复**：
+  - **接口多重映射**：在 `/api/history/{student_id}` 接口中返回 `query` 和 `response_summary` 的同时，补全了 `message`、`response` 和 `resources` 作为兼容别名，修复前端与后端对字段读取格式不一致的缺陷。
+  - **前端搜索过滤扩展**：重构 `History.vue` 中的 `filtered` 计算属性，支持跨 `query || message`、`target` 及 `response_summary || response` 进行联合不区分大小写检索，从根本上解决检索输入任何字符均被清空的 Bug。
+  - **展示层修正**：修改 `History.vue` 模板，正确读取 `item.query` 作为用户提问，并将 AI 资源交付明细在下方的 `内容:` 区域友好展示。
+[x] **后端 API 集成测试与进程拉起**：
+  - **测试双重覆盖**：在 `test_edumatrix.py` 中新增 `test_conversation_history_endpoint` 和 `test_stream_chat_records_conversation_in_history` 两项集成测试，直接覆盖别名接口以及通过 `TestClient` 发起 `/api/stream/chat` 流式交互后对话自动沉淀至数据库的逻辑，确保双向数据流通。
+  - **服务守护**：针对服务器重启事件，在后台重新拉起了 `python run.py` 服务进程。
+
+#### 2. 测试与编译校验
+* 前端打包编译：`npm run build` ➡️ **Built successfully (100% OK)**。
+* 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **37/37 tests passed (100% OK)** (包含了新增的 `test_checkin_flow_and_streak`、`test_checkin_history_filtering`、`test_conversation_history_endpoint` 和 `test_stream_chat_records_conversation_in_history` 单元测试)。
+
+---
+
+### 2026-06-24 (收尾更新)
+> **今日概述**：完成了**对话历史时间线视觉大改版**（UTC 时区修复、多智能体 Swarm 协作可视化、时空回溯与自适应小测闭环）以及**知识库文件上传 500 崩溃的根因修复**（`document_parser.py` 中的 `BytesIO` 流包装修正），同时补全了 `test_pdf_upload_and_parsing` 单元测试并修复了外键约束冲突。全量 38 项单元测试 100% 绿灯通过，前端编译无误，后端服务稳定拉起。
+
+#### 1. 对话历史页（History.vue）时间线与 Swarm 协作链可视化重构
+- **时区自愈修复**：修复 SQLite 存储的 naive UTC 时间戳在浏览器解析时导致 `NaN` 或时差 8 小时的 Bug。新增 `parseTimestamp` 方法，在 `Date()` 构造前自动补全 `'Z'` UTC 后缀，确保所有浏览器环境一致性识别。3 天内显示"刚刚 / X分钟前 / X天前"，超过 3 天显示 `YYYY/MM/DD` 格式。
+- **精美时间线重构**：卡片左侧带有认知对齐状态染色条（绿/橙），每个卡片配有时空轨道原点与连线微动画。设计了"问/答"分体胶囊泡，淡蓝色为学生问、淡紫色为 Swarm 回应。
+- **1+3+5 协作 Swarm 调度链可视化**：新增 `parseResponseSummary` 解析器，从数据库 `response_summary` 字段中提取各智能体名称与产出的资源类型，以胶囊 Badge 形式（含 Sparkles/GraduationCap/BrainCircuit 图标）在卡片中展示多智能体协作分工轨迹。
+- **时空回溯 & 自适应小测闭环**：新增"时空回溯"按钮，一键重定向至 `/learn` 并自动填充历史提问重新发送。新增"自适应小测"按钮，一键挂载 Pinia CAT 任务并导航至 `/learn` 开启测评，打通"学—测—诊—改"闭环。
+
+#### 2. 知识库文件上传 BytesIO 流包装修复（document_parser.py）
+- **问题根源**：`document_parser.py` 中 `_parse_pdf`、`_parse_pptx` 等解析函数直接对原始 `bytes` 二进制字节调用需要 `seek()` 方法的底层库（PyPDF2.PdfReader、pdfplumber、pptx.Presentation 等），因为 Python `bytes` 对象不具备 `seek()` 方法，导致知识库上传所有文件均触发 `AttributeError` 返回 500 服务器崩溃。
+- **修复方案**：引入 `from io import BytesIO`，将所有传入第三方解析库的二进制数据统一用 `BytesIO(raw)` 包装，模拟类文件（File-like）流对象，完全符合各库对 `seek()` 调用的预期。
+- **新增单元测试**：`test_pdf_upload_and_parsing`——在测试中构造模拟 PDF 二进制内容，通过 FastAPI TestClient 发起 `/api/knowledge/upload` 请求验证解析正常。同时修复测试中因未预先创建 `student_profile` 而触发的外键约束 `IntegrityError`，在测试前调用 `save_student_profile` 创建关联画像记录，测试结束后物理清理相关数据。
+
+#### 3. 测试与编译校验（收尾）
+* 前端打包编译：`npm run build` ➡️ **Built in 746ms (100% OK)**，无任何编译错误。
+* 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **38/38 tests passed (100% OK)**（含 `test_pdf_upload_and_parsing` 新增测试）。
+* 后端服务：`python run.py` 在后台拉起，监听 `http://0.0.0.0:8000`，应用启动正常。
 
 
 

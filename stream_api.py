@@ -175,6 +175,22 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 except Exception:
                     pass
 
+                # === 将低置信度拒绝记录写入历史数据库 ===
+                try:
+                    from app.crud import record_conversation
+                    from app.database import run_db_op
+                    await run_db_op(
+                        record_conversation,
+                        student_id,
+                        message,
+                        "系统拦截:低置信度拒绝",
+                        "未知",
+                        0,
+                        True
+                    )
+                except Exception as e:
+                    print(f"  [StreamAPI] Failed to record low confidence refusal: {e}")
+
                 yield _sse("complete", {
                     "target": "未知",
                     "content": f"## ⚠️ 置信度拦截提示\n\n{refusal_msg}",
@@ -411,6 +427,28 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     print(f"  [StreamAPI] Automatically created/updated review plan for concept: {target_concept}")
             except Exception as e:
                 print(f"  [StreamAPI] Failed to automatically create/update review plan: {e}")
+
+            # === 将本次对话记录写入历史数据库 ===
+            try:
+                from app.crud import record_conversation
+                from app.database import run_db_op
+                
+                target_concept = getattr(retrieval, "target", "")
+                alignment_passed = alignment_report.passed if alignment_report else True
+                resource_summary = "; ".join(f"{getattr(r, 'agent', '')}:{getattr(r, 'resource_type', '')}" for r in streamed_parts)
+                
+                await run_db_op(
+                    record_conversation,
+                    student_id,
+                    message,
+                    resource_summary,
+                    target_concept,
+                    len(streamed_parts),
+                    alignment_passed
+                )
+                print(f"  [StreamAPI] Successfully recorded conversation to history: {message[:30]}...")
+            except Exception as e:
+                print(f"  [StreamAPI] Failed to record conversation to history: {e}")
 
             yield _sse("complete", {
                 "target": getattr(retrieval, "target", ""),

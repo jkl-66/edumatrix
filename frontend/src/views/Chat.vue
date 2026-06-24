@@ -1,5 +1,6 @@
 <script setup>
 import { ref, nextTick, computed, onMounted, onUnmounted, watch, createApp } from 'vue'
+import { useRoute } from 'vue-router'
 import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 import {
   processMessage, getHistory,
@@ -28,6 +29,7 @@ import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
 const quizStore = useQuizStore()
+const route = useRoute()
 const avatarRef = ref(null)
 
 // --- Chat State ---
@@ -565,6 +567,16 @@ onMounted(async () => {
     latestProfile.value = profile
   } catch (e) {
     console.error('加载学生画像失败:', e)
+  }
+
+  // 时空回溯与跳转触发
+  if (route.query.quiz) {
+    activeTab.value = 'quiz'
+    quizConcept.value = route.query.quiz
+    startQuiz()
+  } else if (route.query.prompt) {
+    input.value = route.query.prompt
+    send()
   }
 })
 

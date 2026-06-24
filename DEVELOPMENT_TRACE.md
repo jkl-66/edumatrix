@@ -735,6 +735,61 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
   - **前端编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully (100% OK)**，无编译与打包错误。
 - **架构师（用户）终审反馈**：Approved
 
+### [2026-06-24] - 对话历史搜索功能与属性名兼容别名映射优化
+- **任务编号**：`TASK_CHAT_HISTORY_SEARCH_COMPAT`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-frontend`, `oma-backend`, `oma-qa`, `oma-debug`
+- **开发场景**：
+  - `app/main.py`: `get_history` (在返回的对话历史 JSON 列表中，将 `c.query` 映射至 `query` 且额外提供兼容前端渲染的别名 `message`；将 `c.response_summary` 写入并同时提供别名 `response`；将 `c.resources_count` 映射至 `resources_count` 与别名 `resources`)
+  - `frontend/src/views/History.vue`:
+    - 重构 `filtered` 计算属性，支持跨 `query || message`、`target` 及 `response_summary || response` 进行联合且忽略大小写的包含检索，修复搜索框失效问题。
+    - 在卡片内适配 `item.query || item.message` 作为学生输入渲染，并将 `item.response || item.response_summary` 的内容在 AI 卡片下方单独起一行以 `内容:` 形式渲染，消除此前消息内容全部展示为 `'-'` 的 Bug。
+  - `test_edumatrix.py`: 新增 `test_conversation_history_endpoint` 集成测试，验证了通过 FastAPI TestClient 请求历史记录 API 时响应状态、主字段和多重别名字段的正确绑定。
+- **测试验证结果**：
+  - **后端集成测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **36/36 tests passed (100% OK)**。
+  - **前端编译校验**：在 `frontend` 目录运行 `npm run build` ➡️ **Built successfully (100% OK)**，无任何警告与语法阻碍。
+- **架构师（用户）终审反馈**：Approved
+
+---
+
+### [2026-06-24] - 对话历史时间线视觉重构与 UTC 时区 NaN Bug 修复
+- **任务编号**：`TASK_HISTORY_TIMELINE_REDESIGN`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-frontend`, `oma-backend`, `oma-qa`, `oma-debug`
+- **开发场景**：
+  - `frontend/src/views/History.vue`：新增 `parseTimestamp` 方法，自动识别 SQLite 输出的 naive UTC 时间格式（`2026-06-24 12:30:00`），在末尾补全 `'Z'` 时区标识，彻底消除跨浏览器解析时出现的 `NaN` 或 +8h 时区偏差 Bug；重构 `ago` 时间格式化，3 天内显示相对时间（刚刚/分钟前/天前），3 天以上显示 `YYYY/MM/DD`。
+  - 重构 `History.vue` 时间线布局，引入左侧认知对齐状态染色条（绿/橙）及悬停轨道微动画；设计"问/答"分体淡色胶囊泡排版，以现代 Timeline 风格替代原先极简卡片。
+  - 新增 `parseResponseSummary` 解析器，从 `response_summary` 中提取 9 位智能体协作分工信息，以 Sparkles/GraduationCap/BrainCircuit 图标配合胶囊 Badge 形式，将"1+3+5 多智能体 Swarm 协作链"可视化展示在卡片内。
+  - 新增"时空回溯"快捷按钮（重定向至 `/learn` 并自动填充历史提问）及"自适应小测"快捷按钮（挂载 Pinia CAT 任务并跳转 `/learn` 开启 CAT 测验），打通"学—测—诊—改"四环闭环。
+- **自愈重试记录**：
+  1. *第一次问题*：历史卡片时间显示 `NaN` 或者比实际时间早 8 小时，与服务器日志不符。
+  2. *自愈与修复*：定位为 SQLite 存储的 naive UTC 字符串在某些浏览器中被解析为本地时间。在 `parseTimestamp` 中统一将 `' '` 空格替换为 `'T'`，并在末尾无 `'Z'` 时自动附加，确保全局统一识别 UTC。
+- **测试验证结果**：
+  * **前端编译**：`npm run build` ➡️ **Built successfully (100% OK)**，无语法错误。
+  * **后端集成测试**：`python -m pytest test_edumatrix.py -v` ➡️ **37 passed (100% OK)**。
+- **Token 消耗估计**：约 28,000 Input / 2,500 Output
+- **架构师（用户）终审反馈**：Approved
+
+---
+
+### [2026-06-24] - 知识库文件上传 BytesIO 修复与 test_pdf_upload_and_parsing 单元测试
+- **任务编号**：`TASK_KNOWLEDGE_UPLOAD_BYTESIO_FIX`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-backend`, `oma-debug`, `oma-qa`
+- **开发场景**：
+  - `document_parser.py`：引入 `from io import BytesIO`，将 `_parse_pdf`、`_parse_pptx` 及 zipfile fallback 中所有直接传入 `bytes` 对象的解析调用（如 `PyPDF2.PdfReader(raw)`、`pdfplumber.open(raw)`、`Presentation(raw)` 等）统一修正为 `BytesIO(raw)` 包装，使其模拟文件流，消除 `AttributeError: 'bytes' object has no attribute 'seek'`。
+  - `test_edumatrix.py`：新增 `test_pdf_upload_and_parsing` 集成测试。在测试前调用 `save_student_profile` 预先创建 `student_profile` DB 行，避免 `knowledge_documents` 表插入时触发 `FOREIGN KEY constraint failed (IntegrityError)`；测试完毕后同时物理清理 `DBKnowledgeDocument` 和 `DBStudentProfile` 两张表中的脏数据。
+- **自愈重试记录**：
+  1. *第一次报错*：用户反映知识库上传时所有格式的文件均返回 500 服务器错误。排查后端日志确认 `AttributeError: 'bytes' object has no attribute 'seek'`，来源于 `PyPDF2.PdfReader` 调用链。
+  2. *第二次报错*：新增测试时 `sqlalchemy.exc.IntegrityError: FOREIGN KEY constraint failed`——因为 `knowledge_documents` 表的 `student_id` 是外键，测试用的随机 `student_id` 在 `student_profiles` 中无对应行。增加预创建画像记录后彻底解决。
+- **测试验证结果**：
+  * 单独运行 `python -m pytest test_edumatrix.py -k test_pdf_upload_and_parsing -v` ➡️ **1 passed**。
+  * 全量运行 `python -m pytest test_edumatrix.py -v` ➡️ **38 passed (100% OK)**，包含所有新旧测试。
+  * 前端编译 `npm run build` ➡️ **Built in 746ms (100% OK)**，无任何报错。
+- **Token 消耗估计**：约 18,000 Input / 1,800 Output
+- **架构师（用户）终审反馈**：Approved
+
+
 
 
 

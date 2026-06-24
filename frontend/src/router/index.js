@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import Login from '../views/Login.vue'
 import Dashboard from '../views/Dashboard.vue'
 import Chat from '../views/Chat.vue'
 import Notes from '../views/Notes.vue'
@@ -12,19 +13,26 @@ import LearningPathGraph from '../views/LearningPathGraph.vue'
 import WrongQuestionBook from '../views/WrongQuestionBook.vue'
 import RevisionCalendar from '../views/RevisionCalendar.vue'
 
+function requireAuth() {
+  const token = localStorage.getItem('edumatrix_token')
+  if (!token) return '/login'
+  return true
+}
+
 const routes = [
-  { path: '/', name: 'Dashboard', component: Dashboard },
-  { path: '/learn', name: 'Learn', component: Chat },
-  { path: '/notes', name: 'Notes', component: Notes },
-  { path: '/review', name: 'Review', component: Review },
-  { path: '/teacher', name: 'Teacher', component: Teacher },
-  { path: '/history', name: 'History', component: History },
-  { path: '/knowledge', name: 'Knowledge', component: Knowledge },
-  { path: '/profile', name: 'ProfileDashboard', component: ProfileDashboard },
-  { path: '/settings', name: 'Settings', component: Settings },
-  { path: '/learning-path', name: 'LearningPathGraph', component: LearningPathGraph },
-  { path: '/wrong-questions', name: 'WrongQuestionBook', component: WrongQuestionBook },
-  { path: '/revision-calendar', name: 'RevisionCalendar', component: RevisionCalendar },
+  { path: '/login', name: 'Login', component: Login },
+  { path: '/', name: 'Dashboard', component: Dashboard, beforeEnter: requireAuth },
+  { path: '/learn', name: 'Learn', component: Chat, beforeEnter: requireAuth },
+  { path: '/notes', name: 'Notes', component: Notes, beforeEnter: requireAuth },
+  { path: '/review', name: 'Review', component: Review, beforeEnter: requireAuth },
+  { path: '/teacher', name: 'Teacher', component: Teacher, beforeEnter: requireAuth },
+  { path: '/history', name: 'History', component: History, beforeEnter: requireAuth },
+  { path: '/knowledge', name: 'Knowledge', component: Knowledge, beforeEnter: requireAuth },
+  { path: '/profile', name: 'ProfileDashboard', component: ProfileDashboard, beforeEnter: requireAuth },
+  { path: '/settings', name: 'Settings', component: Settings, beforeEnter: requireAuth },
+  { path: '/learning-path', name: 'LearningPathGraph', component: LearningPathGraph, beforeEnter: requireAuth },
+  { path: '/wrong-questions', name: 'WrongQuestionBook', component: WrongQuestionBook, beforeEnter: requireAuth },
+  { path: '/revision-calendar', name: 'RevisionCalendar', component: RevisionCalendar, beforeEnter: requireAuth },
 ]
 
 export default createRouter({

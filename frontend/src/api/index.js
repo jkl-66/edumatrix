@@ -14,6 +14,8 @@ function buildHeaders() {
   if (cfg.apiKey) headers['X-EduMatrix-Api-Key'] = cfg.apiKey
   if (cfg.endpoint) headers['X-EduMatrix-Endpoint'] = cfg.endpoint
   if (cfg.model) headers['X-EduMatrix-Model'] = cfg.model
+  const token = localStorage.getItem('edumatrix_token')
+  if (token) headers['Authorization'] = `Bearer ${token}`
   if (cfg.temperature != null) headers['X-EduMatrix-Temperature'] = String(cfg.temperature)
   if (cfg.maxTokens) headers['X-EduMatrix-Max-Tokens'] = String(cfg.maxTokens)
   // 任务 9.2: 教学风格
@@ -28,6 +30,16 @@ const api = axios.create({ baseURL: '/api' })
 
 export async function healthCheck() {
   const r = await api.get('/health', { headers: buildHeaders() })
+  return r.data
+}
+
+export async function loginUser(username, password) {
+  const params = new URLSearchParams()
+  params.append('username', username)
+  params.append('password', password)
+  const r = await api.post('/api/auth/login', params, {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+  })
   return r.data
 }
 

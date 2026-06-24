@@ -225,14 +225,16 @@ function clearChat() {
 const messageListRef = ref(null)
 
 function scrollToTop() {
-  if (messageListRef.value) {
-    messageListRef.value.scrollTo({ top: 0, behavior: 'smooth' })
+  const container = document.querySelector('main')
+  if (container) {
+    container.scrollTo({ top: 0, behavior: 'smooth' })
   }
 }
 
 function scrollToBottom() {
-  if (messageListRef.value) {
-    messageListRef.value.scrollTo({ top: messageListRef.value.scrollHeight, behavior: 'smooth' })
+  const container = document.querySelector('main')
+  if (container) {
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
   }
 }
 
@@ -534,13 +536,6 @@ function openSocraticPopup(targetText, contextBefore, contextAfter, lineIndex, m
  * 在 Chat 组件挂载后需绑定点击事件到渲染内容
  */
 onMounted(async () => {
-  // 动态锁定全局 `<main>` 的 overflow 并使其成为 flex 布局容器、剥离 padding，使得 Chat 能够继承高度并内部滚动
-  const mainEl = document.querySelector('main')
-  if (mainEl) {
-    mainEl.classList.remove('overflow-y-auto', 'p-6')
-    mainEl.classList.add('overflow-hidden', 'flex', 'flex-col', 'h-full')
-  }
-
   // 委托监听：捕获 Markdown 卡片内的代码块和公式点击
   document.addEventListener('click', handleMarkdownClick)
 
@@ -576,13 +571,6 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  // 恢复全局 `<main>` 的布局和滚动
-  const mainEl = document.querySelector('main')
-  if (mainEl) {
-    mainEl.classList.add('overflow-y-auto', 'p-6')
-    mainEl.classList.remove('overflow-hidden', 'flex', 'flex-col', 'h-full')
-  }
-
   if (scrollTimer) {
     clearInterval(scrollTimer)
     scrollTimer = null
@@ -1432,7 +1420,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
 </script>
 
 <template>
-  <div class="flex gap-4 h-full overflow-hidden p-6">
+  <div class="flex gap-4 h-full">
     <!-- Main content area -->
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Premium Tabs -->
@@ -1473,7 +1461,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
           </button>
         </div>
 
-        <div ref="messageListRef" class="flex-1 min-h-0 overflow-y-auto space-y-4 mb-4 scrollbar-thin">
+        <div ref="messageListRef" class="flex-1 overflow-y-auto space-y-4 mb-4 scrollbar-thin">
           <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center text-gray-400">
             <Bot :size="48" class="mb-3 text-gray-300" />
             <p class="text-sm font-medium">输入问题开始学习</p>
@@ -1607,7 +1595,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
 
         <!-- 一键回到顶端/底端悬浮按钮 -->
-        <div v-if="messages.length > 0" class="absolute right-4 bottom-24 flex flex-col gap-2 z-30">
+        <div v-if="messages.length > 0" class="scroll-fab-container" :class="{ 'has-right-panel': shouldShowRightPanel }">
           <button @click="scrollToTop" class="w-8 h-8 rounded-xl bg-white/95 hover:bg-blue-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-blue-500/10 transition-all duration-200 hover:scale-115 active:scale-90 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最顶端">
             <ChevronUp :size="16" />
           </button>
@@ -2166,5 +2154,28 @@ function renderMarkdown(text, type = '', conceptName = '') {
   background: #eff6ff;
   color: #2563eb;
   font-weight: 600;
+}
+
+.scroll-fab-container {
+  position: fixed;
+  bottom: 120px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 30;
+  transition: all 0.3s ease;
+}
+
+/* 当右侧面板显示时，微调固定按钮位置以防重叠 */
+@media (min-width: 1024px) {
+  .scroll-fab-container.has-right-panel {
+    right: 440px;
+  }
+}
+@media (max-width: 1023px) {
+  .scroll-fab-container.has-right-panel {
+    right: 380px;
+  }
 }
 </style>

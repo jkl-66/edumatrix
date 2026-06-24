@@ -129,7 +129,7 @@ function goHome() {
       <!-- Page content -->
       <main class="flex-1 overflow-y-auto p-6">
         <!-- 任务 8.4: 全局渲染异常拦截器（自动降级，防白屏） -->
-        <div class="h-full flex flex-col min-h-0" @error.capture="(e) => console.warn('[GraphicFallback] 捕获渲染异常:', e)">
+        <div @error.capture="(e) => console.warn('[GraphicFallback] 捕获渲染异常:', e)">
           <router-view :student-id="studentId" />
         </div>
       </main>

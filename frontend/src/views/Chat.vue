@@ -263,21 +263,12 @@ watch(messages, (newMsgs, oldMsgs) => {
   }
 }, { deep: true })
 
-let scrollTimer = null
 watch(sending, (val) => {
   if (val) {
-    // Start polling scroll while sending is true (streaming progress updates)
-    if (!scrollTimer) {
-      scrollTimer = setInterval(() => {
-        scrollToBottom()
-      }, 250)
-    }
+    // 开始对话时跳到底端一次
+    scrollToBottom()
   } else {
-    if (scrollTimer) {
-      clearInterval(scrollTimer)
-      scrollTimer = null
-    }
-    // Also scroll at completion with delayed steps to handle dynamic layouts (Mermaid, KaTeX, images)
+    // 生成完毕时跳到底端（用延迟步长处理脑图/公式/卡片异步展开）
     for (const delay of [10, 100, 300, 600, 1000]) {
       setTimeout(scrollToBottom, delay)
     }
@@ -571,11 +562,6 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (scrollTimer) {
-    clearInterval(scrollTimer)
-    scrollTimer = null
-  }
-
   document.removeEventListener('click', handleMarkdownClick)
   window.startInteractiveQuiz = null
   window.startInteractiveVideo = null

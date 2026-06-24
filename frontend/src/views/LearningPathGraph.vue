@@ -1,362 +1,161 @@
 <script setup>
-/**
- * LearningPathGraph.vue — 任务 7.1 前端: DAG 知识依赖图谱可视化
- *
- * 基于 ECharts-Graph 渲染交互图谱，点击节点可查看详情，
- * ZPD 区间高亮，前置依赖回滚路径展示。
- */
-import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
-import { BookOpen, BrainCircuit, Info, AlertTriangle, ArrowLeft } from '@lucide/vue'
+import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { getStudentProfile } from '../api'
-import * as echarts from 'echarts'
+import {
+  BookOpen, BrainCircuit, Target, TrendingUp, ChevronRight,
+  ArrowRight, AlertTriangle, CheckCircle2, Layers,
+} from '@lucide/vue'
 
-const props = defineProps({
-  studentId: { type: String, default: 'demo-student' },
-})
-
+const router = useRouter()
+const props = defineProps({ studentId: { type: String, default: 'demo-student' } })
 const loading = ref(true)
-const error = ref('')
 const profile = ref(null)
-const selectedNode = ref(null)
-const chartRef = ref(null)
-let chartInstance = null
 
-// 默认知识依赖 DAG（与 agent_swarm.py DEFAULT_KNOWLEDGE_DAG 同步）
+// DEFAULT_KNOWLEDGE_DAG 同步自 agent_swarm.py
 const KNOWLEDGE_DAG = {
-  '池化层': { level: 1, category: '神经网络' },
-  '最大池化': { level: 2, category: '神经网络' },
-  '平均池化': { level: 2, category: '神经网络' },
-  '卷积核': { level: 1, category: '神经网络' },
-  '特征图': { level: 2, category: '神经网络' },
-  '反向传播': { level: 1, category: '优化' },
-  '链式法则': { level: 2, category: '优化' },
-  '梯度下降': { level: 1, category: '优化' },
-  '逻辑回归': { level: 1, category: '监督学习' },
-  '线性回归': { level: 1, category: '监督学习' },
-  '决策树': { level: 1, category: '监督学习' },
-  '支持向量机': { level: 2, category: '监督学习' },
-  '过拟合': { level: 2, category: '模型评估' },
-  '正则化': { level: 2, category: '模型评估' },
-  '交叉验证': { level: 2, category: '模型评估' },
-  '数据预处理': { level: 1, category: '基础' },
-  '特征工程': { level: 2, category: '基础' },
-  '混淆矩阵': { level: 2, category: '模型评估' },
-  '机器学习': { level: 0, category: '基础' },
-  '监督学习': { level: 1, category: '基础' },
-  '模型评估': { level: 1, category: '基础' },
-  'Transformer': { level: 2, category: '前沿' },
-  '注意力机制': { level: 2, category: '前沿' },
-  '神经网络': { level: 1, category: '神经网络' },
-  '卷积神经网络': { level: 2, category: '神经网络' },
+  '池化层': ['卷积核', '特征图'], '卷积核': ['反向传播'], '特征图': ['卷积核'],
+  '反向传播': ['链式法则', '梯度下降'], '链式法则': ['梯度下降'],
+  '梯度下降': ['线性回归'], '逻辑回归': ['线性回归', '梯度下降'],
+  '线性回归': ['机器学习'], '决策树': ['机器学习'],
+  '支持向量机': ['线性回归', '机器学习'], '过拟合': ['正则化', '交叉验证'],
+  '正则化': ['线性回归'], '交叉验证': ['机器学习'],
+  '神经网络': ['反向传播', '梯度下降'], '卷积神经网络': ['神经网络', '卷积核', '池化层'],
+  'Transformer': ['注意力机制', '反向传播'], '注意力机制': ['神经网络'],
 }
 
-const EDGES = [
-  ['池化层', '卷积核'], ['池化层', '特征图'],
-  ['最大池化', '池化层'], ['平均池化', '池化层'],
-  ['卷积核', '反向传播'], ['特征图', '卷积核'],
-  ['反向传播', '链式法则'], ['反向传播', '梯度下降'],
-  ['链式法则', '梯度下降'], ['梯度下降', '线性回归'],
-  ['逻辑回归', '线性回归'], ['逻辑回归', '梯度下降'],
-  ['线性回归', '机器学习'], ['决策树', '机器学习'],
-  ['支持向量机', '线性回归'], ['支持向量机', '机器学习'],
-  ['过拟合', '正则化'], ['过拟合', '交叉验证'],
-  ['正则化', '线性回归'], ['交叉验证', '机器学习'],
-  ['监督学习', '机器学习'], ['模型评估', '机器学习'],
-  ['数据预处理', '机器学习'], ['特征工程', '数据预处理'], ['混淆矩阵', '模型评估'],
-  ['Transformer', '注意力机制'], ['Transformer', '反向传播'],
-  ['注意力机制', '神经网络'],
-  ['神经网络', '反向传播'], ['神经网络', '梯度下降'],
-  ['卷积神经网络', '神经网络'], ['卷积神经网络', '卷积核'], ['卷积神经网络', '池化层'],
-]
+const pathPlan = computed(() => {
+  if (!profile.value?.concept_mastery) return { weak: [], prereq_gaps: [], ready: [], strong: [] }
+  const mastery = profile.value.concept_mastery
+  const weak = Object.entries(mastery).filter(([, v]) => v < 0.4).sort(([, a], [, b]) => a - b)
+  const medium = Object.entries(mastery).filter(([, v]) => v >= 0.4 && v < 0.7).sort(([, a], [, b]) => a - b)
+  const strong = Object.entries(mastery).filter(([, v]) => v >= 0.7).sort(([, a], [, b]) => b - a)
 
-const FIXED_COORDINATES = {
-  '平均池化': { x: 128, y: 230 },
-  '最大池化': { x: 136, y: 125 },
-  '卷积神经网络': { x: 137, y: 415 },
-  '池化层': { x: 204, y: 307 },
-  '特征图': { x: 256, y: 172 },
-  'Transformer': { x: 297, y: 366 },
-  '卷积核': { x: 340, y: 267 },
-  '注意力机制': { x: 356, y: 428 },
-  '神经网络': { x: 413, y: 493 },
-  '反向传播': { x: 470, y: 332 },
-  '过拟合': { x: 516, y: 186 },
-  '链式法则': { x: 537, y: 446 },
-  '逻辑回归': { x: 560, y: 308 },
-  '正则化': { x: 620, y: 276 },
-  '交叉验证': { x: 633, y: 138 },
-  '梯度下降': { x: 650, y: 495 },
-  '支持向量机': { x: 687, y: 210 },
-  '线性回归': { x: 738, y: 432 },
-  '决策树': { x: 740, y: 123 },
-  '特征工程': { x: 789, y: 474 },
-  '数据预处理': { x: 868, y: 407 },
-  '混淆矩阵': { x: 881, y: 478 },
-  '监督学习': { x: 882, y: 118 },
-  '模型评估': { x: 960, y: 407 },
-  '机器学习': { x: 1041, y: 251 }
-}
-
-
-const CATEGORIES = ['基础', '监督学习', '优化', '神经网络', '模型评估', '前沿']
-const CATEGORY_COLORS = ['#94a3b8', '#3b82f6', '#8b5cf6', '#f97316', '#10b981', '#ec4899']
-
-const nodes = computed(() => {
-  if (!profile.value) return []
-  const mastery = profile.value.concept_mastery || {}
-  return Object.entries(KNOWLEDGE_DAG).map(([name, info]) => {
-    const m = mastery[name] || 0
-    let color = '#94a3b8' // 默认灰色
-    let symbolSize = 30
-    let zpdZone = 'unknown'
-
-    if (m >= 0.75) {
-      color = '#22c55e' // 绿色 — 已掌握
-      symbolSize = 35
-      zpdZone = 'mastered'
-    } else if (m >= 0.3) {
-      color = '#eab308' // 黄色 — ZPD 核心区
-      symbolSize = 40
-      zpdZone = 'zpd'
-    } else if (m > 0) {
-      color = '#ef4444' // 红色 — 薄弱
-      symbolSize = 38
-      zpdZone = 'weak'
+  // 前置依赖检查：对每个薄弱点，检查其前置概念是否也已掌握
+  const prereq_gaps = []
+  for (const [concept, score] of weak) {
+    const prereqs = KNOWLEDGE_DAG[concept] || []
+    for (const p of prereqs) {
+      if ((mastery[p] || 0) < 0.4) {
+        prereq_gaps.push({ concept, prereq: p, prereq_mastery: mastery[p] || 0 })
+      }
     }
+  }
 
-    const coord = FIXED_COORDINATES[name] || { x: 0, y: 0 }
-
-    return {
-      id: name,
-      name,
-      x: coord.x,
-      y: coord.y,
-      value: `${name}\n掌握度: ${(m * 100).toFixed(0)}%\n类别: ${info.category}\nZPD: ${zpdZone}`,
-      category: CATEGORIES.indexOf(info.category),
-      itemStyle: { color },
-      symbolSize,
-      mastery: m,
-      zpdZone,
-      concept: name,
-      categoryName: info.category,
-    }
-  })
-})
-
-const edges = computed(() => {
-  return EDGES.map(([source, target]) => ({
-    source,
-    target,
-    label: { show: false },
-    lineStyle: {
-      color: '#475569',
-      width: 1.5,
-      curveness: 0.1,
-      type: 'solid',
-    },
-  }))
-})
-
-function buildChartOption() {
   return {
-    title: {
-      text: '知识依赖图谱 (DAG)',
-      subtext: '节点颜色: 绿色=已掌握  黄色=ZPD发展区  红色=薄弱  灰色=未接触',
-      left: 'center',
-      top: 10,
-      textStyle: { fontSize: 16, color: '#e2e8f0' },
-      subtextStyle: { fontSize: 10, color: '#94a3b8' },
-    },
-    tooltip: {
-      formatter: (params) => {
-        if (params.dataType === 'node') {
-          return `
-            <div style="font-size:13px;font-weight:bold">${params.name}</div>
-            <div style="font-size:11px;color:#666;margin-top:4px">
-              类别: ${params.data.categoryName}<br/>
-              掌握度: ${(params.data.mastery * 100).toFixed(0)}%<br/>
-              ZPD 区间: ${params.data.zpdZone}
-            </div>
-          `
-        }
-        return `${params.data.source} → ${params.data.target}`
-      },
-    },
-    legend: {
-      data: CATEGORIES,
-      top: 60,
-      left: 'center',
-      textStyle: { fontSize: 10, color: '#94a3b8' },
-    },
-    animationDuration: 800,
-    animationEasingUpdate: 'quinticInOut',
-    series: [{
-      type: 'graph',
-      layout: 'none',
-      roam: true,
-      draggable: false,
-      data: nodes.value,
-      edges: edges.value,
-      categories: CATEGORIES.map((name, i) => ({
-        name,
-        itemStyle: { color: CATEGORY_COLORS[i] },
-      })),
-      label: {
-        show: true,
-        position: 'bottom',
-        fontSize: 10,
-        color: '#cbd5e1',
-        offset: [0, 4],
-      },
-      edgeLabel: { show: false },
-      lineStyle: {
-        color: 'source',
-        curveness: 0.1,
-        width: 1.5,
-      },
-      emphasis: {
-        focus: 'adjacency',
-        lineStyle: { width: 3 },
-      },
-      zoom: 0.8,
-    }],
+    weak: weak.map(([c, s]) => ({ concept: c, score: Math.round(s * 100) })),
+    medium: medium.map(([c, s]) => ({ concept: c, score: Math.round(s * 100) })),
+    strong: strong.map(([c, s]) => ({ concept: c, score: Math.round(s * 100) })),
+    prereq_gaps,
   }
-}
+})
 
-function onChartClick(params) {
-  if (params.dataType === 'node') {
-    selectedNode.value = {
-      name: params.data.concept,
-      mastery: params.data.mastery,
-      zpdZone: params.data.zpdZone,
-      categoryName: params.data.categoryName,
-      // 计算前置依赖
-      prerequisites: EDGES
-        .filter(([s, t]) => t === params.data.concept)
-        .map(([s]) => s),
-      // 计算后置依赖
-      dependents: EDGES
-        .filter(([s, t]) => s === params.data.concept)
-        .map(([, t]) => t),
-    }
-  }
+const avgMastery = computed(() => {
+  const m = profile.value?.concept_mastery
+  if (!m || Object.keys(m).length === 0) return 0
+  const v = Object.values(m)
+  return Math.round(v.reduce((a, b) => a + b, 0) / v.length * 100)
+})
+
+function goLearn(concept) {
+  router.push({ path: '/learn', query: { q: concept } })
 }
 
 onMounted(async () => {
   try {
-    const res = await getStudentProfile(props.studentId)
-    profile.value = res.data ? (typeof res.data === 'object' ? res.data : JSON.parse(res.data)) : res
-  } catch (e) {
-    error.value = '加载学生画像失败'
+    const p = await getStudentProfile(props.studentId || 'default')
+    profile.value = p
+  } catch {
+    // use empty
+  } finally {
+    loading.value = false
   }
-  loading.value = false
-
-  await nextTick()
-  if (chartRef.value) {
-    chartInstance = echarts.init(chartRef.value)
-    chartInstance.setOption(buildChartOption())
-    chartInstance.on('click', onChartClick)
-    window.addEventListener('resize', () => chartInstance?.resize())
-  }
-})
-
-onUnmounted(() => {
-  chartInstance?.dispose()
 })
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-950 text-gray-200 p-6">
-    <div class="max-w-7xl mx-auto">
-      <!-- 页头 -->
-      <div class="flex items-center justify-between mb-6">
-        <div class="flex items-center gap-3">
-          <BrainCircuit :size="22" class="text-purple-400" />
+  <div class="max-w-4xl mx-auto space-y-6">
+    <div v-if="loading" class="flex items-center justify-center h-64"><div class="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" /></div>
+    <div v-else-if="!profile" class="text-center py-12 text-gray-400 text-sm">无法加载画像数据</div>
+    <div v-else>
+
+      <!-- 概览 -->
+      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <div class="flex items-center gap-4">
+          <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
+            <TrendingUp :size="22" class="text-white" />
+          </div>
           <div>
-            <h1 class="text-lg font-bold">知识依赖图谱</h1>
-            <p class="text-[11px] text-gray-400">EduMatrix ZPD 自适应学习路径规划</p>
+            <h2 class="text-lg font-bold text-gray-800">学习路径规划</h2>
+            <p class="text-xs text-gray-400">基于 ZPD 最近发展区和前置依赖 DAG 动态生成</p>
+          </div>
+          <div class="ml-auto text-right">
+            <p class="text-2xl font-bold" :class="avgMastery >= 60 ? 'text-emerald-600' : 'text-amber-600'">{{ avgMastery }}%</p>
+            <p class="text-[10px] text-gray-400">平均掌握度</p>
           </div>
         </div>
-        <div class="flex items-center gap-2">
-          <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-green-900/30 text-green-400 rounded text-[10px]">
-            <span class="w-2 h-2 rounded-full bg-green-500" /> 已掌握
-          </span>
-          <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-900/30 text-yellow-400 rounded text-[10px]">
-            <span class="w-2 h-2 rounded-full bg-yellow-500" /> ZPD发展区
-          </span>
-          <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-red-900/30 text-red-400 rounded text-[10px]">
-            <span class="w-2 h-2 rounded-full bg-red-500" /> 薄弱
-          </span>
-        </div>
       </div>
 
-      <!-- 加载 / 错误 -->
-      <div v-if="loading" class="flex items-center justify-center py-20">
-        <div class="animate-spin w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full" />
-        <span class="ml-3 text-sm text-gray-400">加载图谱数据...</span>
-      </div>
-      <div v-else-if="error" class="flex items-center justify-center py-20">
-        <AlertTriangle :size="18" class="text-red-500 mr-2" />
-        <span class="text-sm text-red-400">{{ error }}</span>
-      </div>
-
-      <div v-else class="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <!-- 图谱区域 -->
-        <div class="lg:col-span-3 bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
-          <div ref="chartRef" class="w-full h-[600px]" />
-        </div>
-
-        <!-- 选中节点详情面板 -->
-        <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-          <div v-if="!selectedNode" class="text-center text-gray-500 text-sm py-10">
-            <Info :size="32" class="mx-auto mb-2 opacity-40" />
-            <p>点击图中的节点<br/>查看详细知识信息</p>
-          </div>
-          <div v-else>
-            <div class="flex items-center gap-2 mb-3">
-              <BookOpen :size="16" class="text-purple-400" />
-              <h3 class="font-semibold text-sm">{{ selectedNode.name }}</h3>
+      <!-- 前置依赖缺口 -->
+      <div v-if="pathPlan.prereq_gaps.length" class="bg-white rounded-2xl border border-red-100 shadow-sm p-5">
+        <h3 class="text-sm font-semibold text-red-700 mb-3 flex items-center gap-2"><AlertTriangle :size="16" /> 前置依赖缺口 — 需要先补习这些基础知识</h3>
+        <div class="space-y-2">
+          <div v-for="(gap, i) in pathPlan.prereq_gaps" :key="i" class="flex items-center gap-3 p-3 rounded-xl bg-red-50 border border-red-100">
+            <div class="w-7 h-7 rounded-full bg-red-200 text-red-700 flex items-center justify-center text-xs font-bold shrink-0">{{ i + 1 }}</div>
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-800">{{ gap.prereq }} <span class="text-xs text-gray-400">→</span> {{ gap.concept }}</p>
+              <p class="text-[10px] text-red-500 mt-0.5">{{ gap.prereq }} 掌握度仅 {{ Math.round(gap.prereq_mastery * 100) }}%，不满足学习 {{ gap.concept }} 的前置要求</p>
             </div>
-
-            <div class="space-y-3 text-xs">
-              <div class="flex justify-between">
-                <span class="text-gray-400">掌握度</span>
-                <span :class="selectedNode.mastery >= 0.75 ? 'text-green-400' : selectedNode.mastery >= 0.3 ? 'text-yellow-400' : 'text-red-400'">
-                  {{ (selectedNode.mastery * 100).toFixed(0) }}%
-                </span>
-              </div>
-              <div class="flex justify-between">
-                <span class="text-gray-400">ZPD 区间</span>
-                <span class="text-gray-200">{{ selectedNode.zpdZone }}</span>
-              </div>
-              <div class="flex justify-between">
-                <span class="text-gray-400">类别</span>
-                <span class="text-gray-200">{{ selectedNode.categoryName }}</span>
-              </div>
-
-              <!-- 前置依赖 -->
-              <div v-if="selectedNode.prerequisites.length">
-                <p class="text-gray-400 mb-1 mt-3">前置依赖</p>
-                <div class="flex flex-wrap gap-1">
-                  <span v-for="p in selectedNode.prerequisites" :key="p"
-                    class="px-2 py-0.5 bg-blue-900/30 text-blue-400 rounded text-[10px]"
-                  >{{ p }}</span>
-                </div>
-              </div>
-
-              <!-- 后置依赖（进阶） -->
-              <div v-if="selectedNode.dependents.length">
-                <p class="text-gray-400 mb-1 mt-3">进阶方向</p>
-                <div class="flex flex-wrap gap-1">
-                  <span v-for="d in selectedNode.dependents" :key="d"
-                    class="px-2 py-0.5 bg-purple-900/30 text-purple-400 rounded text-[10px]"
-                  >{{ d }}</span>
-                </div>
-              </div>
-            </div>
+            <button class="px-3 py-1.5 text-[10px] font-semibold rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all shrink-0" @click="goLearn(gap.prereq)">去补习</button>
           </div>
         </div>
       </div>
+
+      <!-- 薄弱点 → 紧急复习 -->
+      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <h3 class="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2"><Target :size="16" class="text-rose-500" /> 薄弱知识点（掌握度 &lt; 40%）</h3>
+        <div v-if="!pathPlan.weak.length" class="text-center py-4 text-emerald-600 text-xs flex items-center justify-center gap-2"><CheckCircle2 :size="14" /> 暂无薄弱知识点</div>
+        <div v-else class="space-y-2">
+          <div v-for="(item, i) in pathPlan.weak" :key="item.concept" class="flex items-center gap-3 p-3 rounded-xl hover:bg-rose-50 transition-all cursor-pointer border border-transparent hover:border-rose-200" @click="goLearn(item.concept)">
+            <div class="w-7 h-7 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center text-xs font-bold shrink-0">{{ i + 1 }}</div>
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-800">{{ item.concept }}</p>
+              <p class="text-[10px] text-gray-400">掌握度 {{ item.score }}% — 紧急</p>
+            </div>
+            <button class="px-3 py-1.5 text-[10px] font-semibold rounded-lg bg-rose-500 hover:bg-rose-600 text-white transition-all shrink-0 flex items-center gap-1"><BookOpen :size="10" /> 学习</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 进阶中 -->
+      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <h3 class="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2"><Layers :size="16" class="text-amber-500" /> 巩固提升（掌握度 40%~70%）</h3>
+        <div v-if="!pathPlan.medium.length" class="text-center py-4 text-gray-400 text-xs">暂无</div>
+        <div v-else class="space-y-2">
+          <div v-for="(item, i) in pathPlan.medium" :key="item.concept" class="flex items-center gap-3 p-3 rounded-xl hover:bg-amber-50 transition-all cursor-pointer border border-transparent hover:border-amber-200" @click="goLearn(item.concept)">
+            <div class="flex-1 flex items-center gap-3">
+              <span class="text-xs text-gray-600 w-24">{{ item.concept }}</span>
+              <div class="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div class="h-full rounded-full bg-amber-500" :style="{ width: item.score + '%' }" />
+              </div>
+              <span class="text-xs font-mono text-amber-600 w-10 text-right">{{ item.score }}%</span>
+            </div>
+            <ChevronRight :size="14" class="text-gray-300 shrink-0" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 已掌握 -->
+      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <h3 class="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2"><CheckCircle2 :size="16" class="text-emerald-500" /> 已掌握（&gt; 70%）</h3>
+        <div class="flex flex-wrap gap-2">
+          <span v-for="item in pathPlan.strong" :key="item.concept" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-700">
+            {{ item.concept }}
+          </span>
+          <span v-if="!pathPlan.strong.length" class="text-xs text-gray-400">暂无</span>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>

@@ -202,6 +202,12 @@ watch(sending, async (newVal, oldVal) => {
     } catch (e) {
       console.error('更新最新学生画像失败:', e)
     }
+    // Auto scroll to bottom after rendering completes
+    nextTick(() => {
+      setTimeout(() => {
+        scrollToBottom()
+      }, 300)
+    })
   }
 })
 
@@ -231,9 +237,13 @@ function scrollToBottom() {
 }
 
 
-// Watch for new assistant messages to trigger TTS
+// Watch for new assistant messages to trigger TTS and auto-scroll
 watch(messages, (newMsgs, oldMsgs) => {
-  if (newMsgs.length > (oldMsgs?.length || 0)) {
+  if (!newMsgs || newMsgs.length === 0) return
+  
+  const lengthIncreased = newMsgs.length > (oldMsgs?.length || 0)
+  
+  if (lengthIncreased) {
     const lastMsg = newMsgs[newMsgs.length - 1]
     if (lastMsg.role === 'assistant' && !lastMsg.error && avatarRef.value) {
       // Remove Markdown headers and code blocks for cleaner TTS
@@ -246,6 +256,11 @@ watch(messages, (newMsgs, oldMsgs) => {
       avatarRef.value.speak(cleanText)
     }
     // Auto scroll to bottom when new message arrives
+    nextTick(() => {
+      scrollToBottom()
+    })
+  } else if (sending.value) {
+    // Auto scroll during text streaming
     nextTick(() => {
       scrollToBottom()
     })
@@ -1558,7 +1573,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
 
         <!-- 一键回到顶端/底端悬浮按钮 -->
-        <div v-if="messages.length > 0" class="absolute right-4 bottom-20 flex flex-col gap-2.5 z-20">
+        <div v-if="messages.length > 0" class="absolute right-2 xl:right-[-52px] bottom-32 flex flex-col gap-2.5 z-30">
           <button @click="scrollToTop" class="w-9 h-9 rounded-full bg-white/90 hover:bg-gradient-to-br hover:from-blue-500 hover:to-indigo-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-indigo-500/20 transition-all duration-300 hover:scale-110 active:scale-95 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最顶端">
             <ChevronUp :size="18" />
           </button>

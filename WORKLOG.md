@@ -688,10 +688,20 @@
   - **流式追踪**：修改 `watch(messages)` 监听器，取消原本仅在数组长度增长时才执行滚底的硬约束，新增在文本流式打字输出期间 (`sending.value` 为真) 持续执行 `nextTick` 结合 `scrollToBottom` 自动顺滑滚动，让打字机流式输出始终保留在视口内。
   - **卡片渲染自愈滚动**：在 `watch(sending)` 结束生成的回调中，追加 `setTimeout` 300ms 延迟滚底。这解决了由于 ECharts 雷达图或 Mermaid 思维导图等异步组件在流式结束后因高度物理撑开、卡片向下延展导致的视觉截断，确保完全生成后整页精准落底。
 
+#### 1. 计划/完成工作
+[x] **置顶/置底悬浮按钮（FAB）位置与点击失效优化**：
+  - **位置重规划**：将一键置顶/置底按钮的位置重新定位至 `absolute right-4 bottom-24 z-30`，放置在 relative 聊天主容器的内部右下角，既保证了在各类屏幕尺寸下均能正确浮动，又完全避开了右侧可视化画板和系统滚动条，保证了 100% 的可点击性。
+[x] **动态锁定 `<main>` 滚动与高度继承自适应自愈**：
+  - **滚动环境切换**：恢复 `App.vue` 中的全局 `<main>` 容器为默认的 `overflow-y-auto`，仅在 `Chat.vue` 的 `onMounted` 时动态通过 `classList` 去除 `overflow-y-auto` 和 `p-6`，添加 `overflow-hidden flex flex-col h-full` 强约束，在 `onUnmounted` 时恢复，确保其他 11 个模块能够像平常一样全页滚动。
+  - **高度继承修复**：给 `App.vue` 中路由异常拦截包裹 `div` 添加 `class="h-full flex flex-col min-h-0"`。这一改动让 `Chat.vue` 的 `h-full` 在 main `overflow-hidden` 状态下能向上继承精确的高度空间，彻底解决了由于高度未限制导致子视图无限膨胀、页面无法滚动的冻结问题。
+[x] **新消息流式自适应滚动落底**：
+  - **双向监听与定时器滚动**：新增对 `sending` 状态的监听。在生成中时开启 250ms 定时器轮询调用 `scrollToBottom()`，使并行生成进展墙始终可见。
+  - **异步组件渲染落底自愈**：当生成结束时，清除定时器，并以多段延迟（10ms、100ms、300ms、600ms、1000ms）轮询触发 `scrollToBottom()`。这一策略完美抵消了 Mermaid 脑图、KaTeX 公式和图表在流式结束后因异步计算、加载导致的高度的二次延迟膨胀，实现完全一致的视口贴合。
+
 #### 2. 测试与编译校验
 * 前端打包编译：`npm run build` ➡️ **Built successfully (100% OK)**。
 * 后端单元测试：`python -m pytest test_edumatrix.py -v` ➡️ **32/32 tests passed (100% OK)**。
-* 版本推送：已将所有修复推送至 GitHub `main` 分支 (Commit: `dbdf21e`)。
+* 版本推送：已将所有修复推送至 GitHub `main` 分支 (Commit: `1b68020`)。
 
 
 

@@ -236,7 +236,6 @@ function scrollToBottom() {
   }
 }
 
-
 // Watch for new assistant messages to trigger TTS and auto-scroll
 watch(messages, (newMsgs, oldMsgs) => {
   if (!newMsgs || newMsgs.length === 0) return
@@ -259,13 +258,29 @@ watch(messages, (newMsgs, oldMsgs) => {
     nextTick(() => {
       scrollToBottom()
     })
-  } else if (sending.value) {
-    // Auto scroll during text streaming
-    nextTick(() => {
-      scrollToBottom()
-    })
   }
 }, { deep: true })
+
+let scrollTimer = null
+watch(sending, (val) => {
+  if (val) {
+    // Start polling scroll while sending is true (streaming progress updates)
+    if (!scrollTimer) {
+      scrollTimer = setInterval(() => {
+        scrollToBottom()
+      }, 250)
+    }
+  } else {
+    if (scrollTimer) {
+      clearInterval(scrollTimer)
+      scrollTimer = null
+    }
+    // Also scroll at completion with delayed steps to handle dynamic layouts (Mermaid, KaTeX, images)
+    for (const delay of [10, 100, 300, 600, 1000]) {
+      setTimeout(scrollToBottom, delay)
+    }
+  }
+})
 
 const input = ref('')
 const showResources = ref(new Set())
@@ -519,6 +534,12 @@ function openSocraticPopup(targetText, contextBefore, contextAfter, lineIndex, m
  * 在 Chat 组件挂载后需绑定点击事件到渲染内容
  */
 onMounted(async () => {
+  // 动态锁定全局 `<main>` 的 overflow，使得 Chat 内部能够撑满并滚动，其余页面正常页面滚动
+  const mainEl = document.querySelector('main')
+  if (mainEl) {
+    mainEl.style.overflow = 'hidden'
+  }
+
   // 委托监听：捕获 Markdown 卡片内的代码块和公式点击
   document.addEventListener('click', handleMarkdownClick)
 
@@ -554,6 +575,17 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 恢复全局 `<main>` 的 overflow
+  const mainEl = document.querySelector('main')
+  if (mainEl) {
+    mainEl.style.overflow = ''
+  }
+
+  if (scrollTimer) {
+    clearInterval(scrollTimer)
+    scrollTimer = null
+  }
+
   document.removeEventListener('click', handleMarkdownClick)
   window.startInteractiveQuiz = null
   window.startInteractiveVideo = null
@@ -1398,7 +1430,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
 </script>
 
 <template>
-  <div class="flex gap-4 h-full">
+  <div class="flex gap-4 h-full overflow-hidden p-6">
     <!-- Main content area -->
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Premium Tabs -->
@@ -1439,7 +1471,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
           </button>
         </div>
 
-        <div ref="messageListRef" class="flex-1 overflow-y-auto space-y-4 mb-4 scrollbar-thin">
+        <div ref="messageListRef" class="flex-1 min-h-0 overflow-y-auto space-y-4 mb-4 scrollbar-thin">
           <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center text-gray-400">
             <Bot :size="48" class="mb-3 text-gray-300" />
             <p class="text-sm font-medium">输入问题开始学习</p>
@@ -1573,12 +1605,12 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
 
         <!-- 一键回到顶端/底端悬浮按钮 -->
-        <div v-if="messages.length > 0" class="absolute right-2 xl:right-[-52px] bottom-32 flex flex-col gap-2.5 z-30">
-          <button @click="scrollToTop" class="w-9 h-9 rounded-full bg-white/90 hover:bg-gradient-to-br hover:from-blue-500 hover:to-indigo-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-indigo-500/20 transition-all duration-300 hover:scale-110 active:scale-95 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最顶端">
-            <ChevronUp :size="18" />
+        <div v-if="messages.length > 0" class="absolute right-4 bottom-24 flex flex-col gap-2 z-30">
+          <button @click="scrollToTop" class="w-8 h-8 rounded-xl bg-white/95 hover:bg-blue-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-blue-500/10 transition-all duration-200 hover:scale-115 active:scale-90 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最顶端">
+            <ChevronUp :size="16" />
           </button>
-          <button @click="scrollToBottom" class="w-9 h-9 rounded-full bg-white/90 hover:bg-gradient-to-br hover:from-blue-500 hover:to-indigo-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-indigo-500/20 transition-all duration-300 hover:scale-110 active:scale-95 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最底端">
-            <ChevronDown :size="18" />
+          <button @click="scrollToBottom" class="w-8 h-8 rounded-xl bg-white/95 hover:bg-blue-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-blue-500/10 transition-all duration-200 hover:scale-115 active:scale-90 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最底端">
+            <ChevronDown :size="16" />
           </button>
         </div>
 

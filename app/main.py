@@ -32,7 +32,7 @@ from app.crud import (
     update_note,
     append_wrong_question_reflection,
 )
-from app.auth import authenticate_user, create_access_token, get_current_user, get_password_hash
+from app.auth import authenticate_user, create_access_token, get_current_user, get_current_teacher, get_password_hash
 from knowledge_api import router as knowledge_router
 from quiz_api import router as quiz_router
 from web_search_api import router as web_search_router
@@ -96,13 +96,12 @@ async def add_process_time_header(request: Request, call_next):
 
 @app.post("/api/auth/login")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    """JWT 登录接口，获取访问令牌 (Task 2.2)"""
+    """JWT 登录接口，获取访问令牌"""
     def do_auth(session):
         user = authenticate_user(session, form_data.username, form_data.password)
         if not user:
-            # 如果是首次演示，且数据库为空，自动创建 demo 用户
             if form_data.username == "demo-student" and form_data.password == "demo-password":
-                user = DBUser(username="demo-student", hashed_password=get_password_hash("demo-password"))
+                user = DBUser(username="demo-student", hashed_password=get_password_hash("demo-password"), role="student", display_name="演示学生")
                 session.add(user)
                 session.commit()
                 session.refresh(user)
@@ -120,9 +119,59 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     
     access_token_expires = timedelta(minutes=CONFIG.auth_access_token_expire_minutes)
     access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
+        data={"sub": user.username, "role": user.role or "student"}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user.username,
+        "display_name": user.display_name or user.username,
+        "role": user.role or "student",
+        "student_id": user.username,
+    }
+
+@app.post("/api/auth/register")
+async def register_user(request: Request):
+    """学生注册接口"""
+    payload = await request.json()
+    username = str(payload.get("username", "")).strip()
+    password = str(payload.get("password", "")).strip()
+    display_name = str(payload.get("display_name", username)).strip()
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    if len(password) < 4:
+        raise HTTPException(status_code=400, detail="密码至少4位")
+
+    def do_register(session):
+        existing = session.query(DBUser).filter(DBUser.username == username).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="用户名已存在")
+        hashed = get_password_hash(password)
+        user = DBUser(username=username, hashed_password=hashed, role="student", display_name=display_name)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+    try:
+        user = await run_db_op(do_register)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"注册失败: {str(e)}")
+
+    access_token_expires = timedelta(minutes=CONFIG.auth_access_token_expire_minutes)
+    access_token = create_access_token(
+        data={"sub": user.username, "role": "student"}, expires_delta=access_token_expires
+    )
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user.username,
+        "display_name": user.display_name or user.username,
+        "role": "student",
+        "student_id": user.username,
+    }
 
 
 @app.on_event("startup")
@@ -136,6 +185,15 @@ async def startup():
     print(f"  [EduMatrix] LLM: {CONFIG.llm_provider} @ {CONFIG.llm_endpoint} model={CONFIG.llm_model}")
     print(f"  [EduMatrix] Rate limit: {CONFIG.llm_rate_limit_rpm} RPM / {CONFIG.llm_rate_limit_tpm} TPM")
     await SANDBOX_RUNNER.start()
+    # 自动预置教师账号
+    def seed_teacher(session):
+        teacher = session.query(DBUser).filter(DBUser.username == "teacher").first()
+        if not teacher:
+            teacher = DBUser(username="teacher", hashed_password=get_password_hash("admin123"), role="teacher", display_name="教师")
+            session.add(teacher)
+            session.commit()
+            print("  [EduMatrix] Teacher account created: teacher / admin123")
+    await run_db_op(seed_teacher)
 
 
 @app.on_event("shutdown")
@@ -268,11 +326,12 @@ async def read_index():
     from web_demo import INDEX_HTML
     return INDEX_HTML
 
-@app.get("/api/teacher")
+@app.get("/api/teacher")  # MARKER_20260627
 async def get_teacher_dashboard(
-    current_user: DBUser = Depends(get_current_user)
+    current_user: DBUser = Depends(get_current_teacher)
 ):
-    """获取教师端诊断看板（直接从本地 SQLite 数据库中读取，实现实时持久化，受 JWT 保护）"""
+    """获取教师端诊断看板（仅教师可访问）"""
+    print("  [Teacher] get_teacher_dashboard called - checking version")
     def fetch_dashboard_data(session):
         _seed_demo_class(session)
         db_profiles = session.query(DBStudentProfile).all()
@@ -290,17 +349,114 @@ async def get_teacher_dashboard(
 
     misconception_rank: dict[str, float] = {}
     intervention_rank: dict[str, int] = {}
+    major_distribution: dict[str, int] = {}
+    dimension_averages: dict[str, float] = {k: 0.0 for k in DIMENSION_LABELS}
+    dimension_counts: dict[str, int] = {k: 0 for k in DIMENSION_LABELS}
+    
     for profile in profiles:
         for name, value in profile.misconception_patterns.items():
             misconception_rank[name] = misconception_rank.get(name, 0.0) + value
         for cause in profile.learning_state_causes.values():
             for intervention in cause.recommended_interventions:
                 intervention_rank[intervention] = intervention_rank.get(intervention, 0) + 1
+        major = profile.major or profile.major_preference or "未设置"
+        major_distribution[major] = major_distribution.get(major, 0) + 1
+        for key in DIMENSION_LABELS:
+            state = profile.dimension_states.get(key)
+            if state:
+                dimension_averages[key] = dimension_averages.get(key, 0.0) + state.score
+                dimension_counts[key] = dimension_counts.get(key, 0) + 1
+
+    # 计算班级各维度平均分
+    class_dimension_avg = {}
+    for key in DIMENSION_LABELS:
+        cnt = dimension_counts.get(key, 0)
+        class_dimension_avg[key] = round(dimension_averages.get(key, 0.0) / cnt, 2) if cnt > 0 else 0.0
+
+    # === 教师增强数据 ===
+
+    # 1. 班级摘要
+    total = len(profiles)
+    avg_mastery_val = sum(calc_avg_mastery(p) for p in profiles) / max(total, 1)
+    alert_count = sum(1 for p in profiles if (p.frustration_index or 0) > 0.3 or (p.cognitive_load or 0) > 0.6)
+
+    low_mastery_count = 0
+    concept_class_mastery: dict[str, list[float]] = {}
+    for p in profiles:
+        for c, s in (p.concept_mastery or {}).items():
+            concept_class_mastery.setdefault(c, []).append(s)
+        # 平均掌握度 < 0.3 算低掌握度学生
+        pm = calc_avg_mastery(p)
+        if pm < 0.3:
+            low_mastery_count += 1
+
+    class_summary = {
+        "total_students": total,
+        "avg_mastery": round(avg_mastery_val, 2),
+        "alert_count": alert_count,
+        "low_mastery_count": low_mastery_count,
+    }
+
+    # 2. 概念全班排行（按平均掌握度升序 = 最薄弱在前）
+    concept_class_ranking = sorted(
+        [
+            {
+                "concept": c,
+                "avg_mastery": round(sum(v) / len(v), 2),
+                "student_count": len(v),
+            }
+            for c, v in concept_class_mastery.items()
+        ],
+        key=lambda item: item["avg_mastery"],
+    )[:15]
+
+    # 3. 高危学生列表
+    alert_students = []
+    for p in profiles:
+        reasons = []
+        fi = p.frustration_index or 0
+        cl = p.cognitive_load or 0
+        pm = calc_avg_mastery(p)
+        if fi > 0.3:
+            reasons.append(f"挫败感偏高({round(fi*100)}%)")
+        if cl > 0.6:
+            reasons.append(f"认知负荷过高({round(cl*100)}%)")
+        if pm < 0.3:
+            reasons.append(f"掌握度极低({round(pm*100)}%)")
+        if reasons:
+            alert_students.append({
+                "student_id": p.student_id,
+                "reasons": reasons,
+                "frustration_index": round(fi, 2),
+                "cognitive_load": round(cl, 2),
+                "mastery": round(pm, 2),
+            })
+    alert_students = sorted(alert_students, key=lambda a: -a["frustration_index"])[:10]
+
+    # 4. 每个学生最近活动（简化为最近画像更新时间）
+    recent_activities = []
+    for p in profiles:
+        ts = getattr(p, "last_update_timestamp", "") or ""
+        recent_activities.append({
+            "student_id": p.student_id,
+            "last_active": ts[:19] if ts else "",
+        })
+    recent_activities.sort(key=lambda a: a["last_active"], reverse=True)
 
     return {
         "course": "机器学习导论",
         "dimensions": DIMENSION_LABELS,
+        "class_summary": class_summary,
+        "class_dimension_avg": class_dimension_avg,
         "heatmap": heatmap,
+        "major_distribution": sorted(
+            [{"major": name, "count": count} for name, count in major_distribution.items()],
+            key=lambda item: item["count"],
+            reverse=True,
+        ),
+        "concept_class_ranking": concept_class_ranking,
+        "alert_students": alert_students,
+        "recent_activities": recent_activities,
         "misconceptions": sorted(
             [{"name": name, "score": round(score, 2)} for name, score in misconception_rank.items()],
             key=lambda item: item["score"],
@@ -313,6 +469,52 @@ async def get_teacher_dashboard(
         )[:8],
         "profiles": [_profile_card(profile) for profile in profiles],
     }
+
+
+def calc_avg_mastery(profile) -> float:
+    """计算单个画像的平均掌握度"""
+    m = profile.concept_mastery or {}
+    if not m:
+        return 0.0
+    vals = [v for v in m.values() if isinstance(v, (int, float))]
+    return sum(vals) / len(vals) if vals else 0.0
+
+@app.get("/api/teacher/seed")
+async def seed_student_data(
+    current_user: DBUser = Depends(get_current_teacher)
+):
+    """触发学生种子数据生成（仅教师可调用）"""
+    try:
+        from scripts.seed_students import seed_all
+        seed_all()
+        return {"status": "ok", "message": "学生数据已生成"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"种子数据生成失败: {str(e)}")
+
+@app.get("/api/teacher/reviews")
+async def get_teacher_reviews(
+    current_user: DBUser = Depends(get_current_teacher)
+):
+    """获取全班学生的复习计划（教师复习监控）"""
+    from app.crud import get_review_plan
+    from app.database import DBStudentProfile
+
+    def fetch(session):
+        profiles = session.query(DBStudentProfile).all()
+        result = []
+        for dbp in profiles:
+            plans = get_review_plan(session, dbp.student_id)
+            if plans:
+                result.append({
+                    "student_id": dbp.student_id,
+                    "review_count": len(plans),
+                    "next_review": plans[0].next_review_time.isoformat() if hasattr(plans[0], 'next_review_time') else "",
+                    "due_concepts": [p.concept_name for p in plans[:3]] if hasattr(plans[0], 'concept_name') else [],
+                })
+        return result
+
+    reviews = await run_db_op(fetch)
+    return {"reviews": reviews, "total": len(reviews)}
 
 @app.get("/api/datasets")
 async def get_datasets():

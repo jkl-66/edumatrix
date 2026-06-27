@@ -31,16 +31,19 @@ def _free_port(port: int) -> None:
                 f'netstat -ano | findstr "LISTENING" | findstr ":{port}"',
                 capture_output=True, text=True, shell=True
             )
+            killed = set()
             for line in result.stdout.strip().split("\n"):
                 parts = line.strip().split()
                 if len(parts) >= 5:
                     pid = parts[-1]
-                    try:
-                        subprocess.run(["taskkill", "/F", "/PID", pid],
-                                       capture_output=True, timeout=3)
-                        print(f"  [端口] 已清理 PID {pid} 占用的端口 {port}")
-                    except Exception:
-                        pass
+                    if pid.isdigit() and pid not in killed and int(pid) != 0 and int(pid) != os.getpid():
+                        killed.add(pid)
+                        try:
+                            subprocess.run(["taskkill", "/F", "/PID", pid],
+                                           capture_output=True, timeout=3)
+                            print(f"  [端口] 已清理 PID {pid} 占用的端口 {port}")
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -53,9 +56,6 @@ RELOAD = os.getenv("EDUMATRIX_RELOAD", "1") == "1"
 def main():
     provider = os.getenv("EDUMATRIX_LLM_PROVIDER", "openai")
     api_key = os.getenv("EDUMATRIX_LLM_API_KEY", "")
-
-    # 启动前清理旧进程
-    _free_port(PORT)
 
     print("=" * 56)
     print("  EduMatrix 智教矩阵 v1.0")

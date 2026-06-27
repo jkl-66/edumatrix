@@ -37,7 +37,7 @@ export async function loginUser(username, password) {
   const params = new URLSearchParams()
   params.append('username', username)
   params.append('password', password)
-  const r = await api.post('/api/auth/login', params, {
+  const r = await api.post('/auth/login', params, {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
   })
   return r.data
@@ -259,7 +259,7 @@ export function abortAllStreams() {
   _activeStreamControllers.clear()
 }
 
-export function streamChat(message, studentId, onEvent, onError) {
+export function streamChat(message, studentId, onEvent, onError, retries = 3) {
   // 强制终止该学生的旧连接，防止并发泄漏
   abortStream(studentId)
 
@@ -269,58 +269,92 @@ export function streamChat(message, studentId, onEvent, onError) {
 
   const headers = buildHeaders()
   const url = '/api/stream/chat'
+  let retryCount = 0
 
-  fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify({ message, student_id: studentId }),
-    signal,  // 绑定 AbortSignal
-  }).then(response => {
-    if (!response.ok) {
-      if (signal.aborted) return  // 被主动中止，不报错
-      onError?.(new Error(`HTTP ${response.status}`))
-      return
-    }
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
+  function doFetch() {
+    if (signal.aborted) return
 
-    function read() {
-      if (signal.aborted) {
-        reader.cancel().catch(() => {})
-        return
-      }
-      reader.read().then(({ done, value }) => {
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ message, student_id: studentId }),
+      signal,
+    }).then(response => {
+      if (!response.ok) {
         if (signal.aborted) return
-        if (done) {
-          _activeStreamControllers.delete(studentId)
+        // 断线自动重连（最多 retries 次）
+        if (retryCount < retries) {
+          retryCount++
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 5000)
+          console.warn(`[Chat] 连接断开(${response.status})，${delay}ms后重试(${retryCount}/${retries})`)
+          setTimeout(doFetch, delay)
           return
         }
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-        let currentEvent = ''
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim()
-          } else if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              onEvent?.(currentEvent, data)
-            } catch {}
-          }
+        onError?.(new Error(`HTTP ${response.status}`))
+        return
+      }
+
+      // 连接成功，重置重试计数
+      retryCount = 0
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      function read() {
+        if (signal.aborted) {
+          reader.cancel().catch(() => {})
+          return
         }
-        read()
-      }).catch(err => {
-        if (err.name === 'AbortError') return
-        onError?.(err)
-      })
-    }
-    read()
-  }).catch(err => {
-    if (err.name === 'AbortError') return
-    onError?.(err)
-  })
+        reader.read().then(({ done, value }) => {
+          if (signal.aborted) return
+          if (done) {
+            _activeStreamControllers.delete(studentId)
+            return
+          }
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+          let currentEvent = ''
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7).trim()
+            } else if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6))
+                onEvent?.(currentEvent, data)
+              } catch {}
+            }
+          }
+          read()
+        }).catch(err => {
+          if (err.name === 'AbortError') return
+          // 断线自动重连
+          if (retryCount < retries) {
+            retryCount++
+            const delay = Math.min(1000 * Math.pow(2, retryCount), 5000)
+            console.warn(`[Chat] 流断开，${delay}ms后重试(${retryCount}/${retries})`)
+            setTimeout(doFetch, delay)
+            return
+          }
+          onError?.(err)
+        })
+      }
+      read()
+    }).catch(err => {
+      if (err.name === 'AbortError') return
+      // 网络错误自动重连
+      if (retryCount < retries) {
+        retryCount++
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 5000)
+        console.warn(`[Chat] 网络错误，${delay}ms后重试(${retryCount}/${retries})`)
+        setTimeout(doFetch, delay)
+        return
+      }
+      onError?.(err)
+    })
+  }
+
+  doFetch()
 
   // 返回 abort 函数供组件销毁时调用
   return () => abortStream(studentId)
@@ -329,6 +363,16 @@ export function streamChat(message, studentId, onEvent, onError) {
 // --- Profile API ---
 export async function getStudentProfile(studentId) {
   const r = await api.get(`/profile/${studentId}`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function getProfileAnalysis(studentId) {
+  const r = await api.get(`/profile/${studentId}/analysis`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function getLearningPath(studentId) {
+  const r = await api.get(`/profile/${studentId}/learning-path`, { headers: buildHeaders() })
   return r.data
 }
 

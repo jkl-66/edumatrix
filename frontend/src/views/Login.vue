@@ -18,8 +18,16 @@ async function login() {
   try {
     const data = await loginUser(username.value.trim(), password.value.trim())
     localStorage.setItem('edumatrix_token', data.access_token)
-    localStorage.setItem('edumatrix_username', username.value.trim())
-    router.push('/')
+    localStorage.setItem('edumatrix_username', data.username || username.value.trim())
+    localStorage.setItem('edumatrix_display_name', data.display_name || data.username || username.value.trim())
+    localStorage.setItem('edumatrix_role', data.role || 'student')
+    localStorage.setItem('edumatrix_student_id', data.student_id || data.username || username.value.trim())
+    // 教师跳转到看板，学生跳转到首页
+    if (data.role === 'teacher') {
+      router.push('/teacher')
+    } else {
+      router.push('/')
+    }
   } catch (e) {
     error.value = e.response?.data?.detail || '登录失败，请检查用户名和密码'
   } finally {
@@ -66,8 +74,8 @@ async function login() {
             <LogIn :size="14" /> {{ loading ? '登录中...' : '登录' }}
           </button>
           <p class="text-[10px] text-gray-400 text-center mt-4">
-            教师账号: teacher / teacher123<br>
-            学生账号: student1 / password123
+            教师账号: teacher / admin123<br>
+            学生可自行注册或使用演示账号: stu-cs-001 / 123456
           </p>
         </div>
       </div>

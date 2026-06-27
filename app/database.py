@@ -138,6 +138,8 @@ class DBUser(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(64), unique=True, index=True, nullable=False) # 通常与 student_id 一致
     hashed_password = Column(String(128), nullable=False)
+    role = Column(String(16), default="student")  # "student" 或 "teacher"
+    display_name = Column(String(64), default="")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=_utcnow)
 
@@ -328,6 +330,22 @@ class DBArxivCache(Base):
 # 物理并网：自动创建所有本地 SQLite 数据库表
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # 增量迁移：为新添加的列做兼容
+    _migrate_schema()
+
+def _migrate_schema():
+    """SQLite 增量迁移：添加新列（如存在则跳过）"""
+    import sqlalchemy as sa
+    inspector = sa.inspect(engine)
+    columns = [c["name"] for c in inspector.get_columns("users")]
+    if "role" not in columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE users ADD COLUMN role VARCHAR(16) DEFAULT 'student'"))
+            conn.commit()
+    if "display_name" not in columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE users ADD COLUMN display_name VARCHAR(64) DEFAULT ''"))
+            conn.commit()
 
 def get_db():
     db = SessionLocal()

@@ -815,7 +815,7 @@
 ---
 
 ### 2026-06-27
-> **今日概述**：完成三大核心重构：多用户角色分离（学生/教师双框架）、学习路径链条式推进、教师端教学监控面板。大幅优化画像语义分析引擎和前端用户体验。
+> **今日概述**：完成三大核心重构：多用户角色分离（学生/教师双框架）、学习路径链条式推进、教师端教学监控面板。此外完成了多轮苏格拉底即时答疑接口对接与UI滚动加固；实现了知识库 Word 文档 (.docx) 物理解析和入库，下线了旧版二进制 OLE `.ppt` 支持；重构了拖拽上传区域和参数设置页面，实现大模型温度与字数设置的自愈与星火并网。通过全量 40 项单元/集成测试，并在前端打包中实现 100% 成功。
 
 #### 1. 多用户角色与双框架分离
 * **角色系统**：app/database.py + app/auth.py 增加 role 字段（student/teacher），JWT 返回角色信息，新增注册端点和教师账号自动创建。
@@ -827,18 +827,33 @@
 * **链条状态**：已完成(>=70%) / 当前可学(前置就绪) / 前置未完成。
 * **步骤引导**：每步含 summary/strategy/verify/estimated_minutes。
 
-#### 3. 画像语义引擎升级
-* models.py 关键词库扩展 3 倍，新增追问检测、进步识别、再问降分逻辑。
+#### 3. 教师端重构与画像语义引擎升级
+* **画像语义引擎**：models.py 关键词库扩展 3 倍，新增追问检测、进步识别、再问降分逻辑。
+* **教师端看板**：Teacher.vue 重写为 4 个独立标签页，使用独立路由 /teacher/students 等，修复导航跳回学生面板 Bug。
+* **Dashboard 改版**：Dashboard 改版为学生专属仪表盘（进度卡片+雷达图+快捷入口）。
 
-#### 4. 教师端重构
-* Teacher.vue 重写为 4 个独立标签页，使用独立路由 /teacher/students 等。
-* 修复导航跳回学生面板 Bug。
+#### 4. 即时答疑与滚动防并发加固
+- **即时答疑 Axios 接口对齐**：修复 `frontend/src/api/index.js` 中的 `socraticExplain` 传参缺失 Bug，补全了 `follow_up` 和 `history` 的映射。
+- **页面防并发与加载锁**：在 `InlineSocraticPopup.vue` 中对输入框与发送按钮在 loading 状态下进行了禁用处理，防止用户快速重复提交导致多协程并发抢占 API 流量。
+- **滚动元素定位纠偏**：将 `popupRef` 从不具有滚动条的 Flex 容器下移并正确挂载至 `.overflow-y-auto` 滚动对话流子项。解决了在多轮追问时，回答追加后页面无法自动滚动到底部的 Bug。
 
-#### 5. Bug 修复 & 体验优化
-* 修复教师导航 query 参数跳回学生面板（改为独立路由）。
-* 修复端口 8000 僵尸进程。
-* SSE 聊天增加指数退避自动重连。
-* Dashboard 改版为学生专属仪表盘（进度卡片+雷达图+快捷入口）。
+#### 5. 知识库 Word (.docx) 解析与上传兼容自愈
+- **Word 文档物理解析**：在 [document_parser.py](file:///d:/project-edumatrix/edumatrix-main/document_parser.py) 中实现并加入了 `_parse_docx` 机制，结合 `python-docx` 将二进制 Word 内容抓取为段落和表格明细文本并推给切片入库。
+- **外键约束自愈修复**：修复了上传大类下前端 `FormData` 与后端 FastAPI 默认从 URL 提取 Query Parameter 的冲突。在后端 [knowledge_api.py](file:///d:/project-edumatrix/edumatrix-main/knowledge_api.py) 中增加了 `student_id` 缺失时自动回退提取 request.form() 数据的 fallback 自愈结构，同时修改了前端请求，双保险锁死解决 FOREIGN KEY 写入 500 错误。
+- **拖拽上传 Flickering 重构**：在 [Knowledge.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Knowledge.vue) 中隐藏原有的覆盖 input 框，加装 ref 进行 click 手动映射。为所有子项卡片配置 `pointer-events-none` 样式，杜绝了拖拽进入内部图标时频繁触发 dragleave / drop 崩溃的顽疾。
+
+#### 6. 废弃旧版 PPT 文件支持
+- **拦截非 XML OLE 格式**：移除了前端及后端对旧版二进制 OLE 格式 `.ppt` 的支持（该格式由旧版 Presentation 模块读取容易乱码），只支持标准的 `.pptx`。
+- **配置用户友好说明**：在 [Knowledge.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Knowledge.vue) 的 drop 事件中拦截并增加了贴心的黄色对话框引导，提醒用户在 PowerPoint 中另存为 `.pptx` 后上传；后端同步增加了 400 校验拦截。
+
+#### 7. 大模型参数持久化自愈与 Spark 并网
+- **前端 LocalStorage 缓存自愈**：重构了 [Settings.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Settings.vue) 中的 `load` 与 `save` 逻辑。当用户历史浏览器缓存中缺少 `temperature` 或 `maxTokens` 时，页面在加载时会自动为其赋上默认的 `0.3` 和 `4096`，并执行静默保存将其自动写回 LocalStorage。彻底解决了动滑块后一刷新就重置回默认 0.3 的 Bug。
+- **打通科大讯飞星火温控限制**：重构了 [llm_client.py](file:///d:/project-edumatrix/edumatrix-main/llm_client.py) 中的 `SparkClient` 和 `AsyncSparkClient`，将硬编码的 `0.25` 温度和 `4096` 字数限制改由属性传入，并在 `build_llm`/`build_async_llm` 方法中对接，完成了全系统的温度及字数覆盖控制。
+
+#### 8. 单元与集成测试校验
+- **测试大盘**：在 `test_edumatrix.py` 中新增加了 `test_docx_upload_and_parsing` 单元测试，并修正了 `test_pdf_upload_and_parsing` 中因重构丢失的 `dir_path` 局部变量 NameError。
+- **全量测试通过**：`python -m pytest test_edumatrix.py -v` ➡️ **40/40 tests passed (100% OK)**。
+- **前端生产编译**：`npm run build` ➡️ **Built in 826ms (100% OK)**。
 
 
 

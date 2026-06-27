@@ -42,17 +42,7 @@ const config = ref({
   xfApiSecret: '',
 })
 
-function load() {
-  try {
-    const raw = localStorage.getItem('edumatrix_llm_config')
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      Object.assign(config.value, parsed)
-    }
-  } catch {}
-}
-
-function save() {
+function save(silent = false) {
   localStorage.setItem('edumatrix_llm_config', JSON.stringify({
     apiKey: config.value.apiKey,
     endpoint: config.value.endpoint,
@@ -63,8 +53,34 @@ function save() {
     xfApiKey: config.value.xfApiKey,
     xfApiSecret: config.value.xfApiSecret,
   }))
-  saved.value = true
-  setTimeout(() => { saved.value = false }, 3000)
+  if (!silent) {
+    saved.value = true
+    setTimeout(() => { saved.value = false }, 3000)
+  }
+}
+
+function load() {
+  try {
+    const raw = localStorage.getItem('edumatrix_llm_config')
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      let needsSave = false
+      if (parsed.temperature === undefined) {
+        parsed.temperature = 0.3
+        needsSave = true
+      }
+      if (parsed.maxTokens === undefined) {
+        parsed.maxTokens = 4096
+        needsSave = true
+      }
+      Object.assign(config.value, parsed)
+      if (needsSave) {
+        save(true)
+      }
+    } else {
+      save(true)
+    }
+  } catch {}
 }
 
 function clearKey() {

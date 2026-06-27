@@ -136,7 +136,7 @@ export async function uploadKnowledgeDocument(file, studentId = 'default', onPro
   const form = new FormData()
   form.append('file', file)
   form.append('student_id', studentId)
-  const r = await api.post('/knowledge/upload', form, {
+  const r = await api.post(`/knowledge/upload?student_id=${encodeURIComponent(studentId)}`, form, {
     headers: { ...buildHeaders(), 'Content-Type': 'multipart/form-data' },
     onUploadProgress: onProgress,
   })
@@ -464,6 +464,8 @@ export async function socraticExplain(opts) {
     context_before: opts.context_before || '',
     context_after: opts.context_after || '',
     student_id: opts.student_id || 'default',
+    follow_up: opts.follow_up || '',
+    history: opts.history || '',
   }, { headers: buildHeaders() })
   return r.data
 }

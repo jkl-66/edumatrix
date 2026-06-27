@@ -147,7 +147,7 @@ function renderMarkdown(text) {
 <template>
   <Teleport to="body">
     <div v-if="visible" class="fixed inset-0 z-50 flex items-start justify-center pt-20" @click.self="close">
-      <div ref="popupRef"
+      <div
         class="inline-socratic-popup bg-gray-900 border border-gray-700 rounded-lg shadow-2xl w-[460px] max-h-[70vh] flex flex-col"
         @click.stop>
         <!-- 头部 -->
@@ -161,7 +161,7 @@ function renderMarkdown(text) {
           <code class="text-xs text-yellow-300 break-all">{{ targetText.slice(0, 80) }}</code>
         </div>
         <!-- 对话区域 -->
-        <div class="flex-1 overflow-y-auto p-4 space-y-2">
+        <div ref="popupRef" class="flex-1 overflow-y-auto p-4 space-y-2">
           <div v-if="loading && steps.length === 0" class="flex items-center gap-2 text-gray-400 text-xs py-8 justify-center">
             <div class="animate-spin w-3 h-3 border border-purple-500 border-t-transparent rounded-full" />
             正在推导...
@@ -180,8 +180,8 @@ function renderMarkdown(text) {
         <!-- 追问输入区 -->
         <div class="border-t border-gray-700 p-3 shrink-0">
           <div class="flex gap-2">
-            <input v-model="followUp" class="flex-1 px-3 py-2 text-xs rounded-lg bg-gray-800 border border-gray-600 text-gray-200 placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none transition-all" placeholder="输入追问..." @keydown.enter="sendFollowUp" :disabled="sendingFollowUp" />
-            <button class="px-3 py-2 text-xs font-semibold rounded-lg bg-purple-600 hover:bg-purple-700 text-white transition-all disabled:opacity-50" :disabled="!followUp.trim() || sendingFollowUp" @click="sendFollowUp">
+            <input v-model="followUp" class="flex-1 px-3 py-2 text-xs rounded-lg bg-gray-800 border border-gray-600 text-gray-200 placeholder-gray-500 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none transition-all" placeholder="输入追问..." @keydown.enter="sendFollowUp" :disabled="sendingFollowUp || loading" />
+            <button class="px-3 py-2 text-xs font-semibold rounded-lg bg-purple-600 hover:bg-purple-700 text-white transition-all disabled:opacity-50" :disabled="!followUp.trim() || sendingFollowUp || loading" @click="sendFollowUp">
               {{ sendingFollowUp ? '...' : '追问' }}
             </button>
           </div>

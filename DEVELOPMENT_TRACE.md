@@ -789,6 +789,63 @@ python -m pytest tests/ test_edumatrix.py -q → 58 passed in 12.73s
 - **Token 消耗估计**：约 18,000 Input / 1,800 Output
 - **架构师（用户）终审反馈**：Approved
 
+---
+
+### [2026-06-27] - 修复多轮苏格拉底即时答疑接口与前端滚动及防并发加固
+- **任务编号**：`TASK_SOCRATIC_MULTI_ROUND_001`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-backend`, `oma-frontend`, `oma-qa`
+- **开发场景**：[frontend/src/api/index.js](file:///d:/project-edumatrix/edumatrix-main/frontend/src/api/index.js) (在 `socraticExplain` 参数中补齐 `follow_up` 和 `history` 传参)、[frontend/src/components/InlineSocraticPopup.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/InlineSocraticPopup.vue) (重构滚动容器 `ref="popupRef"` 挂载至正确层级，并在追问输入区加上 `loading` 状态禁用以实现防并发保护)、[test_edumatrix.py](file:///d:/project-edumatrix/edumatrix-main/test_edumatrix.py) (新增 `test_socratic_explain_multi_round` 并验证单轮与多轮参数路由响应行为).
+- **自愈重试记录**：
+  1. *第一次报错*：多轮追问时，后端收到空 `follow_up` 与空 `history` 导致无法触发多轮深入引导；同时，追问消息发送后弹出窗口无法自动滚动到底部。
+  2. *自愈与修复*：
+     - 排查前端 Axios 调用层，定位到 `socraticExplain` 方法未对 payload 映射 `follow_up` 与 `history` 字段。补全参数传递。
+     - 排查 CSS 排版，发现滚动容器被嵌套在 flex 子项中，而 `ref="popupRef"` 仍挂在父级 Flexbox container，将其下移挂载至 `.overflow-y-auto` 容器。
+     - 增加 `loading || sendingFollowUp` 控制输入和提交按钮禁用状态，防范并发二次触发。
+- **测试验证结果**：
+  * **后端测试**：运行 `python -m pytest test_edumatrix.py` ➡️ **39 passed in 26.16s (100% OK)**。
+  * **前端编译**：运行 `npm run build` ➡️ **Built in 21.38s (100% OK)**。
+- **Token 消耗估计**：约 8,500 Input / 800 Output
+- **架构师（用户）终审反馈**：Pending
+
+---
+
+### [2026-06-27] - 知识库 Word 解析、传参对齐与拖拽上传自愈
+- **任务编号**：`TASK_KNOWLEDGE_DOCX_DRAG_FIX`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-backend`, `oma-frontend`, `oma-qa`, `oma-debug`
+- **开发场景**：[document_parser.py](file:///d:/project-edumatrix/edumatrix-main/document_parser.py) (集成 `python-docx` 读取文本和表格)、[knowledge_api.py](file:///d:/project-edumatrix/edumatrix-main/knowledge_api.py) (添加 `.docx` 到支持白名单、新增从 Form Data 提取 `student_id` 的自愈 Fallback)、[frontend/src/api/index.js](file:///d:/project-edumatrix/edumatrix-main/frontend/src/api/index.js) (在 `uploadKnowledgeDocument` 中增加 URL 网址查询传参对齐)、[frontend/src/views/Knowledge.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Knowledge.vue) (隐藏原生 Input 框，添加 ref 执行 programmatic click 激活，为所有子元素配置 `pointer-events-none` 根治拖拽 flickering 问题，并更新说明文字与颜色)、[test_edumatrix.py](file:///d:/project-edumatrix/edumatrix-main/test_edumatrix.py) (新增 `test_docx_upload_and_parsing` 单元测试，并修正 `test_pdf_upload_and_parsing` 遗留的 `NameError: dir_path` 崩溃).
+- **自愈重试记录**：
+  1. *第一次报错*：界面上传任何文档（.md, .txt, .pdf）抛出 500 服务器错误，但测试套件却绿灯。
+  2. *定位与修复*：排查发现前端以 Form Data 发送 `student_id`，而 FastAPI 因无 Form 声明默认从 URL 提取。当无 URL 参时，后端读取默认的 `'default'`，引发数据库外键 IntegrityError 约束失败。在后端增加 Fallback 并强制前端 URL 传参，实现双保险修复。
+  3. *第二次报错*：拖拽上传时页面频繁出现“不支持的文件类型”且区域虚线闪烁，甚至文件直接在浏览器中打开。
+  4. *定位与修复*：分析得出是绝对定位覆盖的 `<input>` 拦截了 Dragover/Drop 事件，且当鼠标拖入图标等子元素时反复触发 parent 的 `dragleave`。通过将 `<input>` 隐藏、用 Vue Ref 触发 click、并给所有子元素加上 `pointer-events-none`，彻底实现了极速丝滑的拖拽。
+- **测试验证结果**：
+  * **后端测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **40 passed in 32.07s (100% OK)**。
+  * **前端编译**：运行 `npm run build` ➡️ **Built successfully in 749ms (100% OK)**。
+- **Token 消耗估计**：约 15,000 Input / 1,500 Output
+- **架构师（用户）终审反馈**：Approved
+
+---
+
+### [2026-06-27] - 禁用旧版 PPT 并网与 LLM 参数保存自愈打通
+- **任务编号**：`TASK_SETTINGS_PERSISTENCE_AND_SPARK_ALIGN`
+- **对应智能体**：`Antigravity (Gemini-2.5-Flash)`
+- **绑定 Skill**：`oma-backend`, `oma-frontend`, `oma-qa`, `oma-debug`
+- **开发场景**：[llm_client.py](file:///d:/project-edumatrix/edumatrix-main/llm_client.py) (重构 `SparkClient`/`AsyncSparkClient` 使其动态接受并应用 `temperature` 和 `max_tokens`，并在 `build_llm`/`build_async_llm` 方法中传递)、[knowledge_api.py](file:///d:/project-edumatrix/edumatrix-main/knowledge_api.py) (在 `SUPPORTED_EXTENSIONS` 中下线 `.ppt` 二进制格式并实现上传时 400 友好错误拦截)、[document_parser.py](file:///d:/project-edumatrix/edumatrix-main/document_parser.py) (解析分发层下线 `.ppt` 格式)、[frontend/src/views/Knowledge.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Knowledge.vue) (过滤剔除 `.ppt` 文件支持并添加友好黄色提示弹窗)、[frontend/src/views/Settings.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Settings.vue) (重构 `load` 与 `save` 机制，增加缺失字段自愈写入 `localStorage` 保护，彻底解决刷新重置问题).
+- **自愈重试记录**：
+  1. *第一次报错*：用户上传旧版 `.ppt` 文件后生成上万个乱码碎片。
+  2. *定位与修复*：`python-pptx` 库无法解析旧版 OLE 二进制 `.ppt` 格式导致触发 UTF-8 强行解码乱码。评估该功能性价比极低，决定采取行业黄金实践拦截限制，前后端移除 `.ppt` 支持，并在前后端均配置友好引导信息提示用户另存为 `.pptx`。
+  3. *第二次报错*：配置页面修改 LLM 的温度和生成长度上限后，刷新网页必定重置为默认值 `0.3`。
+  4. *定位与修复*：排查由于浏览器历史缓存的 JSON 字段缺失这两个 key，加载时覆盖了 Vue 组件的默认绑定，导致刷新直接回退。通过重构 `load` 方法在首次读取时对其进行自愈补齐与静默持久化，并重构 Spark 后端，打通了全系统的自定义大模型参数限制。
+- **测试验证结果**：
+  * **后端测试**：运行 `python -m pytest test_edumatrix.py -v` ➡️ **40 passed in 29.12s (100% OK)**。
+  * **前端编译**：运行 `npm run build` ➡️ **Built successfully in 826ms (100% OK)**。
+- **Token 消耗估计**：约 12,000 Input / 1,200 Output
+- **架构师（用户）终审反馈**：Pending
+
+
+
 
 
 

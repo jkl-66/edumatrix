@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, Request
 
 from app.database import DBKnowledgeDocument, run_db_op
 from document_parser import chunk_document, parse_uploaded_file, parse_pptx_slides
@@ -20,10 +20,10 @@ SUPPORTED_EXTENSIONS = {
     ".md": "markdown",
     ".txt": "text",
     ".pdf": "pdf",
+    ".docx": "word",
     ".json": "json",
     ".py": "python_code",
     ".pptx": "presentation",
-    ".ppt": "presentation",
     ".mp4": "video",
     ".avi": "video",
     ".mov": "video",
@@ -35,13 +35,25 @@ SUPPORTED_EXTENSIONS = {
 
 @router.post("/upload")
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     student_id: str = "default",
 ) -> dict[str, Any]:
+    if student_id == "default":
+        try:
+            form = await request.form()
+            form_student_id = form.get("student_id")
+            if form_student_id:
+                student_id = str(form_student_id)
+        except Exception:
+            pass
+
     filename = file.filename or "unnamed"
     ext = os.path.splitext(filename)[1].lower()
 
     if ext not in SUPPORTED_EXTENSIONS:
+        if ext == ".ppt":
+            raise HTTPException(status_code=400, detail="不支持旧版 PPT 二进制格式，请在 PowerPoint 中另存为 .pptx 格式后再上传。")
         allowed = ", ".join(SUPPORTED_EXTENSIONS.keys())
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext}，支持 {allowed}")
 

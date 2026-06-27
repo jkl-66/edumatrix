@@ -304,14 +304,18 @@ graph LR
 
 ## 🌊 Wave 10：知识库上传与对话历史时间线优化
 
-### 📋 Task 10.A: 知识库文件上传 BytesIO 流包装修复
-*   **原理机制**：`document_parser.py` 中使用 `io.BytesIO` 对原始二进制字节数据进行流包装，使 `PyPDF2`、`pdfplumber`、`python-pptx` 等第三方库能够正常调用 `.seek()` 方法，避免 `AttributeError` 导致 500 崩溃。
+### 📋 Task 10.A: 知识库文件上传 BytesIO 流包装与 Word 文件解析修复
+*   **原理机制**：
+    - `document_parser.py` 中使用 `io.BytesIO` 对原始二进制字节数据进行流包装，使 `PyPDF2`、`pdfplumber`、`python-pptx` 等第三方库能够正常调用 `.seek()` 方法，避免 `AttributeError` 导致 500 崩溃。
+    - 针对 Word 文件 (.docx)，新增集成 `python-docx` 库以支持对段落文本与表格内容的解析提取，并打通前端文件接受格式过滤限制，支持无缝上传解析。
 *   **测试方法**（自动化）：
-    运行命令 `python -m pytest test_edumatrix.py -k test_pdf_upload_and_parsing -v`。
-*   **预期结果**：上传 PDF 文件二进制数据后，接口返回 200 OK，响应体包含 `file_type: "pdf"` 及 `chunk_count >= 0`，不抛出任何 `AttributeError` 或服务器 500 错误。
+    运行命令：
+    - 验证 PDF 上传：`python -m pytest test_edumatrix.py -k test_pdf_upload_and_parsing -v`
+    - 验证 Word (.docx) 上传：`python -m pytest test_edumatrix.py -k test_docx_upload_and_parsing -v`
+*   **预期结果**：上传 PDF 或 DOCX 文件后，接口返回 200 OK，分别输出包含 `file_type: "pdf"` / `file_type: "docx"` 及 `chunk_count >= 0` 的 JSON 数据，并且文档解析提取正常入库。
 *   **手动验证**：
-    * 进入 `/knowledge` 知识库页面，点击上传按钮，选择一份 PDF 课件上传。
-    * **预期结果**：上传进度条流畅完成，页面刷新后能看到刚上传的文件名及 chunk 数量，无弹出错误提示。
+    * 进入 `/knowledge` 知识库页面，拖入或点击上传按钮选择一份 `.docx` 格式的 Word 文档课件进行上传。
+    * **预期结果**：上传完成后状态显示为绿色成功，页面文档列表中出现该 Word 文件的卡片（显示为蓝色，配合文本图标），并且可在探索器中查看对应的知识图谱实体及关联标签。
 
 ### 📋 Task 10.B: 对话历史时间线与 Swarm 协作链可视化
 *   **原理机制**：`History.vue` 使用 `parseTimestamp` 方法规范 SQLite 存储的 naive UTC 字符串，补全 `'Z'` 时区标识防止 `NaN`/时差 8 小时 Bug；通过 `parseResponseSummary` 解析 `response_summary` 字段，将 9 个智能体协作记录渲染为胶囊 Badge 链。

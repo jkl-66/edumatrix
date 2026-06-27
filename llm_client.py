@@ -179,6 +179,8 @@ class SparkClient:
     spark_url: str = CONFIG.spark_url
     domain: str = CONFIG.spark_domain
     timeout_seconds: int = 45
+    temperature: float = 0.25
+    max_tokens: int = 4096
 
     def _create_url(self) -> str:
         parsed = urlparse(self.spark_url)
@@ -213,8 +215,8 @@ class SparkClient:
             "parameter": {
                 "chat": {
                     "domain": self.domain,
-                    "temperature": 0.25,
-                    "max_tokens": 4096,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
                 }
             },
             "payload": {
@@ -260,6 +262,8 @@ class AsyncSparkClient:
     spark_url: str = CONFIG.spark_url
     domain: str = CONFIG.spark_domain
     timeout_seconds: int = 45
+    temperature: float = 0.25
+    max_tokens: int = 4096
 
     def _create_url(self) -> str:
         parsed = urlparse(self.spark_url)
@@ -294,8 +298,8 @@ class AsyncSparkClient:
             "parameter": {
                 "chat": {
                     "domain": self.domain,
-                    "temperature": 0.25,
-                    "max_tokens": 4096,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
                 }
             },
             "payload": {
@@ -390,6 +394,8 @@ def build_llm(config: EduMatrixConfig = CONFIG) -> LLMBackend:
                 api_secret=config.spark_api_secret,
                 spark_url=config.spark_url,
                 domain=config.spark_domain,
+                temperature=config.llm_temperature,
+                max_tokens=config.llm_max_tokens,
             )
     if provider == "openai" and config.llm_api_key:
         return OpenAIChatLLM(
@@ -417,6 +423,8 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
             api_secret=config.spark_api_secret,
             spark_url=config.spark_url,
             domain=config.spark_domain,
+            temperature=overrides.get("temperature", config.llm_temperature),
+            max_tokens=overrides.get("max_tokens", config.llm_max_tokens),
         )
         
     if (provider == "openai" or provider == "vllm") and api_key:

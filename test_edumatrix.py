@@ -1152,6 +1152,119 @@ print("Val:", s.val)
             except Exception:
                 pass
 
+    def test_docx_upload_and_parsing(self):
+        """验证 Word (.docx) 上传和解析逻辑能够正常提取文本与入库"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal, DBKnowledgeDocument, DBStudentProfile
+        from app.crud import save_student_profile
+        from models import StudentProfile
+        import uuid
+        import docx
+        from io import BytesIO
+
+        student_id = f"test-docx-upload-{uuid.uuid4().hex[:8]}"
+        client = TestClient(app)
+        
+        session = SessionLocal()
+        try:
+            profile = StudentProfile(student_id=student_id)
+            save_student_profile(session, profile)
+        finally:
+            session.close()
+
+        # 生成一个内存中的有效 docx 文件数据
+        doc = docx.Document()
+        doc.add_paragraph("This is a mock Word document for testing convolutional neural networks and pooling layers.")
+        table = doc.add_table(rows=1, cols=2)
+        table.rows[0].cells[0].text = "Header 1"
+        table.rows[0].cells[1].text = "Value 1"
+        
+        docx_io = BytesIO()
+        doc.save(docx_io)
+        docx_content = docx_io.getvalue()
+        
+        file_payload = {"file": ("test_cnn_doc.docx", docx_content, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+        
+        response = client.post(
+            f"/api/knowledge/upload?student_id={student_id}",
+            files=file_payload
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["file_type"], "docx")
+        self.assertTrue(data["chunk_count"] >= 0)
+        
+        # 验证提取的文本中包含段落及表格内容
+        self.assertIn("mock Word document", data["content_preview"])
+        
+        # 清理数据库和物理文件
+        session = SessionLocal()
+        try:
+            db_doc = session.query(DBKnowledgeDocument).filter_by(id=data["id"]).first()
+            if db_doc:
+                session.delete(db_doc)
+            prof_now = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if prof_now:
+                session.delete(prof_now)
+            session.commit()
+        finally:
+            session.close()
+
+        # 清除物理上传的文件和目录
+        file_path = os.path.join("data", "uploads", student_id, f"{data['id']}.docx")
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+        dir_path = os.path.join("data", "uploads", student_id)
+        if os.path.exists(dir_path):
+            try:
+                os.rmdir(dir_path)
+            except Exception:
+                pass
+
+    def test_socratic_explain_multi_round(self):
+        """验证苏格拉底即时答疑接口在单轮和多轮追问模式下的参数和路由行为"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        import uuid
+
+        client = TestClient(app)
+        student_id = f"test-explain-{uuid.uuid4().hex[:8]}"
+
+        # 1. 验证单轮公式解释
+        response = client.post(
+            "/api/stream/explain",
+            json={
+                "target_text": "\\frac{\\partial L}{\\partial w}",
+                "context_before": "损失函数对权重的偏导数为",
+                "context_after": "，用梯度下降更新权重。",
+                "student_id": student_id
+            }
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["target_text"], "\\frac{\\partial L}{\\partial w}")
+        self.assertIn("content", data)
+
+        # 2. 验证多轮追问模式
+        response = client.post(
+            "/api/stream/explain",
+            json={
+                "target_text": "\\frac{\\partial L}{\\partial w}",
+                "follow_up": "这里的L指的是什么损失函数？",
+                "history": "导师: 这是一个求偏导的公式...\n学生: 明白。",
+                "student_id": student_id
+            }
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertIn("content", data)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,7 +37,9 @@ def parse_uploaded_file(file: BinaryIO, filename: str) -> str:
     raw = file.read()
     if ext == ".pdf":
         return _parse_pdf(raw)
-    elif ext == ".pptx" or ext == ".ppt":
+    elif ext == ".docx":
+        return _parse_docx(raw)
+    elif ext == ".pptx":
         return _parse_pptx(raw)
     elif ext == ".md":
         return raw.decode("utf-8", errors="replace")
@@ -69,6 +71,25 @@ def _parse_pdf(raw: bytes) -> str:
         import pdfplumber
         with pdfplumber.open(BytesIO(raw)) as pdf:
             return "\n".join(page.extract_text() or "" for page in pdf.pages)
+    except Exception:
+        pass
+    return raw.decode("utf-8", errors="replace")
+
+
+def _parse_docx(raw: bytes) -> str:
+    try:
+        import docx
+        doc = docx.Document(BytesIO(raw))
+        full_text = []
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if text:
+                full_text.append(text)
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                full_text.append(" | ".join(cells))
+        return "\n".join(full_text)
     except Exception:
         pass
     return raw.decode("utf-8", errors="replace")

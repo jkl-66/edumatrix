@@ -14,9 +14,14 @@ const dragOver = ref(false)
 const uploadError = ref('')
 const uploadSuccess = ref('')
 const error = ref('')
+const fileInput = ref(null)
 
-const fileTypes = ['.md', '.txt', '.pdf', '.json', '.pptx', '.ppt', '.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv']
-const acceptedTypes = '.md,.txt,.pdf,.json,.pptx,.ppt,.mp4,.avi,.mov,.mkv,.webm,.flv'
+function triggerSelect() {
+  if (fileInput.value) fileInput.value.click()
+}
+
+const fileTypes = ['.md', '.txt', '.pdf', '.docx', '.json', '.pptx', '.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv']
+const acceptedTypes = '.md,.txt,.pdf,.docx,.json,.pptx,.mp4,.avi,.mov,.mkv,.webm,.flv'
 
 function formatSize(bytes) {
   if (!bytes || bytes === 0) return '0 B'
@@ -41,23 +46,23 @@ function ago(ts) {
 
 function fileIcon(type) {
   if (type === 'pdf') return FileImage
-  if (type === 'pptx' || type === 'ppt') return Presentation
-  if (type === 'md') return FileText
+  if (type === 'pptx') return Presentation
+  if (type === 'md' || type === 'docx') return FileText
   if (['mp4', 'avi', 'mov', 'mkv', 'webm', 'flv'].includes(type)) return Film
   return File
 }
 
 function fileColor(type) {
   if (type === 'pdf') return 'text-red-500 bg-red-50'
-  if (type === 'pptx' || type === 'ppt') return 'text-orange-500 bg-orange-50'
-  if (type === 'md') return 'text-blue-500 bg-blue-50'
+  if (type === 'pptx') return 'text-orange-500 bg-orange-50'
+  if (type === 'md' || type === 'docx') return 'text-blue-500 bg-blue-50'
   if (['mp4', 'avi', 'mov', 'mkv', 'webm', 'flv'].includes(type)) return 'text-purple-500 bg-purple-50'
   if (type === 'txt') return 'text-gray-500 bg-gray-50'
   return 'text-green-500 bg-green-50'
 }
 
 function isMultimodal(doc) {
-  return doc.is_multimodal || ['pptx', 'ppt', 'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv'].includes(doc.file_type)
+  return doc.is_multimodal || ['pptx', 'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv'].includes(doc.file_type)
 }
 
 async function load() {
@@ -81,7 +86,11 @@ async function handleUpload(event) {
   for (const file of files) {
     const ext = '.' + file.name.split('.').pop().toLowerCase()
     if (!fileTypes.includes(ext)) {
-      uploadError.value = `不支持的文件类型: ${ext}`
+      if (ext === '.ppt') {
+        uploadError.value = `检测到旧版 PPT 文件。为了获得完美的知识图谱解析，请在 PowerPoint 中将其另存为 .pptx 格式后再上传。`
+      } else {
+        uploadError.value = `不支持的文件类型: ${ext}`
+      }
       continue
     }
     uploading.value = true
@@ -192,13 +201,19 @@ onMounted(load)
       <h2 class="text-sm font-semibold text-gray-800">知识库 ({{ docs.length }})</h2>
     </div>
 
-    <div class="relative mb-6" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
-      <div class="border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer"
-        :class="dragOver ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-blue-300 hover:bg-gray-50'">
-        <input type="file" :accept="acceptedTypes" multiple class="absolute inset-0 opacity-0 cursor-pointer" @change="handleUpload" />
-        <Upload :size="36" class="mx-auto mb-3" :class="dragOver ? 'text-blue-500' : 'text-gray-400'" />
-        <p class="text-sm font-medium text-gray-700">{{ dragOver ? '释放文件以上传' : '拖拽文件到此处，或点击选择文件' }}</p>
-        <p class="text-xs text-gray-400 mt-1">支持 文档(.md/.txt/.pdf) / PPT(.pptx) / 视频(.mp4/.avi/.mov) 自动解析</p>
+    <div class="relative mb-6">
+      <input ref="fileInput" type="file" :accept="acceptedTypes" multiple class="hidden" @change="handleUpload" />
+      <div 
+        class="border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer"
+        :class="dragOver ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-blue-300 hover:bg-gray-50'"
+        @click="triggerSelect"
+        @dragover.prevent="onDragOver"
+        @dragleave.prevent="onDragLeave"
+        @drop.prevent="onDrop"
+      >
+        <Upload :size="36" class="mx-auto mb-3 pointer-events-none" :class="dragOver ? 'text-blue-500' : 'text-gray-400'" />
+        <p class="text-sm font-medium text-gray-700 pointer-events-none">{{ dragOver ? '释放文件以上传' : '拖拽文件到此处，或点击选择文件' }}</p>
+        <p class="text-xs text-gray-400 mt-1 pointer-events-none">支持 文档(.md/.txt/.pdf/.docx) / PPT(.pptx) / 视频(.mp4/.avi/.mov) 自动解析</p>
       </div>
     </div>
 

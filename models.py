@@ -649,9 +649,15 @@ class StudentProfile:
             "神经网络", "卷积神经网络", "Transformer", "注意力机制", "K-Means", "PCA", "t-SNE",
             "随机森林", "XGBoost", "AUC", "F1分数", "精确率", "召回率", "分类", "回归",
         )
-        for point in known_points:
-            if point in message:
-                # 跨对话概念演进检测：如果之前已掌握的概念再次被问，说明可能有新困惑
+        matched_points = [p for p in known_points if p in message]
+        filtered_points = []
+        for p in matched_points:
+            if any(other != p and p in other for other in matched_points):
+                continue
+            filtered_points.append(p)
+
+        for point in filtered_points:
+            # 跨对话概念演进检测：如果之前已掌握的概念再次被问，说明可能有新困惑
                 prev = self.knowledge_traces.get(point)
                 if prev and prev.mastery >= 0.6 and any(
                     word in message for word in ("还是不懂", "重新", "又忘了", "再讲", "还是不明白", "又遇到")

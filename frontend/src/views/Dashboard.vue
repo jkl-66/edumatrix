@@ -123,7 +123,7 @@ onMounted(async () => {
     <!-- 主内容：雷达图 + 薄弱点 -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <!-- 雷达图 -->
-      <div class="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+      <div class="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 overflow-hidden">
         <h2 class="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
           <Brain :size="15" class="text-purple-500" /> 知识掌握度
         </h2>

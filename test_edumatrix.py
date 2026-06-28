@@ -1265,6 +1265,36 @@ print("Val:", s.val)
         self.assertEqual(data["status"], "success")
         self.assertIn("content", data)
 
+    def test_component_regeneration_endpoint(self):
+        import uuid
+        from app.database import SessionLocal
+        from app.crud import load_student_profile, save_student_profile
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        student_id = f"test-regen-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            profile = load_student_profile(session, student_id)
+            save_student_profile(session, profile)
+        finally:
+            session.close()
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/stream/regenerate",
+            json={
+                "student_id": student_id,
+                "role": "理论教授",
+                "resource_type": "专业讲义",
+                "query": "什么是池化层"
+            }
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertIn("content", data)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ import {
   BrainCircuit, Target, TrendingUp, BookOpen, AlertTriangle,
   User, Lightbulb, BarChart3, Layers, Activity, Zap, Heart,
   ChevronRight, ArrowRight, GraduationCap, Sparkles, CheckCircle2,
-  AlertCircle, Info, FileText, Download,
+  AlertCircle, Info, FileText, Download, Calendar,
 } from '@lucide/vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 

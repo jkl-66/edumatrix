@@ -13,7 +13,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles,
-  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar,
+  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar, X,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
 import { useQuizStore } from '../stores/quiz'
@@ -21,7 +21,6 @@ import SandboxConsole from '../components/SandboxConsole.vue'
 import InlineSocraticPopup from '../components/InlineSocraticPopup.vue'
 import GraphicFallback from '../components/GraphicFallback.vue'
 import ManifoldVisualizer from '../components/ManifoldVisualizer.vue'
-import AvatarSpeech from '../components/AvatarSpeech.vue'
 import AgentTimeline from '../components/AgentTimeline.vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
@@ -30,7 +29,8 @@ const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
 const quizStore = useQuizStore()
 const route = useRoute()
-const avatarRef = ref(null)
+
+
 
 // --- Chat State ---
 const messages = computed(() => chatStore.messages)
@@ -264,17 +264,6 @@ watch(messages, (newMsgs, oldMsgs) => {
   const lengthIncreased = newMsgs.length > (oldMsgs?.length || 0)
   
   if (lengthIncreased) {
-    const lastMsg = newMsgs[newMsgs.length - 1]
-    if (lastMsg.role === 'assistant' && !lastMsg.error && avatarRef.value) {
-      // Remove Markdown headers and code blocks for cleaner TTS
-      const cleanText = lastMsg.content
-        .replace(/#+\s/g, '')
-        .replace(/```[\s\S]*?```/g, '[代码块已省略]')
-        .replace(/\*\*/g, '')
-        .replace(/\$/g, '')
-      
-      avatarRef.value.speak(cleanText)
-    }
     // 仅在非资源生成期间，新消息到达才自动滚动落底
     if (!sending.value) {
       nextTick(() => {
@@ -1535,7 +1524,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
       </div>
 
       <!-- CHAT TAB -->
-      <div v-if="activeTab === 'chat'" class="relative flex flex-col flex-1 min-h-0 max-w-4xl">
+      <div v-if="activeTab === 'chat'" class="relative flex flex-col flex-1 min-h-0 max-w-4xl mb-6">
         <div class="flex flex-wrap gap-2 mb-4">
           <button v-for="preset in presets" :key="preset" class="btn btn-outline text-xs py-1.5" @click="usePreset(preset)">
             {{ preset.slice(0, 20) }}{{ preset.length > 20 ? '...' : '' }}
@@ -1688,7 +1677,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
       </div>
 
       <!-- QUIZ TAB -->
-      <div v-if="activeTab === 'quiz'" class="flex flex-col flex-1 min-h-0 max-w-4xl">
+      <div v-if="activeTab === 'quiz'" class="flex flex-col flex-1 min-h-0 max-w-4xl mb-6">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-sm font-semibold text-gray-800 flex items-center gap-2">
             <BrainCircuit :size="16" class="text-purple-600" /> 自适应测验
@@ -1832,7 +1821,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
       </div>
 
       <!-- CODE TAB -->
-      <div v-if="activeTab === 'code'" class="flex flex-col flex-1 min-h-0 max-w-4xl">
+      <div v-if="activeTab === 'code'" class="flex flex-col flex-1 min-h-0 max-w-4xl mb-6">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-semibold text-gray-800 flex items-center gap-2">
             <Terminal :size="16" class="text-emerald-600" /> Python 代码沙箱
@@ -1878,7 +1867,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
       </div>
 
       <!-- WEB SEARCH TAB -->
-      <div v-if="activeTab === 'websearch'" class="flex flex-col flex-1 min-h-0 max-w-4xl">
+      <div v-if="activeTab === 'websearch'" class="flex flex-col flex-1 min-h-0 max-w-4xl mb-6">
         <div class="flex items-center gap-2 mb-4">
           <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center">
             <Globe :size="18" class="text-blue-500" />
@@ -1983,7 +1972,6 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
       <!-- Right Visualization Sidebar -->
       <div class="w-full max-w-4xl hidden xl:flex flex-col gap-6 overflow-y-auto scrollbar-none pb-4 shrink-0">
-            <AvatarSpeech ref="avatarRef" class="shrink-0" />
             
             <div class="grid grid-cols-2 gap-6 shrink-0 items-stretch">
               <AgentTimeline 

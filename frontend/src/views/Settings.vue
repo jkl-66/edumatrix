@@ -59,6 +59,15 @@ function save(silent = false) {
   }
 }
 
+const autoSaved = ref(false)
+let autoSaveTimer = null
+function triggerAutoSave() {
+  save(true)
+  autoSaved.value = true
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = setTimeout(() => { autoSaved.value = false }, 1500)
+}
+
 function load() {
   try {
     const raw = localStorage.getItem('edumatrix_llm_config')
@@ -112,6 +121,7 @@ onMounted(load)
         <label class="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5">
           <Key :size="14" />
           API Key
+          <span v-if="autoSaved" class="text-[10px] text-emerald-600 font-normal ml-2 animate-pulse bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/50">已实时保存</span>
         </label>
         <div class="flex gap-2">
           <div class="relative flex-1">
@@ -120,6 +130,7 @@ onMounted(load)
               :type="showKey ? 'text' : 'password'"
               class="input pr-9"
               placeholder="sk-... 留空使用模拟引擎"
+              @input="triggerAutoSave"
             />
             <button
               class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
@@ -139,8 +150,9 @@ onMounted(load)
         <label class="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5">
           <Globe :size="14" />
           API Endpoint
+          <span v-if="autoSaved" class="text-[10px] text-emerald-600 font-normal ml-2 animate-pulse bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/50">已实时保存</span>
         </label>
-        <input v-model="config.endpoint" class="input" placeholder="https://api.openai.com/v1/chat/completions" />
+        <input v-model="config.endpoint" class="input" placeholder="https://api.openai.com/v1/chat/completions" @input="triggerAutoSave" />
       </div>
 
       <!-- Model -->
@@ -148,8 +160,9 @@ onMounted(load)
         <label class="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5">
           <Cpu :size="14" />
           模型名称
+          <span v-if="autoSaved" class="text-[10px] text-emerald-600 font-normal ml-2 animate-pulse bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/50">已实时保存</span>
         </label>
-        <input v-model="config.model" class="input" placeholder="gpt-4o-mini" />
+        <input v-model="config.model" class="input" placeholder="gpt-4o-mini" @input="triggerAutoSave" />
       </div>
 
       <!-- Temperature -->
@@ -157,8 +170,9 @@ onMounted(load)
         <label class="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5">
           <Thermometer :size="14" />
           Temperature ({{ config.temperature }})
+          <span v-if="autoSaved" class="text-[10px] text-emerald-600 font-normal ml-2 animate-pulse bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/50">已实时保存</span>
         </label>
-        <input v-model.number="config.temperature" type="range" min="0" max="1" step="0.05" class="w-full" />
+        <input v-model.number="config.temperature" type="range" min="0" max="1" step="0.05" class="w-full" @input="triggerAutoSave" />
         <div class="flex justify-between text-[10px] text-gray-400 mt-0.5">
           <span>精确 (0)</span>
           <span>创造性 (1)</span>
@@ -167,28 +181,32 @@ onMounted(load)
 
       <!-- Max Tokens -->
       <div>
-        <label class="text-sm font-medium text-gray-700 mb-1.5 block">Max Tokens ({{ config.maxTokens }})</label>
-        <input v-model.number="config.maxTokens" type="range" min="512" max="8192" step="512" class="w-full" />
+        <label class="text-sm font-medium text-gray-700 mb-1.5 flex items-center justify-between">
+          <span>Max Tokens ({{ config.maxTokens }})</span>
+          <span v-if="autoSaved" class="text-[10px] text-emerald-600 font-normal animate-pulse bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/50">已实时保存</span>
+        </label>
+        <input v-model.number="config.maxTokens" type="range" min="512" max="8192" step="512" class="w-full" @input="triggerAutoSave" />
       </div>
 
       <div class="border-t border-gray-100 pt-5">
         <h3 class="text-sm font-bold text-gray-800 mb-4 flex items-center gap-2">
           <Sparkles :size="16" class="text-blue-500" />
           科大讯飞 TTS 设置
+          <span v-if="autoSaved" class="text-[10px] text-emerald-600 font-normal ml-2 animate-pulse bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/50">已实时保存</span>
         </h3>
         
         <div class="space-y-4">
           <div>
             <label class="text-xs font-medium text-gray-600 mb-1.5 block">APPID</label>
-            <input v-model="config.xfAppId" class="input text-sm" placeholder="讯飞控制台获取的 APPID" />
+            <input v-model="config.xfAppId" class="input text-sm" placeholder="讯飞控制台获取的 APPID" @input="triggerAutoSave" />
           </div>
           <div>
             <label class="text-xs font-medium text-gray-600 mb-1.5 block">API Key</label>
-            <input v-model="config.xfApiKey" class="input text-sm" placeholder="讯飞控制台获取的 API Key" />
+            <input v-model="config.xfApiKey" class="input text-sm" placeholder="讯飞控制台获取的 API Key" @input="triggerAutoSave" />
           </div>
           <div>
             <label class="text-xs font-medium text-gray-600 mb-1.5 block">API Secret</label>
-            <input v-model="config.xfApiSecret" type="password" class="input text-sm" placeholder="讯飞控制台获取的 API Secret" />
+            <input v-model="config.xfApiSecret" type="password" class="input text-sm" placeholder="讯飞控制台获取的 API Secret" @input="triggerAutoSave" />
           </div>
         </div>
       </div>

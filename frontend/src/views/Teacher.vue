@@ -13,6 +13,10 @@ const router = useRouter()
 const data = ref(null)
 const loading = ref(true)
 const error = ref('')
+const searchQuery = ref('')
+const selectedMajor = ref('')
+const expandedStudent = ref(null)
+
 const activeTab = computed(() => {
   const pathMap = {
     '/teacher': 'overview',

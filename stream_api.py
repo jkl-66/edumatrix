@@ -482,6 +482,9 @@ async def stream_chat(request: Request) -> StreamingResponse:
 
 @router.post("/regenerate")
 async def regenerate_component(request: Request) -> dict[str, Any]:
+    from app.database import run_db_op
+    from app.crud import load_student_profile
+
     payload = await request.json()
     student_id = str(payload.get("student_id", "default"))
     role = str(payload.get("role", ""))
@@ -493,14 +496,23 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
         
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
+    if not profile:
+        profile = await run_db_op(load_student_profile, student_id)
+        swarm.profile_store[student_id] = profile
     
     try:
         retrieval = await swarm.planner.plan_async(swarm.rag, query, profile)
         evidence = swarm.debate.clean(retrieval).clean_evidence
         graph_context = retrieval.graph_context
     except Exception:
-        evidence = []
-        graph_context = ""
+        from models import GraphContext
+        evidence = ()
+        graph_context = GraphContext(
+            target=query,
+            learning_path=(query,),
+            prerequisite_edges=(),
+            downstream_edges=(),
+        )
         
     try:
         result = await swarm.async_generator.generate(

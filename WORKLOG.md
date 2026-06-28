@@ -855,6 +855,35 @@
 - **全量测试通过**：`python -m pytest test_edumatrix.py -v` ➡️ **40/40 tests passed (100% OK)**。
 - **前端生产编译**：`npm run build` ➡️ **Built in 826ms (100% OK)**。
 
+---
+
+### 2026-06-28
+> **今日概述**：完成大模型运行期参数实时控制与前端交互反馈的闭环，解决教师端切换侧边栏响应式同步缺陷；开放理论教授 Mermaid 结构图生成权限并并轨防错红线；全面重构 AI Tutor 语音助手，实现了粘性悬浮吸附、全状态播放器控制以及 LaTeX 公式/Markdown 格式的智能清洗汉化；彻底修复了局部模块重算 (Regenerate) 挂起崩溃的后端漏洞并并轨测试。
+
+#### 1. 教师端侧边栏响应式同步 Bug 修复
+- **侧边栏状态响应化**：重构 `App.vue` 中非响应式计算属性，将 `role`、`displayName` 和 `studentId` 改为响应式 `ref`，配合对 `route.path` 变化的 `watch` 监听。一旦发生路由切换（如登录成功跳转），自动从 `localStorage` 中刷新当前身份卡并触发重绘，完美解决教师登录后侧边栏错乱显示学生界面且底部名牌及主题色不更新的 Bug。
+
+#### 2. 大模型与科大讯飞 TTS 参数实时保存与后端缓存并网
+- **前端自动保存与呼吸灯反馈**：在 `Settings.vue` 中为 Temperature、Max Tokens 以及科大讯飞 TTS 参数输入框绑定 `@input="triggerAutoSave"`。用户滑动滑块或键入字符时即刻静默写入 LocalStorage，同时在标题右侧显示闪烁绿色的 `已实时保存` 的微光 Badge 作为交互反馈。
+- **后端缓存失效机制**：重构 `swarm_factory.py` 的 `build_swarm_from_headers` 方法，将 `temperature` 和 `max_tokens` 合并编入 `cache_key`。当前端滑动调整时，下一次 API 请求的 Headers 发生变动，后端缓存即刻失效，重新生成包含全新参数的大模型客户端实例，达到名副其实的“实时秒级生效”。
+
+#### 3. 理论教授支持 Mermaid 思维导图与流程图生成
+- **讲义排版放开与防错并轨**：在 `instruct_rag.py` 中重构“理论教授”的 `role_rules` 规则，开放在概念讲解中自主生成 Mermaid 思维导图（mindmap）与流程图（graph TD）的许可，并完整注入了缩进、ID命名、特殊字符中文双引号包裹等致命防错红线。前端 `renderMarkdown` 无缝提取并动态渲染为高互动性的自适应“概念思维导图”全屏查看卡片。
+
+#### 4. AI Tutor 智能语音助手悬浮跟随与手动朗读讲义控制
+- **自适应粘性物理跟随**：将 `<AvatarSpeech>` 组件由主页面流位置迁移至右侧“可视化画板”（`shouldShowRightPanel`）侧边栏的底部，借助右侧栏本身的 `sticky top-6 self-start` 定位与 `mt-auto`，实现在页面上下滚动时始终吸附在右下角。
+- **全状态播放控制器**：为 `AvatarSpeech.vue` 增加了 `isPaused` 响应式变量，并暴露了 `pause()`、`resume()`、`stop()` 控制接口。在人脸下方增加了多色状态控制按钮，点击即可触发读取、暂停、继续。当发出新提问时，自动调用 `.stop()` 终止老音频播放防止重叠冲突。
+- **公式与格式智能清洗汉化 (Oral Normalization)**：新增 `cleanTextForSpeech` 清洗模块。在文字送往 TTS 前，剥离 Markdown、HTML、SVG 等杂质，更将不可发音的 LaTeX 科学符号（如 `\alpha`，`\frac{A}{B}`，`\partial` 等）智能“汉化转义”为人类自然普通话（如“偏导”、“B分之A”、“西格玛”等）。
+
+#### 5. 资源的重新生成（“重算”按键）功能修复
+- **画像内存加载自愈**：修复 `/api/stream/regenerate` 接口在 `profile_store` 缓存缺失时返回 `None` 导致底层 `AttributeError` 崩溃的 Bug，增加了自动使用 `load_student_profile` 从数据库中提取并载入缓存的逻辑。
+- **兜底 GraphContext 结构完整化**：修复异常捕获兜底块中将 `graph_context` 设为空字符串 `""` 导致 generate 函数解析属性报错的 Bug，改为构造结构完整的降级 `GraphContext` 实例。
+- **新增回归测试**：在 `test_edumatrix.py` 中新增 `test_component_regeneration_endpoint` 单元测试，通过 TestClient 模拟请求。
+
+#### 6. 单元与集成测试校验
+- **测试通过**：`python -m pytest test_edumatrix.py -v` ➡️ **41/41 tests passed (100% OK)**。
+- **前端生产编译**：`npm run build` ➡️ **Built in 705ms (100% OK)**。
+
 
 
 

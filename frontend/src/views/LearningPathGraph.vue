@@ -5,7 +5,7 @@ import { getLearningPath } from '../api'
 import {
   BookOpen, BrainCircuit, Target, TrendingUp, ChevronRight,
   ArrowRight, AlertTriangle, CheckCircle2, Layers, Sparkles,
-  Clock, Zap, AlertCircle, Info, Lock, Unlock,
+  Clock, Zap,
 } from '@lucide/vue'
 
 const route = useRoute()

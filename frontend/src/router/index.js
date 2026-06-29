@@ -21,16 +21,25 @@ function requireAuth() {
   return true
 }
 
+// 教师路由守卫：只允许教师角色访问
+function requireTeacher() {
+  const token = localStorage.getItem('edumatrix_token')
+  if (!token) return '/login'
+  const role = localStorage.getItem('edumatrix_role')
+  if (role !== 'teacher') return '/'
+  return true
+}
+
 const routes = [
   { path: '/login', name: 'Login', component: Login },
   { path: '/', name: 'Dashboard', component: Dashboard, beforeEnter: requireAuth },
   { path: '/learn', name: 'Learn', component: Chat, beforeEnter: requireAuth },
   { path: '/notes', name: 'Notes', component: Notes, beforeEnter: requireAuth },
   { path: '/review', name: 'Review', component: Review, beforeEnter: requireAuth },
-  { path: '/teacher', name: 'Teacher', component: Teacher, beforeEnter: requireAuth, alias: ['/teacher/overview'] },
-  { path: '/teacher/students', name: 'TeacherStudents', component: Teacher, beforeEnter: requireAuth },
-  { path: '/teacher/reviews', name: 'TeacherReviews', component: Teacher, beforeEnter: requireAuth },
-  { path: '/teacher/reports', name: 'TeacherReports', component: Teacher, beforeEnter: requireAuth },
+  { path: '/teacher', name: 'Teacher', component: Teacher, beforeEnter: requireTeacher, alias: ['/teacher/overview'] },
+  { path: '/teacher/students', name: 'TeacherStudents', component: Teacher, beforeEnter: requireTeacher },
+  { path: '/teacher/reviews', name: 'TeacherReviews', component: Teacher, beforeEnter: requireTeacher },
+  { path: '/teacher/reports', name: 'TeacherReports', component: Teacher, beforeEnter: requireTeacher },
   { path: '/history', name: 'History', component: History, beforeEnter: requireAuth },
   { path: '/knowledge', name: 'Knowledge', component: Knowledge, beforeEnter: requireAuth },
   { path: '/profile', name: 'ProfileDashboard', component: ProfileDashboard, beforeEnter: requireAuth },

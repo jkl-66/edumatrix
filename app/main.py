@@ -595,45 +595,37 @@ async def socratic_explain_direct(request: Request) -> dict[str, Any]:
     context_before = str(payload.get("context_before", ""))
     context_after = str(payload.get("context_after", ""))
     student_id = str(payload.get("student_id", "default"))
-    follow_up = str(payload.get("follow_up", "")).strip()  # 多轮追问
-    history = payload.get("history", "")  # 之前的对话
+    follow_up = str(payload.get("follow_up", "")).strip()
+    history = payload.get("history", "")
     if not target_text and not follow_up:
         raise HTTPException(status_code=400, detail="target_text 不能为空")
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
-    is_formula = any(c in target_text for c in ['\\', '∂', '∫', '∑', 'π', 'θ', 'lim', 'frac', 'partial'])
-    is_code = 'def ' in target_text or 'import ' in target_text or 'class ' in target_text or '=' in target_text
+    
+    import re
+    # 添加学生画像上下⽂
+    profile_context = ""
+    if profile:
+        weak = "、".join(profile.weak_points[:3]) if profile.weak_points else "暂无"
+        goals = "、".join(profile.learning_goals[:3]) if profile.learning_goals else "暂无"
+        major = profile.major or "未设置"
+        profile_context = f"学生专业={major}，学习目标={goals}，薄弱点={weak}"
+    
+    is_formula = bool(re.search(r'[\\∂∫∑πθ∏∐∆∇∞∧∨∩∪⊂⊃∈∉≤≥≠≈≡⇒⇔∀∃]', target_text))
+    is_code = bool(re.search(r'(def |import |class |\bfor\b|\bif\b|return |lambda |async |await )', target_text))
 
     if follow_up and history:
-        # 多轮追问模式
-        system = ("你是一位温和的苏格拉底导师。你正在与学生进行一段持续的苏格拉底式对话。\n"
-                  "根据之前的对话历史和用户最新的追问，继续深入引导，不要重复已经讲过的内容。\n"
-                  "规则：\n1) 先肯定学生的问题\n"
-                  "2) 针对追问的核心深入讲解\n"
-                  "3) 最后再抛出一个新的引导性问题\n"
-                  "4) 使用中文回复，保持简洁友善")
-        user = f"【原始内容】{target_text}\n【历史对话】{history}\n【学生追问】{follow_up}"
+        system = "你是一位温和的苏格拉底导师。根据之前的对话和学生追问继续引导，不要重复已讲内容。使用中文。"
+        user = f"【学生画像】{profile_context}\n【原始内容】{target_text}\n【历史对话】{history}\n【学生追问】{follow_up}"
     elif is_formula:
-        system = ("你是一位温和的苏格拉底导师。用户点击了一个数学公式，"
-                  "请用启发式分步推导解释这个公式。\n\n"
-                  "规则：\n1) 先问学生这个公式中每个符号表示什么\n"
-                  "2) 再拆解公式结构，用通俗比喻解释\n"
-                  "3) 给出一个具体数值例子\n"
-                  "4) 最后问一个引导性问题确认理解\n"
-                  "5) 使用中文回复，保持简洁友善")
-        user = f"用户点击的公式: {target_text}\n上文: {context_before}\n下文: {context_after}"
+        system = f"你是一位温和的苏格拉底导师。{profile_context}。用户点击了一个数学公式，请用启发式分步推导解释。\n规则：1)拆解公式结构，用通俗比喻 2)给出具体数值例子 3)结合学生背景 4)最后问引导性问题 5)使用中文。"
+        user = f"公式: {target_text}\n上文: {context_before}\n下文: {context_after}"
     elif is_code:
-        system = ("你是一位温和的苏格拉底导师。用户点击了一行代码，"
-                  "请用启发式方式解释这行代码的作用。\n\n"
-                  "规则：\n1) 先问学生你觉得这行代码在做什么\n"
-                  "2) 解释代码的关键部分和参数\n"
-                  "3) 给出一个简单的运行示例\n"
-                  "4) 最后问一个引导性问题\n"
-                  "5) 使用中文回复")
-        user = f"用户点击的代码: {target_text}\n上文: {context_before}\n下文: {context_after}"
+        system = f"你是一位温和的苏格拉底导师。{profile_context}。用户点击了一行代码，请用启发式方式解释。\n规则：1)先问学生觉得代码在做什么 2)解释关键部分 3)结合学生专业 4)最后问引导性问题 5)使用中文。"
+        user = f"代码: {target_text}\n上文: {context_before}\n下文: {context_after}"
     else:
-        system = "你是一位温和的苏格拉底导师。用户选取了一段文本，请用启发式方式解释。"
-        user = f"用户选取的内容: {target_text}\n上文: {context_before}\n下文: {context_after}"
+        system = f"你是一位温和的苏格拉底导师。{profile_context}。用户选取了一段文本，请用启发式方式解释。\n规则：1)概括核心内容 2)拆解关键概念 3)结合学生薄弱点 4)最后问引导性问题 5)使用中文。"
+        user = f"内容: {target_text}\n上文: {context_before}\n下文: {context_after}"
     try:
         content = await swarm.async_generator.llm.generate(system, user, role="苏格拉底辩手")
         return {"status": "success", "content": content, "target_text": target_text}

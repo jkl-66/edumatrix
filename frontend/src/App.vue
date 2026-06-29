@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar,
@@ -14,26 +14,19 @@ const router = useRouter()
 onMounted(() => window.addEventListener('beforeunload', abortAllStreams))
 onUnmounted(() => window.removeEventListener('beforeunload', abortAllStreams))
 
-const studentId = ref('')
-const role = ref('student')
-const displayName = ref('')
-const sidebarCollapsed = ref(false)
-
 const getOrInitStudentId = () => {
   let id = localStorage.getItem('edumatrix_student_id')
-  if (!id) { id = 'stu-' + Date.now(); localStorage.setItem('edumatrix_student_id', id) }
+  if (!id) {
+    id = 'stu-' + Date.now()
+    localStorage.setItem('edumatrix_student_id', id)
+  }
   return id
 }
 
-const updateSessionInfo = () => {
-  studentId.value = localStorage.getItem('edumatrix_student_id') || getOrInitStudentId()
-  role.value = localStorage.getItem('edumatrix_role') || 'student'
-  displayName.value = localStorage.getItem('edumatrix_display_name') || studentId.value.slice(0, 16)
-}
-
-watch(() => route.path, () => {
-  updateSessionInfo()
-}, { immediate: true })
+const studentId = computed(() => getOrInitStudentId())
+const role = computed(() => localStorage.getItem('edumatrix_role') || 'student')
+const displayName = computed(() => localStorage.getItem('edumatrix_display_name') || studentId.value.slice(0, 16))
+const sidebarCollapsed = ref(false)
 
 // 学生导航 — 只展示学习相关内容
 const studentNav = [
@@ -74,7 +67,7 @@ const pageTitle = computed(() => {
 function goHome() { router.push(role.value === 'teacher' ? '/teacher' : '/') }
 
 function logout() {
-  ['edumatrix_token','edumatrix_role','edumatrix_username','edumatrix_display_name','edumatrix_student_id','edumatrix_viewing_student']
+  ['edumatrix_token','edumatrix_role','edumatrix_username','edumatrix_display_name','edumatrix_student_id','edumatrix_viewing_student','edumatrix_chat_messages']
     .forEach(k => localStorage.removeItem(k))
   router.push('/login')
 }
@@ -145,7 +138,7 @@ function logout() {
       <!-- Page content -->
       <main class="flex-1 overflow-y-auto p-5">
         <div @error.capture="(e) => console.warn('[EduMatrix] 渲染异常:', e)">
-          <router-view :student-id="studentId" />
+          <router-view :key="route.fullPath" :student-id="studentId" />
         </div>
       </main>
     </div>

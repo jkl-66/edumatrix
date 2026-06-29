@@ -20,7 +20,8 @@ import { useQuizStore } from '../stores/quiz'
 import SandboxConsole from '../components/SandboxConsole.vue'
 import InlineSocraticPopup from '../components/InlineSocraticPopup.vue'
 import GraphicFallback from '../components/GraphicFallback.vue'
-import ManifoldVisualizer from '../components/ManifoldVisualizer.vue'
+import KnowledgePointsPanel from '../components/KnowledgePointsPanel.vue'
+import SandboxVisualizer from '../components/SandboxVisualizer.vue'
 import AgentTimeline from '../components/AgentTimeline.vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
@@ -293,6 +294,7 @@ const socraticPopup = ref({
 // --- 任务 8.4: 双栏阻尼排版 ---
 const rightPanelCollapsed = ref(false)
 const showSandbox = ref(false)
+const showVisualizer = ref(false)
 const sandboxInitialCode = ref("import numpy as np\nprint('Hello, EduMatrix!')")
 
 function extractCodeFromMarkdown(mdText) {
@@ -945,6 +947,28 @@ const alignmentProgress = computed(() => {
   const dist = klDivergence.value
   if (dist === 0) return 100
   return Math.max(0, Math.min(100, (1 - dist) * 100))
+})
+
+// 知识点列表（用于 KnowledgePointsPanel 浮窗）
+const conceptList = computed(() => {
+  const profile = latestProfile.value || capturedInitialProfile.value
+  if (!profile || !profile.concept_mastery) return []
+  return Object.entries(profile.concept_mastery).map(([name, mastery]) => ({
+    name,
+    mastery: Math.min(1, Math.max(0, mastery || 0)),
+    count: (profile.discussion_counts || {})[name] || 0,
+  }))
+})
+
+const discussionThemes = computed(() => {
+  const msgs = messages.value
+  const lastMsgs = msgs.slice(-4).map(m => m.content || '')
+  const themes = []
+  for (const msg of lastMsgs) {
+    const found = (msg.match(/(机器学习|深度学习|神经网络|线性回归|逻辑回归|SVM|决策树|梯度下降|反向传播|CNN|RNN|Transformer|注意力|池化|卷积|过拟合|正则化|交叉验证|模型评估|数据预处理|特征工程|聚类|降维|PCA)/g) || [])
+    themes.push(...found.slice(0, 3))
+  }
+  return [...new Set(themes)].slice(0, 5)
 })
 
 const codePresets = [
@@ -2119,13 +2143,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
                   errorMessage="图表渲染参数异常"
                   fallbackText="当前图表格式不支持实时渲染，已降级为文本示意图"
                 >
-                  <ManifoldVisualizer
-                    :studentMastery="studentMastery"
-                    :targetPoints="targetPoints"
-                    :klDivergence="klDivergence"
-                    :alignmentProgress="alignmentProgress"
-                    :conflictDetected="conflictDetected"
-                  />
+                  <!-- 此处原为 ManifoldVisualizer，已替换为浮窗 KnowledgePointsPanel -->
+                  <div class="flex items-center justify-center h-full text-gray-500 text-xs">
+                    <BookOpen :size="24" class="mr-2 opacity-50" />
+                    知识点浮窗在右下角
+                  </div>
                 </GraphicFallback>
               </div>
             </div>
@@ -2143,6 +2165,26 @@ function renderMarkdown(text, type = '', conceptName = '') {
       :lineIndex="socraticPopup.lineIndex"
       :messageIndex="socraticPopup.messageIndex"
       @close="socraticPopup.visible = false" />
+
+    <!-- 知识点速览浮窗（替换双曲圆盘） -->
+    <KnowledgePointsPanel
+      :concepts="conceptList"
+      :discussionThemes="discussionThemes"
+      :webResults="[]" />
+
+    <!-- 可视化分析浮窗按钮+面板 -->
+    <button
+      v-if="activeTab === 'chat'"
+      class="fixed bottom-44 right-6 z-40 w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-teal-600 text-white shadow-lg hover:scale-110 transition-all flex items-center justify-center"
+      :title="showVisualizer ? '关闭可视化' : '可视化分析'"
+      @click="showVisualizer = !showVisualizer"
+    >
+      <span class="text-sm">📊</span>
+    </button>
+    <SandboxVisualizer
+      v-if="showVisualizer"
+      :studentId="props.studentId"
+      @close="showVisualizer = false" />
 
     <!-- 任务 8.5: 视频渲染面板 -->
     <button

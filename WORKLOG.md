@@ -884,6 +884,36 @@
 - **测试通过**：`python -m pytest test_edumatrix.py -v` ➡️ **41/41 tests passed (100% OK)**。
 - **前端生产编译**：`npm run build` ➡️ **Built in 705ms (100% OK)**。
 
+---
+
+### 2026-06-29
+> **今日概述**：完成三大用户体验重构：移除双曲圆盘替换为知识点速览浮窗、苏格拉底答疑弹窗改为浮动图标模式、新增代码沙箱可视化分析浮窗。
+
+#### 1. 知识点速览浮窗（替换双曲圆盘）
+* **新组件**：`KnowledgePointsPanel.vue` — 右下角浮动面板
+* 显示当前讨论主题标签 + 涵盖知识点列表（含掌握度进度条 + 讨论次数）
+* 可最小化为浮动图标，不遮挡聊天内容
+* 移除原来无用的 `ManifoldVisualizer.vue`（Poincaré 双曲圆盘）
+
+#### 2. 苏格拉底即时答疑弹窗 → 浮动图标模式
+* `InlineSocraticPopup.vue` 重写：点击背景→最小化到🧠浮动图标（不是关闭）
+* 点击浮动图标→恢复弹窗，保留对话历史
+* 选中内容区域支持 KaTeX LaTeX 渲染（配合 CDN+本地兜底）
+* 顶部新增提示条："💡 选中公式/代码即可触发即时答疑"
+
+#### 3. 代码沙箱可视化分析浮窗
+* **新组件**：`SandboxVisualizer.vue` — 浮动可视化窗（左下角）
+* 5 种图表类型：📈折线图 / 📊柱状图 / 🔵散点图 / 📐函数曲线 / 🧊3D图
+* 选择类型→自动填充 matplotlib 代码→运行→显示生成的图表图像
+* 「💡 生成讲解」按钮→AI 解释图表含义
+
+#### 4. 代码质量修复
+* `.gitignore` 添加 `.reasonix/`、`*.db`、`*.db-shm`、`*.db-wal`
+* `router/index.js` 新增 `requireTeacher()` 守卫阻止学生访问教师路由
+* `App.vue` logout 增加清除聊天记录 localStorage
+* 移除未使用的 `getTeacherDashboard` import 和 `AlertCircle/Info/Lock/Unlock` import
+* 前端构建通过 ✅
+
 
 
 

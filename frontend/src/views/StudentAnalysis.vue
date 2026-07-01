@@ -1,12 +1,12 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getStudentProfile } from '../api'
+import { getStudentProfile, getProfileAnalysis, getProfileNarrative, updateStudentProfile } from '../api'
 import {
   BrainCircuit, Target, TrendingUp, BookOpen, AlertTriangle,
   User, Lightbulb, BarChart3, Layers, Activity, Zap, Heart,
   ChevronRight, ArrowRight, GraduationCap, Sparkles, CheckCircle2,
-  AlertCircle, Info, FileText, Download, Calendar,
+  AlertCircle, Info, FileText, Download, Calendar, Edit2, X,
 } from '@lucide/vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 
@@ -18,25 +18,42 @@ const loading = ref(true)
 const error = ref('')
 const activeTab = ref('overview')
 
+const narrative = ref('')
+const narrativeLoading = ref(true)
+
 onMounted(async () => {
   try {
-    // Get raw profile first
+    // 1. 先快速加载主画像数据与图表数据（无阻塞秒开）
     const profile = await getStudentProfile(studentId.value)
-    // Then get analysis
-    const { default: axios } = await import('axios')
-    const token = localStorage.getItem('edumatrix_token')
-    const headers = { Authorization: `Bearer ${token}` }
-    const lang = localStorage.getItem('edumatrix_lang') || ''
-    if (lang) headers['Accept-Language'] = lang
-    const resp = await axios.get(`/api/profile/${studentId.value}/analysis`, { headers })
+    const data = await getProfileAnalysis(studentId.value)
     analysis.value = {
-      ...resp.data,
+      ...data,
       raw_profile: profile,
+    }
+    // 优先读取已有的缓存叙事报告，如果暂无真实缓存，则先用默认信笺占位，同时触发异步拉取
+    narrative.value = data.narrative_report || ''
+    if (data.has_narrative_cache) {
+      narrativeLoading.value = false
+    } else {
+      narrativeLoading.value = true
     }
   } catch (e) {
     error.value = e.response?.data?.detail || e.message || '加载失败'
   } finally {
     loading.value = false
+  }
+
+  // 2. 异步（后台非阻塞）获取或生成最新的叙事报告，防止整页加载过慢
+  if (narrativeLoading.value) {
+    try {
+      const resp = await getProfileNarrative(studentId.value)
+      narrative.value = resp.narrative_report
+    } catch (err) {
+      console.error("加载成长信笺失败:", err)
+      narrative.value = "加载成长信笺超时，您可以在学习对话中继续提问以重新触发生长信笺计算。"
+    } finally {
+      narrativeLoading.value = false
+    }
   }
 })
 
@@ -89,6 +106,95 @@ function goLearn(concept) {
 
 function goPath() {
   router.push({ path: '/learning-path', query: { student_id: studentId.value } })
+}
+
+const showEditModal = ref(false)
+const saving = ref(false)
+
+const editForm = ref({
+  major: '',
+  target_course: '',
+  cognitive_style: '',
+  motivation_type: '',
+  learning_goals: '',
+  learning_preferences: []
+})
+
+const styleOptions = [
+  { value: '视觉演示导向', label: '视觉演示型 (思维导图优先)' },
+  { value: '代码实操导向', label: '代码实操型 (案例/代码驱动)' },
+  { value: '文本阅读导向', label: '文本阅读型 (理论推导/详细讲义)' }
+]
+
+const motivationOptions = [
+  { value: '内在动机', label: '内在动机 (求知欲与兴趣驱动)' },
+  { value: '外在动机', label: '外在动机 (目标分数与任务驱动)' },
+  { value: '无动机', label: '无动机' },
+  { value: '未诊断', label: '未诊断' }
+]
+
+const preferenceOptions = [
+  { value: '分步引导', label: '分步引导' },
+  { value: '具体例子', label: '具体例子' },
+  { value: '对比解析', label: '对比解析' },
+  { value: '图示演示', label: '图示演示' },
+  { value: '代码实操', label: '代码实操' }
+]
+
+function openEdit() {
+  editForm.value = {
+    major: background.value.major || '',
+    target_course: background.value.target_course || '',
+    cognitive_style: background.value.cognitive_style || '视觉演示导向',
+    motivation_type: background.value.motivation_type || '未诊断',
+    learning_goals: (background.value.learning_goals || []).join(', '),
+    learning_preferences: [...(background.value.learning_preferences || [])]
+  }
+  showEditModal.value = true
+}
+
+async function saveProfile() {
+  saving.value = true
+  try {
+    const goalsArray = editForm.value.learning_goals
+      .split(/[,，]/)
+      .map(g => g.trim())
+      .filter(g => g.length > 0)
+
+    const payload = {
+      major: editForm.value.major,
+      target_course: editForm.value.target_course,
+      cognitive_style: editForm.value.cognitive_style,
+      motivation_type: editForm.value.motivation_type,
+      learning_goals: goalsArray,
+      learning_preferences: editForm.value.learning_preferences
+    }
+
+    const updated = await updateStudentProfile(studentId.value, payload)
+    
+    // 同步更新本地状态，实现无刷新即时反馈
+    if (analysis.value && analysis.value.background) {
+      analysis.value.background.major = updated.major
+      analysis.value.background.target_course = updated.target_course
+      analysis.value.background.cognitive_style = updated.cognitive_style
+      analysis.value.background.motivation_type = updated.motivation_type
+      analysis.value.background.learning_goals = updated.learning_goals
+      analysis.value.background.learning_preferences = updated.learning_preferences
+    }
+
+    showEditModal.value = false
+    
+    // 异步清除并重新加载信笺，让大模型感知最新画像变化
+    narrativeLoading.value = true
+    narrative.value = ''
+    const resp = await getProfileNarrative(studentId.value)
+    narrative.value = resp.narrative_report
+  } catch (err) {
+    alert('保存失败: ' + (err.response?.data?.detail || err.message))
+  } finally {
+    saving.value = false
+    narrativeLoading.value = false
+  }
 }
 </script>
 
@@ -155,8 +261,13 @@ function goPath() {
             {{ (background.student_id || '?')[0] }}
           </div>
           <div class="flex-1">
-            <h2 class="text-lg font-bold text-gray-800">{{ background.student_id }}</h2>
-            <p class="text-xs text-gray-500 mt-0.5">{{ background.major }} · {{ background.target_course }}</p>
+            <div class="flex items-center gap-2">
+              <h2 class="text-lg font-bold text-gray-800">{{ background.student_id }}</h2>
+              <button @click="openEdit" class="text-purple-600 hover:text-purple-700 transition-colors p-1 rounded-lg hover:bg-purple-50 flex items-center gap-0.5 text-[10px] font-medium" title="编辑学情设置">
+                <Edit2 :size="10" />编辑画像
+              </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-0.5">{{ background.major || '未设置' }} · {{ background.target_course || '未设置' }}</p>
             <div class="flex gap-2 mt-2 flex-wrap">
               <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium bg-blue-50 text-blue-700">
                 <Lightbulb :size="10" /> {{ background.cognitive_style }}
@@ -186,6 +297,21 @@ function goPath() {
           <div class="flex flex-wrap gap-1">
             <span v-for="pref in background.learning_preferences" :key="pref" class="px-2 py-0.5 rounded-md text-[10px] font-medium bg-cyan-50 text-cyan-700">{{ pref }}</span>
           </div>
+        </div>
+      </div>
+
+      <!-- 📬 StoryLensEdu 叙事学情信笺 (异步加载优化) -->
+      <div class="bg-gradient-to-r from-amber-50 to-orange-50/50 border border-amber-100/70 rounded-2xl p-6 shadow-sm relative overflow-hidden">
+        <Sparkles class="absolute right-4 top-4 text-amber-200/30 w-16 h-16 pointer-events-none" />
+        <h3 class="text-xs font-semibold text-amber-800 mb-3 flex items-center gap-1.5">
+          <Heart :size="14" class="text-amber-600 animate-pulse" /> 个性化成长信笺 (StoryLensEdu)
+        </h3>
+        <div v-if="narrativeLoading" class="flex items-center gap-2 text-xs text-amber-700/80 py-2">
+          <div class="animate-spin rounded-full h-3.5 w-3.5 border-2 border-amber-600 border-t-transparent"></div>
+          <span>智能助教正在为您撰写成长信笺...</span>
+        </div>
+        <div v-else class="text-xs text-amber-900/90 leading-relaxed whitespace-pre-wrap">
+          {{ narrative.replace('### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n', '') }}
         </div>
       </div>
 
@@ -381,6 +507,85 @@ function goPath() {
             <p class="text-[10px] text-gray-400">查看错题和薄弱点回顾</p>
           </div>
         </router-link>
+      </div>
+    </div>
+
+    <!-- Edit Profile Modal -->
+    <div v-if="showEditModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div class="bg-white rounded-2xl border border-gray-100 shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
+        <!-- Modal Header -->
+        <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-purple-50 to-indigo-50/50">
+          <div class="flex items-center gap-2">
+            <Edit2 :size="16" class="text-purple-600" />
+            <h3 class="text-sm font-bold text-gray-800">自定义编辑学情画像</h3>
+          </div>
+          <button @click="showEditModal = false" class="text-gray-400 hover:text-gray-600 transition-colors">
+            <X :size="18" />
+          </button>
+        </div>
+
+        <!-- Modal Body -->
+        <div class="p-5 space-y-4 overflow-y-auto flex-1">
+          <!-- Major -->
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">专业/方向</label>
+            <input v-model="editForm.major" type="text" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50" placeholder="例如：人工智能实践、计算机科学与技术" />
+            <p class="text-[10px] text-gray-400 mt-0.5">将影响教学案例领域的选择（例如金融、医疗等跨学科领域）</p>
+          </div>
+
+          <!-- Target Course -->
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">学习目标课程</label>
+            <input v-model="editForm.target_course" type="text" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50" placeholder="例如：机器学习导论、高等数学" />
+          </div>
+
+          <!-- Cognitive Style -->
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">认知与学习风格</label>
+            <select v-model="editForm.cognitive_style" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50">
+              <option v-for="opt in styleOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+            <p class="text-[10px] text-gray-400 mt-0.5">更改此项将改变大模型回答时的排版优先级与可视化呈现策略</p>
+          </div>
+
+          <!-- Motivation Type -->
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">动机类型</label>
+            <select v-model="editForm.motivation_type" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50">
+              <option v-for="opt in motivationOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </div>
+
+          <!-- Learning Goals -->
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">当前学习目标知识点</label>
+            <input v-model="editForm.learning_goals" type="text" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50" placeholder="多个知识点用英文或中文逗号隔开" />
+            <p class="text-[10px] text-gray-400 mt-0.5">例如：池化层, 最大池化, 平均池化, 卷积神经网络</p>
+          </div>
+
+          <!-- Learning Preferences -->
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1.5">偏好支持 (多选)</label>
+            <div class="flex flex-wrap gap-2">
+              <label v-for="pref in preferenceOptions" :key="pref.value" class="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs cursor-pointer select-none transition-all hover:bg-purple-50/50" :class="editForm.learning_preferences.includes(pref.value) ? 'border-purple-300 bg-purple-50 text-purple-700 font-medium' : 'bg-gray-50/30 text-gray-600'">
+                <input type="checkbox" :value="pref.value" v-model="editForm.learning_preferences" class="sr-only" />
+                <span>{{ pref.label }}</span>
+              </label>
+            </div>
+            <p class="text-[10px] text-gray-400 mt-1">控制回答中是否注入分步步骤、实操示例、比喻或图示</p>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="px-5 py-3 border-t border-gray-100 flex justify-end gap-2 bg-gray-50/50">
+          <button @click="showEditModal = false" class="px-3 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 bg-white border border-gray-200 rounded-lg transition-all">
+            取消
+          </button>
+          <button @click="saveProfile" :disabled="saving" class="px-4 py-1.5 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-700 rounded-lg shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-50">
+            <div v-if="saving" class="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
+            <span>{{ saving ? '正在保存...' : '确认保存' }}</span>
+          </button>
+        </div>
       </div>
     </div>
 

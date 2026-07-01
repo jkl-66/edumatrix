@@ -12,7 +12,7 @@ import {
   Send, Bot, User, Loader2, BookOpen, Code2, LayoutGrid, HelpCircle, Video,
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
-  BrainCircuit, Target, TrendingUp, Sparkles,
+  BrainCircuit, Target, TrendingUp, Sparkles, Users,
   RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar, X,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
@@ -389,6 +389,15 @@ const codeVizHtml = computed(() => {
 })
 
 // ======================== CHAT ========================
+
+function triggerPeerPK(targetConcept = '') {
+  if (targetConcept && typeof targetConcept === 'string') {
+    input.value = "找学伴PK " + targetConcept
+  } else {
+    input.value = "找学伴PK"
+  }
+  send()
+}
 
 async function send() {
   const text = input.value.trim()
@@ -1586,6 +1595,10 @@ function renderMarkdown(text, type = '', conceptName = '') {
                   <div class="card chat-card-assistant">
                     <!-- 任务 8.3: 讲义操作栏 -->
                     <div class="flex items-center justify-end gap-1 mb-1 pb-1 border-b border-gray-100">
+                      <button @click="triggerPeerPK(msg.target)" class="text-[10px] text-orange-600 hover:text-orange-700 hover:bg-orange-50 flex items-center gap-0.5 px-1.5 py-0.5 rounded transition-colors font-medium border border-orange-200/30"
+                        title="针对当前概念进行学伴对战" :disabled="sending">
+                        <Users :size="10" /> 👥 找同伴 PK
+                      </button>
                       <button @click="openSaveNoteModal(idx)" class="text-[10px] text-gray-400 hover:text-amber-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-amber-50 rounded transition-colors"
                         title="保存到知识笔记">
                         <BookOpen :size="10" /> 笔记
@@ -1604,6 +1617,23 @@ function renderMarkdown(text, type = '', conceptName = '') {
                     <!-- 打字光标 -->
                     <span v-if="idx === messages.length - 1 && chatStore.sending"
                       class="inline-block w-[2px] h-4 bg-blue-500 animate-pulse ml-0.5 align-text-bottom" />
+
+                    <!-- RDI 幻觉风险溯源指数 (创新点1) -->
+                    <div v-if="msg.rdi" class="mt-3 pt-2.5 border-t border-gray-100 flex flex-wrap items-center gap-2 text-[10px]">
+                      <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-medium"
+                        :class="msg.rdi.score < 0.15 ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : msg.rdi.score < 0.4 ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'bg-red-50 text-red-700 border border-red-100'">
+                        🛡️ RDI 幻觉风险指数: {{ Math.round(msg.rdi.score * 100) }}% ({{ msg.rdi.category }})
+                      </span>
+                      <span class="text-gray-400 font-medium">{{ msg.rdi.explanation }}</span>
+                      
+                      <!-- 溯源实体展示 -->
+                      <div v-if="msg.rdi.details?.matched_entities?.length" class="w-full flex items-center gap-1 flex-wrap mt-1">
+                        <span class="text-gray-400">已比对知识库实体:</span>
+                        <span v-for="ent in msg.rdi.details.matched_entities" :key="ent" class="px-1.5 py-0.5 bg-gray-50 border border-gray-200 text-gray-500 rounded text-[9px] font-mono">
+                          🔗 {{ ent }}
+                        </span>
+                      </div>
+                    </div>
                   </div>
 
                   <!-- 任务 8.3: 资源卡片 + 局部重生成按钮 -->

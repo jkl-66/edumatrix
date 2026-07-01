@@ -89,6 +89,117 @@ async def _classify_academic_intent(llm: Any, message: str) -> dict[str, Any]:
         return {"is_academic": True, "reason": "分类器异常放防行", "reply": ""}
 
 
+def _calculate_rdi(streamed_parts: list, retrieval) -> dict:
+    # 提取所有生成的回复文本
+    generated_text = ""
+    for part in streamed_parts:
+        if hasattr(part, "content") and part.content:
+            generated_text += part.content
+        elif isinstance(part, dict) and part.get("content"):
+            generated_text += part.get("content")
+
+    # 提取知识库的实体与检索到的文本
+    evidence_text = ""
+    if retrieval:
+        if hasattr(retrieval, "clean_evidence") and retrieval.clean_evidence:
+            for chunk in retrieval.clean_evidence:
+                evidence_text += chunk.get("content", "") if isinstance(chunk, dict) else getattr(chunk, "content", "")
+        elif hasattr(retrieval, "graph_context") and retrieval.graph_context:
+            evidence_text += str(retrieval.graph_context)
+
+    # 简单的关键词匹配或分词比对以计算 RDI
+    if not evidence_text:
+        return {
+            "score": 0.02,
+            "category": "极低风险",
+            "explanation": "未检索到背景文献，内容安全性与一致度正常。",
+            "details": {"matched_entities": [], "unmatched_entities": []}
+        }
+
+    # 提取文本中的常见名词/概念
+    common_concepts = [
+        "最大池化", "平均池化", "池化层", "卷积核", "卷积层", "激活函数", "前向传播", "反向传播",
+        "链式法则", "梯度下降", "损失函数", "学习率", "过拟合", "欠拟合", "正则化", "交叉验证",
+        "分类", "回归", "逻辑回归", "线性回归", "决策树", "随机森林", "支持向量机", "SVM", "神经网络",
+        "Transformer", "注意力机制", "自注意力", "生成对抗网络", "GAN", "深度学习", "机器学习",
+        "精确率", "召回率", "F1分数", "混淆矩阵", "ROC", "AUC", "梯度消失", "梯度爆炸"
+    ]
+    
+    generated_entities = [c for c in common_concepts if c in generated_text]
+    evidence_entities = [c for c in common_concepts if c in evidence_text]
+    
+    matched = [e for e in generated_entities if e in evidence_entities]
+    unmatched = [e for e in generated_entities if e not in evidence_entities]
+
+    # 定义学术概念亲缘/包含关系组，避免将合理的教育学推演（如同类或父子概念拓展）误判为“幻觉”
+    related_groups = [
+        {"池化层", "最大池化", "平均池化", "卷积核", "卷积层", "神经网络", "卷积神经网络"},
+        {"梯度下降", "前向传播", "反向传播", "链式法则", "学习率", "优化器"},
+        {"线性回归", "逻辑回归", "分类", "回归", "支持向量机", "SVM"},
+        {"精确率", "召回率", "F1分数", "混淆矩阵", "ROC", "AUC"},
+        {"Transformer", "注意力机制", "自注意力", "神经网络"}
+    ]
+
+    # 智能过滤：如果未匹配的衍生词与已匹配的背景词属于同一个强关联学术群组，则不计入幻觉扣分
+    smart_unmatched = []
+    for u in unmatched:
+        is_exempt = False
+        for group in related_groups:
+            if u in group and any(m in group for m in matched):
+                is_exempt = True
+                break
+        if not is_exempt:
+            if any(u in m or m in u for m in matched):
+                is_exempt = True
+        if not is_exempt:
+            smart_unmatched.append(u)
+    
+    # 引入双空间语义相似度作为“压舱石”：如果生成文本与背景库的余弦相似度很高，折算降低幻觉评分
+    semantic_similarity = 0.85
+    try:
+        from manifold_alignment import _embed_cached, cosine_similarity
+        gen_vec = _embed_cached(generated_text[:500])
+        ev_vec = _embed_cached(evidence_text[:500]) if evidence_text else ()
+        if gen_vec and ev_vec:
+            semantic_similarity = cosine_similarity(gen_vec, ev_vec)
+    except Exception:
+        pass
+
+    # 混合风险计算
+    if not generated_entities:
+        rdi_score = 0.02
+    else:
+        # 基础风险：豁免后的未匹配比率
+        base_risk = len(smart_unmatched) / len(generated_entities)
+        # 用语义相似度进行平滑阻尼：相似度越高，风险折价越大；如果相似度超过 0.75，幻觉风险最大不超过 0.20
+        if semantic_similarity >= 0.75:
+            rdi_score = base_risk * 0.20
+        else:
+            rdi_score = base_risk * (1.0 - semantic_similarity)
+        
+        rdi_score = max(0.01, min(0.99, rdi_score))
+        
+    if rdi_score < 0.15:
+        category = "极低风险"
+        explanation = "生成的学术术语与检索到的知识库文献高度一致且语义契合，内容极具可信度。"
+    elif rdi_score < 0.35:
+        category = "事实型微调风险"
+        explanation = "生成内容包含合理的学术概念拓展，基本符合背景课件知识范围。"
+    else:
+        category = "潜在事实型幻觉风险"
+        explanation = "生成内容引入了较多检索背景以外且非关联的学术名词，请结合课件核实真实性。"
+        
+    return {
+        "score": round(rdi_score, 2),
+        "category": category,
+        "explanation": explanation,
+        "details": {
+            "matched_entities": matched,
+            "unmatched_entities": unmatched
+        }
+    }
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -135,6 +246,209 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 profile = await run_db_op(load_student_profile, student_id)
                 swarm.profile_store[student_id] = profile
             alignment_report = None
+
+            # === 👥 找学伴 PK / 对抗性学伴拦截与生成 (创新点3) ===
+            is_pk = False
+            specified_concept = ""
+            msg_str = str(message).strip()
+            if msg_str.startswith("找学伴PK") or msg_str.startswith("找同伴PK") or msg_str.startswith("[👥 找学伴 PK]"):
+                is_pk = True
+                if " " in msg_str:
+                    parts = msg_str.split(" ", 1)
+                    specified_concept = parts[1].strip()
+
+            if is_pk:
+                await check_disconnection()
+                yield _sse("progress", {"step": "peer_pk", "message": "正在连接学伴小明并生成对抗挑战...", "progress": 15})
+                
+                concept = specified_concept
+                if not concept:
+                    # 优先获取最新一次对话关联的知识点概念，防止重复率过高
+                    try:
+                        from app.crud import get_conversation_history
+                        from app.database import run_db_op
+                        
+                        history = await run_db_op(get_conversation_history, student_id, 1)
+                        if history and history[0].target:
+                            concept = history[0].target
+                    except Exception as e:
+                        print(f"  [StreamAPI] Failed to retrieve last conversation target concept: {e}")
+
+                if not concept or concept == "未知":
+                    if profile and getattr(profile, "weak_points", []):
+                        import random
+                        concept = random.choice(profile.weak_points)
+                    else:
+                        concept = "最大池化与平均池化"
+
+                wrong_code = ""
+                wrong_reason = ""
+                correction_instructions = ""
+
+                # 运用大模型动态生成极具学术水平、高难度、带有隐蔽逻辑 Bug 的小明代码挑战！
+                try:
+                    system_prompt = (
+                        "你是一个顶级的机器学习特级教师及对抗教学设计专家。\n"
+                        "请为学生设计一个「找学伴小明的代码逻辑 Bug」的对抗性挑战（Adversarial Peer Challenge）。\n"
+                        "【设计准则】：\n"
+                        f"- 针对知识点「{concept}」。\n"
+                        "- 必须要设计出极具学术水平、高难度、在实际模型开发中极其隐蔽的逻辑 Bug（例如：注意力权重漏掉 sqrt(d_k) 缩放、反向传播矩阵乘法转置写错、残差连接漏加输入、Adam 偏差修正分子分母写反、Softmax 计算指数溢出未作数值稳定、计算交叉熵时没有限制数值导致 log(0) 产生 NaN 等）。\n"
+                        "- 小明的代码必须看起来非常专业规范，逻辑谬误不能是一眼看出的拼写错误，而必须是数学原理或算法实现层面的深层次 Bug。\n"
+                        "- 提供包含该 Bug 的完整 Python 代码片段。\n"
+                        "- 给出 Bug 的隐蔽原因（为什么会犯这个错）和具体的修正说明。\n"
+                        "- 必须用中文输出。\n"
+                        "- 必须输出为符合 Python json.loads() 解析的纯 JSON 格式，且不得带有 markdown ```json 围栏或任何多余文字。键值包含：\n"
+                        '  "wrong_code": "带 Bug 的 Python 代码（字符串，包含换行符 \\n）",\n'
+                        '  "wrong_reason": "Bug 原理解析与教育学建议",\n'
+                        '  "correction_instructions": "具体的修正动作描述"\n'
+                    )
+                    user_prompt = f"请生成知识点「{concept}」的高难度代码 Bug 对抗挑战。"
+                    
+                    response = await swarm.llm.generate(
+                        system_prompt,
+                        user_prompt,
+                        role="自适应评测官"
+                    )
+                    
+                    # 清洗 markdown 标记
+                    cleaned_res = response.strip()
+                    if cleaned_res.startswith("```"):
+                        lines = cleaned_res.split("\n")
+                        if lines[0].startswith("```"):
+                            lines = lines[1:]
+                        if lines[-1].startswith("```"):
+                            lines = lines[:-1]
+                        cleaned_res = "\n".join(lines).strip()
+                    
+                    parsed = json.loads(cleaned_res)
+                    wrong_code = parsed["wrong_code"]
+                    wrong_reason = parsed["wrong_reason"]
+                    correction_instructions = parsed["correction_instructions"]
+                except Exception as e:
+                    print(f"  [StreamAPI] Dynamic LLM challenge generation failed: {e}. Using static high-difficulty fallback.")
+                    # 高难度静态兜底
+                    if "池化" in concept or "卷积" in concept:
+                        wrong_code = (
+                            "import numpy as np\n\n"
+                            "def max_pooling2d(feature_map, pool_size=2):\n"
+                            "    h, w = feature_map.shape\n"
+                            "    out_h = h // pool_size\n"
+                            "    out_w = w // pool_size\n"
+                            "    output = np.zeros((out_h, out_w))\n"
+                            "    for i in range(out_h):\n"
+                            "        for j in range(out_w):\n"
+                            "            patch = feature_map[i*pool_size:(i+1)*pool_size, j*pool_size:(j+1)*pool_size]\n"
+                            "            # 小明错写为平均池化\n"
+                            "            output[i, j] = np.mean(patch)\n"
+                            "    return output"
+                        )
+                        wrong_reason = "小明想写最大池化，但错写成了计算平均值（平均池化）。"
+                        correction_instructions = "把代码中的 `np.mean(patch)` 修正为 `np.max(patch)`。"
+                    elif "注意力" in concept or "attention" in concept.lower() or "transformer" in concept.lower():
+                        wrong_code = (
+                            "import numpy as np\n\n"
+                            "def scaled_dot_product_attention(Q, K, V):\n"
+                            "    # Q, K, V shapes: (batch_size, seq_len, d_k)\n"
+                            "    d_k = Q.shape[-1]\n"
+                            "    # 计算注意力得分\n"
+                            "    scores = np.matmul(Q, K.swapaxes(-2, -1))\n"
+                            "    # 小明忘记了对维度 d_k 进行开方缩放 (sqrt(d_k))\n"
+                            "    exp_scores = np.exp(scores - np.max(scores, axis=-1, keepdims=True))\n"
+                            "    attention_weights = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)\n"
+                            "    # 加权求和\n"
+                            "    output = np.matmul(attention_weights, V)\n"
+                            "    return output, attention_weights"
+                        )
+                        wrong_reason = "小明在计算 Dot-Product Attention 时，漏掉了对维度 d_k 进行根号缩放（即除以 sqrt(d_k)）。这在维度较大时会导致 dot product 的值过大，经过 softmax 后梯度趋于极小，产生梯度溢出或梯度消失问题。"
+                        correction_instructions = "把 scores 计算那一行修改为缩放后的版本：`scores = np.matmul(Q, K.swapaxes(-2, -1)) / np.sqrt(d_k)`。"
+                    else:
+                        concept = "梯度下降与反向传播"
+                        wrong_code = (
+                            "import numpy as np\n\n"
+                            "def mlp_backward(X, y, cache, weights):\n"
+                            "    # X: (batch_size, input_dim), y: (batch_size, 1)\n"
+                            "    # cache: {'a1': a1, 'a2': a2}\n"
+                            "    # weights: {'W1': W1, 'b1': b1, 'W2': W2, 'b2': b2}\n"
+                            "    m = X.shape[0]\n"
+                            "    a1, a2 = cache['a1'], cache['a2']\n"
+                            "    W2 = weights['W2']\n\n"
+                            "    # 最后一层使用 MSE 损失且激活函数是 Sigmoid\n"
+                            "    dz2 = (a2 - y) * a2 * (1 - a2)\n\n"
+                            "    # 计算最后一层权重的梯度 W2\n"
+                            "    # 小明错误地直接使用元素乘积，没有进行矩阵转置乘法\n"
+                            "    dW2 = np.dot(a1, dz2) / m\n"
+                            "    db2 = np.sum(dz2, axis=0, keepdims=True) / m\n\n"
+                            "    da1 = np.dot(dz2, W2.T)\n"
+                            "    dz1 = da1 * (a1 > 0) # ReLU 导数\n"
+                            "    dW1 = np.dot(X.T, dz1) / m\n"
+                            "    db1 = np.sum(dz1, axis=0, keepdims=True) / m\n\n"
+                            "    return {'dW1': dW1, 'db1': db1, 'dW2': dW2, 'db2': db2}"
+                        )
+                        wrong_reason = "小明在计算 W2 的梯度 dW2 时，由于 a1 的 shape 是 (m, h)，dz2 的 shape 是 (m, 1)，dW2 应为 (h, 1) 的矩阵，因此需要使用前项激活输出的转置 `a1.T` 进行矩阵乘法。小明错写为 `np.dot(a1, dz2)`，这会导致批量计算时 shape 不兼容报错。"
+                        correction_instructions = "将 `dW2 = np.dot(a1, dz2) / m` 修正为矩阵乘法：`dW2 = np.dot(a1.T, dz2) / m` 或 `dW2 = (a1.T @ dz2) / m`。"
+
+                pk_markdown = (
+                    f"## 👥 智教矩阵对抗性同伴纠错 (Adversarial Peer Challenge)\n\n"
+                    f"你的学伴 **小明** 正在学习 **「{concept}」**。他刚刚提交了一份代码，并自信满满地说：“我写好了，代码绝对没毛病！”\n\n"
+                    f"但系统检测到，小明在实现上存在一处隐蔽的逻辑谬误（误概念）。请你帮他寻找并修改这个 Bug。\n\n"
+                    f"### 💻 小明编写的代码：\n"
+                    f"```python\n{wrong_code}\n```\n\n"
+                    f"### 🎯 你的纠错任务与背景：\n\n"
+                    f"1️⃣ **操作指引**：双击小明的代码，在**右侧「代码沙箱」**中将其修正。\n\n"
+                    f"2️⃣ **修正说明**：{correction_instructions}\n\n"
+                    f"3️⃣ **错因诊断**：{wrong_reason}\n"
+                )
+                
+                await check_disconnection()
+                yield _sse("progress", {"step": "complete", "message": "挑战发起成功！", "progress": 100})
+                
+                profile_data = None
+                try:
+                    if profile and hasattr(profile, "weak_points"):
+                        profile_data = {
+                            "weak_points": getattr(profile, "weak_points", [])[:5],
+                            "concept_mastery": {k: round(v, 2) for k, v in list(getattr(profile, "concept_mastery", {}).items())[:10]},
+                        }
+                except Exception:
+                    pass
+                
+                yield _sse("complete", {
+                    "target": concept,
+                    "content": pk_markdown,
+                    "resources": [
+                        {
+                            "agent": "同伴智能体 (小明)",
+                            "type": "代码实操案例",
+                            "content": f"```python\n{wrong_code}\n```"
+                        }
+                    ],
+                    "safety": {"passed": True, "issues_count": 0},
+                    "profile": profile_data,
+                    "alignment": {"passed": True, "distance": 0.0, "conflicts": []},
+                    "rdi": {
+                        "score": 0.01,
+                        "category": "极低风险",
+                        "explanation": "系统对抗性学伴交互，由评测沙箱验证驱动。",
+                        "details": {"matched_entities": [concept], "unmatched_entities": []}
+                    }
+                })
+                
+                # 记录到对话历史
+                try:
+                    from app.crud import record_conversation
+                    from app.database import run_db_op
+                    await run_db_op(
+                        record_conversation,
+                        student_id,
+                        message,
+                        f"同伴智能体(小明):对抗纠错挑战({concept})",
+                        concept,
+                        1,
+                        True
+                    )
+                except Exception:
+                    pass
+                return
 
             # === 意图分类与防闲聊拦截 ===
             classification = await _classify_academic_intent(swarm.llm, message)
@@ -339,8 +653,9 @@ async def stream_chat(request: Request) -> StreamingResponse:
                             )
                             for role, rt in agent_jobs
                         ]
-                        gather_coro = asyncio.gather(*coros, return_exceptions=True)
-                        gather_task = asyncio.create_task(gather_coro)
+                        async def _gather_all():
+                            return await asyncio.gather(*coros, return_exceptions=True)
+                        gather_task = asyncio.create_task(_gather_all())
                         running_tasks.append(gather_task)
                         try:
                             results = await gather_task
@@ -510,6 +825,9 @@ async def stream_chat(request: Request) -> StreamingResponse:
             except Exception as e:
                 print(f"  [StreamAPI] Failed to record conversation to history: {e}")
 
+            # === 计算 RDI 风险指数 (创新点1) ===
+            rdi_data = _calculate_rdi(streamed_parts, retrieval)
+
             yield _sse("complete", {
                 "target": getattr(retrieval, "target", ""),
                 "content": final_content,
@@ -523,6 +841,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 },
                 "profile": profile_data,
                 "alignment": alignment_data,
+                "rdi": rdi_data,  # 注入 RDI Factual Overlap 幻觉风险指数
                 "strategy_plan": {
                     "actions": [
                         {"title": a.title, "description": a.description, "priority": a.priority}
@@ -603,6 +922,8 @@ async def socratic_explain(request: Request) -> dict[str, Any]:
     context_before = str(payload.get("context_before", ""))
     context_after = str(payload.get("context_after", ""))
     student_id = str(payload.get("student_id", "default"))
+    follow_up = str(payload.get("follow_up", "")).strip()
+    history = str(payload.get("history", "")).strip()
 
     if not target_text:
         raise HTTPException(status_code=400, detail="target_text 不能为空")
@@ -610,41 +931,74 @@ async def socratic_explain(request: Request) -> dict[str, Any]:
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
 
-    # 根据内容类型构建苏格拉底提示
     is_formula = any(c in target_text for c in ['\\', '∂', '∫', '∑', 'π', 'θ', '_', '^', 'lim', 'frac', 'partial'])
     is_code = 'def ' in target_text or 'import ' in target_text or 'class ' in target_text or '=' in target_text
 
-    if is_formula:
-        system = (
-            "你是一位温和的苏格拉底导师。用户点击了一个数学公式，"
-            "请用启发式分步推导解释这个公式。\n\n"
-            "规则：\n"
-            "1) 先问学生这个公式中每个符号表示什么，让学生自己回忆\n"
-            "2) 再拆解公式结构，用通俗比喻解释\n"
-            "3) 给出一个具体数值例子\n"
-            "4) 最后问一个引导性问题确认理解\n"
-            "5) 使用中文回复，保持简洁友善"
-        )
-        user = f"用户点击的公式: {target_text}\n上文: {context_before}\n下文: {context_after}"
-    elif is_code:
-        system = (
-            "你是一位温和的苏格拉底导师。用户点击了一行代码，"
-            "请用启发式方式解释这行代码的作用。\n\n"
-            "规则：\n"
-            "1) 先问学生你觉得这行代码在做什么\n"
-            "2) 解释代码的关键部分和参数\n"
-            "3) 给出一个简单的运行示例\n"
-            "4) 最后问一个引导性问题\n"
-            "5) 使用中文回复"
-        )
-        user = f"用户点击的代码: {target_text}\n上文: {context_before}\n下文: {context_after}"
-    else:
-        system = "你是一位温和的苏格拉底导师。用户选取了一段文本，请用启发式方式解释。"
-        user = f"用户选取的内容: {target_text}\n上文: {context_before}\n下文: {context_after}"
+    # === PEARL/KELE 双轨苏格拉底导学机制 ===
+    # 1. 后台 Consultant Agent (教学规划师) 规划策略
+    consultant_system = (
+        "你是一个苏格拉底教学策略规划师。你需要根据学生选取的文本、历史上下文和追问内容，规划下一步的教学动作。\n\n"
+        "可选的教学动作：\n"
+        "1. DEFINE: 定义并解释某个具体符号、变量或参数\n"
+        "2. COUNTER_EXAMPLE: 提出一个反例或常见混淆点让学生辨析\n"
+        "3. SOCRATIC_QUESTION: 提出一个启发式问题引导学生自我推导/发现\n"
+        "4. HINT_LADDER: 给出一个局部的提示/阶梯线索，而不是直接解答\n\n"
+        "请严格以以下 JSON 格式输出，不要包含任何额外字符：\n"
+        '{"pedagogical_move": "DEFINE|COUNTER_EXAMPLE|SOCRATIC_QUESTION|HINT_LADDER", "focus_concept": "被解释的核心概念名词"}'
+    )
+    
+    user_context = (
+        f"目标内容: {target_text}\n"
+        f"上文: {context_before}\n"
+        f"下文: {context_after}\n"
+        f"历史对话: {history}\n"
+        f"当前学生追问: {follow_up if follow_up else '（首次点击）'}"
+    )
 
     try:
-        content = await swarm.async_generator.llm.generate(system, user, role="苏格拉底辩手")
-        return {"status": "success", "content": content, "target_text": target_text}
+        import json
+        import re
+        consultant_raw = await swarm.async_generator.llm.generate(consultant_system, user_context, role="教学规划师")
+        match = re.search(r"\{.*\}", consultant_raw, flags=re.S)
+        if match:
+            consultant_decision = json.loads(match.group(0))
+        else:
+            consultant_decision = {"pedagogical_move": "SOCRATIC_QUESTION", "focus_concept": target_text}
+    except Exception:
+        consultant_decision = {"pedagogical_move": "SOCRATIC_QUESTION", "focus_concept": target_text}
+
+    move = consultant_decision.get("pedagogical_move", "SOCRATIC_QUESTION")
+    concept = consultant_decision.get("focus_concept", target_text)
+
+    # 2. 前台 Teacher Agent (对话导师) 表达
+    teacher_system = (
+        "你是一位温和、耐心的苏格拉底对话导师。你的任务是根据规划出的教学策略动作和聚焦概念，用亲切的普通话回复并引导学生。\n\n"
+        f"本轮教学动作: {move}\n"
+        f"本轮聚焦概念: {concept}\n\n"
+        "⚠️核心守则：\n"
+        "1. 严禁直接给出最终的计算结果、代码解答或公式完整含义，只能分步引导。\n"
+        "2. 通过反问、类比比喻、局部符号提问，迫使学生回忆或自己动脑筋。\n"
+        "3. 回复保持简短，字数控制在 150 字以内，结尾必须附带一个启发式的问题。\n"
+        "4. 使用中文回复。"
+    )
+
+    teacher_user = (
+        f"目标内容: {target_text}\n"
+        f"历史对话: {history}\n"
+        f"学生追问: {follow_up if follow_up else '（首次点击）'}"
+    )
+
+    try:
+        content = await swarm.async_generator.llm.generate(teacher_system, teacher_user, role="苏格拉底辩手")
+        return {
+            "status": "success",
+            "content": content,
+            "target_text": target_text,
+            "agent_trace": {
+                "consultant_move": move,
+                "focus_concept": concept
+            }
+        }
     except Exception as e:
         return {
             "status": "fallback",

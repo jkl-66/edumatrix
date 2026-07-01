@@ -371,13 +371,18 @@ export async function getProfileAnalysis(studentId) {
   return r.data
 }
 
+export async function getProfileNarrative(studentId) {
+  const r = await api.get(`/profile/${studentId}/narrative`, { headers: buildHeaders() })
+  return r.data
+}
+
 export async function getLearningPath(studentId) {
   const r = await api.get(`/profile/${studentId}/learning-path`, { headers: buildHeaders() })
   return r.data
 }
 
 export async function updateStudentProfile(studentId, data) {
-  const r = await api.post(`/profile/${studentId}`, data, { headers: buildHeaders() })
+  const r = await api.post(`/profile/${studentId}/update`, data, { headers: buildHeaders() })
   return r.data
 }
 

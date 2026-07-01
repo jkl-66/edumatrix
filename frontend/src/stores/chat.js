@@ -126,6 +126,7 @@ export const useChatStore = defineStore('chat', {
                 target: data.target || '',
                 safety: data.safety || null,
                 alignment: data.alignment || {},
+                rdi: data.rdi || null,
               }
 
               this.addMessage(assistantMsg)

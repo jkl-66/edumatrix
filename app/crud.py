@@ -52,6 +52,8 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 profile.cognitive_style = db_profile.cognitive_style
                 profile.focus_level = db_profile.focus_level
                 profile.cognitive_load = db_profile.cognitive_load
+                profile.motivation_type = getattr(db_profile, "motivation_type", "未诊断") or "未诊断"
+                profile.frustration_index = getattr(db_profile, "frustration_index", 0.0) or 0.0
                 profile.weak_points = list(db_profile.weak_points or [])
                 profile.learning_goals = list(db_profile.learning_goals or [])
                 profile.interaction_preferences = list(db_profile.interaction_preferences or [])
@@ -61,6 +63,7 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                     profile.history = db_profile.history_logs.split("\n")
                 profile.major = db_profile.major or ""
                 profile.favorites = list(db_profile.favorites or [])
+                profile.narrative_report = db_profile.narrative_report or ""
                 return profile
         return profile
 
@@ -71,6 +74,8 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
     profile.cognitive_style = db_profile.cognitive_style
     profile.focus_level = db_profile.focus_level
     profile.cognitive_load = db_profile.cognitive_load
+    profile.motivation_type = getattr(db_profile, "motivation_type", "未诊断") or "未诊断"
+    profile.frustration_index = getattr(db_profile, "frustration_index", 0.0) or 0.0
     
     profile.weak_points = list(db_profile.weak_points or [])
     profile.learning_goals = list(db_profile.learning_goals or [])
@@ -86,6 +91,7 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
     # 还原新增加的物理字段 (Task 6.2)
     profile.major = db_profile.major or ""
     profile.favorites = list(db_profile.favorites or [])
+    profile.narrative_report = db_profile.narrative_report or ""
     
     if db_profile.knowledge_traces:
         for k, v in db_profile.knowledge_traces.items():
@@ -153,6 +159,8 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     db_profile.cognitive_style = profile.cognitive_style
     db_profile.focus_level = profile.focus_level
     db_profile.cognitive_load = profile.cognitive_load
+    db_profile.motivation_type = profile.motivation_type
+    db_profile.frustration_index = profile.frustration_index
     
     db_profile.weak_points = profile.weak_points
     db_profile.learning_goals = profile.learning_goals
@@ -165,6 +173,7 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     # 序列化复杂/新增物理对象为 JSON 格式存入 SQLite (Task 6.2)
     db_profile.major = profile.major
     db_profile.favorites = to_dict_safe(profile.favorites)
+    db_profile.narrative_report = profile.narrative_report
     db_profile.knowledge_traces = to_dict_safe(profile.knowledge_traces)
     db_profile.profile_evidence = to_dict_safe(profile.profile_evidence)
     

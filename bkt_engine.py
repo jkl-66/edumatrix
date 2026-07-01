@@ -416,3 +416,104 @@ def behavior_sanity_check(
         "metacognitive_mismatch_new": profile.metacognitive_mismatch,
         "report": "；".join(report_parts),
     }
+
+
+class KnowledgeDiffusionEngine:
+    """LMCD 知识扩散引擎：解决冷启动，自动将某个概念的掌握度变化向关联概念传播。"""
+
+    def __init__(self, alpha: float = 0.4, gamma: float = 0.6) -> None:
+        self.alpha = alpha     # 语义相似度权重 (余弦相似度)，其余为前置拓扑依赖权重
+        self.gamma = gamma     # 拓扑距离衰减系数
+
+    def diffuse(
+        self,
+        concept_mastery: dict[str, float],
+        target_concept: str,
+        delta: float,
+        dag: dict[str, list[str]],
+    ) -> dict[str, float]:
+        """对知识点掌握度执行扩散。
+
+        Args:
+            concept_mastery: 当前所有的概念掌握度字典。
+            target_concept: 发生变化的目标概念。
+            delta: 掌握度变化量（如 +0.15 或 -0.1）。
+            dag: DAG 知识依赖图。
+
+        Returns:
+            扩散更新后的概念掌握度字典。
+        """
+        if not concept_mastery or target_concept not in concept_mastery or abs(delta) < 1e-5:
+            return concept_mastery
+
+        from embedding_models import EMBEDDINGS, cosine_similarity
+
+        # 获取目标概念的 Embedding
+        target_vec = EMBEDDINGS.embed(target_concept)
+        if not target_vec:
+            return concept_mastery
+
+        new_mastery = dict(concept_mastery)
+
+        # 预计算到目标概念的拓扑距离（通过 BFS 寻找图中最短无向距离）
+        topo_dist = self._compute_topo_distances(target_concept, dag)
+
+        for concept in concept_mastery:
+            if concept == target_concept:
+                continue
+
+            # 1. 语义相似度 (用 embedding 的余弦相似度计算)
+            c_vec = EMBEDDINGS.embed(concept)
+            sim = cosine_similarity(target_vec, c_vec) if c_vec else 0.0
+
+            # 2. 拓扑依赖度计算 (如果 concept 是 target_concept 的直接前置或后继)
+            prereq_weight = 0.0
+            if concept in dag.get(target_concept, []):
+                prereq_weight = 0.7  # 直接前置依赖
+            elif target_concept in dag.get(concept, []):
+                prereq_weight = 0.5  # 直接后继影响
+
+            # 3. 转移概率权重
+            p_ij = self.alpha * sim + (1 - self.alpha) * prereq_weight
+
+            # 4. 拓扑距离衰减
+            dist = topo_dist.get(concept, 4)  # 找不到距离时默认设定为 4 (远距离)
+            decay = self.gamma ** dist
+
+            # 5. 更新改变量
+            diffusion_delta = delta * p_ij * decay
+            new_val = concept_mastery[concept] + diffusion_delta
+            new_mastery[concept] = max(0.0, min(1.0, new_val))
+
+        return new_mastery
+
+    def _compute_topo_distances(self, start: str, dag: dict[str, list[str]]) -> dict[str, int]:
+        """通过无向 BFS 计算目标点到图中其他各概念的拓扑最短距离。"""
+        # 构建无向图邻接表
+        adj: dict[str, set[str]] = {}
+        all_nodes = set(dag.keys())
+        for parents in dag.values():
+            all_nodes.update(parents)
+
+        for node in all_nodes:
+            adj[node] = set()
+
+        for node, parents in dag.items():
+            for p in parents:
+                adj[node].add(p)
+                adj[p].add(node)
+
+        # BFS 算距离
+        distances = {start: 0}
+        queue = [start]
+        head = 0
+        while head < len(queue):
+            curr = queue[head]
+            head += 1
+            curr_dist = distances[curr]
+            for neighbor in adj.get(curr, []):
+                if neighbor not in distances:
+                    distances[neighbor] = curr_dist + 1
+                    queue.append(neighbor)
+        return distances
+

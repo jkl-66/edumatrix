@@ -96,6 +96,8 @@ class DBStudentProfile(Base):
     target_course = Column(String(128), default="机器学习导论")
     knowledge_base = Column(String(64), default="初级")
     cognitive_style = Column(String(128), default="视觉+代码导向")
+    motivation_type = Column(String(64), default="未诊断")
+    frustration_index = Column(Float, default=0.0)
     focus_level = Column(Float, default=0.72)
     cognitive_load = Column(Float, default=0.45)
     
@@ -111,6 +113,7 @@ class DBStudentProfile(Base):
     learning_state_causes = Column(JSON, default=dict)   # 原因占比 Breakdown
     
     history_logs = Column(Text, default="")              # 提问历史（以换行符或JSON数组隔开）
+    narrative_report = Column(Text, default="")          # 📬 缓存的 StoryLensEdu 叙事学情成长信笺
     last_updated = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     # 扩充物理字段 (Task 6.2)
@@ -345,6 +348,20 @@ def _migrate_schema():
     if "display_name" not in columns:
         with engine.connect() as conn:
             conn.execute(sa.text("ALTER TABLE users ADD COLUMN display_name VARCHAR(64) DEFAULT ''"))
+            conn.commit()
+            
+    profile_columns = [c["name"] for c in inspector.get_columns("student_profiles")]
+    if "narrative_report" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN narrative_report TEXT DEFAULT ''"))
+            conn.commit()
+    if "motivation_type" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN motivation_type VARCHAR(64) DEFAULT '未诊断'"))
+            conn.commit()
+    if "frustration_index" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN frustration_index FLOAT DEFAULT 0.0"))
             conn.commit()
 
 def get_db():

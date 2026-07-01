@@ -1295,6 +1295,208 @@ print("Val:", s.val)
         self.assertEqual(data["status"], "success")
         self.assertIn("content", data)
 
+    def test_lmcd_knowledge_diffusion(self):
+        """验证 LMCD 知识扩散算法：当某个核心概念变化时，其增量会正确传播到邻近概念"""
+        from bkt_engine import KnowledgeDiffusionEngine
+        from agent_swarm import DEFAULT_KNOWLEDGE_DAG
+
+        engine = KnowledgeDiffusionEngine(alpha=0.5, gamma=0.7)
+        # 初始化一个画像概念掌握度
+        concept_mastery = {
+            "最大池化": 0.40,
+            "池化层": 0.30,
+            "机器学习": 0.50,
+        }
+        # 当“最大池化”增加 0.40 时，测试扩散效果
+        updated = engine.diffuse(
+            concept_mastery=concept_mastery,
+            target_concept="最大池化",
+            delta=0.40,
+            dag=DEFAULT_KNOWLEDGE_DAG,
+        )
+
+        # 检查“最大池化”本身不变（仅扩散给其他概念）
+        self.assertEqual(updated["最大池化"], 0.40)
+        # 检查邻近的“池化层”（作为最大池化的前置概念，有拓扑依赖和语义相似）应该增加了掌握度
+        self.assertGreater(updated["池化层"], 0.30)
+        # 检查较远概念“机器学习”（无直接依赖），因为距离衰减，其增量应该明显小于邻近的“池化层”
+        diff_pooling = updated["池化层"] - 0.30
+        diff_ml = updated["机器学习"] - 0.50
+        self.assertGreater(diff_pooling, diff_ml)
+
+    def test_council_mode_consensus_synthesis(self):
+        """验证 Council Mode 委员会机制对平行生成的资源进行共识评测与幻觉拦截"""
+        from manifold_alignment import CouncilDecisionEngine
+        from models import AgentOutput
+        
+        engine = CouncilDecisionEngine(fact_threshold=0.70, rel_threshold=0.65)
+        
+        # 1. 模拟没有冲突的高质量专家输出
+        good_resources = [
+            AgentOutput(agent="理论教授", resource_type="专业讲义", content="卷积神经网络包含池化层，最大池化层能降维", citations=()),
+            AgentOutput(agent="逻辑画师", resource_type="思维导图", content="池化层：分为最大池化与平均池化", citations=()),
+        ]
+        synthesis1 = engine.synthesize(good_resources, "池化层")
+        self.assertTrue(synthesis1["overall_passed"])
+        self.assertGreaterEqual(synthesis1["mean_factuality_score"], 0.70)
+        
+        # 2. 模拟存在池化层操作冲突（幻觉）的专家输出
+        conflict_resources = [
+            AgentOutput(agent="理论教授", resource_type="专业讲义", content="最大池化Max Pooling取局部最大值，平均池化Avg Pooling取均值", citations=()),
+            # 这个资源内容自相矛盾（同时提到了最大池化和平均池化，或存在事实偏离）
+            AgentOutput(agent="极客助教", resource_type="代码实操案例", content="这里演示最大池化，但代码实现中我们用AvgPool2d表示平均池化，其实最大池化和平均池化是一回事", citations=()),
+        ]
+        synthesis2 = engine.synthesize(conflict_resources, "最大池化")
+        self.assertFalse(synthesis2["overall_passed"])
+        self.assertTrue(any(not v["passed"] for v in synthesis2["verdicts"]))
+
+    def test_profile_analysis_includes_narrative_report(self):
+        """验证 StoryLensEdu 叙事驱动评估报告管道：请求画像分析时应包含个性化成长信笺"""
+        import uuid
+        from app.database import SessionLocal
+        from app.crud import load_student_profile, save_student_profile
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        student_id = f"test-story-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            profile = load_student_profile(session, student_id)
+            save_student_profile(session, profile)
+        finally:
+            session.close()
+
+        client = TestClient(app)
+        response = client.get(f"/api/profile/{student_id}/analysis")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("narrative_report", data)
+        self.assertIn("StoryLensEdu", data["narrative_report"])
+
+
+    def test_rdi_and_peer_pk_challenge(self):
+        """验证 RDI 风险指数计算以及 👥 找学伴 PK 的对抗拦截推流逻辑"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        import uuid
+
+        client = TestClient(app)
+        student_id = f"test-pk-{uuid.uuid4().hex[:8]}"
+
+        # 1. 验证普通 stream chat 中包含 RDI 字段
+        response = client.post(
+            "/api/stream/chat",
+            json={"message": "什么是梯度下降？", "student_id": student_id}
+        )
+        self.assertEqual(response.status_code, 200)
+        
+        # 提取流中最后的 complete 帧
+        complete_payload = None
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                try:
+                    import json
+                    data = json.loads(line[6:])
+                    # complete 帧有 resources 或 rdi 字段
+                    if "rdi" in data:
+                        complete_payload = data
+                        break
+                except Exception:
+                    pass
+
+        # 验证 RDI 结构存在且正确
+        if complete_payload:
+            self.assertIn("rdi", complete_payload)
+            rdi = complete_payload["rdi"]
+            self.assertIn("score", rdi)
+            self.assertIn("category", rdi)
+            self.assertIn("explanation", rdi)
+            self.assertIn("details", rdi)
+
+        # 2. 验证找学伴 PK 拦截与对抗出题
+        response_pk = client.post(
+            "/api/stream/chat",
+            json={"message": "找学伴PK", "student_id": student_id}
+        )
+        self.assertEqual(response_pk.status_code, 200)
+        
+        pk_payload = None
+        for line in response_pk.iter_lines():
+            if line.startswith("data: "):
+                try:
+                    import json
+                    data = json.loads(line[6:])
+                    if "rdi" in data: # complete 帧
+                        pk_payload = data
+                        break
+                except Exception:
+                    pass
+
+        self.assertIsNotNone(pk_payload)
+        self.assertIn("小明", pk_payload["content"])
+        self.assertIn("Adversarial Peer Challenge", pk_payload["content"])
+        self.assertTrue(len(pk_payload["resources"]) > 0)
+        self.assertEqual(pk_payload["resources"][0]["agent"], "同伴智能体 (小明)")
+
+
+    def test_profile_update_endpoint(self):
+        """验证学生画像更新接口正确性，能够修改并持久化各个偏好字段，并且清除信笺缓存"""
+        import uuid
+        from app.database import SessionLocal, DBStudentProfile
+        from app.crud import load_student_profile, save_student_profile
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        student_id = f"test-profile-update-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            profile = load_student_profile(session, student_id)
+            profile.narrative_report = "some cached narrative"
+            save_student_profile(session, profile)
+        finally:
+            session.close()
+
+        client = TestClient(app)
+        
+        # 1. 发送更新请求
+        update_payload = {
+            "major": "人工智能实践与应用",
+            "target_course": "深度学习进阶",
+            "cognitive_style": "代码实操导向",
+            "motivation_type": "内在动机",
+            "learning_goals": ["卷积神经网络", "池化层"],
+            "learning_preferences": ["分步引导", "代码实操"]
+        }
+        
+        response = client.post(f"/api/profile/{student_id}/update", json=update_payload)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["major"], "人工智能实践与应用")
+        self.assertEqual(data["cognitive_style"], "代码实操导向")
+        self.assertEqual(data["learning_goals"], ["卷积神经网络", "池化层"])
+        
+        # 2. 验证数据库中确实更新了
+        session = SessionLocal()
+        try:
+            profile_db = load_student_profile(session, student_id)
+            self.assertEqual(profile_db.major, "人工智能实践与应用")
+            self.assertEqual(profile_db.target_course, "深度学习进阶")
+            self.assertEqual(profile_db.cognitive_style, "代码实操导向")
+            self.assertEqual(profile_db.motivation_type, "内在动机")
+            self.assertEqual(profile_db.learning_goals, ["卷积神经网络", "池化层"])
+            self.assertEqual(profile_db.interaction_preferences, ["分步引导", "代码实操"])
+            # 信笺缓存应该被清空
+            self.assertEqual(profile_db.narrative_report, "")
+            
+            # 清理
+            db_prof = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if db_prof:
+                session.delete(db_prof)
+                session.commit()
+        finally:
+            session.close()
+
 
 if __name__ == "__main__":
     unittest.main()

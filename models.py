@@ -308,6 +308,7 @@ class StudentProfile:
     recent_quiz_accuracy: dict[str, list[float]] = field(default_factory=dict)  # concept -> [最近3次正确率]
     metacognitive_mismatch: float = 0.0  # 元认知偏差指标 0~1
     last_update_timestamp: str = field(default_factory=_utc_now)  # 画像最后更新时间（用于遗忘衰减）
+    narrative_report: str = ""  # 📬 缓存的 StoryLensEdu 叙事学情成长信笺
     bkt_states: dict[str, dict] = field(default_factory=dict)  # BKT 状态快照: concept -> {p_mastered, history...}
 
     # === 替换 models.py 中的 add_favorite 方法 ===
@@ -390,9 +391,23 @@ class StudentProfile:
                 trace = self.knowledge_traces.setdefault(point, KnowledgeTrace(concept=point, mastery=old))
                 trace.update(correct=accuracy >= 0.68, hinted=hint_count > 0)
                 self.concept_mastery[point] = trace.mastery
+
+                # === LMCD 知识点掌握度扩散 (newplan.md 核心改进点一) ===
+                delta = self.concept_mastery[point] - old
+                if abs(delta) > 1e-5:
+                    from bkt_engine import KnowledgeDiffusionEngine
+                    from agent_swarm import DEFAULT_KNOWLEDGE_DAG
+                    diffuse_engine = KnowledgeDiffusionEngine()
+                    self.concept_mastery = diffuse_engine.diffuse(
+                        self.concept_mastery,
+                        point,
+                        delta,
+                        DEFAULT_KNOWLEDGE_DAG,
+                    )
         self._update_context(feedback)
         self._update_legacy_fields(feedback)
         self._refresh_dynamic_profile()
+        self.narrative_report = ""  # 清空 StoryLensEdu 缓存以便下一次生成最新的信笺
 
     def apply_llm_features(self, payload: dict[str, Any], *, source_text: str) -> None:
         if not payload:
@@ -454,10 +469,23 @@ class StudentProfile:
                         concept_text,
                         KnowledgeTrace(concept=concept_text, mastery=self.concept_mastery[concept_text])
                     )
+
+                    # === LMCD 知识点掌握度扩散 (newplan.md 核心改进点一) ===
+                    if abs(delta) > 1e-5:
+                        from bkt_engine import KnowledgeDiffusionEngine
+                        from agent_swarm import DEFAULT_KNOWLEDGE_DAG
+                        diffuse_engine = KnowledgeDiffusionEngine()
+                        self.concept_mastery = diffuse_engine.diffuse(
+                            self.concept_mastery,
+                            concept_text,
+                            delta,
+                            DEFAULT_KNOWLEDGE_DAG,
+                        )
                 except (ValueError, TypeError):
                     continue
                     
         self._refresh_dynamic_profile()
+        self.narrative_report = ""  # 清空 StoryLensEdu 缓存以便下一次生成最新的信笺
 
     def profile_prompt(self) -> str:
         dimensions = "；".join(

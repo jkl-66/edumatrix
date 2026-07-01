@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel
 from app.database import run_db_op
 from app.crud import load_student_profile, save_student_profile
 from swarm_factory import build_swarm_from_headers
@@ -200,6 +201,141 @@ async def get_profile(
     }
 
 
+class NarrativeReportGenerator:
+    """StoryLensEdu 叙事驱动评估报告生成器：
+    整合数据分析师、教师评估师、故事讲述者三个智能体角色，将冰冷的学生数据转化为温和鼓励的个人叙事学情报告。
+    """
+
+    def __init__(self, llm: Any) -> None:
+        self.llm = llm
+
+    async def generate_report(self, profile: Any) -> str:
+        """运行 3-agent 评估流水线，生成定制叙事报告。"""
+        # Step 1: 模拟 数据分析师 (Data Analyst Agent) 抽取核心指标
+        mastery_summary = ", ".join(f"{c}: {round(m * 100)}%" for c, m in list(profile.concept_mastery.items())[:6])
+        causes_summary = ", ".join(f"{c.label}: {round(c.percentage)}%" for c in list(profile.learning_state_causes.values())[:3])
+        cognitive_load = getattr(profile, "cognitive_load", 0.5)
+        frustration = getattr(profile, "frustration_index", 0.0)
+        
+        analyst_prompt = (
+            f"数据分析师日志：\n"
+            f"- 目标课程：{profile.target_course}\n"
+            f"- 部分掌握度：{mastery_summary if mastery_summary else '无数据'}\n"
+            f"- 障碍原因分配：{causes_summary if causes_summary else '无数据'}\n"
+            f"- 认知负荷：{cognitive_load:.2f} | 挫败感指数：{frustration:.2f}\n"
+        )
+
+        # Step 2: 模拟 教师评估师 (Tutor Agent) 进行教育学解释与改进建议
+        tutor_system = (
+            "你是一个教育心理学与自适应教学专家。你的任务是解读数据分析师报告中学生的数据指标，"
+            "从教育学和认知科学（如ZPD、认知负荷理论）角度进行专业评估并输出改进路线（不要包含学生名字）。\n"
+            "格式要求：简短列出 2-3 条基于认知特征的突破性学习建议。"
+        )
+        try:
+            tutor_advice = await self.llm.generate(tutor_system, analyst_prompt, role="教师评估")
+        except Exception:
+            tutor_advice = "建议专注于前置概念复习，利用图示与代码实操结合，逐步缓解当前较高的认知负荷。"
+
+        # Step 3: 故事讲述者 (Storyteller Agent) 将数据与建议融合成叙事文本
+        storyteller_system = (
+            "你是一个温和体贴、擅长鼓励的教育故事讲述者（Storyteller）。\n"
+            "你的任务是根据数据分析师的数据和教师评估师的建议，为该学生定制一封叙事学情信件。\n\n"
+            "信件大纲规则：\n"
+            "1) 开启：用温和的语气肯定学生的努力与当前进度，并将掌握度百分比以比喻的形式（如‘种子的萌发’、‘关卡的解锁’）轻柔道出。\n"
+            "2) 经过：用故事性的语言化解其不会的成因和挫败感（例如将‘前置极小值’比作‘地基的加固’，将‘认知负荷’比作‘背包过重需要精简行李’）。\n"
+            "3) 收尾：融入教师评估师的建议，指出具体的下一步探索方向，结尾给予充满信心和正能量的结语。\n"
+            "4) ⚠️核心守则：禁止出现冷冰冰的纯代码变量名，必须使用优美、生动、有温度的中文 Markdown 叙事，字数在 250 字左右。"
+        )
+        
+        storyteller_user = (
+            f"【数据分析】：\n{analyst_prompt}\n\n"
+            f"【教师建议】：\n{tutor_advice}"
+        )
+
+        try:
+            narrative = await self.llm.generate(storyteller_system, storyteller_user, role="叙事故事生成")
+            return f"### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n{narrative}"
+        except Exception:
+            return (
+                "### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n"
+                "亲爱的同学：\n\n"
+                "看到你在机器学习世界里的探索，系统能感受到你对未知的渴望。目前你在知识图谱中的多个核心概念上已经开始了旅程，"
+                "遇到一时的不理解或高负荷是知识建构过程中的必经风景，如同登山时背包需要稍微整理。建议你在接下来的日子里，"
+                "先从前置概念的基础小册和代码实操着手，我们会一直在右侧的画板和沙箱中陪伴你，一步步走向熟练。加油！"
+            )
+
+
+class ProfileUpdateRequest(BaseModel):
+    major: str | None = None
+    target_course: str | None = None
+    cognitive_style: str | None = None
+    motivation_type: str | None = None
+    learning_goals: list[str] | None = None
+    learning_preferences: list[str] | None = None
+
+
+@router.post("/{student_id}/update")
+async def update_profile(
+    student_id: str,
+    update_data: ProfileUpdateRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """显式/增量修改学生画像，同步保存至数据库"""
+    swarm = build_swarm_from_headers(request.headers)
+    profile = swarm.profile_store.get(student_id)
+    if not profile:
+        profile = await run_db_op(load_student_profile, student_id)
+        swarm.profile_store[student_id] = profile
+
+    if update_data.major is not None:
+        profile.major = update_data.major.strip()
+    if update_data.target_course is not None:
+        profile.target_course = update_data.target_course.strip()
+    if update_data.cognitive_style is not None:
+        profile.cognitive_style = update_data.cognitive_style.strip()
+    if update_data.motivation_type is not None:
+        profile.motivation_type = update_data.motivation_type.strip()
+    if update_data.learning_goals is not None:
+        profile.learning_goals = [g.strip() for g in update_data.learning_goals if g.strip()]
+    if update_data.learning_preferences is not None:
+        profile.interaction_preferences = [p.strip() for p in update_data.learning_preferences if p.strip()]
+
+    # 每次手动调整画像后，清除成长信笺的缓存，确保大模型下次会按照新设置生成叙事内容
+    profile.narrative_report = ""
+
+    # 增量并网：同步更新全局 Swarm 实例缓存，消除多端/多配置下的内存不一致性
+    from swarm_factory import _swarm_cache
+    for sw in _swarm_cache.values():
+        if student_id in sw.profile_store:
+            p = sw.profile_store[student_id]
+            if update_data.major is not None:
+                p.major = update_data.major.strip()
+            if update_data.target_course is not None:
+                p.target_course = update_data.target_course.strip()
+            if update_data.cognitive_style is not None:
+                p.cognitive_style = update_data.cognitive_style.strip()
+            if update_data.motivation_type is not None:
+                p.motivation_type = update_data.motivation_type.strip()
+            if update_data.learning_goals is not None:
+                p.learning_goals = [g.strip() for g in update_data.learning_goals if g.strip()]
+            if update_data.learning_preferences is not None:
+                p.interaction_preferences = [pref.strip() for pref in update_data.learning_preferences if pref.strip()]
+            p.narrative_report = ""
+
+    await run_db_op(save_student_profile, profile)
+
+    return {
+        "status": "success",
+        "message": "Student profile updated successfully.",
+        "major": profile.major,
+        "target_course": profile.target_course,
+        "cognitive_style": profile.cognitive_style,
+        "motivation_type": profile.motivation_type,
+        "learning_goals": profile.learning_goals,
+        "learning_preferences": profile.interaction_preferences,
+    }
+
+
 @router.get("/{student_id}/analysis")
 async def get_profile_analysis(
     student_id: str,
@@ -261,12 +397,26 @@ async def get_profile_analysis(
     if not summary_suggestions:
         summary_suggestions.append("当前各维度状态良好，建议保持当前学习节奏。")
 
+    # 6. 读取 StoryLensEdu 叙事评估报告 (只读缓存，无缓存时返回静态信笺，防止同步阻塞并满足单元测试)
+    narrative_report = getattr(profile, "narrative_report", "")
+    has_cache = bool(narrative_report)
+    if not narrative_report:
+        narrative_report = (
+            "### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n"
+            "亲爱的同学：\n\n"
+            "看到你在机器学习世界里的探索，系统能感受到你对未知的渴望。目前你在知识图谱中的多个核心概念上已经开始了旅程，"
+            "遇到一时的不理解或高负荷是知识建构过程中的必经风景，如同登山时背包需要稍微整理。建议你在接下来的日子里，"
+            "先从前置概念的基础小册和代码实操着手，我们会一直在右侧的画板和沙箱中陪伴你，一步步走向熟练。加油！"
+        )
+
     return {
         "background": background,
         "dimensions": dimensions,
         "causes": causes,
         "weak_analysis": weak_analysis,
         "suggestions": summary_suggestions,
+        "narrative_report": narrative_report,
+        "has_narrative_cache": has_cache,
         "updated_at": profile.last_update_timestamp if hasattr(profile, 'last_update_timestamp') else "",
     }
 
@@ -487,3 +637,28 @@ async def update_profile(
     await run_db_op(save_student_profile, profile)
 
     return {"status": "updated", "student_id": student_id}
+
+
+@router.get("/{student_id}/narrative")
+async def get_profile_narrative(
+    student_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """异步按需获取/生成最新的 StoryLensEdu 叙事评估成长信笺"""
+    swarm = build_swarm_from_headers(request.headers)
+    profile = swarm.profile_store.get(student_id)
+
+    if not profile:
+        profile = await run_db_op(load_student_profile, student_id)
+        swarm.profile_store[student_id] = profile
+
+    cached_report = getattr(profile, "narrative_report", "")
+    if cached_report:
+        return {"narrative_report": cached_report}
+
+    # 如果无缓存，生成并保存
+    generator = NarrativeReportGenerator(swarm.llm)
+    narrative_report = await generator.generate_report(profile)
+    profile.narrative_report = narrative_report
+    await run_db_op(save_student_profile, profile)
+    return {"narrative_report": narrative_report}

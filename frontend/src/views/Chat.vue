@@ -25,6 +25,7 @@ import SandboxVisualizer from '../components/SandboxVisualizer.vue'
 import AgentTimeline from '../components/AgentTimeline.vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
+import ManifoldVisualizer from '../components/ManifoldVisualizer.vue'
 
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
@@ -293,8 +294,7 @@ const socraticPopup = ref({
 
 // --- 任务 8.4: 双栏阻尼排版 ---
 const rightPanelCollapsed = ref(false)
-const showSandbox = ref(false)
-const showVisualizer = ref(false)
+const rightPanelActiveTab = ref('knowledge')
 const sandboxInitialCode = ref("import numpy as np\nprint('Hello, EduMatrix!')")
 
 function extractCodeFromMarkdown(mdText) {
@@ -314,7 +314,7 @@ function extractCodeFromMarkdown(mdText) {
 function mountToSandbox(rawContent) {
   const code = extractCodeFromMarkdown(rawContent)
   sandboxInitialCode.value = code
-  showSandbox.value = true
+  rightPanelActiveTab.value = 'sandbox'
   rightPanelCollapsed.value = false
 }
 
@@ -889,9 +889,15 @@ const hasVisualContent = computed(() => {
 // 是否需要右侧画板：有可视化内容或用户主动展开
 const shouldShowRightPanel = computed(() => {
   if (rightPanelCollapsed.value) return false
-  if (showSandbox.value) return true
-  return hasVisualContent.value
+  return true
 })
+
+watch(hasVisualContent, (newVal) => {
+  if (newVal) {
+    rightPanelActiveTab.value = 'canvas'
+    rightPanelCollapsed.value = false
+  }
+}, { immediate: true })
 
 const studentMastery = computed(() => {
   let profile = latestProfile.value
@@ -1536,12 +1542,12 @@ function renderMarkdown(text, type = '', conceptName = '') {
         <div class="flex items-center gap-2">
           <button v-if="activeTab === 'chat' && messages.length > 0"
             @click="clearChat"
-            class="px-2.5 py-1 text-xs font-semibold text-red-400 hover:text-red-300 bg-red-950/30 hover:bg-red-900/40 rounded-lg flex items-center gap-1 transition-all border border-red-900/30">
+            class="px-2.5 py-1 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-100 bg-red-50 rounded-lg flex items-center gap-1 transition-all border border-red-200">
             <Trash2 :size="12" /> 清空对话
           </button>
           <button v-if="activeTab === 'chat' && rightPanelCollapsed"
             @click="rightPanelCollapsed = false"
-            class="px-2.5 py-1 text-xs font-semibold text-blue-400 hover:text-blue-300 bg-blue-950/30 hover:bg-blue-900/40 rounded-lg flex items-center gap-1 transition-all border border-blue-900/30">
+            class="px-2.5 py-1 text-xs font-semibold text-blue-600 hover:text-blue-700 hover:bg-blue-100 bg-blue-50 rounded-lg flex items-center gap-1 transition-all border border-blue-200">
             <Maximize2 :size="12" /> 展开可视化画板
           </button>
         </div>
@@ -2098,58 +2104,85 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
     <!-- ========== 任务 8.4: 双栏阻尼自适应排版（右侧画板） ========== -->
     <div v-if="activeTab === 'chat'"
-      class="sticky top-6 self-start transition-all duration-300 overflow-hidden shrink-0 border-l border-gray-200"
+      class="sticky top-6 self-start transition-all duration-300 overflow-hidden shrink-0 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl"
       :class="shouldShowRightPanel ? 'w-[360px] lg:w-[420px]' : 'w-0 border-l-0'">
       <div v-if="shouldShowRightPanel" class="h-[calc(100vh-120px)] flex flex-col p-3">
         <!-- 面板切换栏 -->
-        <div class="flex items-center justify-between mb-3">
-          <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
-            {{ showSandbox ? '代码沙箱' : '可视化画板' }}
-          </span>
-          <div class="flex gap-1">
-            <button @click="showSandbox = !showSandbox"
-              class="px-2 py-1 rounded text-[10px] transition-colors"
-              :class="showSandbox ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'">
-              <Terminal :size="10" /> 沙箱
+        <div class="flex items-center justify-between mb-3 border-b border-gray-800 pb-2">
+          <div class="flex flex-wrap gap-1">
+            <button
+              v-if="hasVisualContent"
+              @click="rightPanelActiveTab = 'canvas'"
+              class="px-2 py-1 rounded text-[10px] transition-all font-semibold"
+              :class="rightPanelActiveTab === 'canvas' ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+            >
+              🎨 画布
             </button>
-            <button @click="rightPanelCollapsed = true"
-              class="px-2 py-1 rounded bg-gray-100 text-gray-500 hover:bg-gray-200 text-[10px]">
-              <Minimize2 :size="10" /> 折叠
+            <button
+              @click="rightPanelActiveTab = 'sandbox'"
+              class="px-2 py-1 rounded text-[10px] transition-all font-semibold"
+              :class="rightPanelActiveTab === 'sandbox' ? 'bg-green-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+            >
+              💻 沙箱
+            </button>
+            <button
+              @click="rightPanelActiveTab = 'knowledge'"
+              class="px-2 py-1 rounded text-[10px] transition-all font-semibold"
+              :class="rightPanelActiveTab === 'knowledge' ? 'bg-purple-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+            >
+              📖 知识点
+            </button>
+            <button
+              @click="rightPanelActiveTab = 'visualizer'"
+              class="px-2 py-1 rounded text-[10px] transition-all font-semibold"
+              :class="rightPanelActiveTab === 'visualizer' ? 'bg-teal-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+            >
+              📊 可视化
             </button>
           </div>
+          <button
+            @click="rightPanelCollapsed = true"
+            class="w-6 h-6 rounded-lg hover:bg-gray-800 flex items-center justify-center text-gray-400 hover:text-gray-200 transition-all shrink-0"
+            title="折叠面板"
+          >
+            <Minimize2 :size="12" />
+          </button>
         </div>
 
-        <!-- 代码沙箱（切换） -->
-        <SandboxConsole v-if="showSandbox"
+        <!-- 1. 代码沙箱 -->
+        <SandboxConsole v-if="rightPanelActiveTab === 'sandbox'"
           :studentId="props.studentId"
           :initialCode="sandboxInitialCode" />
 
-        <!-- 绘图区域 + 空白画布自适应收缩 -->
-        <div v-else class="flex-1 flex flex-col">
-          <div v-if="!hasVisualContent" class="flex-1 flex items-center justify-center text-center text-gray-400">
-            <div>
-              <Maximize2 :size="28" class="mx-auto mb-2 opacity-30" />
-              <p class="text-xs">当前讲义不包含可视化图表</p>
-              <p class="text-[10px] mt-1">右侧面板已自动收缩</p>
-            </div>
-          </div>
-          <!-- 实际绘图区域（可由 GraphicFallback 降级） -->
-          <div v-else class="flex-1 flex flex-col min-h-0">
-            <!-- 图表内容区 -->
-            <div class="flex-1 relative overflow-auto min-h-0">
-              <div class="h-full">
-                <GraphicFallback
-                  originalType="mermaid"
-                  errorMessage="图表渲染参数异常"
-                  fallbackText="当前图表格式不支持实时渲染，已降级为文本示意图"
-                >
-                  <!-- 此处原为 ManifoldVisualizer，已替换为浮窗 KnowledgePointsPanel -->
-                  <div class="flex items-center justify-center h-full text-gray-500 text-xs">
-                    <BookOpen :size="24" class="mr-2 opacity-50" />
-                    知识点浮窗在右下角
-                  </div>
-                </GraphicFallback>
-              </div>
+        <!-- 2. 知识点速览 -->
+        <KnowledgePointsPanel v-else-if="rightPanelActiveTab === 'knowledge'"
+          :concepts="conceptList"
+          :discussionThemes="discussionThemes"
+          :webResults="[]"
+          :inline="true" />
+
+        <!-- 3. 可视化分析 -->
+        <SandboxVisualizer v-else-if="rightPanelActiveTab === 'visualizer'"
+          :studentId="props.studentId"
+          :inline="true" />
+
+        <!-- 4. 绘图区域/画布 -->
+        <div v-else class="flex-1 flex flex-col min-h-0">
+          <div class="flex-1 relative overflow-auto min-h-0">
+            <div class="h-full">
+              <GraphicFallback
+                originalType="mermaid"
+                errorMessage="图表渲染参数异常"
+                fallbackText="当前图表格式不支持实时渲染，已降级为文本示意图"
+              >
+                <ManifoldVisualizer
+                  :studentMastery="studentMastery"
+                  :targetPoints="targetPoints"
+                  :klDivergence="klDivergence"
+                  :alignmentProgress="alignmentProgress"
+                  :conflictDetected="conflictDetected"
+                />
+              </GraphicFallback>
             </div>
           </div>
         </div>
@@ -2164,37 +2197,52 @@ function renderMarkdown(text, type = '', conceptName = '') {
       :contextAfter="socraticPopup.contextAfter"
       :lineIndex="socraticPopup.lineIndex"
       :messageIndex="socraticPopup.messageIndex"
+      :activeTab="activeTab"
+      :studentId="props.studentId"
+      :rightPanelCollapsed="rightPanelCollapsed"
       @close="socraticPopup.visible = false" />
 
-    <!-- 知识点速览浮窗（替换双曲圆盘） -->
-    <KnowledgePointsPanel
-      :concepts="conceptList"
-      :discussionThemes="discussionThemes"
-      :webResults="[]" />
-
-    <!-- 可视化分析浮窗按钮+面板 -->
-    <button
-      v-if="activeTab === 'chat'"
-      class="fixed bottom-44 right-6 z-40 w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-teal-600 text-white shadow-lg hover:scale-110 transition-all flex items-center justify-center"
-      :title="showVisualizer ? '关闭可视化' : '可视化分析'"
-      @click="showVisualizer = !showVisualizer"
-    >
-      <span class="text-sm">📊</span>
-    </button>
-    <SandboxVisualizer
-      v-if="showVisualizer"
-      :studentId="props.studentId"
-      @close="showVisualizer = false" />
+    <!-- 可视化分析悬浮按钮 -->
+    <div v-if="rightPanelCollapsed && activeTab === 'chat'" class="fixed bottom-[152px] right-6 z-40 group">
+      <button
+        class="w-12 h-12 rounded-full bg-gradient-to-br from-green-500 to-teal-600 text-white shadow-lg hover:scale-110 transition-all flex items-center justify-center cursor-pointer"
+        @click="rightPanelActiveTab = 'visualizer'; rightPanelCollapsed = false"
+      >
+        <span class="text-xl">📊</span>
+      </button>
+      <!-- Tooltip -->
+      <div class="absolute right-full mr-3 top-1/2 -translate-y-1/2 scale-75 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-200 bg-gray-900/90 text-white text-xs px-2.5 py-1.5 rounded-lg border border-gray-700/50 shadow-xl pointer-events-none whitespace-nowrap">
+        可视化分析
+      </div>
+    </div>
 
     <!-- 任务 8.5: 视频渲染面板 -->
-    <button
-      v-if="activeTab === 'chat'"
-      class="fixed bottom-24 right-6 z-40 w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center"
-      :title="showVideoPanel ? '关闭视频面板' : '生成讲解视频'"
-      @click="toggleVideoPanel"
-    >
-      <Video :size="20" />
-    </button>
+    <div v-if="rightPanelCollapsed && activeTab === 'chat'" class="fixed bottom-[88px] right-6 z-40 group">
+      <button
+        class="w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 hover:scale-110 transition-all flex items-center justify-center cursor-pointer"
+        @click="toggleVideoPanel"
+      >
+        <Video :size="22" />
+      </button>
+      <!-- Tooltip -->
+      <div class="absolute right-full mr-3 top-1/2 -translate-y-1/2 scale-75 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-200 bg-gray-900/90 text-white text-xs px-2.5 py-1.5 rounded-lg border border-gray-700/50 shadow-xl pointer-events-none whitespace-nowrap">
+        生成讲解视频
+      </div>
+    </div>
+
+    <!-- 知识点速览悬浮按钮 -->
+    <div v-if="rightPanelCollapsed && activeTab === 'chat'" class="fixed bottom-6 right-6 z-50 group">
+      <button
+        class="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 shadow-lg flex items-center justify-center cursor-pointer hover:scale-110 transition-all hover:shadow-xl"
+        @click="rightPanelActiveTab = 'knowledge'; rightPanelCollapsed = false"
+      >
+        <BookOpen :size="22" class="text-white" />
+      </button>
+      <!-- Tooltip -->
+      <div class="absolute right-full mr-3 top-1/2 -translate-y-1/2 scale-75 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-200 bg-gray-900/90 text-white text-xs px-2.5 py-1.5 rounded-lg border border-gray-700/50 shadow-xl pointer-events-none whitespace-nowrap">
+        展开知识点速览
+      </div>
+    </div>
     <VideoRenderPanel
       :visible="showVideoPanel"
       :videoUrl="videoPanelUrl"
@@ -2306,8 +2354,8 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
 .scroll-fab-container {
   position: fixed;
-  bottom: 120px;
-  right: 24px;
+  bottom: 280px;
+  right: 80px;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;

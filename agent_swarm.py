@@ -1015,9 +1015,79 @@ class EduMatrixSwarm:
         # 任务 7.3: 多门控自适应 FSM 路由器
         self.mediation_router = SwarmMediationRouter()
 
+    async def _check_academic_intent(self, message: str) -> dict[str, Any]:
+        """使用大语言模型快速分类学生输入的意图是学术学习相关，还是闲聊/无关内容。"""
+        system_prompt = (
+            "你是一个意图分类器。你需要判断用户输入的问题是否与学术学习、机器学习、数据科学、数学、人工智能、编程、计算机科学或此教学系统的使用说明相关。\n"
+            "如果输入仅仅是打招呼（如“你好”、“hello”），但在后续可能引发学术问题，也可以归为学术，但如果是纯粹的个人情况提问、系统无关闲聊（如“你是谁啊”、“你是谁”、“吃了吗”、“今天天气”、“给我讲个笑话”），请判定为非学术 (is_academic: false)。\n"
+            "回答必须是 JSON 格式：\n"
+            "{\n"
+            "  \"is_academic\": true 或 false,\n"
+            "  \"reason\": \"分类的理由简述\",\n"
+            "  \"reply\": \"如果 is_academic 为 false，请在此处提供一个友好的、引导学生回到学术学习范围的回复（Markdown格式，必须以 '## 智能答疑 / 系统说明\\n\\n' 开头）；如果为 true，此项为空串\"\n"
+            "}\n"
+            "引导回复示例：\n"
+            "\"## 智能答疑 / 系统说明\\n\\n您好！我是 EduMatrix 智能自适应助教。我专注于为您解答机器学习、深度学习、数据科学等学术与编程问题，并辅助您的学习进度。建议您向我提问相关的专业内容，例如：‘什么是梯度下降？’。\"\n"
+            "请严格遵循 JSON 格式返回，不要有任何 Markdown 包裹符之外的其他解释文本。"
+        )
+        user_prompt = f"用户输入: \"{message}\""
+        try:
+            response_text = await self.llm.generate(system_prompt, user_prompt, role="意图分类")
+            clean_text = response_text.strip()
+            if clean_text.startswith("```"):
+                lines = clean_text.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                clean_text = "\n".join(lines).strip()
+            import json
+            return json.loads(clean_text)
+        except Exception:
+            return {"is_academic": True, "reason": "分类器异常放行", "reply": ""}
+
     async def async_process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
         with timed_span(TELEMETRY, "swarm.process", student_id=student_id):
             profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
+
+            # === 意图分类与防闲聊拦截 ===
+            classification = await self._check_academic_intent(user_input)
+            if not classification.get("is_academic", True):
+                from models import AlignmentReport, LearningSignal
+                reply = classification.get("reply") or "## 智能答疑 / 系统说明\n\n您好！我是 EduMatrix 智能自适应助教。我目前专注于为您解答机器学习和数据科学等学术问题，请提出与学习相关的疑问，谢谢！"
+                resources = (
+                    AgentOutput(
+                        agent="Coordinator",
+                        resource_type="专业讲义",
+                        content=reply,
+                        citations=(),
+                        private_rationale="日常沟通/学习无关拦截",
+                    ),
+                )
+                alignment_report = AlignmentReport(
+                    passed=True,
+                    distance=0.0,
+                    threshold=0.65,
+                    conflicts=[],
+                    advice="非学术沟通拦截",
+                )
+                learning_signal = LearningSignal(
+                    accuracy=1.0,
+                    needs_replan=False,
+                    error_message="",
+                    grading_details={},
+                )
+                return ResourcePackage(
+                    student_id=student_id,
+                    target="系统沟通",
+                    profile=profile,
+                    retrieval=None,
+                    verdicts=(),
+                    resources=resources,
+                    alignment=alignment_report,
+                    learning_signal=learning_signal,
+                    strategy_plan=[],
+                )
 
             # === 任务 7.2: 应用 Ebbinghaus 遗忘衰减 ===
             from bkt_engine import EbbinghausDecayEngine, behavior_sanity_check

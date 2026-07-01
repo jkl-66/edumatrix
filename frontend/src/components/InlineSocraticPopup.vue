@@ -3,7 +3,7 @@
  * InlineSocraticPopup.vue — v4: 浮动图标模式
  * 背景点击→最小化到浮动图标，X按钮→关闭
  */
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, watch } from 'vue'
 import { socraticExplain } from '../api'
 
 const emit = defineEmits(['close'])
@@ -15,6 +15,8 @@ const props = defineProps({
   lineIndex: { type: Number, default: 0 },
   messageIndex: { type: Number, default: -1 },
   studentId: { type: String, default: 'demo-student' },
+  activeTab: { type: String, default: 'chat' },
+  rightPanelCollapsed: { type: Boolean, default: true },
 })
 
 const visible = ref(false)
@@ -31,6 +33,17 @@ onMounted(async () => {
   visible.value = true
   await nextTick()
   await fetchExplanation()
+})
+
+watch(() => props.targetText, async (newVal) => {
+  if (newVal) {
+    minimized.value = false
+    steps.value = []
+    conversationHistory.value = ''
+    followUp.value = ''
+    await nextTick()
+    await fetchExplanation()
+  }
 })
 
 async function fetchExplanation(followUpText = '') {
@@ -105,9 +118,7 @@ function restore() {
 }
 
 function close() {
-  visible.value = false
-  minimized.value = false
-  emit('close')
+  minimized.value = true
 }
 
 function renderMarkdown(text) {
@@ -148,14 +159,20 @@ function renderMarkdown(text) {
 <template>
   <Teleport to="body">
     <!-- 浮动图标（最小化状态） -->
-    <div v-if="minimized"
-      class="fixed bottom-20 right-6 z-50 w-10 h-10 rounded-full bg-purple-600 shadow-lg flex items-center justify-center cursor-pointer hover:bg-purple-500 hover:scale-110 transition-all hover:shadow-xl"
+    <div v-if="minimized && activeTab === 'chat' && rightPanelCollapsed"
+      class="fixed bottom-[216px] right-6 z-50 group"
       @click="restore">
-      <span class="text-white text-sm">🧠</span>
+      <div class="w-12 h-12 rounded-full bg-purple-600 shadow-lg flex items-center justify-center cursor-pointer hover:bg-purple-500 hover:scale-110 transition-all hover:shadow-xl">
+        <span class="text-white text-xl">🧠</span>
+      </div>
+      <!-- Tooltip -->
+      <div class="absolute right-full mr-3 top-1/2 -translate-y-1/2 scale-75 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-200 bg-gray-900/90 text-white text-xs px-2.5 py-1.5 rounded-lg border border-gray-700/50 shadow-xl pointer-events-none whitespace-nowrap">
+        恢复即时答疑 (Socratic)
+      </div>
     </div>
 
     <!-- 主弹窗 -->
-    <div v-if="visible && !minimized" class="fixed inset-0 z-50 flex items-start justify-center pt-16 md:pt-24" @click.self="minimize">
+    <div v-if="visible && !minimized && activeTab === 'chat'" class="fixed inset-0 z-50 flex items-start justify-center pt-16 md:pt-24" @click.self="minimize">
       <div
         class="inline-socratic-popup bg-gray-900/95 backdrop-blur-sm border border-gray-700/60 rounded-2xl shadow-2xl w-[90vw] md:w-[480px] max-h-[80vh] flex flex-col"
         @click.stop>

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar,
@@ -23,10 +23,20 @@ const getOrInitStudentId = () => {
   return id
 }
 
-const studentId = computed(() => getOrInitStudentId())
-const role = computed(() => localStorage.getItem('edumatrix_role') || 'student')
-const displayName = computed(() => localStorage.getItem('edumatrix_display_name') || studentId.value.slice(0, 16))
+const studentId = ref('')
+const role = ref('student')
+const displayName = ref('')
 const sidebarCollapsed = ref(false)
+
+const updateSessionInfo = () => {
+  studentId.value = localStorage.getItem('edumatrix_student_id') || getOrInitStudentId()
+  role.value = localStorage.getItem('edumatrix_role') || 'student'
+  displayName.value = localStorage.getItem('edumatrix_display_name') || studentId.value.slice(0, 16)
+}
+
+watch(() => route.path, () => {
+  updateSessionInfo()
+}, { immediate: true })
 
 // 学生导航 — 只展示学习相关内容
 const studentNav = [

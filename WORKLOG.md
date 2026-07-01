@@ -914,6 +914,32 @@
 * 移除未使用的 `getTeacherDashboard` import 和 `AlertCircle/Info/Lock/Unlock` import
 * 前端构建通过 ✅
 
+---
+
+### 2026-07-01
+> **今日概述**：前置拦截非学术/闲聊输入；重构侧边栏为 Tab 式统一容器，无缝集成知识点与可视化组件；恢复庞加莱双曲圆盘可视化并绑定数据；彻底重构界面透明度与色彩对比度，解决视觉反光与阅读模糊问题。
+
+#### 1. 前置拦截非学术与闲聊意图 (Intent Filtering)
+- **学术意图快速分类**：在推流接口 [stream_api.py](file:///d:/project-edumatrix/edumatrix-main/stream_api.py) 与核心处理层 [agent_swarm.py](file:///d:/project-edumatrix/edumatrix-main/agent_swarm.py) 前置引入 `_classify_academic_intent` 大模型分类模块。
+- **闲聊智能区分与重导向**：非学术相关的无关提问（如“你是谁啊”、“吃了吗”）将在第 1 步被快速截断，避免消耗 RAG、学情画像及 5 个动作智能体的推理资源，降低 API Token 开支。
+- **输出格式优化**：拦截后以 `## 智能答疑 / 系统说明` 格式输出优雅的答疑边界解释与引导词，避免匹配错误的概念大纲。
+
+#### 2. 右侧滑动面板 Tab 式容器化与组件嵌入
+- **四维一体 Tab 导航**：在 `Chat.vue` 右侧滑动侧边栏顶部新增 Tab 切换控制器，集成 🎨 画布、💻 沙箱、📖 知识点、📊 可视化四个核心视图，统一收纳呈现。
+- **无缝内联自适应**：在 [KnowledgePointsPanel.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/KnowledgePointsPanel.vue) 和 [SandboxVisualizer.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/SandboxVisualizer.vue) 中开发了 `inline` 参数，去除外部 Teleport 及 fixed positioning 样式。使其在嵌入侧边栏时能自适应宽高度填充，关闭折叠时由右下角悬浮按钮快捷调起并自动划开面板。
+
+#### 3. Poincaré 双曲圆盘可视化恢复与数据绑定
+- **庞加莱几何圆盘回归**：在 `🎨 画布` Tab 中重新引入并挂载了 [ManifoldVisualizer.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/ManifoldVisualizer.vue)。
+- **数据流动并轨**：成功将计算属性 `studentMastery`、`targetPoints`、`klDivergence`、`alignmentProgress` 及 `conflictDetected` 与组件 props 绑定，动态展示掌握度粒子对齐、认知冲突告警与散度变化。当大模型输出包含思维导图或 Mermaid 数据时，系统会自动打开面板并切至画布页。
+
+#### 4. UI 界面透明度与色彩对比度美化
+- **实体深色侧边栏背景**：右侧滑动栏容器设为 `bg-slate-900 border border-slate-800 rounded-2xl shadow-xl`，内嵌子组件使用 `bg-slate-950/40 border border-slate-800/80` 双层阴影。彻底解决了在浅色背景下由于透明度过低导致白字灰底、文字发虚几乎无法阅读的 Bug。
+- **实体操作按钮**：清除了“清空对话”和“展开可视化画板”两个操作按钮中杂乱的半透明背景，改为 `bg-red-50 text-red-600 border border-red-200 hover:bg-red-100` 和 `bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100` 的实体高亮浅色系配比，整体观感整洁利落，字迹对比十分明显。
+
+#### 5. 单元测试与生产编译校验
+- **自动化测试通过**：运行全量 pytest 集成测试 ➡️ **41/41 tests passed (100% OK)**。
+- **前端生产编译**：执行 `npm run build` 构建成功无报错 ➡️ **Built in 674ms (100% OK)**。
+
 
 
 

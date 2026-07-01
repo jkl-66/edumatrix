@@ -6,7 +6,10 @@
 import { ref, computed } from 'vue'
 
 const emit = defineEmits(['close'])
-const props = defineProps({ studentId: { type: String, default: 'demo-student' } })
+const props = defineProps({
+  studentId: { type: String, default: 'demo-student' },
+  inline: { type: Boolean, default: false }
+})
 
 const visible = ref(true)
 const activeChart = ref('line')
@@ -192,8 +195,11 @@ selectChart('line')
 </script>
 
 <template>
-  <div v-if="visible"
-    class="fixed bottom-6 left-6 z-50 w-[92vw] md:w-[560px] max-h-[80vh] bg-gray-900/95 backdrop-blur-md border border-gray-700/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-200">
+  <div v-if="inline || visible"
+    :class="inline
+      ? 'w-full h-full flex flex-col bg-slate-950/40 rounded-2xl border border-slate-800/80 overflow-hidden'
+      : 'fixed top-20 right-6 z-50 w-[92vw] md:w-[560px] max-h-[80vh] bg-gray-900/95 backdrop-blur-md border border-gray-700/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-200'"
+  >
 
     <!-- Header -->
     <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700/50 shrink-0 bg-gray-800/80">
@@ -203,7 +209,7 @@ selectChart('line')
         </div>
         <span class="text-xs font-semibold text-gray-200">可视化分析</span>
       </div>
-      <button @click="close" class="w-6 h-6 rounded-lg hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-gray-200 transition-all">
+      <button v-if="!inline" @click="close" class="w-6 h-6 rounded-lg hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-gray-200 transition-all">
         <span class="text-sm leading-none">&times;</span>
       </button>
     </div>

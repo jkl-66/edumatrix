@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar,
   Presentation, Clock, GraduationCap, Library, Settings, UserCheck,
-  GitBranch, BarChart3, TrendingUp, LogOut, Users,
+  GitBranch, BarChart3, TrendingUp, LogOut, Users, Flame,
 } from '@lucide/vue'
 import { abortAllStreams } from './api'
 
@@ -46,6 +46,7 @@ const studentNav = [
   { path: '/learning-path', label: '学习路径', icon: GitBranch },
   { path: '/notes', label: '学习笔记', icon: StickyNote },
   { path: '/review', label: '复习计划', icon: Calendar },
+  { path: '/revision-calendar', label: '复习打卡', icon: Flame },
   { path: '/wrong-questions', label: '错题本', icon: BookOpen },
   { path: '/history', label: '对话历史', icon: Clock },
   { path: '/knowledge', label: '知识库', icon: Library },

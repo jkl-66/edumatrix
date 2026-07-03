@@ -154,7 +154,6 @@ function agentIcon(agent) {
       <div v-else class="relative">
         <!-- 竖线 -->
         <div class="absolute left-[11px] top-2 bottom-2 w-0.5 bg-gray-700" />
-
         <div v-for="(step, idx) in computedSteps" :key="step.id || idx" class="relative pl-8 pb-3 last:pb-0">
           <!-- 时间线圆点 -->
           <div class="absolute left-[5px] top-0.5 w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center"
@@ -162,7 +161,7 @@ function agentIcon(agent) {
               'border-green-500 bg-green-900/40': step.status === 'success',
               'border-red-500 bg-red-900/40': step.status === 'error',
               'border-yellow-500 bg-yellow-900/40': step.status === 'warning',
-              'border-blue-500 bg-blue-900/40': step.status === 'running',
+              'border-blue-500 bg-blue-900/40 pulse-glow-running': step.status === 'running',
               'border-gray-600 bg-gray-800': step.status === 'pending',
             }">
             <CheckCircle2 v-if="step.status === 'success'" :size="8" class="text-green-400" />
@@ -218,5 +217,19 @@ function agentIcon(agent) {
 }
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.4);
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 2px rgba(59, 130, 246, 0.4);
+    border-color: rgba(59, 130, 246, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.8);
+    border-color: rgba(59, 130, 246, 1);
+  }
+}
+.pulse-glow-running {
+  animation: pulse-glow 1.5s infinite ease-in-out;
 }
 </style>

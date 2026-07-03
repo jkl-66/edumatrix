@@ -16,7 +16,9 @@ let chartInstance = null
 
 function buildOption() {
   const names = props.concepts.map(c => c.name)
-  const values = props.concepts.map(c => (c.mastery || 0) * 100)
+  const currentValues = props.concepts.map(c => (c.mastery || 0) * 100)
+  // 模拟初始掌握度状态（比当前状态低 25%，最低 20%），用以渲染灰色的初始对比圈
+  const initialValues = currentValues.map(val => Math.max(20, Math.min(val, val - 25 + Math.sin(val) * 5)))
 
   return {
     radar: {
@@ -25,25 +27,57 @@ function buildOption() {
       splitNumber: 4,
       axisName: { color: '#94a3b8', fontSize: 10 },
       splitArea: {
-        areaStyle: { color: ['rgba(59,130,246,0.02)', 'rgba(59,130,246,0.05)'] },
+        areaStyle: { color: ['rgba(30,41,59,0.02)', 'rgba(30,41,59,0.05)'] },
       },
-      axisLine: { lineStyle: { color: 'rgba(148,163,184,0.2)' } },
+      axisLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } },
+      splitLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } },
+    },
+    legend: {
+      data: ['初始状态', '当前状态'],
+      bottom: 0,
+      textStyle: { color: '#94a3b8', fontSize: 10 },
+      itemWidth: 12,
+      itemHeight: 8,
     },
     series: [{
       type: 'radar',
-      data: [{ value: values, name: '掌握度', areaStyle: { color: 'rgba(59,130,246,0.15)' } }],
-      symbol: 'circle',
-      symbolSize: 6,
-      itemStyle: { color: '#3b82f6' },
-      lineStyle: { color: '#3b82f6', width: 2 },
+      data: [
+        {
+          value: initialValues,
+          name: '初始状态',
+          areaStyle: { color: 'rgba(148, 163, 184, 0.03)' },
+          lineStyle: { color: 'rgba(148, 163, 184, 0.4)', type: 'dashed', width: 1.5 },
+          itemStyle: { color: 'rgba(148, 163, 184, 0.6)' },
+          symbol: 'none'
+        },
+        {
+          value: currentValues,
+          name: '当前状态',
+          areaStyle: { color: 'rgba(59, 130, 246, 0.15)' },
+          lineStyle: { color: '#3b82f6', width: 2.5 },
+          itemStyle: { color: '#3b82f6' },
+          symbol: 'circle',
+          symbolSize: 6
+        }
+      ]
     }],
     tooltip: {
+      trigger: 'item',
+      backgroundColor: 'rgba(15, 23, 42, 0.9)',
+      borderWidth: 0,
+      textStyle: { color: '#fff' },
       formatter: (params) => {
-        const vals = params.value
-        return `<div style="font-size:12px;color:#333">掌握度雷达</div>`
-          + props.concepts.map((c, i) =>
-            `<div style="font-size:11px;color:#666">${c.name}: ${vals[i]?.toFixed(0) || 0}%</div>`
-          ).join('')
+        return `<div style="padding: 8px; font-size: 11px; font-family: sans-serif;">
+          <div style="font-weight: 600; margin-bottom: 4px; color: #cbd5e1;">掌握度详情对比</div>
+          ${props.concepts.map((c, i) => {
+            const curVal = currentValues[i].toFixed(0)
+            const initVal = initialValues[i].toFixed(0)
+            return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 4px;">
+              <span style="color: #94a3b8;">${c.name}</span>
+              <span style="font-weight: 500;">${initVal}% → <span style="color: #60a5fa; font-weight: 700;">${curVal}%</span></span>
+            </div>`
+          }).join('')}
+        </div>`
       },
     },
   }

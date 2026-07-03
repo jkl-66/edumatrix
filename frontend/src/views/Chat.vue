@@ -213,6 +213,10 @@ const radarConcepts = computed(() => {
   }))
 })
 
+const showRadarChart = computed(() => {
+  return activeTab.value === 'quiz' && quizStore.quizState === 'adapting'
+})
+
 watch(sending, async (newVal, oldVal) => {
   if (newVal && !oldVal) {
     // 开始对话时（sending 从 false 变为 true）立即跳到底端一次
@@ -451,6 +455,13 @@ async function startQuiz() {
 
 async function submitQuizAnswer() {
   await quizStore.submitQuizAnswerAction(props.studentId)
+  // 答完题后，立刻从数据库拉取最新的学情画像，以触发掌握度雷达图实时更新！
+  try {
+    const profile = await getStudentProfile(props.studentId)
+    latestProfile.value = profile
+  } catch (e) {
+    console.error('更新最新学生画像失败:', e)
+  }
 }
 
 async function continueQuiz() {
@@ -2048,7 +2059,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
                 <div class="flex-1 flex items-center justify-center">
                   <MasteryRadar 
                     class="w-full h-full"
-                    :concepts="radarConcepts" 
+                    :concepts="showRadarChart ? radarConcepts : []" 
                     :student-id="props.studentId" 
                   />
                 </div>

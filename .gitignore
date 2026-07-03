@@ -16,9 +16,6 @@ venv/
 *.local
 
 # SQLite Database (local data, not to be committed)
-*.db
-*.db-shm
-*.db-wal
 *.sqlite
 data/
 
@@ -71,8 +68,6 @@ scratch/
 lzz每天看的工作时间表.md
 WORKSPACE_STATE.md
 
-
-
 # Local agent orchestration tools & workspace environments
 .agents/
 .claude/
@@ -82,10 +77,28 @@ WORKSPACE_STATE.md
 CLAUDE.md
 plan.md
 
-
 # Local lecture slides (too large for GitHub)
 人工智能导论/
 人工智能基础.zip
 
 # oma docs generated artifacts
 docs/generated/
+
+# Editor & Agent temporary state folders
+.trae/
+.reasonix_backup/
+
+# Backup & Scrap files
+restored_selecting_topics_convo.md
+newplan.md
+my_plot.png
+fix.py
+README00.md
+
+# Team Planning & Process documents (keep local only)
+组内分工.md
+团队协同开发守则.md
+软件杯计划表.md
+实施方案（详细版）.md
+智能教育系统开发指导报告.md
+现在假设你是这个榜题的总评委，有一份满足了以上要求的作品交到你手上，但是有太多的人借助ai做出了这....md

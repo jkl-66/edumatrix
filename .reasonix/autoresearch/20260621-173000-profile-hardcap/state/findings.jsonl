@@ -1,1 +1,0 @@
-{"timestamp":"2026-06-21T17:50:00","finding":"硬拦截逻辑已存在于 bkt_engine.behavior_sanity_check() 中（非 models.py），包含 mastery_cap=0.5 + metacognitive_boost=0.30","evidence":"6项手动验证通过；新增 test_behavior_sanity_hard_cap_locks_mastery 集成测试；全量18/18通过","files_modified":["test_edumatrix.py"]}

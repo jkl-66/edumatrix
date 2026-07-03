@@ -1,1 +1,0 @@
-{"timestamp":"2026-06-21T18:40:00","iteration":1,"direction":"ZPD路径规划+自适应教学+前端DAG全链路验证","finding":"ZPD三档(0.3/0.75)精确分类，前置回滚机制正确(低掌握度basic/ZPD区间intermediate/高掌握度advanced)，SwarmMediationRouter教学模式切换(SIMPLIFIED/ADVANCED指令注入)，LearningPathGraph.vue前端ECharts DAG组件存在","evidence":"10项子测试全部通过，20/20 pytest passed in 9.26s","files_modified":["test_edumatrix.py"]}

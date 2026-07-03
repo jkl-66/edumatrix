@@ -213,7 +213,7 @@ const radarConcepts = computed(() => {
   }))
 })
 
-const showRadarChart = computed(() => {
+const showComparison = computed(() => {
   return activeTab.value === 'quiz' && quizStore.quizState === 'adapting'
 })
 
@@ -2059,7 +2059,8 @@ function renderMarkdown(text, type = '', conceptName = '') {
                 <div class="flex-1 flex items-center justify-center">
                   <MasteryRadar 
                     class="w-full h-full"
-                    :concepts="showRadarChart ? radarConcepts : []" 
+                    :concepts="radarConcepts" 
+                    :show-comparison="showComparison"
                     :student-id="props.studentId" 
                   />
                 </div>

@@ -365,6 +365,7 @@ class StudentProfile:
         accuracy: float | None = None,
         self_confidence: float | None = None,
         hint_count: int = 0,
+        concept: str | None = None,
     ) -> None:
         self.history.append(feedback)
         features = self._extract_features(feedback)
@@ -385,12 +386,34 @@ class StudentProfile:
             )
         )
         if accuracy is not None:
-            for point in self.weak_points:
+            update_points = [concept] if concept else list(self.weak_points)
+            for point in update_points:
+                if not point:
+                    continue
                 old = self.concept_mastery.get(point, 0.45)
-                self.concept_mastery[point] = _clamp(old * 0.72 + accuracy * 0.28)
+                base_updated = old * 0.72 + accuracy * 0.28
+                
                 trace = self.knowledge_traces.setdefault(point, KnowledgeTrace(concept=point, mastery=old))
-                trace.update(correct=accuracy >= 0.68, hinted=hint_count > 0)
-                self.concept_mastery[point] = trace.mastery
+                
+                is_correct = accuracy >= 0.68
+                hinted = hint_count > 0
+                if is_correct:
+                    learning_gain = 0.16
+                    if hinted:
+                        learning_gain *= 0.55
+                else:
+                    learning_gain = -0.10 - (0.68 - accuracy) * 0.32
+                    if hinted:
+                        learning_gain *= 1.15
+                
+                trace.attempts += 1
+                if is_correct:
+                    trace.correct_attempts += 1
+                
+                trace.mastery = round(_clamp(trace.mastery + learning_gain), 2)
+                trace.last_updated = _utc_now()
+                
+                self.concept_mastery[point] = min(round(base_updated, 2), trace.mastery)
 
                 # === LMCD 知识点掌握度扩散 (newplan.md 核心改进点一) ===
                 delta = self.concept_mastery[point] - old

@@ -439,6 +439,7 @@ async def evaluate_answer(
             accuracy=accuracy_score,
             self_confidence=student_confidence,
             hint_count=0,
+            concept=local_record.target_concept if local_record else None,
         )
         save_student_profile(session, profile)
 

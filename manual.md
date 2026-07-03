@@ -6,14 +6,22 @@ EduMatrix 面向“中国软件杯”A3 教育智能体赛道，采用 **1+3+5 S
 
 本仓库已经实现一套离线可运行的工程骨架：
 
+- `app/main.py`：FastAPI 后端总挂载入口，初始化连接池、注册全局中间件并统一引入路由。
+- `stream_api.py` / `profile_api.py` / `quiz_api.py` / `report_api.py` 等：以独立路由形式提供高并发 SSE 流式输出、画像动态更新、自适应评测（CAT）以及 PDF 报告导出接口。
+- `concurrency.py`：系统高可用限流熔断与异步线程工作池控制器。
 - `rag_engine.py`：GraphRAG 知识边界召回 + VisRAG 图像切片/文本证据混合检索。
 - `drag_debate.py`：正方、反方、法官三角色证据清洗，剔除低相关或矛盾证据。
 - `instruct_rag.py`：面向生成 Agent 的证据约束模板，生成前保存内部审计 rationale。
 - `manifold_alignment.py`：使用 Poincare Ball 双曲距离和规则冲突检测进行跨模态一致性校验。
 - `agent_swarm.py`：完整 1+3+5 Agent 编排，支持资源并发生成、对齐失败回滚和量化评估闭环。
-- `models.py`：证据驱动动态学生画像，支持自然语言解析、10 维画像、不会原因占比、置信度和随学更新。
+- `models.py`：证据驱动动态学生画像，声明式 ORM 与内存状态双轨并网，支持 10 维画像、不会原因占比与情感计算。
 - `llm_client.py`：科大讯飞星火 WebSocket 适配器与离线 deterministic fallback。
-- `swarm_orchestrator.py`：命令行运行入口。
+- `bkt_engine.py` / `anki_engine.py`：Bayesian Knowledge Tracing (BKT) 掌握度估计引擎、Ebbinghaus 记忆遗忘衰减模型与 SM2 算法排程闪卡管理器。
+- `code_exec_api.py`：独立子进程安全隔离代码沙箱，限制 CPU 与内存防逃逸。
+- `note_engine.py` / `learning_strategy.py`：智能笔记与错题反思提炼引擎，自适应 ZPD 教学策略规划器。
+- `document_parser.py` / `ingestion.py`：多模态课件文档解析器（PDF/docx/txt/LaTeX）与 GraphRAG 拓扑图谱索引入库管道。
+- `observability.py`：智能体执行链路可观测性遥测系统（Trace, Metrics）。
+- `swarm_orchestrator.py` / `run.py`：服务启动入口与命令行测试/仿真调度器。
 
 > 答辩口径建议：不要承诺数学意义上的“绝对零幻觉”。更稳的表达是：EduMatrix 通过证据绑定、辩论过滤、生成约束和一致性回滚，把幻觉从不可见的模型内部错误，转化为可审计、可定位、可修复的工程质量问题。
 
@@ -288,63 +296,55 @@ python -m unittest discover -s . -p "test_*.py" -v
 
 当前测试覆盖：
 
-- GraphRAG/VisRAG 是否召回池化层上下文。
-- DRAG 是否保留相关证据。
-- 流形对齐是否能发现“最大池化讲义 + 平均池化代码”的冲突。
-- Swarm 是否生成完整五类资源包。
-- 对话画像是否能从自然语言解析专业、目标、薄弱点、不会原因占比和 10 维动态画像。
-- 学生反馈是否能根据正确率、自评置信度和提示次数更新掌握度、学习策略缺口和元认知状态。
+- **核心 RAG 检索**：验证 GraphRAG/VisRAG 是否能精准召回池化层的前置路径与图像切片上下文。
+- **DRAG 证据净化**：验证辩论清洗机制是否能有效过滤低相关和矛盾噪声，并在低分时触发覆盖不足警告。
+- **跨模态流形对齐**：校验对齐算法是否能强拦截“最大池化讲义 + 平均池化代码”等逻辑冲突并触发 Agent 局部重写回滚。
+- **1+3+5 智能体并发**：验证多智能体使用 `asyncio.gather` 并发生成 5 类资源且在发生 Exception 时提供失败自愈容错。
+- **对话式动态画像**：验证画像探针是否能从自然语言中隐式解析出专业、目标、薄弱点、不会原因占比和 10 维动态画像状态。
+- **认知状态闭环更新**：验证学生答题与诊断反馈是否能根据正确率、置信度与提示次数，增量更新掌握度、策略缺口与元认知状态。
+- **数据库事务与关联**：测试 ORM 在高并发多线程下安全写入（WAL 模式防锁），以及学生销户时对笔记、复习计划和答题记录的外键级联删除。
+- **垃圾词与指代自愈**：测试口语指代消解在“这这那那”等垃圾词打断和历史长上下文下的自愈还原能力。
+- **自适应 ZPD 路径规划**：验证 BKT 状态下的 ZPD 教学档位判定、前置知识回滚计划以及二档路由（SIMPLIFIED/ADVANCED）降级分流。
+- **高可用与沙箱安全**：测试熔断器（CircuitBreaker）状态扭转，以及代码沙箱（SandboxRunner）在运行超时或恶意循环下的资源限制硬截断。
+- **高并发 PDF 与前端集成**：验证后台 BrowserPool 资源复用生命周期，以及前端 stores、致谢墙、Anki 闪卡、数字人嘴形滤波等核心组件的结构与字段一致性。
 
 ## 6. 生产部署升级路径
 
 ### 6.1 数据层
 
-- 当前：内存 DAG + 内存证据库。
-- 生产：Neo4j 存储课程概念图；Milvus/FAISS/pgvector 存储视觉切片和文本 chunk embedding。
-- 数据摄入：PDF 页面渲染、版面检测、图像切片、元数据登记、课程知识点对齐。
+- **当前**：使用 **SQLite (WAL 预写日志模式) + SQLAlchemy 2.0 ORM** 承载 9 张业务实体表（学生画像、流形对齐日志、答题记录、复习计划、笔记、对话历史、代码沙箱执行日志等），保障事务级并发读写；向量和多模态图像检索基于 **本地轻量级 FAISS 索引**，进行极速的相似度匹配与序列化持久化。
+- **生产**：
+  - 关系与图数据：升级为 **PostgreSQL/RDS** 关系型集群以承载海量高并发业务，并引入 **Neo4j** 存储并查询课程知识图谱（GraphRAG）的实体关系。
+  - 向量数据：将本地 FAISS 索引迁移至分布式向量数据库（如 **Milvus / Chroma / pgvector**）集群，支持动态增删索引和更大规模的特征向量检索。
+  - 数据摄入：由离线脚本入库升级为自动化摄入管线，集成 **Apache Tika**、**PyMuPDF** 等解析 PDF/Office 文档，使用多模态视觉模型（如 **ColPali**）生成切片特征向量并对齐学科大纲。
 
 ### 6.2 模型层
 
-- 当前：`DeterministicEducationLLM` 离线生成，保证 CI 可运行。
-- 生产：设置 `EDUMATRIX_USE_REMOTE_LLM=1` 并配置 `SPARK_APP_ID`、`SPARK_API_KEY`、`SPARK_API_SECRET`，启用 `SparkClient`。
-- 视频层：虚拟导演输出脚本后，对接讯飞 TTS 与虚拟人合成 API。
+- **当前**：统一抽象模型客户端 `llm_client.py`，默认使用本地离线 `DeterministicEducationLLM` 保证 CI 和单元测试顺利执行；生产环境已适配 **科大讯飞星火 API（WebSocket）** 与 **OpenAI-compatible 远程网关**。
+- **生产**：
+  - 星火模型集群：生产部署设置 `EDUMATRIX_LLM_PROVIDER=spark`，并使用配置完备的星火 V3.5 专业大模型集群作为核心 Agent 调度大脑。
+  - 本地 vLLM 降级：配置高可用 **本地 vLLM 备用节点（Qwen2.5-Coder-32B）**，当星火 API 超时或网络异常时，通过 **CircuitBreaker（熔断器）** 机制自动切流降级。
+  - 媒体渲染：虚拟导演（Virtual Director）输出的分镜与脚本直接对接 **讯飞 TTS 和虚拟人合成 API**，生成高保真微课短视频。
 
 ### 6.3 服务层
 
-- 当前：命令行同步编排。
-- 生产：FastAPI + Celery/RQ + Redis Stream；资源兵工厂 Agent 独立 Worker 化。
-- 长任务：视频合成和代码沙盒执行走异步任务，前端通过任务 ID 轮询或 WebSocket 接收状态。
+- **当前**：采用 **FastAPI 异步高并发架构** 启动 Web 服务，结合 `asyncio.gather` 在协程池中并发驱动 5 大资源生成智能体，通过 **SSE (Server-Sent Events) 实时流式通道** 与前端 Vue 3 单页面应用交互。
+- **生产**：
+  - 分布式任务网格：引入 **Celery / RQ**，将大模型重试、视频渲染合成、隔离代码沙箱执行等重计算逻辑剥离为后台异步任务，走 **Redis Stream / RabbitMQ** 消息队列进行任务分发与状态同步。
+  - 容器化集群：在 Docker 容器化方案的基础上，使用 **Kubernetes (K8s)** 进行水平扩展与弹性伸缩，配合 Nginx 进行灰度发布和反向代理限流。
 
 ### 6.4 可观测性
 
-建议采集以下指标：
+- **当前**：基于 `observability.py` 本地记录调用链追踪（Trace ID, Span ID）、大模型延迟及 Token 消耗。
+- **生产**：
+  - 接入标准 **OpenTelemetry** 协议，打通 APM，将调用链日志自动吐出至 **Jaeger / Zipkin** 平台进行可视化分布式追踪。
+  - 采集以下核心生产指标并配置 **Grafana 监控大盘**：
+    - *检索质量*：Top-K 命中率、证据覆盖率、图谱节点偏离度、RAG 检索均分。
+    - *辩论清洗*：DRAG 证据保留率、反方风险拦截率、平均法官评分。
+    - *生成对齐*：各 Agent 耗时、对齐回滚拦截率、局部重写成功率。
+    - *教规诊断*：贝叶斯掌握度准确度、遗忘衰减触发频次、错题反思命中率。
 
-- 检索：top-k 命中率、证据覆盖率、图谱路径长度。
-- DRAG：证据保留率、反方风险分分布、被剔除原因。
-- 生成：各 Agent 延迟、重试次数、引用证据数量。
-- 对齐：测地线距离、冲突类型、回滚成功率。
-- 学习效果：练习正确率、沙盒错误率、停留时长、重规划次数。
-
-## 7. 答辩话术建议
-
-### 7.1 关于“为什么不用一个大模型直接生成所有资源”
-
-一个大模型同时生成讲义、代码、导图和视频脚本，会导致提示词过长、职责混乱、错误不可定位。EduMatrix 把资源生产拆成五个高内聚 Agent，每个 Agent 只负责一种资源，并由统一的证据包和对齐器约束。这种架构更容易扩展：未来新增动画、实验报告或错题本，只需要增加新的资源 Agent。
-
-### 7.2 关于“如何防止幻觉”
-
-EduMatrix 不依赖一次性 Prompt 防幻觉，而是四道闸门：
-
-1. GraphRAG/VisRAG 保证召回完整且不破坏图表公式。
-2. DRAG 在生成前剔除噪声和矛盾证据。
-3. InstructRAG 让每个 Agent 绑定证据和学生画像。
-4. 双曲流形对齐在交付前检查讲义、代码、导图、视频脚本是否一致。
-
-### 7.3 关于“如何体现讯飞生态”
-
-底层架构保留模型适配层，生产环境由科大讯飞星火承担 Agent 推理，由讯飞 TTS 和虚拟人接口承担最终视频表达。这样既保留自研 RAG/Swarm 编排能力，又把讯飞生态放在最能体现交互效果和业务价值的位置。
-
-## 8. 参考论文与技术依据
+## 7. 参考论文与技术依据
 
 - GraphRAG: *From Local to Global: A Graph RAG Approach to Query-Focused Summarization*（arXiv:2404.16130）。
 - VisRAG: *VisRAG: Vision-based Retrieval-augmented Generation on Multi-modality Documents*（arXiv:2410.10594）。
@@ -353,24 +353,3 @@ EduMatrix 不依赖一次性 Prompt 防幻觉，而是四道闸门：
 - Hyperbolic Embedding: *Poincare Embeddings for Learning Hierarchical Representations*（NeurIPS 2017）。
 
 > 工程备注：本报告把“Graph-VisRAG”定义为 GraphRAG 与 VisRAG 的系统融合，不把它包装成单一论文名；这样更经得起专家追问。
-
----
-
-## 🛠️ 九、 主控指挥官的核心铁律 (Strict Rules for Coordinator)
-
-当你作为主控协调官（Sisyphus）在 IDE 对话框中与用户交流时，**誓死死守以下铁律**：
-1.  **Zero Code Implementation**：你必须是一个纯粹的“指挥官”。**你绝对不能亲自动手去编写、修改或重构任何一行后端、前端或数据库代码**！
-2.  **Zero Source Reading**：不要读取项目中的业务源文件。你只能读取 `plan.md` 确定任务，然后**立即调用终端工具 `run_command` 发送 `oma agent:spawn` 指令将写码工作派发给子智能体**。
-3.  **Mandatory `/compact`**：在每次成功派发子智能体指令之后，你必须在回答末尾明确提示用户运行 `/compact` 清理当前上下文，防止 Token 膨胀。
-4.  **Strict Division of Labor & Standard Spawning (分工与指派发令铁律)**：必须严格按照团队分工工作。常规后端开发必须指派给 GLM-5.1 算力通道，发令方式必须使用标准的编排指令：
-    ```powershell
-    oma agent:spawn backend-engineer scratch/your_prompt_file.txt your_session_id
-    ```
-    **严禁**直接在命令行裸跑 `codex exec` 或使用管道重定向的方式绕过 `oma` 框架，这会导致环境变量和 Hook 配置失效而报错。
-5.  **Metarule of Rules (写规则的规则)**：你每写一个或修改一个需要读取的文件（包括但不限于 `WORKSPACE_STATE.md`, `CLAUDE.md`, `AGENTS.md`, `manual.md`, `plan.md`），必须把上述“严格分工与标准指派发令”的规则强制写入该文件的底部，此条写规则的规则亦作为底层的绝对铁律执行。
-6.  **Rule 1: 设立“行为阻断器”（Action Interceptor）**：主控协调官在任何情况下尝试调用文件写入或修改工具直接编辑业务源文件（如 `.py`, `.vue`）时，必须在动作生成前强制阻断自己，无条件抛出分工越权异常并终止执行。
-7.  **Rule 2: 执行“排错三步走”（Structured Diagnostics）**：面对任何环境或网络报错，绝对不先改动配置或撰写调试脚本。必须先以文本分析原因、列出排查逻辑，并在获得用户明确授权后，方可运行纯粹的非破坏性连接测试（测试完需清理 `scratch/` 垃圾）。
-8.  **Rule 3: 死守 `oma` 统一发令入口（Uniform Command Entrance）**：严禁脱离 `oma` 框架直接裸跑大模型命令行。遇到 Windows 命令行转义问题时，应使用 `scratch/` 文件作为 Prompt 传输中介，走标准的 `oma agent:spawn` 进行派发。
-9.  **Rule 4: 强制“首屏置顶”必读文件规则（High-Priority Hook）**：每次会话被重新唤醒或压缩后，必须第一时间检索并加载 `CLAUDE.md`、`WORKSPACE_STATE.md` 和 `AGENTS.md` 底部的规范，将团队分工纪律作为超越一切开发本能的最高执行准则。
-
-

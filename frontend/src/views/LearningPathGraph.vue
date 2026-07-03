@@ -5,7 +5,7 @@ import { getLearningPath } from '../api'
 import {
   BookOpen, BrainCircuit, Target, TrendingUp, ChevronRight,
   ArrowRight, AlertTriangle, CheckCircle2, Layers, Sparkles,
-  Clock, Zap,
+  Clock, Zap, ChevronLeft
 } from '@lucide/vue'
 
 const route = useRoute()
@@ -15,6 +15,7 @@ const pathData = ref(null)
 const loading = ref(true)
 const error = ref('')
 const showAll = ref(false)
+const isTeacher = computed(() => localStorage.getItem('edumatrix_role') === 'teacher')
 
 const learningChain = computed(() => pathData.value?.learning_chain || [])
 const nextSteps = computed(() => pathData.value?.next_steps || [])
@@ -62,6 +63,7 @@ function masteryBarColor(score) {
 }
 
 function goLearn(concept) {
+  if (isTeacher.value) return // 教师查看路径时静止跳转去学习
   router.push({ path: '/learn', query: { q: concept } })
 }
 
@@ -89,9 +91,18 @@ onMounted(async () => {
 
     <!-- Header -->
     <div class="flex items-center justify-between">
-      <div>
-        <h1 class="text-lg font-bold text-gray-800">学习路径</h1>
-        <p class="text-xs text-gray-400 mt-0.5">按前置依赖链条推进 · 逐关解锁</p>
+      <div class="flex items-center gap-3">
+        <button 
+          v-if="isTeacher"
+          class="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-all flex items-center gap-1 shrink-0"
+          @click="router.push('/teacher/students')"
+        >
+          <ChevronLeft :size="12" /> 返回学生列表
+        </button>
+        <div>
+          <h1 class="text-lg font-bold text-gray-800">学习路径</h1>
+          <p class="text-xs text-gray-400 mt-0.5">按前置依赖链条推进 · 逐关解锁</p>
+        </div>
       </div>
       <div class="text-right">
         <p class="text-lg font-bold text-emerald-600">{{ masteredCount }}/{{ totalSteps }}</p>
@@ -198,7 +209,7 @@ onMounted(async () => {
             <p>✅ 验证标准：{{ n.guidance?.verify || '能用自己的话解释核心概念' }}</p>
             <p>⏱ 预估时间：{{ n.estimated_minutes || 45 }} 分钟</p>
           </div>
-          <div class="flex gap-2 mt-2">
+          <div v-if="!isTeacher" class="flex gap-2 mt-2">
             <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition-all" @click.stop="goLearn(n.concept)">开始学习</button>
             <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 transition-all">🎯 生成练习题</button>
             <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-all">📝 生成笔记</button>

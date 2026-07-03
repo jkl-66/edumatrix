@@ -642,3 +642,27 @@
 - **单元测试 100% 绿灯**：全量 45 项自动化集成测试通过（`pytest test_edumatrix.py -v`）➡️ **45 passed in 29.55s (100% OK)**。
 - **前端生产环境编译**：执行 `npm run build` 成功通过 Vite 编译 ➡️ **Built in 744ms (100% OK)**.
 - **复习打卡功能找回**：排查发现队友在解决 `App.vue` 合并冲突时，意外删除了 `studentNav` 中的复习日历/打卡链接（`/revision-calendar`）。已在 `App.vue` 中重新导入 `Flame` 图标，并在学生导航菜单中补回“复习打卡”入口，顺利编译通过，打卡与连续签到天数功能完整复原。
+
+---
+
+### 2026-07-02
+> **今日概述**：全面推进并完成了系统初始化向导体验优化、新账号注册及数据库字段对齐、个性化昵称全局并网、已有账户登录状态自适应拦截过滤、以及教师端学生档案分析与自适应学习路径页面的纯静态只读阻断、防数据混杂联动及多点一键返回学生列表设计。所有修改均经过严格前后端联调测试，代码已全数归入 Git 本地暂存。
+
+#### 1. 初始资料填写与 Onboarding 智能向导重构对齐
+- **Onboarding 数据多字段对齐转换**：重构 [Onboarding.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Onboarding.vue) 提交方法，引入学情偏好控制字翻译层。将用户选定的认知偏好与学习诉求，对应转化写入后端 `cognitive_style`、`motivation_type` 等画像表持久化属性中。
+- **自定义主修专业与课程输入**：在初始化向导中，为“主修专业”新增 `其他` 选项，“学习目标课程”新增 `其他自选课程` 选项。一旦激活，自动滑出文本输入框，并友好显示警示通知（*“提示该自选课程未包含在内置大纲中，建议后续在知识库中自行上传课件”*）。
+- **多选偏好复选框与多元化风格名动态合成**：弃用死板的 3 项单选，提供包含分步引导、代码实操、对比解析、图示演示及具体例子等 5 项偏好组成的复选网格。结合计算属性，根据勾选的排列组合，动态合成极具视觉张力与个性化的风格名称（如 `👑 全脑开发矩阵导师`、`🟢 苏格拉底启发式`、`🔴 案例驱动工程式`、`⚡ 多模态自适应协作式` 等 10+ 种多元风格名）。
+- **全流程强制必填锁定**：剥离 Skip 逻辑，对所有步骤实施表单锁死防御。当输入值或勾选不符合约束时，动态将 `下一步`/`进入矩阵` 按钮置灰并禁止点击。
+
+#### 2. 个性化昵称全局并网与文案逻辑偏差修复
+- **后端昵称级联查询下发**：在 [profile_api.py](file:///d:/project-edumatrix/edumatrix-main/profile_api.py) 的 `get_profile` 与 `get_profile_analysis` 接口中，增加辅助查询方法 `load_display_name` 级联获取 `users` 表的 `display_name`，将个性昵称安全装配进分析数据 JSON 中返回。
+- **前端昵称优先渲染**：重构 [StudentAnalysis.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/StudentAnalysis.vue) 页面头部和卡片，将原本粗暴渲染账号 ID 的节点升级为 `background.display_name || background.student_id`，使个性化昵称贯穿主舱。
+- **目标字段文案认知冲突纠正**：定位并修正了画像编辑弹窗中将核心学习诉求 `learning_goals` 错标为`当前学习目标知识点`（且搭配“池化层”等不匹配提示语）的严重文案 Bug，重命名为 **`核心学习目标 / 诉求`** 并配置相符的提示例证，彻底消除了认知偏差。
+
+#### 3. 解决旧账户重复踢回向导 Bug 与布局解耦
+- **修复登录判断 Typos**：排查修复了 [Login.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/Login.vue) 登录回调校验旧账号是否已初始化时，错把 `profile.target_course` 写为 `profile.course` 导致任何用户在再次登录时都恒定被强制踢回 `/onboarding` 重新填写的逻辑漏洞。
+- **全屏无套壳布局隔离**：重构 [App.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/App.vue) 及 [router/index.js](file:///d:/project-edumatrix/edumatrix-main/frontend/src/router/index.js)，为 Landing、Login、Onboarding 页面打上 `meta: { layout: 'full' }` 标签并实行条件渲染，使其脱离主舱侧边栏和顶栏套壳限制，解决全屏元素重叠与物理溢出 Bug。
+
+#### 4. 教师管理视图只读阻断、防混杂及多点一键返回
+- **教师只读拦截器**：在 [StudentAnalysis.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/StudentAnalysis.vue) 和 [LearningPathGraph.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/LearningPathGraph.vue) 页面中注入 `isTeacher` 只读计算属性。当教师越权阅档时，彻底屏蔽并隐藏学生学习对话入口（如“去学习”、“一键生成笔记/练习/针对性讲解”等面板），并在 `goLearn` 端点中进行直接熔断，防止教师误触发学习聊天。
+- **一键返回学生列表**：在这两个视图的顶部 Header 区域优雅并入 `ChevronLeft` 按钮，提供一键直达 `/teacher/students` 的便捷返回入口，保障了教师管理操作流的闭环与整洁。

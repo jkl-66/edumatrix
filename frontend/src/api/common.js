@@ -43,6 +43,15 @@ export async function loginUser(username, password) {
   return r.data
 }
 
+export async function registerUser(username, password, displayName) {
+  const r = await api.post('/auth/register', {
+    username,
+    password,
+    display_name: displayName
+  })
+  return r.data
+}
+
 export async function getTeacherDashboard() {
   const r = await api.get('/teacher', { headers: buildHeaders() })
   return r.data

@@ -85,7 +85,12 @@ function logout() {
 </script>
 
 <template>
-  <div class="flex h-screen overflow-hidden bg-gray-50">
+  <div v-if="route.meta.layout === 'full'" class="h-screen w-screen overflow-hidden bg-[#0b0f19]">
+    <div @error.capture="(e) => console.warn('[EduMatrix] 渲染异常:', e)">
+      <router-view :key="route.fullPath" :student-id="studentId" />
+    </div>
+  </div>
+  <div v-else class="flex h-screen overflow-hidden bg-gray-50">
 
     <!-- Sidebar — 根据角色切换样式 -->
     <aside

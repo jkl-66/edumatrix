@@ -160,6 +160,11 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
     return results
 
 
+def load_display_name(db: Session, username: str) -> str:
+    from app.database import DBUser
+    user = db.query(DBUser).filter(DBUser.username == username).first()
+    return user.display_name if (user and user.display_name) else username
+
 @router.get("/{student_id}")
 async def get_profile(
     student_id: str,
@@ -172,8 +177,11 @@ async def get_profile(
         profile = await run_db_op(load_student_profile, student_id)
         swarm.profile_store[student_id] = profile
 
+    display_name = await run_db_op(load_display_name, student_id)
+
     return {
         "student_id": student_id,
+        "display_name": display_name,
         "major": getattr(profile, "major", ""),
         "target_course": getattr(profile, "target_course", "机器学习导论"),
         "cognitive_style": getattr(profile, "cognitive_style", ""),
@@ -334,8 +342,6 @@ async def update_profile(
         "learning_goals": profile.learning_goals,
         "learning_preferences": profile.interaction_preferences,
     }
-
-
 @router.get("/{student_id}/analysis")
 async def get_profile_analysis(
     student_id: str,
@@ -349,9 +355,12 @@ async def get_profile_analysis(
         profile = await run_db_op(load_student_profile, student_id)
         swarm.profile_store[student_id] = profile
 
+    display_name = await run_db_op(load_display_name, student_id)
+
     # 1. 学生背景概览
     background = {
         "student_id": student_id,
+        "display_name": display_name,
         "major": profile.major or profile.major_preference or "未设置",
         "target_course": profile.target_course or "未设置",
         "cognitive_style": profile.cognitive_style or "未诊断",

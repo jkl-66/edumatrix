@@ -120,7 +120,7 @@ Skill 是为 AI 预设的专业工作流程包，能让 AI 从“通用助手”
 * **修改后端 API / 实时流（如 `run.py`, `app/`, `stream_api.py`）**：自动唤醒 `oma-backend` 与 `skills/fastapi-pro`。强制推行 RESTful API 规范、异步协程 I/O 调优与全局异常阻断。
 * **修改前端 Vue 3 组件 / 拓扑渲染（如 `frontend/src/`）**：自动唤醒 `oma-frontend` 与 `skills/mermaid-expert`。在 `Chat.vue` 中渲染高颜值、无语法错误的 Mermaid 概念脑图。
 * **修改 SQLAlchemy 模型 / 向量检索库（如 `models.py`, `rag_engine.py`）**：自动唤醒 `oma-db` 与 `skills/rag-engineer` 及 `skills/hybrid-search-implementation`。精准调优混合检索与评分重排。
-* **精细化调优 CSS / 视觉动效（如 `frontend/src/index.css`）**：自动唤醒 `oma-design` 与 `skills/ui-ux-pro-max-skill`。强制执行“去 AI 廉价感视觉调优”，微调 Outfit 字体及高大上毛玻璃动效。
+* **精细化调优 CSS / 视觉动效（如 `frontend/src/style.css`）**：自动唤醒 `oma-design` 与 `skills/ui-ux-pro-max-skill`。强制执行“去 AI 廉价感视觉调优”，微调 Outfit 字体及高大上毛玻璃动效。
 * **遭遇任何单元测试闪退 / 逻辑报错（如 Linter 拦截, AttributeError）**：自动唤醒 `oma-debug` 与 `skills/code-reviewer`。开启二分精密诊断定位并自动编写回归测试。
 * **修改协程并发控制 / 隔离代码沙箱（如 `concurrency.py`, `code_exec_api.py`）**：自动唤醒 `oma-qa` 与 `skills/security-auditor`。严密拦截沙箱越权与 SQL 注入风险，引入并发令牌桶。
 * **算法大改 / 自适应路径推荐（如 `manifold_alignment.py`）**：自动唤醒 `oma-brainstorm`、`skills/avoid-ai-writing` (名师化引导中文输出) 与 `skills/python-performance-optimization` (NumPy 矩阵运算加速)。
@@ -132,8 +132,8 @@ Skill 是为 AI 预设的专业工作流程包，能让 AI 从“通用助手”
 为了方便开发与调试，项目已深度集成了**免环境配置启动**与**离线熔断保护网**：
 
 ### 1. 一键双击启动器 (`start.bat`)
-项目根目录内置了绿色便携的 [start.bat](file:///d:/桌面/edumatrix-main/start.bat)。
-* **使用方法**：直接双击运行 [start.bat](file:///d:/桌面/edumatrix-main/start.bat)，或者在编辑器内按下快捷键 **`Alt + L`**。
+项目根目录内置了绿色便携的 [start.bat](start.bat)。
+* **使用方法**：直接双击运行 [start.bat](start.bat)，或者在编辑器内按下快捷键 **`Alt + L`**。
 * **工作逻辑**：
   1. 自动弹出新终端，在后台启动本地 FastAPI 后端服务（8000 端口）。
   2. 自动弹出第二个终端，在后台启动本地 Vite 前端服务（5173 端口，强制绑定 `127.0.0.1` 绕过梯子拦截）。
@@ -164,9 +164,9 @@ EDUMATRIX_LLM_MODEL=gpt-4o-mini
 ### 1. 对称快捷键工作流
 我们为您的编辑器配置了两个对称的、用纯英 ASCII 构建的极速同步脚本：
 * **`Alt + P` (一键拉取更新)**：
-  调用 [pull.bat](file:///d:/桌面/edumatrix-main/pull.bat)，执行 `git pull origin main --rebase`，每天开始开发前一键拉取队友最新的代码并合并。
+  调用 [pull.bat](pull.bat)，执行 `git pull origin main --rebase`，每天开始开发前一键拉取队友最新的代码并合并。
 * **`Alt + G` (一键同步推送)**：
-  调用 [sync.bat](file:///d:/桌面/edumatrix-main/sync.bat)，自动将您刚才所有的开发成果（包含 Untracked 文件）一键暂存、提交并 push 到 GitHub，整个过程耗时仅需 3 秒。
+  调用 [sync.bat](sync.bat)，自动将您刚才所有的开发成果（包含 Untracked 文件）一键暂存、提交并 push 到 GitHub，整个过程耗时仅需 3 秒。
 
 ### 2. 协作冲突合并标准（以 rebase 为准）
 当拉取队友代码时，如果因为两人同时修改了同一个文件而发生 Merge Conflict 冲突（例如在 `frontend/vite.config.js` 或 `rag_engine.py` 中）：
@@ -186,7 +186,7 @@ EDUMATRIX_LLM_MODEL=gpt-4o-mini
 1. 用 Antigravity IDE 打开项目目录。
 2. 按 `Ctrl + L` 唤起对话，对 Gemini 智能体下达指令：
    > **“请通读整个项目，生成一份详细的 `AGENTS.md`，包含架构、模块、数据流、技术栈、代码规范。规则：所有函数必须单一职责，变量命名遵循驼峰规范。”**
-3. 检查并确认生成的 [AGENTS.md](file:///d:/桌面/edumatrix-main/AGENTS.md)。它将作为所有 AI 协作开发的唯一“底线标准”。**凡是调用已有函数，必须先用工具查找，严禁凭大模型记忆编造。**
+3. 检查并确认生成的 [AGENTS.md](AGENTS.md)。它将作为所有 AI 协作开发的唯一“底线标准”。**凡是调用已有函数，必须先用工具查找，严禁凭大模型记忆编造。**
 
 ### 第 2 步：赛题转作战计划
 1. 将赛题 PDF 拖入对话框，输入指令（调用 Opus）：
@@ -203,7 +203,7 @@ EDUMATRIX_LLM_MODEL=gpt-4o-mini
    > **“@frontend-agent 使用 `frontend-design` 技能实现用户仪表盘，@backend-agent 使用 `backend-api` 技能实现对应的 API，@algorithm-agent 实现学习路径推荐算法。”**
 
 ### 第 4 步：设置安全网与“西西弗斯分级调度自愈规则”
-主脑在分配和调度任务时，必须严格遵守我们在 [AGENTS.md](file:///d:/桌面/edumatrix-main/AGENTS.md) 第十章中为它写入的 **分级调度自愈协议**：
+主脑在分配和调度任务时，必须严格遵守我们在 [AGENTS.md](AGENTS.md) 第十章中为它写入的 **分级调度自愈协议**：
 1. **每事必读**：所有 Agent 开始任务前，必须重新读取 `plan.md` 和 `AGENTS.md`。
 2. **重试上限限制**：常规 CRUD 业务代码（**Tier-1** 级别）默认指派给低价的 **GLM-5.1**。在提交前，必须运行 Linter 检查并跑通单元测试。若测试失败，GLM 自愈重试的上限为 **2 次**。
 3. **自动升级派发 (Escalation)**：若 GLM 重试 2 次后测试依然报错，Sisyphus 必须立即终止 GLM 调用，**将当前任务自动升级为 Tier-2 级**。打包代码及报错日志，**派发给 Claude 智能体 (Claude Code)** 进行重构与攻坚。

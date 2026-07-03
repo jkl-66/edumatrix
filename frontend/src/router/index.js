@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import Landing from '../views/Landing.vue'
 import Login from '../views/Login.vue'
+import Onboarding from '../views/Onboarding.vue'
 import Dashboard from '../views/Dashboard.vue'
 import Chat from '../views/Chat.vue'
 import Notes from '../views/Notes.vue'
@@ -17,21 +19,62 @@ import StudentAnalysis from '../views/StudentAnalysis.vue'
 
 function requireAuth() {
   const token = localStorage.getItem('edumatrix_token')
-  if (!token) return '/login'
+  if (!token) return '/landing'
+  const role = localStorage.getItem('edumatrix_role')
+  const onboarded = localStorage.getItem('edumatrix_onboarded') === 'true'
+  if (role === 'student' && !onboarded) {
+    return '/onboarding'
+  }
   return true
 }
 
 // 教师路由守卫：只允许教师角色访问
 function requireTeacher() {
   const token = localStorage.getItem('edumatrix_token')
-  if (!token) return '/login'
+  if (!token) return '/landing'
   const role = localStorage.getItem('edumatrix_role')
   if (role !== 'teacher') return '/'
   return true
 }
 
 const routes = [
-  { path: '/login', name: 'Login', component: Login },
+  { 
+    path: '/landing', 
+    name: 'Landing', 
+    component: Landing,
+    meta: { layout: 'full' },
+    beforeEnter: () => {
+      const token = localStorage.getItem('edumatrix_token')
+      if (token) return '/'
+      return true
+    }
+  },
+  { 
+    path: '/login', 
+    name: 'Login', 
+    component: Login,
+    meta: { layout: 'full' },
+    beforeEnter: () => {
+      const token = localStorage.getItem('edumatrix_token')
+      if (token) return '/'
+      return true
+    }
+  },
+  {
+    path: '/onboarding',
+    name: 'Onboarding',
+    component: Onboarding,
+    meta: { layout: 'full' },
+    beforeEnter: () => {
+      const token = localStorage.getItem('edumatrix_token')
+      if (!token) return '/landing'
+      const role = localStorage.getItem('edumatrix_role')
+      if (role !== 'student') return '/'
+      const onboarded = localStorage.getItem('edumatrix_onboarded') === 'true'
+      if (onboarded) return '/'
+      return true
+    }
+  },
   { path: '/', name: 'Dashboard', component: Dashboard, beforeEnter: requireAuth },
   { path: '/learn', name: 'Learn', component: Chat, beforeEnter: requireAuth },
   { path: '/notes', name: 'Notes', component: Notes, beforeEnter: requireAuth },

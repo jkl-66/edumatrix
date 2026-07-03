@@ -6,7 +6,7 @@ import {
   BrainCircuit, Target, TrendingUp, BookOpen, AlertTriangle,
   User, Lightbulb, BarChart3, Layers, Activity, Zap, Heart,
   ChevronRight, ArrowRight, GraduationCap, Sparkles, CheckCircle2,
-  AlertCircle, Info, FileText, Download, Calendar, Edit2, X,
+  AlertCircle, Info, FileText, Download, Calendar, Edit2, X, ChevronLeft
 } from '@lucide/vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 
@@ -17,6 +17,7 @@ const analysis = ref(null)
 const loading = ref(true)
 const error = ref('')
 const activeTab = ref('overview')
+const isTeacher = computed(() => localStorage.getItem('edumatrix_role') === 'teacher')
 
 const narrative = ref('')
 const narrativeLoading = ref(true)
@@ -213,10 +214,13 @@ async function saveProfile() {
         </div>
         <div>
           <h1 class="text-lg font-bold text-gray-800">学习画像分析</h1>
-          <p class="text-xs text-gray-400">{{ background.student_id }} · {{ background.major }}</p>
+          <p class="text-xs text-gray-400">{{ background.display_name || background.student_id }} ({{ background.student_id }}) · {{ background.major }}</p>
         </div>
       </div>
       <div class="flex items-center gap-2">
+        <button v-if="isTeacher" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-all flex items-center gap-1.5 mr-1" @click="router.push('/teacher/students')">
+          <ChevronLeft :size="12" /> 返回学生列表
+        </button>
         <button class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-all flex items-center gap-1.5" @click="goPath">
           <TrendingUp :size="12" /> 查看学习路径
         </button>
@@ -258,11 +262,11 @@ async function saveProfile() {
       <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
         <div class="flex items-center gap-4">
           <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-lg font-bold">
-            {{ (background.student_id || '?')[0] }}
+            {{ (background.display_name || background.student_id || '?')[0] }}
           </div>
           <div class="flex-1">
             <div class="flex items-center gap-2">
-              <h2 class="text-lg font-bold text-gray-800">{{ background.student_id }}</h2>
+              <h2 class="text-lg font-bold text-gray-800">{{ background.display_name || background.student_id }}</h2>
               <button @click="openEdit" class="text-purple-600 hover:text-purple-700 transition-colors p-1 rounded-lg hover:bg-purple-50 flex items-center gap-0.5 text-[10px] font-medium" title="编辑学情设置">
                 <Edit2 :size="10" />编辑画像
               </button>
@@ -403,7 +407,7 @@ async function saveProfile() {
             <p class="text-[10px] text-amber-700 mt-0.5">{{ rc.detail }}</p>
           </div>
         </div>
-        <button class="mt-3 px-3 py-1.5 text-[10px] font-semibold rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 transition-all flex items-center gap-1" @click="goLearn(wa.concept)">
+        <button v-if="!isTeacher" class="mt-3 px-3 py-1.5 text-[10px] font-semibold rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 transition-all flex items-center gap-1" @click="goLearn(wa.concept)">
           <BookOpen :size="10" /> 去学习
         </button>
       </div>
@@ -445,7 +449,7 @@ async function saveProfile() {
       </div>
 
       <!-- 个性化资源生成 -->
-      <div class="bg-white rounded-2xl border border-purple-100 shadow-sm p-5">
+      <div v-if="!isTeacher" class="bg-white rounded-2xl border border-purple-100 shadow-sm p-5">
         <h3 class="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2"><Sparkles :size="16" class="text-purple-500" /> 一键生成个性化资源</h3>
         <p class="text-[10px] text-gray-500 mb-3">基于您的画像分析自动生成针对性学习资源</p>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -476,7 +480,7 @@ async function saveProfile() {
       </div>
 
       <!-- Quick action links -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div v-if="!isTeacher" class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <router-link :to="{ path: '/learn', query: { student_id: studentId } }"
           class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 hover:border-purple-200 transition-all flex items-center gap-3">
           <div class="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center">
@@ -558,9 +562,9 @@ async function saveProfile() {
 
           <!-- Learning Goals -->
           <div>
-            <label class="block text-xs font-semibold text-gray-600 mb-1">当前学习目标知识点</label>
-            <input v-model="editForm.learning_goals" type="text" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50" placeholder="多个知识点用英文或中文逗号隔开" />
-            <p class="text-[10px] text-gray-400 mt-0.5">例如：池化层, 最大池化, 平均池化, 卷积神经网络</p>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">核心学习目标 / 诉求</label>
+            <input v-model="editForm.learning_goals" type="text" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50" placeholder="多个目标用英文或中文逗号隔开" />
+            <p class="text-[10px] text-gray-400 mt-0.5">例如：期末复习冲刺, 科研学术深造, 求职面试准备</p>
           </div>
 
           <!-- Learning Preferences -->

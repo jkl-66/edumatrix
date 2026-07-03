@@ -1306,3 +1306,31 @@ class EduMatrixSwarm:
                 return future.result()
         else:
             return loop.run_until_complete(self.async_process(user_input, student_id=student_id))
+
+
+def render_console_summary(package: ResourcePackage) -> str:
+    kept = [verdict.evidence_id for verdict in package.verdicts if verdict.keep] if package.verdicts else []
+    resource_lines = "\n".join(
+        f"- {resource.agent} / {resource.resource_type}: {resource.content[:88].replace(chr(10), ' ')}..."
+        for resource in package.resources
+    )
+    strategy_lines = ""
+    if package.strategy_plan and hasattr(package.strategy_plan, "actions"):
+        strategy_lines = "\n".join(
+            f"- {action.title}: {action.description}"
+            for action in package.strategy_plan.actions
+        )
+    learning_path = " -> ".join(package.retrieval.graph_context.learning_path) if (package.retrieval and package.retrieval.graph_context) else "无"
+    
+    return (
+        f"目标知识点: {package.target}\n"
+        f"学习路径: {learning_path}\n"
+        f"{package.profile.state_report()}\n"
+        f"学习策略引擎:\n{strategy_lines or '- 暂无额外策略'}\n"
+        f"DRAG保留证据: {', '.join(kept) if kept else '无'}\n"
+        f"流形对齐: {'通过' if package.alignment.passed else '失败'} "
+        f"(distance={package.alignment.distance:.3f}, threshold={package.alignment.threshold:.3f})\n"
+        f"量化评估: accuracy={package.learning_signal.accuracy:.2f}, "
+        f"sandbox_error_rate={package.learning_signal.sandbox_error_rate:.2f}\n"
+        f"资源包:\n{resource_lines}"
+    )

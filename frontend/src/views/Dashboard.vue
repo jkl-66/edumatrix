@@ -1,12 +1,13 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { getStudentProfile, getLearningPath, getReviewPlans } from '../api'
+import { getStudentProfile, getLearningPath, getReviewPlans, getRecommendations } from '../api'
 import {
   Activity, Brain, ArrowRight, Sparkles, BookOpen, Target, TrendingUp,
-  CheckCircle2, Clock, Calendar, GraduationCap, UserCheck,
+  CheckCircle2, Clock, Calendar, GraduationCap, UserCheck, Play
 } from '@lucide/vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
+import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 
 const router = useRouter()
 const props = defineProps({ studentId: String })
@@ -14,7 +15,11 @@ const props = defineProps({ studentId: String })
 const profile = ref(null)
 const learningPath = ref(null)
 const reviews = ref([])
+const recommendations = ref([])
 const loading = ref(true)
+
+const showVideoPanel = ref(false)
+const videoPanelUrl = ref('')
 
 const avgMastery = computed(() => {
   const m = profile.value?.concept_mastery
@@ -49,17 +54,28 @@ function goPath() { router.push('/learning-path') }
 function goAnalysis() { router.push('/student-analysis') }
 function goReview() { router.push('/review') }
 
+function goNotes(concept) {
+  router.push({ path: '/notes', query: { search: concept } })
+}
+
+function playVideo(url) {
+  videoPanelUrl.value = url
+  showVideoPanel.value = true
+}
+
 onMounted(async () => {
   try {
     const sid = props.studentId || localStorage.getItem('edumatrix_student_id') || 'demo-student'
-    const [p, lp, rv] = await Promise.all([
+    const [p, lp, rv, recs] = await Promise.all([
       getStudentProfile(sid),
       getLearningPath(sid).catch(() => null),
       getReviewPlans(sid).catch(() => []),
+      getRecommendations(sid).catch(() => []),
     ])
     profile.value = p
     learningPath.value = lp
     reviews.value = Array.isArray(rv) ? rv : (rv?.plans || rv?.due_reviews || [])
+    recommendations.value = recs || []
   } catch (e) {
     console.error('Dashboard load error:', e)
   } finally {
@@ -117,6 +133,88 @@ onMounted(async () => {
           @click="goLearn(n.concept)">
           {{ n.concept }} <ArrowRight :size="11" />
         </button>
+      </div>
+    </div>
+
+    <!-- 智能自适应资源推送 -->
+    <div v-if="recommendations.length" class="space-y-3">
+      <h2 class="text-sm font-bold text-gray-800 flex items-center gap-2">
+        <Sparkles :size="15" class="text-indigo-500" />
+        <span>智教自适应资源推送</span>
+        <span class="px-2 py-0.5 text-[9px] font-semibold bg-indigo-50 text-indigo-600 rounded-full border border-indigo-100 animate-pulse">AI Agent 推荐</span>
+      </h2>
+      
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div v-for="item in recommendations" :key="item.title"
+          class="bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-indigo-100/50 transition-all p-4 flex flex-col justify-between relative group overflow-hidden">
+          
+          <!-- Background Accent decoration depending on resource type -->
+          <div class="absolute -right-6 -top-6 w-16 h-16 rounded-full opacity-5 pointer-events-none transition-transform group-hover:scale-125"
+            :class="{
+              'bg-blue-500': item.resource_type === 'document',
+              'bg-emerald-500': item.resource_type === 'code',
+              'bg-indigo-500': item.resource_type === 'video'
+            }" />
+            
+          <div>
+            <!-- Header Badges -->
+            <div class="flex items-center justify-between mb-2">
+              <span class="px-2 py-0.5 text-[9px] font-bold rounded-lg border"
+                :class="{
+                  'bg-rose-50 text-rose-600 border-rose-100': item.badge === '🔥 薄弱强化',
+                  'bg-purple-50 text-purple-600 border-purple-100': item.badge === '💡 探索进阶',
+                  'bg-indigo-50 text-indigo-600 border-indigo-100': item.badge === '⚡ 微课视频'
+                }">
+                {{ item.badge }}
+              </span>
+              <span class="text-[9px] text-gray-400 font-medium truncate max-w-[120px]">{{ item.source_name }}</span>
+            </div>
+
+            <!-- Custom reasoning -->
+            <p class="text-[10px] text-slate-400 leading-normal mb-1.5">{{ item.reason }}</p>
+            
+            <!-- Title -->
+            <h3 class="text-xs font-bold text-gray-800 line-clamp-1 mb-2">{{ item.title }}</h3>
+            
+            <!-- Content preview -->
+            <div class="bg-slate-50/70 border border-slate-100/50 rounded-xl p-3 mb-4 min-h-[72px] flex items-center">
+              <!-- Code Snippet preview style -->
+              <pre v-if="item.resource_type === 'code'" class="text-[9px] text-gray-600 font-mono overflow-x-auto w-full leading-relaxed">{{ item.content.replace(/```python|```/g, '').trim() }}</pre>
+              
+              <!-- Video preview style -->
+              <div v-else-if="item.resource_type === 'video'" class="flex items-center gap-2.5 w-full">
+                <div class="w-10 h-10 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center shrink-0">
+                  <Play :size="16" class="text-indigo-500 fill-indigo-200" />
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="text-[10px] text-slate-600 font-medium line-clamp-2 leading-relaxed">{{ item.content }}</p>
+                </div>
+              </div>
+              
+              <!-- Standard doc style -->
+              <p v-else class="text-[10px] text-slate-600 line-clamp-3 leading-relaxed w-full">{{ item.content }}</p>
+            </div>
+          </div>
+
+          <!-- Bottom Action Buttons -->
+          <div class="mt-auto">
+            <button v-if="item.resource_type === 'video'"
+              @click="playVideo(item.url)"
+              class="w-full py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all border border-indigo-100">
+              <Play :size="12" class="fill-indigo-300" /> 播放讲解视频
+            </button>
+            <button v-else-if="item.resource_type === 'code'"
+              @click="goLearn(item.concept)"
+              class="w-full py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all border border-emerald-100">
+              <Activity :size="12" /> 进入沙箱运行
+            </button>
+            <button v-else
+              @click="goNotes(item.concept)"
+              class="w-full py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all border border-blue-100">
+              <BookOpen :size="12" /> 阅读笔记/讲义
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -194,6 +292,14 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
+    <!-- 视频微课播放模态窗 -->
+    <VideoRenderPanel
+      :visible="showVideoPanel"
+      :videoUrl="videoPanelUrl"
+      :studentId="props.studentId"
+      @close="showVideoPanel = false"
+    />
 
   </div>
 </template>

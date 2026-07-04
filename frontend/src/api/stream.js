@@ -28,7 +28,7 @@ export function abortAllStreams() {
   _activeStreamControllers.clear()
 }
 
-export function streamChat(message, studentId, onEvent, onError, retries = 3) {
+export function streamChat(message, studentId, onEvent, onError, mode = 'chat', images = [], retries = 3) {
   // 强制终止该学生的旧连接，防止并发泄漏
   abortStream(studentId)
 
@@ -46,7 +46,7 @@ export function streamChat(message, studentId, onEvent, onError, retries = 3) {
     fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify({ message, student_id: studentId }),
+      body: JSON.stringify({ message, student_id: studentId, mode, images }),
       signal,
     }).then(response => {
       if (!response.ok) {

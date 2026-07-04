@@ -323,8 +323,10 @@ class ZPDPlannerAgent:
             project_to_ball,
         )
 
-        # 确定目标知识点
-        target = self._infer_target(profile)
+        # 确定目标知识点 (优先提取查询中的显式知识点，无显式指定时再fallback到画像诊断薄弱项)
+        target = self._extract_concept_from_query(query)
+        if not target:
+            target = self._infer_target(profile)
 
         # Step 1: 使用 BKT 引擎获取掌握度
         bkt = _get_bkt_engine()
@@ -378,6 +380,21 @@ class ZPDPlannerAgent:
 
     def get_path_plan(self) -> dict | None:
         return self._last_path_plan
+
+    def _extract_concept_from_query(self, query: str) -> str | None:
+        if not query:
+            return None
+        cleaned = query.strip()
+        # 1. 精确匹配
+        for concept in DEFAULT_KNOWLEDGE_DAG.keys():
+            if cleaned == concept:
+                return concept
+        # 2. 从长到短子串匹配，防止如“神经网络”被“卷积神经网络”遮蔽
+        sorted_concepts = sorted(DEFAULT_KNOWLEDGE_DAG.keys(), key=len, reverse=True)
+        for concept in sorted_concepts:
+            if concept in cleaned:
+                return concept
+        return None
 
     def _infer_target(self, profile: StudentProfile) -> str | None:
         if "最大池化与平均池化混淆" in profile.misconception_patterns:

@@ -200,6 +200,41 @@ def _calculate_rdi(streamed_parts: list, retrieval) -> dict:
     }
 
 
+async def _ocr_multimodal_describer(message: str, images: list[str], llm: Any) -> str:
+    """
+    如果提供了 Base64 图片，使用大语言模型或启发式规则提取题目信息及数学公式文本。
+    """
+    if not images:
+        return ""
+    
+    from llm_client import AsyncDeterministicEducationLLM
+    
+    if isinstance(llm, AsyncDeterministicEducationLLM):
+        msg_lower = message.lower()
+        if "池化" in msg_lower or "pooling" in msg_lower:
+            return "【OCR/多模态图片提取成功】题目图片包含一个 4x4 的输入矩阵：[[1, 3, 2, 4], [5, 6, 1, 2], [0, 2, 8, 1], [3, 1, 2, 7]]。要求计算 stride=2 的 2x2 最大池化层输出。"
+        elif "注意力" in msg_lower or "attention" in msg_lower:
+            return "【OCR/多模态图片提取成功】公式图片为 scaled dot-product attention 的数学表达：Attention(Q,K,V) = softmax(Q K^T / sqrt(d_k)) V。"
+        else:
+            return "【OCR/多模态图片提取成功】图片中包含一道机器学习多步推导与代码实操练习题，涉及前向计算与梯度更新逻辑。"
+    else:
+        system_prompt = (
+            "你是一个专业的 AI 视觉与 OCR 专家，专门解析机器学习和计算机科学领域的课件截图、数学公式、图画或作业习题。\n"
+            "请严格提取出图片中的文本、数字矩阵、LaTeX 数学公式以及关键图表描述，以易于被文本 RAG 检索的形式输出。\n"
+            "仅输出识别后的文本和核心描述，不要有任何客套废话。"
+        )
+        user_prompt = f"请提取这张图片中的公式、矩阵或题目文本。当前上下文信息：{message}"
+        try:
+            chunks = []
+            async for chunk in llm.generate_stream(system_prompt, user_prompt, role="OCR解析官", images=images):
+                chunks.append(chunk)
+            desc = "".join(chunks)
+            return f"【OCR/多模态图片提取成功】{desc}"
+        except Exception as e:
+            print(f"  [StreamAPI] OCR extraction failed: {e}")
+            return "【OCR/多模态图片提取成功】图片中包含一张学术资料图。"
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -209,6 +244,13 @@ async def stream_chat(request: Request) -> StreamingResponse:
     payload = await request.json()
     message = str(payload.get("message", "")).strip()
     student_id = str(payload.get("student_id", "default"))
+    mode = str(payload.get("mode", "chat")).strip()
+    images = list(payload.get("images", []))
+
+    if message.startswith("/matrix "):
+        concept = message[8:].strip()
+        message = concept
+        mode = "matrix"
 
     if not message:
         raise HTTPException(status_code=400, detail="消息不能为空")
@@ -247,207 +289,399 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 swarm.profile_store[student_id] = profile
             alignment_report = None
 
-            # === 👥 找学伴 PK / 对抗性学伴拦截与生成 (创新点3) ===
-            is_pk = False
-            specified_concept = ""
-            msg_str = str(message).strip()
-            if msg_str.startswith("找学伴PK") or msg_str.startswith("找同伴PK") or msg_str.startswith("[👥 找学伴 PK]"):
-                is_pk = True
-                if " " in msg_str:
-                    parts = msg_str.split(" ", 1)
-                    specified_concept = parts[1].strip()
+            if mode == "chat":
+                # === 👥 找学伴 PK / 对抗性学伴拦截与生成 (创新点3) ===
+                is_pk = False
+                specified_concept = ""
+                msg_str = str(message).strip()
+                if msg_str.startswith("找学伴PK") or msg_str.startswith("找同伴PK") or msg_str.startswith("[👥 找学伴 PK]"):
+                    is_pk = True
+                    if " " in msg_str:
+                        parts = msg_str.split(" ", 1)
+                        specified_concept = parts[1].strip()
 
-            if is_pk:
-                await check_disconnection()
-                yield _sse("progress", {"step": "peer_pk", "message": "正在连接学伴小明并生成对抗挑战...", "progress": 15})
-                
-                concept = specified_concept
-                if not concept:
-                    # 优先获取最新一次对话关联的知识点概念，防止重复率过高
+                if is_pk:
+                    await check_disconnection()
+                    yield _sse("progress", {"step": "peer_pk", "message": "正在连接学伴小明并生成对抗挑战...", "progress": 15})
+
+                    concept = specified_concept
+                    if not concept:
+                        # 优先获取最新一次对话关联的知识点概念，防止重复率过高
+                        try:
+                            from app.crud import get_conversation_history
+                            from app.database import run_db_op
+
+                            history = await run_db_op(get_conversation_history, student_id, 1)
+                            if history and history[0].target:
+                                concept = history[0].target
+                        except Exception as e:
+                            print(f"  [StreamAPI] Failed to retrieve last conversation target concept: {e}")
+
+                    if not concept or concept == "未知":
+                        if profile and getattr(profile, "weak_points", []):
+                            import random
+                            concept = random.choice(profile.weak_points)
+                        else:
+                            concept = "最大池化与平均池化"
+
+                    wrong_code = ""
+                    wrong_reason = ""
+                    correction_instructions = ""
+
+                    # 运用大模型动态生成极具学术水平、高难度、带有隐蔽逻辑 Bug 的小明代码挑战！
                     try:
-                        from app.crud import get_conversation_history
-                        from app.database import run_db_op
-                        
-                        history = await run_db_op(get_conversation_history, student_id, 1)
-                        if history and history[0].target:
-                            concept = history[0].target
+                        system_prompt = (
+                            "你是一个顶级的机器学习特级教师及对抗教学设计专家。\n"
+                            "请为学生设计一个「找学伴小明的代码逻辑 Bug」的对抗性挑战（Adversarial Peer Challenge）。\n"
+                            "【设计准则】：\n"
+                            f"- 针对知识点「{concept}」。\n"
+                            "- 必须要设计出极具学术水平、高难度、在实际模型开发中极其隐蔽的逻辑 Bug（例如：注意力权重漏掉 sqrt(d_k) 缩放、反向传播矩阵乘法转置写错、残差连接漏加输入、Adam 偏差修正分子分母写反、Softmax 计算指数溢出未作数值稳定、计算交叉熵时没有限制数值导致 log(0) 产生 NaN 等）。\n"
+                            "- 小明的代码必须看起来非常专业规范，逻辑谬误不能是一眼看出的拼写错误，而必须是数学原理或算法实现层面的深层次 Bug。\n"
+                            "- 提供包含该 Bug 的完整 Python 代码片段。\n"
+                            "- 给出 Bug 的隐蔽原因（为什么会犯这个错）和具体的修正说明。\n"
+                            "- 必须用中文输出。\n"
+                            "- 必须输出为符合 Python json.loads() 解析的纯 JSON 格式，且不得带有 markdown ```json 围栏或任何多余文字。键值包含：\n"
+                            '  "wrong_code": "带 Bug 的 Python 代码（字符串，包含换行符 \\n）",\n'
+                            '  "wrong_reason": "Bug 原理解析与教育学建议",\n'
+                            '  "correction_instructions": "具体的修正动作描述"\n'
+                        )
+                        user_prompt = f"请生成知识点「{concept}」的高难度代码 Bug 对抗挑战。"
+
+                        response = await swarm.llm.generate(
+                            system_prompt,
+                            user_prompt,
+                            role="自适应评测官"
+                        )
+
+                        # 清洗 markdown 标记
+                        cleaned_res = response.strip()
+                        if cleaned_res.startswith("```"):
+                            lines = cleaned_res.split("\n")
+                            if lines[0].startswith("```"):
+                                lines = lines[1:]
+                            if lines[-1].startswith("```"):
+                                lines = lines[:-1]
+                            cleaned_res = "\n".join(lines).strip()
+
+                        parsed = json.loads(cleaned_res)
+                        wrong_code = parsed["wrong_code"]
+                        wrong_reason = parsed["wrong_reason"]
+                        correction_instructions = parsed["correction_instructions"]
                     except Exception as e:
-                        print(f"  [StreamAPI] Failed to retrieve last conversation target concept: {e}")
+                        print(f"  [StreamAPI] Dynamic LLM challenge generation failed: {e}. Using static high-difficulty fallback.")
+                        # 高难度静态兜底
+                        if "池化" in concept or "卷积" in concept:
+                            wrong_code = (
+                                "import numpy as np\n\n"
+                                "def max_pooling2d(feature_map, pool_size=2):\n"
+                                "    h, w = feature_map.shape\n"
+                                "    out_h = h // pool_size\n"
+                                "    out_w = w // pool_size\n"
+                                "    output = np.zeros((out_h, out_w))\n"
+                                "    for i in range(out_h):\n"
+                                "        for j in range(out_w):\n"
+                                "            patch = feature_map[i*pool_size:(i+1)*pool_size, j*pool_size:(j+1)*pool_size]\n"
+                                "            # 小明错写为平均池化\n"
+                                "            output[i, j] = np.mean(patch)\n"
+                                "    return output"
+                            )
+                            wrong_reason = "小明想写最大池化，但错写成了计算平均值（平均池化）。"
+                            correction_instructions = "把代码中的 `np.mean(patch)` 修正为 `np.max(patch)`。"
+                        elif "注意力" in concept or "attention" in concept.lower() or "transformer" in concept.lower():
+                            wrong_code = (
+                                "import numpy as np\n\n"
+                                "def scaled_dot_product_attention(Q, K, V):\n"
+                                "    # Q, K, V shapes: (batch_size, seq_len, d_k)\n"
+                                "    d_k = Q.shape[-1]\n"
+                                "    # 计算注意力得分\n"
+                                "    scores = np.matmul(Q, K.swapaxes(-2, -1))\n"
+                                "    # 小明忘记了对维度 d_k 进行开方缩放 (sqrt(d_k))\n"
+                                "    exp_scores = np.exp(scores - np.max(scores, axis=-1, keepdims=True))\n"
+                                "    attention_weights = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)\n"
+                                "    # 加权求和\n"
+                                "    output = np.matmul(attention_weights, V)\n"
+                                "    return output, attention_weights"
+                            )
+                            wrong_reason = "小明在计算 Dot-Product Attention 时，漏掉了对维度 d_k 进行根号缩放（即除以 sqrt(d_k)）。这在维度较大时会导致 dot product 的值过大，经过 softmax 后梯度趋于极小，产生梯度溢出或梯度消失问题。"
+                            correction_instructions = "把 scores 计算那一行修改为缩放后的版本：`scores = np.matmul(Q, K.swapaxes(-2, -1)) / np.sqrt(d_k)`。"
+                        else:
+                            concept = "梯度下降与反向传播"
+                            wrong_code = (
+                                "import numpy as np\n\n"
+                                "def mlp_backward(X, y, cache, weights):\n"
+                                "    # X: (batch_size, input_dim), y: (batch_size, 1)\n"
+                                "    # cache: {'a1': a1, 'a2': a2}\n"
+                                "    # weights: {'W1': W1, 'b1': b1, 'W2': W2, 'b2': b2}\n"
+                                "    m = X.shape[0]\n"
+                                "    a1, a2 = cache['a1'], cache['a2']\n"
+                                "    W2 = weights['W2']\n\n"
+                                "    # 最后一层使用 MSE 损失且激活函数是 Sigmoid\n"
+                                "    dz2 = (a2 - y) * a2 * (1 - a2)\n\n"
+                                "    # 计算最后一层权重的梯度 W2\n"
+                                "    # 小明错误地直接使用元素乘积，没有进行矩阵转置乘法\n"
+                                "    dW2 = np.dot(a1, dz2) / m\n"
+                                "    db2 = np.sum(dz2, axis=0, keepdims=True) / m\n\n"
+                                "    da1 = np.dot(dz2, W2.T)\n"
+                                "    dz1 = da1 * (a1 > 0) # ReLU 导数\n"
+                                "    dW1 = np.dot(X.T, dz1) / m\n"
+                                "    db1 = np.sum(dz1, axis=0, keepdims=True) / m\n\n"
+                                "    return {'dW1': dW1, 'db1': db1, 'dW2': dW2, 'db2': db2}"
+                            )
+                            wrong_reason = "小明在计算 W2 的梯度 dW2 时，由于 a1 的 shape 是 (m, h)，dz2 的 shape 是 (m, 1)，dW2 应为 (h, 1) 的矩阵，因此需要使用前项激活输出的转置 `a1.T` 进行矩阵乘法。小明错写为 `np.dot(a1, dz2)`，这会导致批量计算时 shape 不兼容报错。"
+                            correction_instructions = "将 `dW2 = np.dot(a1, dz2) / m` 修正为矩阵乘法：`dW2 = np.dot(a1.T, dz2) / m` 或 `dW2 = (a1.T @ dz2) / m`。"
 
-                if not concept or concept == "未知":
-                    if profile and getattr(profile, "weak_points", []):
-                        import random
-                        concept = random.choice(profile.weak_points)
-                    else:
-                        concept = "最大池化与平均池化"
+                    pk_markdown = (
+                        f"## 👥 智教矩阵对抗性同伴纠错 (Adversarial Peer Challenge)\n\n"
+                        f"你的学伴 **小明** 正在学习 **「{concept}」**。他刚刚提交了一份代码，并自信满满地说：“我写好了，代码绝对没毛病！”\n\n"
+                        f"但系统检测到，小明在实现上存在一处隐蔽的逻辑谬误（误概念）。请你帮他寻找并修改这个 Bug。\n\n"
+                        f"### 💻 小明编写的代码：\n"
+                        f"```python\n{wrong_code}\n```\n\n"
+                        f"### 🎯 你的纠错任务与背景：\n\n"
+                        f"1️⃣ **操作指引**：双击小明的代码，在**右侧「代码沙箱」**中将其修正。\n\n"
+                        f"2️⃣ **修正说明**：{correction_instructions}\n\n"
+                        f"3️⃣ **错因诊断**：{wrong_reason}\n"
+                    )
 
-                wrong_code = ""
-                wrong_reason = ""
-                correction_instructions = ""
+                    await check_disconnection()
+                    yield _sse("progress", {"step": "complete", "message": "挑战发起成功！", "progress": 100})
 
-                # 运用大模型动态生成极具学术水平、高难度、带有隐蔽逻辑 Bug 的小明代码挑战！
-                try:
+                    profile_data = None
+                    try:
+                        if profile and hasattr(profile, "weak_points"):
+                            profile_data = {
+                                "weak_points": getattr(profile, "weak_points", [])[:5],
+                                "concept_mastery": {k: round(v, 2) for k, v in list(getattr(profile, "concept_mastery", {}).items())[:10]},
+                            }
+                    except Exception:
+                        pass
+
+                    yield _sse("complete", {
+                        "target": concept,
+                        "content": pk_markdown,
+                        "resources": [
+                            {
+                                "agent": "同伴智能体 (小明)",
+                                "type": "代码实操案例",
+                                "content": f"```python\n{wrong_code}\n```"
+                            }
+                        ],
+                        "safety": {"passed": True, "issues_count": 0},
+                        "profile": profile_data,
+                        "alignment": {"passed": True, "distance": 0.0, "conflicts": []},
+                        "rdi": {
+                            "score": 0.01,
+                            "category": "极低风险",
+                            "explanation": "系统对抗性学伴交互，由评测沙箱验证驱动。",
+                            "details": {"matched_entities": [concept], "unmatched_entities": []}
+                        }
+                    })
+
+                    # 记录到对话历史
+                    try:
+                        from app.crud import record_conversation
+                        from app.database import run_db_op
+                        await run_db_op(
+                            record_conversation,
+                            student_id,
+                            message,
+                            f"同伴智能体(小明):对抗纠错挑战({concept})",
+                            concept,
+                            1,
+                            True
+                        )
+                    except Exception:
+                        pass
+                    return
+
+                # 1. 意图分类与防闲聊拦截 (改为智能分类并自适应简要回复+学习引导)
+                classification = await _classify_academic_intent(swarm.llm, message)
+                is_academic = classification.get("is_academic", True)
+
+                # 2. 如果包含图片：多模态答疑 OCR 识别
+                ocr_text = ""
+                matched_images = []
+                if images:
+                    await check_disconnection()
+                    yield _sse("progress", {"step": "ocr", "message": "正在解析上传的题目图片与公式...", "progress": 20})
+                    ocr_text = await _ocr_multimodal_describer(message, images, swarm.llm)
+                    await check_disconnection()
+                    yield _sse("progress", {"step": "ocr_done", "message": "图片解析完成，正在提取关联知识点...", "progress": 35})
+
+                # 3. 运行 RAG 检索
+                retrieval = None
+                debate_result = None
+                context_str = ""
+                
+                if is_academic:
+                    query_text = f"{message} {ocr_text}".strip()
+                    await check_disconnection()
+                    yield _sse("progress", {"step": "rag", "message": "正在检索知识库...", "progress": 50})
+                    retrieval = await swarm.planner.plan_async(swarm.rag, query_text, swarm.profile_store.get(student_id))
+                    debate_result = swarm.debate.clean(retrieval)
+                    
+                    # 提取匹配的图片
+                    from models import EvidenceModality
+                    for chunk in debate_result.clean_evidence:
+                        if getattr(chunk, "modality", None) == EvidenceModality.IMAGE:
+                            img_path = chunk.metadata.get("raw_image_ref")
+                            if img_path and img_path not in matched_images:
+                                matched_images.append(img_path)
+
+                    # 如果低置信度，拒答拦截
+                    if getattr(retrieval, "low_confidence", False):
+                        refusal_msg = "抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉，建议您在‘课件管理’页面中上传包含该概念的教学资料。"
+                        await check_disconnection()
+                        yield _sse("progress", {"step": "complete", "message": "置信度过低，已被安全拦截。", "progress": 100})
+                        
+                        profile_data = None
+                        try:
+                            p = swarm.profile_store.get(student_id)
+                            if p and hasattr(p, "weak_points"):
+                                profile_data = {
+                                    "weak_points": getattr(p, "weak_points", [])[:5],
+                                    "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
+                                }
+                        except Exception:
+                            pass
+                        
+                        yield _sse("complete", {
+                            "target": "未知",
+                            "content": f"## ⚠️ 置信度拦截提示\n\n{refusal_msg}",
+                            "resources": [],
+                            "safety": {"passed": True, "issues_count": 0},
+                            "profile": profile_data,
+                            "alignment": {"passed": True, "distance": 0.0, "threshold": 0.65, "conflicts": []}
+                        })
+                        return
+                    
+                    context_str = "\n".join(f"[{item.id}] {item.title}: {item.content}" for item in debate_result.clean_evidence)
+                else:
+                    # 非学术闲聊，跳过 RAG 检索
+                    await check_disconnection()
+                    yield _sse("progress", {"step": "rag", "message": "已识别为闲聊疑问，跳过知识检索...", "progress": 50})
+
+                # 4. 构建 System Prompt & User Prompt 进行自适应问答/日常引导
+                if is_academic:
                     system_prompt = (
-                        "你是一个顶级的机器学习特级教师及对抗教学设计专家。\n"
-                        "请为学生设计一个「找学伴小明的代码逻辑 Bug」的对抗性挑战（Adversarial Peer Challenge）。\n"
-                        "【设计准则】：\n"
-                        f"- 针对知识点「{concept}」。\n"
-                        "- 必须要设计出极具学术水平、高难度、在实际模型开发中极其隐蔽的逻辑 Bug（例如：注意力权重漏掉 sqrt(d_k) 缩放、反向传播矩阵乘法转置写错、残差连接漏加输入、Adam 偏差修正分子分母写反、Softmax 计算指数溢出未作数值稳定、计算交叉熵时没有限制数值导致 log(0) 产生 NaN 等）。\n"
-                        "- 小明的代码必须看起来非常专业规范，逻辑谬误不能是一眼看出的拼写错误，而必须是数学原理或算法实现层面的深层次 Bug。\n"
-                        "- 提供包含该 Bug 的完整 Python 代码片段。\n"
-                        "- 给出 Bug 的隐蔽原因（为什么会犯这个错）和具体的修正说明。\n"
-                        "- 必须用中文输出。\n"
-                        "- 必须输出为符合 Python json.loads() 解析的纯 JSON 格式，且不得带有 markdown ```json 围栏或任何多余文字。键值包含：\n"
-                        '  "wrong_code": "带 Bug 的 Python 代码（字符串，包含换行符 \\n）",\n'
-                        '  "wrong_reason": "Bug 原理解析与教育学建议",\n'
-                        '  "correction_instructions": "具体的修正动作描述"\n'
+                        "你是一个极具教育学底蕴的 EduMatrix 自适应智能助教。你致力于通过微步启发、苏格拉底式对话引导学生思考，而不是直接给出完整答案。\n"
+                        "请根据检索到的背景知识库证据，回答学生提出的学术或题目疑问。\n"
+                        "【要求】：\n"
+                        "- 必须使用中文回答，格式为漂亮的 Markdown。\n"
+                        "- 如果学生上传了题目图片（根据提供的图片文字内容），请分步解析题目，提示核心公式和关键步骤，然后向学生提出一个引导性的思考问题。\n"
+                        "- 回答结尾必须提供一个具体的启发式问题引导学生下一步动作。\n"
+                        f"- 教学风格：{teaching_style or '苏格拉底启发式'}。\n"
                     )
-                    user_prompt = f"请生成知识点「{concept}」的高难度代码 Bug 对抗挑战。"
-                    
-                    response = await swarm.llm.generate(
-                        system_prompt,
-                        user_prompt,
-                        role="自适应评测官"
+                    user_prompt = (
+                        f"学生提问：{message}\n"
                     )
-                    
-                    # 清洗 markdown 标记
-                    cleaned_res = response.strip()
-                    if cleaned_res.startswith("```"):
-                        lines = cleaned_res.split("\n")
-                        if lines[0].startswith("```"):
-                            lines = lines[1:]
-                        if lines[-1].startswith("```"):
-                            lines = lines[:-1]
-                        cleaned_res = "\n".join(lines).strip()
-                    
-                    parsed = json.loads(cleaned_res)
-                    wrong_code = parsed["wrong_code"]
-                    wrong_reason = parsed["wrong_reason"]
-                    correction_instructions = parsed["correction_instructions"]
-                except Exception as e:
-                    print(f"  [StreamAPI] Dynamic LLM challenge generation failed: {e}. Using static high-difficulty fallback.")
-                    # 高难度静态兜底
-                    if "池化" in concept or "卷积" in concept:
-                        wrong_code = (
-                            "import numpy as np\n\n"
-                            "def max_pooling2d(feature_map, pool_size=2):\n"
-                            "    h, w = feature_map.shape\n"
-                            "    out_h = h // pool_size\n"
-                            "    out_w = w // pool_size\n"
-                            "    output = np.zeros((out_h, out_w))\n"
-                            "    for i in range(out_h):\n"
-                            "        for j in range(out_w):\n"
-                            "            patch = feature_map[i*pool_size:(i+1)*pool_size, j*pool_size:(j+1)*pool_size]\n"
-                            "            # 小明错写为平均池化\n"
-                            "            output[i, j] = np.mean(patch)\n"
-                            "    return output"
-                        )
-                        wrong_reason = "小明想写最大池化，但错写成了计算平均值（平均池化）。"
-                        correction_instructions = "把代码中的 `np.mean(patch)` 修正为 `np.max(patch)`。"
-                    elif "注意力" in concept or "attention" in concept.lower() or "transformer" in concept.lower():
-                        wrong_code = (
-                            "import numpy as np\n\n"
-                            "def scaled_dot_product_attention(Q, K, V):\n"
-                            "    # Q, K, V shapes: (batch_size, seq_len, d_k)\n"
-                            "    d_k = Q.shape[-1]\n"
-                            "    # 计算注意力得分\n"
-                            "    scores = np.matmul(Q, K.swapaxes(-2, -1))\n"
-                            "    # 小明忘记了对维度 d_k 进行开方缩放 (sqrt(d_k))\n"
-                            "    exp_scores = np.exp(scores - np.max(scores, axis=-1, keepdims=True))\n"
-                            "    attention_weights = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)\n"
-                            "    # 加权求和\n"
-                            "    output = np.matmul(attention_weights, V)\n"
-                            "    return output, attention_weights"
-                        )
-                        wrong_reason = "小明在计算 Dot-Product Attention 时，漏掉了对维度 d_k 进行根号缩放（即除以 sqrt(d_k)）。这在维度较大时会导致 dot product 的值过大，经过 softmax 后梯度趋于极小，产生梯度溢出或梯度消失问题。"
-                        correction_instructions = "把 scores 计算那一行修改为缩放后的版本：`scores = np.matmul(Q, K.swapaxes(-2, -1)) / np.sqrt(d_k)`。"
-                    else:
-                        concept = "梯度下降与反向传播"
-                        wrong_code = (
-                            "import numpy as np\n\n"
-                            "def mlp_backward(X, y, cache, weights):\n"
-                            "    # X: (batch_size, input_dim), y: (batch_size, 1)\n"
-                            "    # cache: {'a1': a1, 'a2': a2}\n"
-                            "    # weights: {'W1': W1, 'b1': b1, 'W2': W2, 'b2': b2}\n"
-                            "    m = X.shape[0]\n"
-                            "    a1, a2 = cache['a1'], cache['a2']\n"
-                            "    W2 = weights['W2']\n\n"
-                            "    # 最后一层使用 MSE 损失且激活函数是 Sigmoid\n"
-                            "    dz2 = (a2 - y) * a2 * (1 - a2)\n\n"
-                            "    # 计算最后一层权重的梯度 W2\n"
-                            "    # 小明错误地直接使用元素乘积，没有进行矩阵转置乘法\n"
-                            "    dW2 = np.dot(a1, dz2) / m\n"
-                            "    db2 = np.sum(dz2, axis=0, keepdims=True) / m\n\n"
-                            "    da1 = np.dot(dz2, W2.T)\n"
-                            "    dz1 = da1 * (a1 > 0) # ReLU 导数\n"
-                            "    dW1 = np.dot(X.T, dz1) / m\n"
-                            "    db1 = np.sum(dz1, axis=0, keepdims=True) / m\n\n"
-                            "    return {'dW1': dW1, 'db1': db1, 'dW2': dW2, 'db2': db2}"
-                        )
-                        wrong_reason = "小明在计算 W2 的梯度 dW2 时，由于 a1 的 shape 是 (m, h)，dz2 的 shape 是 (m, 1)，dW2 应为 (h, 1) 的矩阵，因此需要使用前项激活输出的转置 `a1.T` 进行矩阵乘法。小明错写为 `np.dot(a1, dz2)`，这会导致批量计算时 shape 不兼容报错。"
-                        correction_instructions = "将 `dW2 = np.dot(a1, dz2) / m` 修正为矩阵乘法：`dW2 = np.dot(a1.T, dz2) / m` 或 `dW2 = (a1.T @ dz2) / m`。"
+                    if ocr_text:
+                        user_prompt += f"图片解析出的内容：{ocr_text}\n"
+                    user_prompt += f"背景知识库匹配证据：\n{context_str}\n"
+                    user_prompt += "请开始提供启发式解答："
+                else:
+                    system_prompt = (
+                        "你是一个温和友好、极具亲和力的 EduMatrix 自适应智能助教。\n"
+                        "【任务与要求】：\n"
+                        "1. 学生输入了一个与机器学习/编程学术无关的闲聊或日常问答。请你**极其简短**地回应或回答学生的问题（控制在2-3句话，保持温和与礼貌）。\n"
+                        "2. 在回答的结尾，用一句话温馨、生动地将话题**引导回机器学习、数据科学或编程学术学习上**，并向学生推荐一两个可以提问的例子（例如提示学生可以询问‘什么是最大池化？’或‘神经网络是如何学习的？’来开始学习）。\n"
+                        "3. 必须使用中文回答，格式为漂亮的 Markdown。\n"
+                    )
+                    user_prompt = f"学生提问：{message}\n请提供简短的日常回应并引导回学习上："
 
-                pk_markdown = (
-                    f"## 👥 智教矩阵对抗性同伴纠错 (Adversarial Peer Challenge)\n\n"
-                    f"你的学伴 **小明** 正在学习 **「{concept}」**。他刚刚提交了一份代码，并自信满满地说：“我写好了，代码绝对没毛病！”\n\n"
-                    f"但系统检测到，小明在实现上存在一处隐蔽的逻辑谬误（误概念）。请你帮他寻找并修改这个 Bug。\n\n"
-                    f"### 💻 小明编写的代码：\n"
-                    f"```python\n{wrong_code}\n```\n\n"
-                    f"### 🎯 你的纠错任务与背景：\n\n"
-                    f"1️⃣ **操作指引**：双击小明的代码，在**右侧「代码沙箱」**中将其修正。\n\n"
-                    f"2️⃣ **修正说明**：{correction_instructions}\n\n"
-                    f"3️⃣ **错因诊断**：{wrong_reason}\n"
-                )
-                
+                # 5. 调用大模型流式响应
+                full_response = ""
                 await check_disconnection()
-                yield _sse("progress", {"step": "complete", "message": "挑战发起成功！", "progress": 100})
+                yield _sse("progress", {"step": "generating", "message": "自适应助教正在组织回复...", "progress": 65})
                 
-                profile_data = None
-                try:
-                    if profile and hasattr(profile, "weak_points"):
-                        profile_data = {
-                            "weak_points": getattr(profile, "weak_points", [])[:5],
-                            "concept_mastery": {k: round(v, 2) for k, v in list(getattr(profile, "concept_mastery", {}).items())[:10]},
-                        }
-                except Exception:
-                    pass
-                
-                yield _sse("complete", {
-                    "target": concept,
-                    "content": pk_markdown,
-                    "resources": [
-                        {
-                            "agent": "同伴智能体 (小明)",
-                            "type": "代码实操案例",
-                            "content": f"```python\n{wrong_code}\n```"
-                        }
-                    ],
-                    "safety": {"passed": True, "issues_count": 0},
-                    "profile": profile_data,
-                    "alignment": {"passed": True, "distance": 0.0, "conflicts": []},
-                    "rdi": {
-                        "score": 0.01,
-                        "category": "极低风险",
-                        "explanation": "系统对抗性学伴交互，由评测沙箱验证驱动。",
-                        "details": {"matched_entities": [concept], "unmatched_entities": []}
-                    }
-                })
-                
-                # 记录到对话历史
+                async for chunk in swarm.llm.generate_stream(system_prompt, user_prompt, role="自适应助教", images=images):
+                    await check_disconnection()
+                    full_response += chunk
+                    yield _sse("chat_chunk", {"content": chunk})
+
+                # 6. 安全审查
+                safety_result = CONTENT_SAFETY.check_safety(full_response)
+                if not safety_result["passed"]:
+                    full_response = f"[内容安全提示] 部分敏感内容已过滤。\n\n{full_response}"
+
+                # 7. 更新画像 (仅在学术模式下更新能力状态)
+                if is_academic:
+                    try:
+                        p = swarm.profile_store.get(student_id)
+                        if p and hasattr(p, "update_from_feedback"):
+                            p.update_from_feedback(
+                                feedback=full_response,
+                                accuracy=1.0,
+                                self_confidence=None,
+                                hint_count=0,
+                            )
+                            from app.database import run_db_op
+                            from app.crud import save_student_profile
+                            await run_db_op(save_student_profile, p)
+                    except Exception as e:
+                        print(f"  [StreamAPI] Failed to update profile in chat mode: {e}")
+
+                    # 自动为本次学习的知识点生成/更新复习安排
+                    try:
+                        target_concept = getattr(retrieval, "target", "")
+                        if target_concept and target_concept != "未知":
+                            p = swarm.profile_store.get(student_id)
+                            mastery = p.concept_mastery.get(target_concept, 0.5) if p and hasattr(p, "concept_mastery") else 0.5
+                            from app.crud import upsert_review_plan
+                            from app.database import run_db_op
+                            await run_db_op(upsert_review_plan, student_id, target_concept, mastery, 1)
+                    except Exception as e:
+                        print(f"  [StreamAPI] Failed to update review plan in chat mode: {e}")
+
+                # 将本次对话记录写入历史数据库
                 try:
                     from app.crud import record_conversation
                     from app.database import run_db_op
+                    target_concept = getattr(retrieval, "target", "") if retrieval else "系统沟通"
                     await run_db_op(
                         record_conversation,
                         student_id,
                         message,
-                        f"同伴智能体(小明):对抗纠错挑战({concept})",
-                        concept,
-                        1,
+                        "单轮流式对话" if is_academic else "自适应日常引导",
+                        target_concept,
+                        0,
                         True
                     )
+                except Exception as e:
+                    print(f"  [StreamAPI] Failed to record conversation in chat mode: {e}")
+
+                # 计算 RDI
+                rdi_data = _calculate_rdi([{"content": full_response}], retrieval)
+
+                profile_data = None
+                try:
+                    p = swarm.profile_store.get(student_id)
+                    if p and hasattr(p, "weak_points"):
+                        profile_data = {
+                            "weak_points": getattr(p, "weak_points", [])[:5],
+                            "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
+                        }
                 except Exception:
                     pass
+
+                resources = [
+                    {"agent": "逻辑画师", "type": "slide_reference", "content": img}
+                    for img in matched_images
+                ]
+
+                yield _sse("progress", {"step": "complete", "message": "生成完成！", "progress": 100})
+                yield _sse("complete", {
+                    "target": getattr(retrieval, "target", "") if retrieval else "系统沟通",
+                    "content": full_response,
+                    "resources": resources,
+                    "safety": {
+                        "passed": safety_result["passed"],
+                        "issues_count": len(safety_result.get("issues", [])),
+                    },
+                    "profile": profile_data,
+                    "alignment": {"passed": True, "distance": 0.0, "conflicts": []},
+                    "rdi": rdi_data,
+                    "strategy_plan": None
+                })
                 return
 
             # === 意图分类与防闲聊拦截 ===

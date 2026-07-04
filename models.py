@@ -293,6 +293,7 @@ class StudentProfile:
     misconception_patterns: dict[str, float] = field(default_factory=dict)
     knowledge_traces: dict[str, KnowledgeTrace] = field(default_factory=dict)
     favorites: list[dict] = field(default_factory=list)
+    customized_fields: list[str] = field(default_factory=list)
 
     # === P1-1 情感与动机维度 ===
     frustration_index: float = 0.0         # 挫败感指数 0~1
@@ -435,15 +436,23 @@ class StudentProfile:
     def apply_llm_features(self, payload: dict[str, Any], *, source_text: str) -> None:
         if not payload:
             return
-        self.target_course = str(payload.get("course") or self.target_course or "机器学习导论")
-        major = str(payload.get("major") or "").strip()
-        if major:
-            self.major = major
-            self.major_preference = major
-        for goal in payload.get("goals", []) or []:
-            goal_text = str(goal).strip()
-            if goal_text and goal_text not in self.learning_goals:
-                self.learning_goals.append(goal_text)
+        
+        customs = getattr(self, "customized_fields", [])
+        
+        if "target_course" not in customs:
+            self.target_course = str(payload.get("course") or self.target_course or "机器学习导论")
+        
+        if "major" not in customs:
+            major = str(payload.get("major") or "").strip()
+            if major:
+                self.major = major
+                self.major_preference = major
+                
+        if "learning_goals" not in customs:
+            for goal in payload.get("goals", []) or []:
+                goal_text = str(goal).strip()
+                if goal_text and goal_text not in self.learning_goals:
+                    self.learning_goals.append(goal_text)
                 
         # 👇 强大的防御装甲：拦截大模型输出的坏数据
         raw_weak_points = payload.get("weak_points", [])
@@ -473,10 +482,12 @@ class StudentProfile:
                     confidence=0.70,
                 )
             )
-        for preference in payload.get("preferences", []) or []:
-            preference_text = str(preference).strip()
-            if preference_text and preference_text not in self.interaction_preferences:
-                self.interaction_preferences.append(preference_text)
+            
+        if "interaction_preferences" not in customs:
+            for preference in payload.get("preferences", []) or []:
+                preference_text = str(preference).strip()
+                if preference_text and preference_text not in self.interaction_preferences:
+                    self.interaction_preferences.append(preference_text)
         
         # 👇 接收大模型的语义意图打分
         mastery_updates = payload.get("mastery_updates", {})
@@ -563,69 +574,84 @@ class StudentProfile:
         if any(word in message for word in ("懂了", "明白了", "理解了", "搞懂了")):
             self.cognitive_load = max(0.1, self.cognitive_load - 0.08)
             self.focus_level = min(1.0, self.focus_level + 0.05)
-        if any(word in message for word in ("代码", "PyTorch", "python", "实操", "实现", "写代码")):
-            self.cognitive_style = "代码实操导向"
-            if "代码实操" not in self.interaction_preferences:
-                self.interaction_preferences.append("代码实操")
-        if "图" in message or "演示" in message or "可视化" in message:
-            self.cognitive_style = "视觉演示导向"
-            if "图示演示" not in self.interaction_preferences:
-                self.interaction_preferences.append("图示演示")
-        # 公式推导偏好
-        if any(word in message for word in ("公式", "推导", "证明", "数学")):
-            if "数学推导" not in self.interaction_preferences:
-                self.interaction_preferences.append("数学推导")
+        customs = getattr(self, "customized_fields", [])
+        
+        if "cognitive_style" not in customs:
+            if any(word in message for word in ("代码", "PyTorch", "python", "实操", "实现", "写代码")):
+                self.cognitive_style = "代码实操导向"
+            elif "图" in message or "演示" in message or "可视化" in message:
+                self.cognitive_style = "视觉演示导向"
+                
+        if "interaction_preferences" not in customs:
+            if any(word in message for word in ("代码", "PyTorch", "python", "实操", "实现", "写代码")):
+                if "代码实操" not in self.interaction_preferences:
+                    self.interaction_preferences.append("代码实操")
+            if "图" in message or "演示" in message or "可视化" in message:
+                if "图示演示" not in self.interaction_preferences:
+                    self.interaction_preferences.append("图示演示")
+            # 公式推导偏好
+            if any(word in message for word in ("公式", "推导", "证明", "数学")):
+                if "数学推导" not in self.interaction_preferences:
+                    self.interaction_preferences.append("数学推导")
+                    
         for point in ("池化层", "卷积核", "反向传播", "链式法则", "梯度下降", "逻辑回归",
                       "线性回归", "决策树", "SVM", "朴素贝叶斯", "过拟合", "正则化"):
             if point in message and point not in self.weak_points:
                 self.weak_points.append(point)
 
     def _update_context(self, message: str) -> None:
-        major_patterns = (
-            (r"(计算机|软件工程|人工智能|数据科学|自动化|数学|物理|金融|医学|教育|生物|统计|电子)[\u4e00-\u9fff]*(专业|方向)?", 0),
-            (r"(我是|就读|学习|主修)(\w+)", 2),
-        )
-        for pattern, group in major_patterns:
-            match = re.search(pattern, message)
-            if match:
-                self.major = match.group(group)
-                self.major_preference = self.major
-                break
-        goal_keywords = {
-            "考试": "通过考试",
-            "期末": "期末复习",
-            "考研": "考研备考",
-            "竞赛": "竞赛提升",
-            "项目": "项目应用",
-            "就业": "就业能力",
-            "面试": "面试准备",
-            "论文": "科研写作",
-            "毕设": "毕业设计",
-            "课设": "课程设计",
-            "考证": "资格认证",
-        }
-        for keyword, goal in goal_keywords.items():
-            if keyword in message and goal not in self.learning_goals:
-                self.learning_goals.append(goal)
-        preference_keywords = {
-            "一步步": "分步引导",
-            "例子": "具体例子",
-            "对比": "对比辨析",
-            "反例": "反例辨析",
-            "别直接给答案": "提示阶梯",
-            "提示": "提示阶梯",
-            "视频": "视频脚本",
-            "语音": "语音讲解",
-            "比喻": "类比讲解",
-            "图": "图示演示",
-            "代码": "代码实操",
-            "实操": "代码实操",
-            "推导": "数学推导",
-            "可视化": "可视化演示",
-        }
-        for keyword, preference in preference_keywords.items():
-            if keyword in message and preference not in self.interaction_preferences:
-                self.interaction_preferences.append(preference)
+        customs = getattr(self, "customized_fields", [])
+        
+        if "major" not in customs:
+            major_patterns = (
+                (r"(计算机|软件工程|人工智能|数据科学|自动化|数学|物理|金融|医学|教育|生物|统计|电子)[\u4e00-\u9fff]*(专业|方向)?", 0),
+                (r"(我是|就读|学习|主修)(\w+)", 2),
+            )
+            for pattern, group in major_patterns:
+                match = re.search(pattern, message)
+                if match:
+                    self.major = match.group(group)
+                    self.major_preference = self.major
+                    break
+                    
+        if "learning_goals" not in customs:
+            goal_keywords = {
+                "考试": "通过考试",
+                "期末": "期末复习",
+                "考研": "考研备考",
+                "竞赛": "竞赛提升",
+                "项目": "项目应用",
+                "就业": "就业能力",
+                "面试": "面试准备",
+                "论文": "科研写作",
+                "毕设": "毕业设计",
+                "课设": "课程设计",
+                "考证": "资格认证",
+            }
+            for keyword, goal in goal_keywords.items():
+                if keyword in message and goal not in self.learning_goals:
+                    self.learning_goals.append(goal)
+                    
+        if "interaction_preferences" not in customs:
+            preference_keywords = {
+                "一步步": "分步引导",
+                "例子": "具体例子",
+                "对比": "对比辨析",
+                "反例": "反例辨析",
+                "别直接给答案": "提示阶梯",
+                "提示": "提示阶梯",
+                "视频": "视频脚本",
+                "语音": "语音讲解",
+                "比喻": "类比讲解",
+                "图": "图示演示",
+                "代码": "代码实操",
+                "实操": "代码实操",
+                "推导": "数学推导",
+                "可视化": "可视化演示",
+            }
+            for keyword, preference in preference_keywords.items():
+                if keyword in message and preference not in self.interaction_preferences:
+                    self.interaction_preferences.append(preference)
 
     # === P1-1 情感状态更新（语义增强版） ===
     def _update_emotional_state(self, message: str) -> None:
@@ -660,14 +686,16 @@ class StudentProfile:
             self.engagement_level = min(1.0, self.engagement_level + recency_bonus)
 
         # 动机类型推断（增强版）
-        if any(w in message for w in ("考试", "期末", "考研")):
-            self.motivation_type = "外在动机"
-        elif any(w in message for w in ("感兴趣", "好奇", "想学", "有意思", "探究", "热爱", "喜欢")):
-            self.motivation_type = "内在动机"
-        elif any(w in message for w in ("必须学", "没办法", "不知道为什么要学", "被迫")):
-            self.motivation_type = "无动机"
-        elif self.motivation_type == "未诊断":
-            self.motivation_type = "外在动机"
+        customs = getattr(self, "customized_fields", [])
+        if "motivation_type" not in customs:
+            if any(w in message for w in ("考试", "期末", "考研")):
+                self.motivation_type = "外在动机"
+            elif any(w in message for w in ("感兴趣", "好奇", "想学", "有意思", "探究", "热爱", "喜欢")):
+                self.motivation_type = "内在动机"
+            elif any(w in message for w in ("必须学", "没办法", "不知道为什么要学", "被迫")):
+                self.motivation_type = "无动机"
+            elif self.motivation_type == "未诊断":
+                self.motivation_type = "外在动机"
 
         if self.frustration_index > 0.3:
             self.focus_level = max(0.15, self.focus_level - 0.05)

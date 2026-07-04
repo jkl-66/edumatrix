@@ -1,21 +1,26 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getLearningPath } from '../api'
+import { getLearningPath, getRecommendations } from '../api'
 import {
   BookOpen, BrainCircuit, Target, TrendingUp, ChevronRight,
   ArrowRight, AlertTriangle, CheckCircle2, Layers, Sparkles,
-  Clock, Zap, ChevronLeft
+  Clock, Zap, ChevronLeft, Play, Activity, Unlock
 } from '@lucide/vue'
+import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
 const studentId = ref(route.query.student_id || localStorage.getItem('edumatrix_student_id') || 'demo-student')
 const pathData = ref(null)
+const recommendations = ref([])
 const loading = ref(true)
 const error = ref('')
 const showAll = ref(false)
 const isTeacher = computed(() => localStorage.getItem('edumatrix_role') === 'teacher')
+
+const showVideoPanel = ref(false)
+const videoPanelUrl = ref('')
 
 const learningChain = computed(() => pathData.value?.learning_chain || [])
 const nextSteps = computed(() => pathData.value?.next_steps || [])
@@ -30,6 +35,12 @@ const masteredCount = computed(() => learningChain.value.filter(n => n.mastered)
 const displayChain = computed(() => {
   if (showAll.value) return learningChain.value
   return learningChain.value.slice(0, 15)
+})
+
+const conceptRecommendations = computed(() => {
+  const activeConcept = nextSteps.value[0]?.concept
+  if (!activeConcept || !recommendations.value) return []
+  return recommendations.value.filter(r => r.concept === activeConcept)
 })
 
 function statusIcon(status) {
@@ -81,9 +92,19 @@ function goAnalysis() {
   router.push({ path: '/student-analysis', query: { student_id: studentId.value } })
 }
 
+function playVideo(url) {
+  videoPanelUrl.value = url
+  showVideoPanel.value = true
+}
+
 onMounted(async () => {
   try {
-    pathData.value = await getLearningPath(studentId.value)
+    const [path, recs] = await Promise.all([
+      getLearningPath(studentId.value),
+      getRecommendations(studentId.value).catch(() => []),
+    ])
+    pathData.value = path
+    recommendations.value = recs || []
   } catch (e) {
     error.value = e.response?.data?.detail || e.message || '加载失败'
   } finally {
@@ -219,7 +240,43 @@ onMounted(async () => {
             <p>✅ 验证标准：{{ n.guidance?.verify || '能用自己的话解释核心概念' }}</p>
             <p>⏱ 预估时间：{{ n.estimated_minutes || 45 }} 分钟</p>
           </div>
-          <div v-if="!isTeacher" class="flex gap-2 mt-2">
+
+          <!-- 智能资源推荐 (ZPD Matched Resources) -->
+          <div v-if="!isTeacher && conceptRecommendations.length" class="mt-3 pt-2.5 border-t border-blue-100/50">
+            <p class="text-[10px] font-bold text-indigo-700 flex items-center gap-1 mb-2">
+              <Sparkles :size="10" /> 关联推荐学习资源：
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div v-for="item in conceptRecommendations" :key="item.title"
+                class="bg-white/80 backdrop-blur-sm rounded-xl p-2.5 border border-blue-100 hover:border-indigo-200 hover:bg-white transition-all flex flex-col justify-between">
+                <div>
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="px-1.5 py-0.2 text-[8px] font-bold rounded bg-indigo-50 text-indigo-600 border border-indigo-100/50">{{ item.badge }}</span>
+                    <span class="text-[8px] text-gray-400 truncate max-w-[100px]">{{ item.source_name }}</span>
+                  </div>
+                  <h4 class="text-[10px] font-bold text-gray-800 truncate mb-1">{{ item.title }}</h4>
+                  <p class="text-[9px] text-gray-500 line-clamp-2 leading-relaxed mb-2">{{ item.content.replace(/```python|```/g, '').trim() }}</p>
+                </div>
+                <button v-if="item.resource_type === 'video'"
+                  @click.stop="playVideo(item.url)"
+                  class="w-full py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[9px] font-semibold rounded-lg flex items-center justify-center gap-1 transition-all border border-indigo-100/50">
+                  <Play :size="9" class="fill-indigo-300" /> 播放视频
+                </button>
+                <button v-else-if="item.resource_type === 'code'"
+                  @click.stop="goLearn(item.concept)"
+                  class="w-full py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[9px] font-semibold rounded-lg flex items-center justify-center gap-1 transition-all border border-emerald-100/50">
+                  <Activity :size="9" /> 沙箱运行
+                </button>
+                <button v-else
+                  @click.stop="goNotes(item.concept)"
+                  class="w-full py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[9px] font-semibold rounded-lg flex items-center justify-center gap-1 transition-all border border-blue-100/50">
+                  <BookOpen :size="9" /> 查看笔记
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!isTeacher" class="flex gap-2 mt-3">
             <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition-all" @click.stop="goLearn(n.concept)">开始学习</button>
             <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 transition-all" @click.stop="goQuiz(n.concept)">🎯 生成练习题</button>
             <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-all" @click.stop="goNotes(n.concept)">📝 查看笔记</button>
@@ -307,6 +364,14 @@ onMounted(async () => {
         查看完整画像分析 →
       </button>
     </div>
+
+    <!-- 视频微课播放模态窗 -->
+    <VideoRenderPanel
+      :visible="showVideoPanel"
+      :videoUrl="videoPanelUrl"
+      :studentId="studentId"
+      @close="showVideoPanel = false"
+    />
 
   </div>
 </template>

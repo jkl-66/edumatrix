@@ -30,3 +30,8 @@ export async function updateStudentProfile(studentId, data) {
   const r = await api.post(`/profile/${studentId}/update`, data, { headers: buildHeaders() })
   return r.data
 }
+
+export async function getRecommendations(studentId) {
+  const r = await api.get(`/profile/${studentId}/recommendations`, { headers: buildHeaders() })
+  return r.data
+}

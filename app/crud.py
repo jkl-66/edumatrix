@@ -64,6 +64,7 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 profile.major = db_profile.major or ""
                 profile.favorites = list(db_profile.favorites or [])
                 profile.narrative_report = db_profile.narrative_report or ""
+                profile.customized_fields = list(db_profile.customized_fields or [])
                 return profile
         return profile
 
@@ -92,6 +93,7 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
     profile.major = db_profile.major or ""
     profile.favorites = list(db_profile.favorites or [])
     profile.narrative_report = db_profile.narrative_report or ""
+    profile.customized_fields = list(db_profile.customized_fields or [])
     
     if db_profile.knowledge_traces:
         for k, v in db_profile.knowledge_traces.items():
@@ -176,6 +178,7 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     db_profile.narrative_report = profile.narrative_report
     db_profile.knowledge_traces = to_dict_safe(profile.knowledge_traces)
     db_profile.profile_evidence = to_dict_safe(profile.profile_evidence)
+    db_profile.customized_fields = to_dict_safe(profile.customized_fields)
     
     db_profile.dimension_states = to_dict_safe(profile.dimension_states)
     db_profile.learning_state_causes = to_dict_safe(profile.learning_state_causes)

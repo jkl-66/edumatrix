@@ -121,6 +121,7 @@ class DBStudentProfile(Base):
     favorites = Column(JSON, default=list)
     knowledge_traces = Column(JSON, default=dict)
     profile_evidence = Column(JSON, default=list)
+    customized_fields = Column(JSON, default=list)  # 用户手动设定的不可篡改字段列表
 
     # 级联删除配置关系 (Task 6.2)
     alignment_logs = relationship("DBAlignmentLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
@@ -362,6 +363,10 @@ def _migrate_schema():
     if "frustration_index" not in profile_columns:
         with engine.connect() as conn:
             conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN frustration_index FLOAT DEFAULT 0.0"))
+            conn.commit()
+    if "customized_fields" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN customized_fields TEXT DEFAULT '[]'"))
             conn.commit()
 
 def get_db():

@@ -392,6 +392,63 @@ const codeVizHtml = computed(() => {
   )
 })
 
+// --- Image QA / Lightbox State ---
+const uploadedImages = ref([])
+const lightboxImage = ref(null)
+
+function handleImageUpload(e) {
+  const file = e.target.files[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = (event) => {
+    uploadedImages.value.push(event.target.result)
+  }
+  reader.readAsDataURL(file)
+  e.target.value = ''
+}
+
+function removeUploadedImage(idx) {
+  uploadedImages.value.splice(idx, 1)
+}
+
+function openImageModal(img) {
+  lightboxImage.value = img
+}
+
+function getMatchedSlides(msg) {
+  if (!msg.resources) return []
+  return msg.resources.filter(r => r.type === 'slide_reference')
+}
+
+function getRegularResources(msg) {
+  if (!msg.resources) return []
+  return msg.resources.filter(r => r.type !== 'slide_reference')
+}
+
+function getSlideName(content) {
+  if (!content) return '课件切片'
+  const parts = content.split('/')
+  const filename = parts[parts.length - 1]
+  if (filename === 'pooling_2x2.png') return '2x2 最大池化矩阵'
+  if (filename === 'avg_pooling.png') return '平均池化对照'
+  if (filename === 'conv_stride.png') return '卷积核步长滑动'
+  if (filename === 'backprop_math.png') return '反向传播链式法则'
+  if (filename === 'ml_pipeline.png') return '机器学习流程图'
+  if (filename === 'overfit_curve.png') return '过拟合欠拟合曲线'
+  if (filename === 'confusion_matrix.png') return '混淆矩阵指标'
+  return filename
+}
+
+async function triggerMatrixGeneration(concept) {
+  if (!concept || sending.value) return
+  activeTab.value = 'chat'
+  try {
+    await chatStore.sendChatMessage(concept, props.studentId, 'matrix')
+  } catch (e) {
+    console.error('Swarm generation failed:', e)
+  }
+}
+
 // ======================== CHAT ========================
 
 function triggerPeerPK(targetConcept = '') {
@@ -405,12 +462,16 @@ function triggerPeerPK(targetConcept = '') {
 
 async function send() {
   const text = input.value.trim()
-  if (!text || sending.value) return
+  const imgs = [...uploadedImages.value]
+  if ((!text && imgs.length === 0) || sending.value) return
+  
+  input.value = ''
+  uploadedImages.value = []
+  
   // 斜杠命令
   if (text.startsWith('/quiz ')) {
     quizConcept.value = text.slice(6).trim()
     activeTab.value = 'quiz'
-    input.value = ''
     await nextTick()
     startQuiz()
     return
@@ -418,20 +479,29 @@ async function send() {
   if (text.startsWith('/search ')) {
     searchQuery.value = text.slice(8).trim()
     activeTab.value = 'websearch'
-    input.value = ''
     await nextTick()
     doWebSearch()
     return
   }
   if (text.startsWith('/code')) {
     activeTab.value = 'code'
-    input.value = ''
     return
   }
-  input.value = ''
+  if (text.startsWith('/matrix ')) {
+    const concept = text.slice(8).trim()
+    activeTab.value = 'chat'
+    await nextTick()
+    try {
+      await chatStore.sendChatMessage(concept, props.studentId, 'matrix')
+    } catch (e) {
+      console.error('Matrix generation failed:', e)
+    }
+    return
+  }
+  
   await nextTick()
   try {
-    await chatStore.sendChatMessage(text, props.studentId)
+    await chatStore.sendChatMessage(text || '分析以下题目截图：', props.studentId, 'chat', imgs)
   } catch (e) {
     console.error('Streaming failed:', e)
   }
@@ -1591,13 +1661,18 @@ function renderMarkdown(text, type = '', conceptName = '') {
           <div v-for="(msg, idx) in messages" :key="idx">
             <div v-if="msg.role === 'user'" class="flex justify-end mb-3">
               <!-- 用户消息气泡：圆角矩形，加深蓝色精致边框，大行距，优雅字体 -->
-              <div class="max-w-[75%] chat-card-user text-blue-600 shadow-sm">
+              <div class="max-w-[75%] chat-card-user text-blue-600 shadow-sm flex flex-col gap-2">
                 <p class="text-sm whitespace-pre-wrap leading-relaxed">{{ msg.content }}</p>
+                <div v-if="msg.images && msg.images.length > 0" class="flex gap-2 flex-wrap mt-1">
+                  <div v-for="(img, imgIdx) in msg.images" :key="imgIdx" class="w-24 h-24 rounded-lg overflow-hidden border border-blue-200 shadow-sm bg-white shrink-0">
+                    <img :src="img" class="w-full h-full object-cover cursor-pointer" @click="openImageModal(img)" />
+                  </div>
+                </div>
               </div>
             </div>
 
             <!-- 任务 8.1: data-msg-index 用于行级点击定位 -->
-            <div v-else class="mb-4 chat-message" :data-msg-index="idx">
+            <div v-else-if="msg.content || (msg.resources && msg.resources.length > 0)" class="mb-4 chat-message" :data-msg-index="idx">
               <div class="flex items-start gap-3">
                 <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shrink-0">
                   <Bot :size="16" class="text-white" />
@@ -1626,8 +1701,35 @@ function renderMarkdown(text, type = '', conceptName = '') {
                     </div>
                     <div class="prose prose-sm max-w-none text-sm" v-html="renderMarkdown(msg.content)"></div>
                     <!-- 打字光标 -->
-                    <span v-if="idx === messages.length - 1 && chatStore.sending"
+                    <span v-if="idx === messages.length - 1 && chatStore.sending && chatStore.streamingMode !== 'matrix'"
                       class="inline-block w-[2px] h-4 bg-blue-500 animate-pulse ml-0.5 align-text-bottom" />
+
+                    <!-- Grounded VisRAG Slide reference diagrams -->
+                    <div v-if="getMatchedSlides(msg).length > 0" class="mt-3 bg-indigo-50/30 border border-indigo-100/50 p-3 rounded-xl">
+                      <p class="text-xs font-semibold text-indigo-700 mb-2 flex items-center gap-1.5">
+                        <LayoutGrid :size="12" /> 关联参考课件图谱 (VisRAG)
+                      </p>
+                      <div class="flex gap-2 flex-wrap">
+                        <div v-for="(slide, sIdx) in getMatchedSlides(msg)" :key="sIdx" 
+                          class="group relative w-32 rounded-lg overflow-hidden border border-gray-200 bg-white shadow-sm hover:shadow transition-all duration-200 cursor-pointer flex flex-col"
+                          @click="openImageModal('/' + slide.content)">
+                          <div class="h-20 bg-gray-50 overflow-hidden relative">
+                            <img :src="'/' + slide.content" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                          </div>
+                          <div class="p-1 px-2 border-t border-gray-100 bg-white text-[9px] font-medium text-gray-500 truncate" :title="getSlideName(slide.content)">
+                            {{ getSlideName(slide.content) }}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- 一键矩阵资源生成按钮 -->
+                    <div v-if="msg.target && getRegularResources(msg).length === 0 && !msg.streaming" class="mt-3.5 pt-3 border-t border-gray-100/60 flex items-center justify-between">
+                      <span class="text-[11px] text-gray-400 font-medium">深度学习该概念的讲义、思维导图、代码沙箱及小测：</span>
+                      <button @click="triggerMatrixGeneration(msg.target)" class="btn text-xs font-semibold py-1.5 px-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-xl shadow-sm hover:shadow-blue-500/10 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer font-semibold" :disabled="sending">
+                        <Sparkles :size="12" /> 一键生成专属教学资源包
+                      </button>
+                    </div>
 
                     <!-- RDI 幻觉风险溯源指数 (创新点1) -->
                     <div v-if="msg.rdi" class="mt-3 pt-2.5 border-t border-gray-100 flex flex-wrap items-center gap-2 text-[10px]">
@@ -1648,51 +1750,53 @@ function renderMarkdown(text, type = '', conceptName = '') {
                   </div>
 
                   <!-- 任务 8.3: 资源卡片 + 局部重生成按钮 -->
-                  <div v-if="msg.resources?.length" class="mt-3 space-y-2.5">
-                    <div v-for="(res, ri) in msg.resources" :key="ri"
-                      class="border border-gray-200/80 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 bg-white"
-                      :class="{ 'ring-2 ring-yellow-400/50 bg-yellow-50/20': res._regenerating }">
-                      <div class="flex items-center justify-between px-4 py-3 cursor-pointer bg-gray-50/75 hover:bg-gray-100/70 transition-colors" @click="toggleResource(idx, ri)">
-                        <div class="flex items-center gap-2.5 min-w-0">
-                          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border shadow-sm"
-                            :class="getAgentConfig(res.agent, res.resource_type || res.type).color">
-                            <component :is="getIconComponent(getAgentConfig(res.agent, res.resource_type || res.type).icon)" class="w-3.5 h-3.5" />
-                            {{ getAgentConfig(res.agent, res.resource_type || res.type).label }}
-                          </span>
-                          <span v-if="res.citations?.length" class="text-[10px] text-gray-400 font-medium px-1.5 py-0.5 bg-gray-100 rounded-md">{{ res.citations.length }} 引用</span>
-                          <span v-if="res._regenerating" class="text-[10px] text-yellow-600 flex items-center gap-1 font-medium bg-yellow-50 border border-yellow-100 px-2 py-0.5 rounded-full">
-                            <Loader2 :size="10" class="animate-spin text-yellow-500" /> 正在重新生成...
-                          </span>
+                  <div v-if="getRegularResources(msg).length" class="mt-3 space-y-2.5">
+                    <template v-for="(res, ri) in msg.resources" :key="ri">
+                      <div v-if="res.type !== 'slide_reference' && res.resource_type !== 'slide_reference'"
+                        class="border border-gray-200/80 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 bg-white"
+                        :class="{ 'ring-2 ring-yellow-400/50 bg-yellow-50/20': res._regenerating }">
+                        <div class="flex items-center justify-between px-4 py-3 cursor-pointer bg-gray-50/75 hover:bg-gray-100/70 transition-colors" @click="toggleResource(idx, ri)">
+                          <div class="flex items-center gap-2.5 min-w-0">
+                            <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border shadow-sm"
+                              :class="getAgentConfig(res.agent, res.resource_type || res.type).color">
+                              <component :is="getIconComponent(getAgentConfig(res.agent, res.resource_type || res.type).icon)" class="w-3.5 h-3.5" />
+                              {{ getAgentConfig(res.agent, res.resource_type || res.type).label }}
+                            </span>
+                            <span v-if="res.citations?.length" class="text-[10px] text-gray-400 font-medium px-1.5 py-0.5 bg-gray-100 rounded-md">{{ res.citations.length }} 引用</span>
+                            <span v-if="res._regenerating" class="text-[10px] text-yellow-600 flex items-center gap-1 font-medium bg-yellow-50 border border-yellow-100 px-2 py-0.5 rounded-full">
+                              <Loader2 :size="10" class="animate-spin text-yellow-500" /> 正在重新生成...
+                            </span>
+                          </div>
+                          <div class="flex items-center gap-2">
+                            <!-- 代码资源：运行按钮 -->
+                            <button v-if="(res.resource_type || res.type) === '代码实操案例'"
+                              @click.stop="runResourceCode(idx, ri)"
+                              class="text-xs text-emerald-600 hover:text-emerald-700 flex items-center gap-1 px-2 py-1 hover:bg-emerald-50 rounded-lg border border-emerald-200/60 shadow-sm transition-all"
+                              title="运行此代码">
+                              <Play :size="11" /> 运行
+                            </button>
+                            <button @click.stop="regenerateCard(idx, ri)"
+                              class="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1 px-2 py-1 hover:bg-white rounded-lg border border-gray-200/60 shadow-sm transition-all"
+                              title="重新生成此模块">
+                              <RotateCcw :size="11" /> 重算
+                            </button>
+                            <div class="w-5 h-5 rounded-full flex items-center justify-center bg-gray-200/50 text-gray-500">
+                              <ChevronDown v-if="!showResources.has(`${idx}-${ri}`)" :size="12" class="shrink-0" />
+                              <ChevronUp v-else :size="12" class="shrink-0" />
+                            </div>
+                          </div>
                         </div>
-                        <div class="flex items-center gap-2">
-                          <!-- 代码资源：运行按钮 -->
-                          <button v-if="(res.resource_type || res.type) === '代码实操案例'"
-                            @click.stop="runResourceCode(idx, ri)"
-                            class="text-xs text-emerald-600 hover:text-emerald-700 flex items-center gap-1 px-2 py-1 hover:bg-emerald-50 rounded-lg border border-emerald-200/60 shadow-sm transition-all"
-                            title="运行此代码">
-                            <Play :size="11" /> 运行
-                          </button>
-                          <button @click.stop="regenerateCard(idx, ri)"
-                            class="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1 px-2 py-1 hover:bg-white rounded-lg border border-gray-200/60 shadow-sm transition-all"
-                            title="重新生成此模块">
-                            <RotateCcw :size="11" /> 重算
-                          </button>
-                          <div class="w-5 h-5 rounded-full flex items-center justify-center bg-gray-200/50 text-gray-500">
-                            <ChevronDown v-if="!showResources.has(`${idx}-${ri}`)" :size="12" class="shrink-0" />
-                            <ChevronUp v-else :size="12" class="shrink-0" />
+                        <div v-if="showResources.has(`${idx}-${ri}`)" class="px-5 py-4 border-t border-gray-100 bg-white">
+                          <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(res.content, res.type || res.resource_type || res.agent, msg.target)"></div>
+                          <!-- 如果是极客助教资源，添加一键挂载至沙箱按钮 -->
+                          <div v-if="getAgentConfig(res.agent, res.resource_type || res.type).label === '极客助教'" class="mt-3 flex justify-end">
+                            <button @click="mountToSandbox(res.content)" class="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg text-xs font-semibold shadow-sm transition-all flex items-center gap-1">
+                              <Terminal :size="12" /> 挂载至沙箱 →
+                            </button>
                           </div>
                         </div>
                       </div>
-                      <div v-if="showResources.has(`${idx}-${ri}`)" class="px-5 py-4 border-t border-gray-100 bg-white">
-                        <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(res.content, res.type || res.resource_type || res.agent, msg.target)"></div>
-                        <!-- 如果是极客助教资源，添加一键挂载至沙箱按钮 -->
-                        <div v-if="getAgentConfig(res.agent, res.resource_type || res.type).label === '极客助教'" class="mt-3 flex justify-end">
-                          <button @click="mountToSandbox(res.content)" class="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg text-xs font-semibold shadow-sm transition-all flex items-center gap-1">
-                            <Terminal :size="12" /> 挂载至沙箱 →
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    </template>
                   </div>
                 </div>
               </div>
@@ -1741,9 +1845,24 @@ function renderMarkdown(text, type = '', conceptName = '') {
           </button>
         </div>
 
-        <div class="flex items-end gap-2 bg-white border border-gray-200 rounded-xl p-2">
-          <textarea v-model="input" class="flex-1 resize-none outline-none text-sm px-2 py-1.5 max-h-32" placeholder="输入学习问题..." rows="1" @keydown="handleKeydown" />
-          <button class="btn btn-primary shrink-0" :disabled="!input.trim() || sending" @click="send"><Send :size="16" /></button>
+        <!-- 图片预览 row -->
+        <div v-if="uploadedImages.length > 0" class="flex gap-2 flex-wrap mb-2 p-2 bg-gray-50 rounded-xl border border-gray-200/60 shadow-inner">
+          <div v-for="(img, idx) in uploadedImages" :key="idx" class="relative w-16 h-16 rounded-lg overflow-hidden border border-gray-200 shadow-sm bg-white shrink-0">
+            <img :src="img" class="w-full h-full object-cover" />
+            <button @click="removeUploadedImage(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 hover:bg-black text-white flex items-center justify-center cursor-pointer transition-all border-none" title="移除图片">
+              <X :size="10" />
+            </button>
+          </div>
+        </div>
+
+        <div class="flex items-end gap-2 bg-white border border-gray-200 rounded-xl p-2 shadow-sm">
+          <!-- 📎 图片上传按钮 -->
+          <label class="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-gray-50 shrink-0 cursor-pointer transition-all flex items-center justify-center" title="上传题目截图/数学公式图片">
+            <FileText :size="16" />
+            <input type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
+          </label>
+          <textarea v-model="input" class="flex-1 resize-none outline-none text-sm px-2 py-1.5 max-h-32" placeholder="输入学习问题，可上传题目/公式图片进行多模态答疑..." rows="1" @keydown="handleKeydown" />
+          <button class="btn btn-primary shrink-0" :disabled="(!input.trim() && uploadedImages.length === 0) || sending" @click="send"><Send :size="16" /></button>
         </div>
       </div>
 
@@ -2366,6 +2485,16 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
       </div>
     </Teleport>
+
+    <!-- Lightbox Modal -->
+    <div v-if="lightboxImage" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" @click="lightboxImage = null">
+      <div class="relative max-w-4xl max-h-[90vh]" @click.stop>
+        <img :src="lightboxImage" class="max-w-full max-h-[90vh] rounded-lg shadow-2xl" />
+        <button @click="lightboxImage = null" class="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/60 hover:bg-black text-white flex items-center justify-center cursor-pointer transition-colors border-none" title="关闭">
+          <X :size="18" />
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 

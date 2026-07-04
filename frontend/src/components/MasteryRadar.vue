@@ -107,8 +107,14 @@ function buildOption() {
   }
 }
 
+let resizeObserver = null
+
 function initChart() {
   if (!chartRef.value || !props.concepts || props.concepts.length === 0) return
+  const width = chartRef.value.clientWidth
+  const height = chartRef.value.clientHeight
+  if (width === 0 || height === 0) return // Skip initialization if element is hidden/has zero size
+  
   if (chartInstance) {
     chartInstance.dispose()
     chartInstance = null
@@ -125,12 +131,33 @@ function _handleResize() {
 onMounted(async () => {
   await nextTick()
   initChart()
+  
+  if (window.ResizeObserver && chartRef.value) {
+    resizeObserver = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        const { width, height } = entry.contentRect
+        if (width > 0 && height > 0) {
+          if (!chartInstance) {
+            initChart()
+          } else {
+            chartInstance.resize()
+          }
+        }
+      }
+    })
+    resizeObserver.observe(chartRef.value)
+  }
+  
   window.addEventListener('resize', _handleResize)
 })
 
 onUnmounted(() => {
   // 任务 8.2: 解绑 resize 监听 + 释放 ECharts 实例
   window.removeEventListener('resize', _handleResize)
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
   if (chartInstance) {
     chartInstance.dispose()
     chartInstance = null
@@ -162,9 +189,11 @@ watch(() => props.showComparison, () => {
 </script>
 
 <template>
-  <div v-show="props.concepts && props.concepts.length > 0" ref="chartRef" class="w-full h-full min-h-[200px]" />
-  <div v-if="!props.concepts || props.concepts.length === 0" class="flex flex-col items-center justify-center min-h-[200px] text-xs text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200 p-4 text-center">
-    <span class="font-medium text-slate-500 mb-1">能力掌握度雷达图</span>
-    <span>完成对话后将动态更新您的能力状态</span>
+  <div class="w-full h-full min-h-[200px]">
+    <div v-show="props.concepts && props.concepts.length > 0" ref="chartRef" class="w-full h-full min-h-[200px]" />
+    <div v-if="!props.concepts || props.concepts.length === 0" class="flex flex-col items-center justify-center min-h-[200px] text-xs text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200 p-4 text-center h-full">
+      <span class="font-medium text-slate-500 mb-1">能力掌握度雷达图</span>
+      <span>完成对话后将动态更新您的能力状态</span>
+    </div>
   </div>
 </template>

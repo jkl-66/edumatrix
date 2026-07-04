@@ -295,18 +295,33 @@ async def update_profile(
         profile = await run_db_op(load_student_profile, student_id)
         swarm.profile_store[student_id] = profile
 
+    if not getattr(profile, "customized_fields", None):
+        profile.customized_fields = []
+
     if update_data.major is not None:
         profile.major = update_data.major.strip()
+        if "major" not in profile.customized_fields:
+            profile.customized_fields.append("major")
     if update_data.target_course is not None:
         profile.target_course = update_data.target_course.strip()
+        if "target_course" not in profile.customized_fields:
+            profile.customized_fields.append("target_course")
     if update_data.cognitive_style is not None:
         profile.cognitive_style = update_data.cognitive_style.strip()
+        if "cognitive_style" not in profile.customized_fields:
+            profile.customized_fields.append("cognitive_style")
     if update_data.motivation_type is not None:
         profile.motivation_type = update_data.motivation_type.strip()
+        if "motivation_type" not in profile.customized_fields:
+            profile.customized_fields.append("motivation_type")
     if update_data.learning_goals is not None:
         profile.learning_goals = [g.strip() for g in update_data.learning_goals if g.strip()]
+        if "learning_goals" not in profile.customized_fields:
+            profile.customized_fields.append("learning_goals")
     if update_data.learning_preferences is not None:
         profile.interaction_preferences = [p.strip() for p in update_data.learning_preferences if p.strip()]
+        if "interaction_preferences" not in profile.customized_fields:
+            profile.customized_fields.append("interaction_preferences")
 
     # 每次手动调整画像后，清除成长信笺的缓存，确保大模型下次会按照新设置生成叙事内容
     profile.narrative_report = ""
@@ -316,18 +331,32 @@ async def update_profile(
     for sw in _swarm_cache.values():
         if student_id in sw.profile_store:
             p = sw.profile_store[student_id]
+            if not getattr(p, "customized_fields", None):
+                p.customized_fields = []
             if update_data.major is not None:
                 p.major = update_data.major.strip()
+                if "major" not in p.customized_fields:
+                    p.customized_fields.append("major")
             if update_data.target_course is not None:
                 p.target_course = update_data.target_course.strip()
+                if "target_course" not in p.customized_fields:
+                    p.customized_fields.append("target_course")
             if update_data.cognitive_style is not None:
                 p.cognitive_style = update_data.cognitive_style.strip()
+                if "cognitive_style" not in p.customized_fields:
+                    p.customized_fields.append("cognitive_style")
             if update_data.motivation_type is not None:
                 p.motivation_type = update_data.motivation_type.strip()
+                if "motivation_type" not in p.customized_fields:
+                    p.customized_fields.append("motivation_type")
             if update_data.learning_goals is not None:
                 p.learning_goals = [g.strip() for g in update_data.learning_goals if g.strip()]
+                if "learning_goals" not in p.customized_fields:
+                    p.customized_fields.append("learning_goals")
             if update_data.learning_preferences is not None:
                 p.interaction_preferences = [pref.strip() for pref in update_data.learning_preferences if pref.strip()]
+                if "interaction_preferences" not in p.customized_fields:
+                    p.customized_fields.append("interaction_preferences")
             p.narrative_report = ""
 
     await run_db_op(save_student_profile, profile)
@@ -624,23 +653,34 @@ async def update_profile(
         profile = await run_db_op(load_student_profile, student_id)
         swarm.profile_store[student_id] = profile
 
+    if not getattr(profile, "customized_fields", None):
+        profile.customized_fields = []
+
     major = payload.get("major")
     if major:
         profile.major = major
         profile.major_preference = major
+        if "major" not in profile.customized_fields:
+            profile.customized_fields.append("major")
 
     course = payload.get("target_course")
     if course:
         profile.target_course = course
+        if "target_course" not in profile.customized_fields:
+            profile.customized_fields.append("target_course")
 
     goals = payload.get("learning_goals")
     if goals and isinstance(goals, list):
         profile.learning_goals = list(set(profile.learning_goals + goals))[:5]
+        if "learning_goals" not in profile.customized_fields:
+            profile.customized_fields.append("learning_goals")
 
     preferences = payload.get("interaction_preferences")
     if preferences and isinstance(preferences, list):
         existing = list(profile.interaction_preferences or [])
         profile.interaction_preferences = list(set(existing + preferences))[:5]
+        if "interaction_preferences" not in profile.customized_fields:
+            profile.customized_fields.append("interaction_preferences")
 
     profile._refresh_dynamic_profile()
     await run_db_op(save_student_profile, profile)
@@ -671,3 +711,14 @@ async def get_profile_narrative(
     profile.narrative_report = narrative_report
     await run_db_op(save_student_profile, profile)
     return {"narrative_report": narrative_report}
+
+
+@router.get("/{student_id}/recommendations")
+async def get_recommendations(
+    student_id: str,
+    request: Request,
+) -> list[dict[str, Any]]:
+    """获取针对学生的自适应智能推送学习资源"""
+    from app.utils.recommendation_engine import get_smart_recommendations
+    
+    return await run_db_op(get_smart_recommendations, student_id)

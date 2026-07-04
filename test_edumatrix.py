@@ -1073,7 +1073,7 @@ print("Val:", s.val)
             # 由于使用的是 Mock LLM，该请求会完成生成 5 个资源并自动调用 record_conversation
             response = client.post(
                 "/api/stream/chat",
-                json={"message": "请解释最大池化层", "student_id": student_id}
+                json={"message": "请解释最大池化层", "student_id": student_id, "mode": "matrix"}
             )
             self.assertEqual(response.status_code, 200)
 
@@ -1081,7 +1081,7 @@ print("Val:", s.val)
             records = session.query(DBConversationHistory).filter_by(student_id=student_id).all()
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0].query, "请解释最大池化层")
-            self.assertEqual(records[0].target, "池化层")
+            self.assertEqual(records[0].target, "最大池化")
             self.assertEqual(records[0].resources_count, 5)
 
             # 清理
@@ -1488,6 +1488,48 @@ print("Val:", s.val)
             self.assertEqual(profile_db.interaction_preferences, ["分步引导", "代码实操"])
             # 信笺缓存应该被清空
             self.assertEqual(profile_db.narrative_report, "")
+            
+            # 清理
+            db_prof = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if db_prof:
+                session.delete(db_prof)
+                session.commit()
+        finally:
+            session.close()
+
+    def test_customized_fields_protection(self):
+        """验证手动设定的画像字段受保护不会被大模型/消息自诊断算法篡改。"""
+        from app.database import SessionLocal, DBStudentProfile
+        from app.crud import load_student_profile, save_student_profile
+        from models import StudentProfile
+        import uuid
+        
+        student_id = f"test-custom-prot-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            profile = load_student_profile(session, student_id)
+            profile.major = "计算机工程"
+            profile.target_course = "高级数据结构"
+            profile.customized_fields = ["major", "target_course"]
+            save_student_profile(session, profile)
+            
+            # 1. 尝试通过 update_from_message 更改，应由于 major 被保护而不改变
+            profile.update_from_message("我是数学专业，希望学习深度学习。")
+            self.assertEqual(profile.major, "计算机工程") # major 依然是计算机工程而非数学
+            self.assertEqual(profile.target_course, "高级数据结构") # target_course 依然是高级数据结构而非深度学习
+            
+            # 2. 尝试通过 apply_llm_features (大模型画像抽取) 更改
+            payload = {
+                "major": "人工智能",
+                "course": "机器学习",
+                "goals": ["通过考试"],
+                "preferences": ["数学推导"]
+            }
+            profile.apply_llm_features(payload, source_text="test source")
+            self.assertEqual(profile.major, "计算机工程") # major 受保护
+            self.assertEqual(profile.target_course, "高级数据结构") # target_course 受保护
+            self.assertIn("通过考试", profile.learning_goals) # goals 未受保护，可更新
+            self.assertIn("数学推导", profile.interaction_preferences) # preferences 未受保护，可更新
             
             # 清理
             db_prof = session.query(DBStudentProfile).filter_by(student_id=student_id).first()

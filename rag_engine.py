@@ -356,7 +356,7 @@ class HybridRAGPipeline:
         if removed > 0:
             TELEMETRY.record_metric("user_index.documents_removed", removed)
 
-    def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k, profile: Any | None = None) -> RetrievalBundle:
+    def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k, profile: Any | None = None, disable_external: bool = False) -> RetrievalBundle:
         # === 关键修复：延迟加载，打破循环导入 ===
         from web_search_api import search_arxiv
         
@@ -385,8 +385,10 @@ class HybridRAGPipeline:
                 else:
                     future_local = executor.submit(self.text_index.search, query_with_graph, top_k)
                 
-                # 提交外网 arXiv 检索任务 (使用原始 query 更精准，只拿 Top 2 补充)
-                future_arxiv = executor.submit(search_arxiv, query, 2) 
+                # 仅在非禁用外部搜索时提交外网 arXiv 检索任务
+                future_arxiv = None
+                if not disable_external:
+                    future_arxiv = executor.submit(search_arxiv, query, 2) 
 
                 # 收集结果
                 try:
@@ -394,10 +396,11 @@ class HybridRAGPipeline:
                 except Exception as e:
                     print(f"  [RAG] Local search failed: {e}")
                 
-                try:
-                    candidates.extend(future_arxiv.result())
-                except Exception as e:
-                    print(f"  [RAG] arXiv search failed: {e}")
+                if future_arxiv is not None:
+                    try:
+                        candidates.extend(future_arxiv.result())
+                    except Exception as e:
+                        print(f"  [RAG] arXiv search failed: {e}")
             # === 修改区结束 ===
 
             user_results = self.user_index.search(query_with_graph, top_k=top_k)

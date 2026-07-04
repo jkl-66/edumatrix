@@ -169,3 +169,80 @@ body {
   transition-property: width, padding, opacity;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* 机器人讲义消息卡片定制美化：圆角矩形，有色边框无实色填充，加大行间距，优雅字体 */
+.chat-card-assistant {
+  background: transparent !important;
+  border: 1.5px solid var(--color-accent) !important;
+  border-radius: 1rem !important;
+  padding: 1.25rem;
+  line-height: 1.8 !important;
+  font-family: 'Outfit', 'Inter', var(--font-sans) !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.chat-card-assistant:hover {
+  border-color: var(--color-edu-500) !important;
+  box-shadow: 0 6px 20px rgba(139, 92, 246, 0.08) !important;
+}
+.chat-card-assistant .prose {
+  line-height: 1.8 !important;
+}
+
+/* 用户消息卡片定制美化：圆角矩形，加深蓝色精致边框，大行距，优雅字体 */
+.chat-card-user {
+  background: rgba(59, 130, 246, 0.02) !important;
+  border: 1.5px solid #3b82f6 !important;
+  border-radius: 1rem !important;
+  border-bottom-right-radius: 0.125rem !important;
+  padding: 0.65rem 1.15rem;
+  line-height: 1.6 !important;
+  font-family: 'Outfit', 'Inter', var(--font-sans) !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.chat-card-user:hover {
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.08) !important;
+}
+
+/* 思维导图（Mermaid Mindmap）节点气泡、连线与排版美化 */
+.mermaid svg {
+  font-family: 'Outfit', 'Inter', var(--font-sans) !important;
+}
+
+/* 节点：圆角矩形，有边框颜色，里面无填充 */
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node polygon,
+.mermaid .node path,
+.mermaid rect.clickable {
+  fill: transparent !important;
+  stroke: var(--color-accent) !important; /* 精致紫色边框 */
+  stroke-width: 1.5px !important;
+  rx: 8px !important; /* 圆角 */
+  ry: 8px !important;
+  transition: all 0.2s ease;
+}
+
+/* 鼠标悬停脑图节点高亮 */
+.mermaid .node:hover rect,
+.mermaid .node:hover circle,
+.mermaid .node:hover polygon {
+  stroke: var(--color-edu-500) !important; /* 悬浮高亮蓝色 */
+  stroke-width: 2px !important;
+  filter: drop-shadow(0 2px 8px rgba(59, 130, 246, 0.15));
+}
+
+/* 脑图节点文字及排版 */
+.mermaid .node text,
+.mermaid .node .label {
+  fill: var(--color-text-primary) !important;
+  font-weight: 500 !important;
+  font-size: 11px !important;
+  letter-spacing: 0.02em;
+}
+
+/* 脑图连线 */
+.mermaid .edgePaths .edgePath .path,
+.mermaid .mindmap-edge {
+  stroke: #cbd5e1 !important; /* 细灰色优雅连线 */
+  stroke-width: 1.5px !important;
+}

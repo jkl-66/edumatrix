@@ -25,7 +25,7 @@ def get_password_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """创建 JWT 访问令牌"""
+    """创建 JWT 访问令牌，包含用户角色"""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -43,11 +43,10 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> DBU
         headers={"WWW-Authenticate": "Bearer"},
     )
     if not token:
-        # 本地开发/演示环境下，前台未集成登录时自动降级为默认的 demo-student 用户，防止 401 报错
         def get_or_create_demo(session):
             user = session.query(DBUser).filter(DBUser.username == "demo-student").first()
             if not user:
-                user = DBUser(username="demo-student", hashed_password=get_password_hash("demo-password"))
+                user = DBUser(username="demo-student", hashed_password=get_password_hash("demo-password"), role="student", display_name="演示学生")
                 session.add(user)
                 session.commit()
                 session.refresh(user)
@@ -71,6 +70,15 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> DBU
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
     
+    return user
+
+async def get_current_teacher(user: DBUser = Depends(get_current_user)) -> DBUser:
+    """教师权限依赖：仅允许教师角色访问"""
+    if user.role != "teacher":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="仅教师可访问此接口",
+        )
     return user
 
 def authenticate_user(db, username: str, password: str) -> Optional[DBUser]:

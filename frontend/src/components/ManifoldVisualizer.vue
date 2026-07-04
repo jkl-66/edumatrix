@@ -137,10 +137,10 @@ function drawPoincareDisk() {
     ctx.strokeStyle = grad
     ctx.lineWidth = props.conflictDetected ? 3 : 1.5
 
-    // 如果冲突，用虚线 + 红色
+    // 如果冲突，用虚线 + 红色（减慢频闪至极其柔和的缓慢呼吸）
     if (props.conflictDetected) {
       ctx.setLineDash([5, 5])
-      ctx.strokeStyle = `rgba(239, 68, 68, ${0.4 + Math.sin(time * 3) * 0.3})`
+      ctx.strokeStyle = `rgba(239, 68, 68, ${0.45 + Math.sin(time * 0.6) * 0.15})`
     }
 
     ctx.moveTo(sp.x, sp.y)
@@ -157,7 +157,7 @@ function drawPoincareDisk() {
     ctx.beginPath()
     ctx.arc(ax, ay, 2, 0, Math.PI * 2)
     ctx.fillStyle = props.conflictDetected
-      ? `rgba(239, 68, 68, ${0.6 + Math.sin(time * 5) * 0.4})`
+      ? `rgba(239, 68, 68, ${0.65 + Math.sin(time * 0.8) * 0.15})`
       : `rgba(59, 130, 246, ${0.5 + Math.sin(time * 3) * 0.3})`
     ctx.fill()
   })
@@ -191,17 +191,17 @@ function drawPoincareDisk() {
     ctx.fillText(p.label, p.x, p.y - pulseSize - 6)
   })
 
-  // 冲突告警动画
+  // 冲突告警动画（柔和平缓呼吸光效，减缓频率，减小波幅）
   if (props.conflictDetected) {
-    const pulse = Math.sin(time * 6) * 0.5 + 0.5
+    const pulse = Math.sin(time * 0.5) * 0.2 + 0.8
     ctx.beginPath()
-    ctx.arc(cx, cy, radius * (0.7 + pulse * 0.2), 0, Math.PI * 2)
-    ctx.strokeStyle = `rgba(239, 68, 68, ${0.2 + pulse * 0.3})`
-    ctx.lineWidth = 2
+    ctx.arc(cx, cy, radius * (0.8 + pulse * 0.05), 0, Math.PI * 2)
+    ctx.strokeStyle = `rgba(239, 68, 68, ${0.15 + (pulse - 0.8) * 0.2})`
+    ctx.lineWidth = 1.5
     ctx.stroke()
 
-    ctx.fillStyle = `rgba(239, 68, 68, ${0.6 + pulse * 0.4})`
-    ctx.font = 'bold 14px system-ui, sans-serif'
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.8)'  // 警告文本保持高品质静态，防刺眼
+    ctx.font = 'bold 13px system-ui, sans-serif'
     ctx.textAlign = 'center'
     ctx.fillText('⚠ 认知冲突检测', cx, 30)
   }
@@ -209,16 +209,31 @@ function drawPoincareDisk() {
   animationFrame = requestAnimationFrame(drawPoincareDisk)
 }
 
+let resizeObserver = null
+
 function resize() {
   if (!canvasRef.value) return
   const parent = canvasRef.value.parentElement
   canvasRef.value.width = parent?.clientWidth || 400
-  canvasRef.value.height = Math.min(parent?.clientHeight || 400, 500)
+  canvasRef.value.height = 360
 }
 
 onMounted(async () => {
   resize()
   window.addEventListener('resize', resize)
+
+  // Use ResizeObserver to auto-detect width changes during slide-out transitions
+  if (canvasRef.value && typeof ResizeObserver !== 'undefined') {
+    const parent = canvasRef.value.parentElement
+    if (parent) {
+      resizeObserver = new ResizeObserver(() => {
+        resize()
+        initParticles()
+      })
+      resizeObserver.observe(parent)
+    }
+  }
+
   await nextTick()
   ctx = canvasRef.value?.getContext('2d')
   initParticles()
@@ -227,6 +242,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', resize)
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+  }
   if (animationFrame) cancelAnimationFrame(animationFrame)
 })
 

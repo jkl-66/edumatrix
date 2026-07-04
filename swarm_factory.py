@@ -23,11 +23,6 @@ def build_swarm_from_headers(headers: dict[str, str] | Any) -> EduMatrixSwarm:
         _swarm_cache["__default__"] = default_swarm
         return default_swarm
 
-    cache_key = f"{api_key[-8:]}::{endpoint}::{model}"
-    cached = _swarm_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
     temperature = 0.3
     max_tokens = 4096
     if temp_str:
@@ -40,6 +35,11 @@ def build_swarm_from_headers(headers: dict[str, str] | Any) -> EduMatrixSwarm:
             max_tokens = int(mt_str)
         except Exception:
             pass
+
+    cache_key = f"{api_key[-8:]}::{endpoint}::{model}::{temperature}::{max_tokens}"
+    cached = _swarm_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
     dynamic_llm = build_async_llm(
         api_key=api_key or None,

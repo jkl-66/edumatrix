@@ -3,11 +3,19 @@ import { streamChat, abortStream } from '../api'
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
-    messages: [],
+    messages: (() => {
+      try {
+        const raw = localStorage.getItem('edumatrix_chat_messages')
+        return raw ? JSON.parse(raw) : []
+      } catch {
+        return []
+      }
+    })(),
     sending: false,
     streamingProgress: 0,
     streamingStatus: '',
     streamingAgents: {},
+    streamingMode: 'chat',  // 当前流式传输模式 (chat / matrix)
     _cleanupStream: null,  // 任务 8.2: AbortController 清理函数
   }),
   actions: {
@@ -23,10 +31,30 @@ export const useChatStore = defineStore('chat', {
         abortStream('current')
         this.sending = false
       }
+      this.streamingMode = 'chat'
+    },
+
+    saveMessages() {
+      try {
+        localStorage.setItem('edumatrix_chat_messages', JSON.stringify(this.messages))
+      } catch (e) {
+        console.error('Failed to persist chat messages:', e)
+      }
     },
 
     addMessage(msg) {
       this.messages.push(msg)
+      this.saveMessages()
+    },
+
+    clearHistory() {
+      this.cleanup()
+      this.messages = []
+      try {
+        localStorage.removeItem('edumatrix_chat_messages')
+      } catch (e) {
+        console.error('Failed to clear chat history:', e)
+      }
     },
 
     /**
@@ -55,14 +83,25 @@ export const useChatStore = defineStore('chat', {
       return result
     },
 
-    async sendChatMessage(message, studentId) {
+    async sendChatMessage(message, studentId, mode = 'chat', images = []) {
       if (this.sending) return
       this.sending = true
       this.streamingProgress = 10
       this.streamingStatus = '正在发起连接...'
       this.streamingAgents = {}
+      this.streamingMode = mode
 
-      this.addMessage({ role: 'user', content: message })
+      this.addMessage({ role: 'user', content: message, images: [...images] })
+      
+      // 添加助手占位符 (仅在非 matrix 模式下展示打字机/占位卡)
+      if (mode !== 'matrix') {
+        this.addMessage({
+          role: 'assistant',
+          content: '',
+          resources: [],
+          streaming: true,
+        })
+      }
 
       return new Promise((resolve, reject) => {
         // streamChat 返回 AbortController 清理函数
@@ -73,6 +112,12 @@ export const useChatStore = defineStore('chat', {
             if (event === 'progress') {
               this.streamingProgress = data.progress || this.streamingProgress
               this.streamingStatus = data.message || this.streamingStatus
+            } else if (event === 'chat_chunk') {
+              const lastMsg = this.messages[this.messages.length - 1]
+              if (lastMsg && lastMsg.role === 'assistant') {
+                lastMsg.content += data.content || ''
+                this.saveMessages()
+              }
             } else if (event === 'agent_done') {
               this.streamingProgress = data.progress || this.streamingProgress
               this.streamingAgents[data.agent] = {
@@ -87,42 +132,89 @@ export const useChatStore = defineStore('chat', {
 
               const safeContent = this.getSafeContent(data.content)
 
-              const assistantMsg = {
-                role: 'assistant',
-                content: `## 学习目标：${data.target || '未识别'}\n\n` + safeContent,
-                resources: data.resources || [],
-                profile: data.profile || null,
-                strategy: data.strategy_plan || null,
-                target: data.target || '',
-                safety: data.safety || null,
-                alignment: data.alignment || {},
-              }
+              const finalMsgContent = (safeContent.includes('学习目标') || safeContent.includes('##'))
+                ? safeContent
+                : `## 学习目标：${data.target || '未识别'}\n\n` + safeContent
 
-              this.addMessage(assistantMsg)
+              const lastIdx = this.messages.length - 1
+              if (lastIdx >= 0 && this.messages[lastIdx].role === 'assistant') {
+                this.messages[lastIdx] = {
+                  role: 'assistant',
+                  content: finalMsgContent,
+                  resources: data.resources || [],
+                  profile: data.profile || null,
+                  strategy: data.strategy_plan || null,
+                  target: data.target || '',
+                  safety: data.safety || null,
+                  alignment: data.alignment || {},
+                  rdi: data.rdi || null,
+                  streaming: false,
+                }
+              } else {
+                this.addMessage({
+                  role: 'assistant',
+                  content: finalMsgContent,
+                  resources: data.resources || [],
+                  profile: data.profile || null,
+                  strategy: data.strategy_plan || null,
+                  target: data.target || '',
+                  safety: data.safety || null,
+                  alignment: data.alignment || {},
+                  rdi: data.rdi || null,
+                  streaming: false,
+                })
+              }
+              this.saveMessages()
               this.sending = false
               this._cleanupStream = null
               resolve(data)
             } else if (event === 'error') {
               this.sending = false
               this._cleanupStream = null
-              this.addMessage({
-                role: 'assistant',
-                content: `错误：${data.message || '生成失败'}`,
-                error: true,
-              })
+              const lastIdx = this.messages.length - 1
+              if (lastIdx >= 0 && this.messages[lastIdx].role === 'assistant') {
+                this.messages[lastIdx] = {
+                  role: 'assistant',
+                  content: `错误：${data.message || '生成失败'}`,
+                  error: true,
+                  streaming: false,
+                }
+              } else {
+                this.addMessage({
+                  role: 'assistant',
+                  content: `错误：${data.message || '生成失败'}`,
+                  error: true,
+                  streaming: false,
+                })
+              }
+              this.saveMessages()
               reject(new Error(data.message))
             }
           },
           (err) => {
             this.sending = false
             this._cleanupStream = null
-            this.addMessage({
-              role: 'assistant',
-              content: `连接异常中断，正在尝试使用语法防护网收敛输出...`,
-              error: true,
-            })
+            const lastIdx = this.messages.length - 1
+            if (lastIdx >= 0 && this.messages[lastIdx].role === 'assistant') {
+              this.messages[lastIdx] = {
+                role: 'assistant',
+                content: `连接异常中断，正在尝试使用语法防护网收敛输出...`,
+                error: true,
+                streaming: false,
+              }
+            } else {
+              this.addMessage({
+                role: 'assistant',
+                content: `连接异常中断，正在尝试使用语法防护网收敛输出...`,
+                error: true,
+                streaming: false,
+              })
+            }
+            this.saveMessages()
             reject(err)
-          }
+          },
+          mode,
+          images
         )
       })
     }

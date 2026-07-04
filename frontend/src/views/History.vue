@@ -1,9 +1,14 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { getHistory } from '../api'
-import { Clock, MessageSquare, Search, ArrowRight } from '@lucide/vue'
+import {
+  Clock, MessageSquare, Search, ArrowRight, Bot, Sparkles,
+  BrainCircuit, CheckCircle2, AlertTriangle, ArrowUpRight, GraduationCap
+} from '@lucide/vue'
 
 const props = defineProps({ studentId: String })
+const router = useRouter()
 
 const history = ref([])
 const loading = ref(true)
@@ -25,76 +30,213 @@ const filtered = computed(() => {
   if (!searchFilter.value) return history.value
   const q = searchFilter.value.toLowerCase()
   return history.value.filter(h =>
-    (h.message || '').toLowerCase().includes(q) ||
-    (h.response || '').toLowerCase().includes(q)
+    (h.query || h.message || '').toLowerCase().includes(q) ||
+    (h.target || '').toLowerCase().includes(q) ||
+    (h.response_summary || h.response || '').toLowerCase().includes(q)
   )
 })
 
+function parseTimestamp(ts) {
+  if (!ts) return null
+  if (ts instanceof Date) return ts
+  if (typeof ts === 'number') return new Date(ts)
+  
+  let str = String(ts).trim()
+  // 替换空格为 T，比如 "2026-06-24 11:32:20" -> "2026-06-24T11:32:20"
+  if (str.includes(' ') && !str.includes('T')) {
+    str = str.replace(' ', 'T')
+  }
+  
+  // 如果是 ISO 字符串但缺少 Z 或时区偏移，则默认补上 Z，因为后端以 UTC 存储
+  if (str.includes('-') && str.includes(':') && !str.endsWith('Z') && !/\+\d{2}:?\d{2}$/.test(str) && !/-\d{2}:?\d{2}$/.test(str)) {
+    str += 'Z'
+  }
+  
+  const d = new Date(str)
+  return isNaN(d.getTime()) ? null : d
+}
+
 function ago(ts) {
-  if (!ts) return ''
-  const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000)
+  const d = parseTimestamp(ts)
+  if (!d) return '未知时间'
+  
+  const s = Math.floor((Date.now() - d.getTime()) / 1000)
+  if (s < 0) return '刚刚' // 避免系统时钟微小偏差产生负数
   if (s < 60) return '刚刚'
   if (s < 3600) return `${Math.floor(s / 60)}分钟前`
   if (s < 86400) return `${Math.floor(s / 3600)}小时前`
-  return `${Math.floor(s / 86400)}天前`
+  if (s < 259200) return `${Math.floor(s / 86400)}天前` // 3天内显示相对时间
+  
+  // 3天以上显示格式化日期
+  return d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+}
+
+function backtrackDialogue(item) {
+  router.push({
+    path: '/learn',
+    query: { prompt: item.query || item.message }
+  })
+}
+
+function startQuiz(concept) {
+  if (typeof window.startInteractiveQuiz === 'function') {
+    window.startInteractiveQuiz(concept)
+  } else {
+    router.push({
+      path: '/learn',
+      query: { quiz: concept }
+    })
+  }
+}
+
+function parseResponseSummary(summary) {
+  if (!summary) return []
+  // summary 格式: "理论教授:专业讲义; 逻辑画师:思维导图; 极客助教:代码实操案例..."
+  return summary.split(';').map(part => {
+    const splitted = part.split(':').map(s => s.trim())
+    if (splitted.length < 2) return null
+    return { agent: splitted[0], rtype: splitted[1] }
+  }).filter(Boolean)
+}
+
+function getResourceBadgeClass(rtype) {
+  const mapping = {
+    '专业讲义': 'bg-blue-50/80 text-blue-700 border border-blue-100/50 dark:bg-blue-950/20 dark:text-blue-300 dark:border-blue-900/30',
+    '思维导图': 'bg-purple-50/80 text-purple-700 border border-purple-100/50 dark:bg-purple-950/20 dark:text-purple-300 dark:border-purple-900/30',
+    '代码实操案例': 'bg-amber-50/80 text-amber-700 border border-amber-100/50 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-900/30',
+    '练习题': 'bg-rose-50/80 text-rose-700 border border-rose-100/50 dark:bg-rose-950/20 dark:text-rose-300 dark:border-rose-900/30',
+    '虚拟人视频脚本': 'bg-emerald-50/80 text-emerald-700 border border-emerald-100/50 dark:bg-emerald-950/20 dark:text-emerald-300 dark:border-emerald-900/30',
+  }
+  return mapping[rtype] || 'bg-gray-50/80 text-gray-700 border border-gray-100/50 dark:bg-gray-850 dark:text-gray-300 dark:border-gray-800'
 }
 </script>
 
 <template>
-  <div class="max-w-4xl mx-auto">
-    <div class="flex items-center justify-between mb-6">
-      <h2 class="text-sm font-semibold text-gray-800">对话历史 ({{ filtered.length }})</h2>
+  <div class="max-w-4xl mx-auto pb-12">
+    <!-- Header Controls -->
+    <div class="flex items-center justify-between mb-8">
+      <div>
+        <h2 class="text-lg font-bold text-gray-900 dark:text-white">对话时空历史</h2>
+        <p class="text-xs text-gray-500 mt-0.5">追溯您的自适应学习路径，随时进行时空回溯或自适应测试</p>
+      </div>
       <div class="relative w-64">
         <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input v-model="searchFilter" class="input pl-8" placeholder="搜索对话内容..." />
+        <input v-model="searchFilter" class="input pl-8 py-1.5" placeholder="搜索问题、知识点或智能体..." />
       </div>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center py-12">
+    <!-- Loading State -->
+    <div v-if="loading" class="flex flex-col items-center justify-center py-20">
       <div class="pulse-dot" />
-      <span class="ml-3 text-gray-400 text-sm">加载中...</span>
+      <span class="mt-4 text-gray-400 text-sm">正在读取时空对话载荷...</span>
     </div>
 
-    <div v-else-if="filtered.length === 0" class="text-center py-12 text-gray-400">
-      <MessageSquare :size="40" class="mx-auto mb-3 text-gray-300" />
-      <p class="text-sm">{{ searchFilter ? '没有匹配的对话记录' : '暂无对话历史' }}</p>
-      <p class="text-xs mt-1">在智能对话中开始学习</p>
+    <!-- Empty State -->
+    <div v-else-if="filtered.length === 0" class="text-center py-20 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm">
+      <MessageSquare :size="48" class="mx-auto mb-4 text-gray-300 dark:text-gray-700" />
+      <p class="text-sm font-medium text-gray-600 dark:text-gray-400">{{ searchFilter ? '未找到匹配的时空历史记录' : '暂无对话历史记录' }}</p>
+      <p class="text-xs text-gray-400 mt-1.5">去智能对话页面开始您的探究式学习吧</p>
+      <router-link to="/learn" class="btn btn-primary mt-6 text-xs px-4 py-2 inline-flex items-center gap-1.5">
+        开启对话学习 <ArrowRight :size="12" />
+      </router-link>
     </div>
 
-    <div v-else class="space-y-3">
-      <div v-for="item in filtered" :key="item.id || item.timestamp" class="card">
-        <div class="flex items-start justify-between gap-4">
-          <div class="flex-1 min-w-0 space-y-2">
-            <!-- Student message -->
-            <div class="flex items-start gap-2">
-              <div class="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 text-xs font-bold shrink-0">S</div>
-              <p class="text-sm text-gray-800">{{ item.message || item.question || '-' }}</p>
-            </div>
+    <!-- Timeline Cards List -->
+    <div v-else class="relative pl-6 border-l-2 border-gray-200/60 dark:border-gray-800/80 space-y-6">
+      <div v-for="item in filtered" :key="item.id || item.timestamp" 
+           class="relative bg-white dark:bg-gray-900 border border-gray-100/90 dark:border-gray-800/90 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all duration-200 group"
+           :class="item.alignment_passed ? 'border-l-4 border-l-success' : 'border-l-4 border-l-warning'">
+        
+        <!-- Timeline Dot Indicator -->
+        <div class="absolute -left-[32px] top-[22px] w-4.5 h-4.5 rounded-full border-2 bg-white dark:bg-gray-950 flex items-center justify-center transition-transform group-hover:scale-110"
+             :class="item.alignment_passed ? 'border-success text-success' : 'border-warning text-warning'">
+          <div class="w-2 h-2 rounded-full" :class="item.alignment_passed ? 'bg-success' : 'bg-warning'"></div>
+        </div>
 
-            <!-- Response summary -->
-            <div v-if="item.response || item.target" class="flex items-start gap-2">
-              <div class="w-6 h-6 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 text-xs font-bold shrink-0">A</div>
-              <div class="text-sm text-gray-600">
-                <span>目标：{{ item.target || '-' }}</span>
-                <span v-if="item.resources" class="ml-2 text-xs text-gray-400">({{ item.resources }} 资源)</span>
-              </div>
-            </div>
+        <!-- Card Header: Status Badges and Time -->
+        <div class="flex flex-wrap items-center justify-between gap-3 pb-3.5 mb-4 border-b border-gray-100 dark:border-gray-800/60 text-xs">
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- Alignment status badge -->
+            <span v-if="item.alignment_passed" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 font-medium">
+              <CheckCircle2 :size="12" /> 认知流形对齐通过
+            </span>
+            <span v-else class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 font-medium">
+              <AlertTriangle :size="12" /> 认知流形偏离警告
+            </span>
 
-            <!-- Tags -->
-            <div v-if="item.target" class="flex flex-wrap gap-1">
-              <span class="badge bg-blue-50 text-blue-700 text-[10px]">{{ item.target }}</span>
-              <span v-if="item.resources" class="badge bg-gray-100 text-gray-600 text-[10px]">{{ item.resources }} 资源</span>
-            </div>
-          </div>
-
-          <!-- Timestamp -->
-          <div class="shrink-0 text-right">
-            <span class="text-[10px] text-gray-400 flex items-center gap-1">
-              <Clock :size="10" /> {{ ago(item.created_at || item.timestamp) }}
+            <!-- Concept target badge -->
+            <span v-if="item.target" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 font-medium">
+              <GraduationCap :size="12" /> 目标概念: {{ item.target }}
             </span>
           </div>
+
+          <!-- Time ago -->
+          <div class="flex items-center gap-1 text-gray-400 dark:text-gray-500 font-medium shrink-0">
+            <Clock :size="12" /> {{ ago(item.created_at || item.timestamp) }}
+          </div>
         </div>
+
+        <!-- Card Body -->
+        <div class="space-y-4">
+          <!-- Student query block -->
+          <div class="flex items-start gap-3">
+            <div class="w-7 h-7 rounded-lg bg-blue-50 dark:bg-blue-950/40 flex items-center justify-center text-blue-600 dark:text-blue-400 text-xs font-extrabold shrink-0 border border-blue-100/50 dark:border-blue-900/30">
+              问
+            </div>
+            <div class="flex-1 min-w-0">
+              <h4 class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-0.5">学生提问</h4>
+              <p class="text-sm font-medium text-gray-800 dark:text-gray-200 leading-normal">{{ item.query || item.message || item.question || '-' }}</p>
+            </div>
+          </div>
+
+          <!-- Swarm agent collaborative chain -->
+          <div class="flex items-start gap-3">
+            <div class="w-7 h-7 rounded-lg bg-purple-50 dark:bg-purple-950/40 flex items-center justify-center text-purple-600 dark:text-purple-400 text-xs font-extrabold shrink-0 border border-purple-100/50 dark:border-purple-900/30">
+              答
+            </div>
+            <div class="flex-1 min-w-0">
+              <h4 class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">1+3+5 智能体 Swarm 协同响应</h4>
+              
+              <!-- Agents involved badge chain -->
+              <div v-if="parseResponseSummary(item.response_summary).length > 0" class="flex flex-wrap items-center gap-2 mb-3">
+                <span class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1 mr-1">
+                  <Bot :size="12" /> Swarm 协作链:
+                </span>
+                <span v-for="(agentItem, idx) in parseResponseSummary(item.response_summary)" :key="idx" 
+                      class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold transition-all"
+                      :class="getResourceBadgeClass(agentItem.rtype)">
+                  <Sparkles v-if="agentItem.rtype === '思维导图'" :size="10" />
+                  <GraduationCap v-else-if="agentItem.rtype === '专业讲义'" :size="10" />
+                  <BrainCircuit v-else-if="agentItem.rtype === '练习题'" :size="10" />
+                  <span class="opacity-75">[{{ agentItem.agent }}]</span>
+                  <span>{{ agentItem.rtype }}</span>
+                </span>
+              </div>
+
+              <!-- Brief response summary content -->
+              <div v-if="item.response || item.response_summary" 
+                   class="bg-gray-50/50 dark:bg-gray-900/40 border border-gray-100/60 dark:border-gray-800/40 rounded-xl p-3 text-xs text-gray-600 dark:text-gray-400 leading-relaxed font-sans italic">
+                {{ item.response || item.response_summary }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card Footer Action Buttons -->
+        <div class="flex items-center justify-end gap-3 mt-4 pt-3.5 border-t border-gray-100/80 dark:border-gray-800/40">
+          <button @click="backtrackDialogue(item)" 
+                  class="btn btn-outline py-1.5 px-3 rounded-lg text-xs flex items-center gap-1.5 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-200 dark:hover:border-blue-900 transition-colors">
+            <ArrowUpRight :size="12" /> 时空回溯
+          </button>
+          <button v-if="item.target" 
+                  @click="startQuiz(item.target)" 
+                  class="btn btn-primary py-1.5 px-3 rounded-lg text-xs flex items-center gap-1.5 shadow-sm hover:shadow transition-all bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium">
+            <BrainCircuit :size="12" /> 自适应小测
+          </button>
+        </div>
+
       </div>
     </div>
   </div>
 </template>
+

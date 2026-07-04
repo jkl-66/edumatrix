@@ -10,6 +10,11 @@ from models import StudentProfile
 class TestHallucinationPrevention(unittest.TestCase):
     """Test low-confidence blocking and out-of-domain graceful degradation."""
 
+    def setUp(self):
+        # 清空 user_index 中的所有残留文档，防止其他上传测试泄露状态导致置信度计算偏差
+        hybrid_rag.user_index._items.clear()
+        hybrid_rag.user_index._vectors.clear()
+
     def test_low_confidence_blocking(self):
         """Query with zero or very low relevance should trigger low_confidence Refusal block."""
         # 1. Test raw retrieval low_confidence calculation

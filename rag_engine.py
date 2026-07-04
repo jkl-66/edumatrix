@@ -356,7 +356,7 @@ class HybridRAGPipeline:
         if removed > 0:
             TELEMETRY.record_metric("user_index.documents_removed", removed)
 
-    def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k, profile: Any | None = None) -> RetrievalBundle:
+    def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k, profile: Any | None = None, disable_external: bool = False) -> RetrievalBundle:
         # === 关键修复：延迟加载，打破循环导入 ===
         from web_search_api import search_arxiv
         
@@ -385,8 +385,10 @@ class HybridRAGPipeline:
                 else:
                     future_local = executor.submit(self.text_index.search, query_with_graph, top_k)
                 
-                # 提交外网 arXiv 检索任务 (使用原始 query 更精准，只拿 Top 2 补充)
-                future_arxiv = executor.submit(search_arxiv, query, 2) 
+                # 仅在非禁用外部搜索时提交外网 arXiv 检索任务
+                future_arxiv = None
+                if not disable_external:
+                    future_arxiv = executor.submit(search_arxiv, query, 2) 
 
                 # 收集结果
                 try:
@@ -394,10 +396,11 @@ class HybridRAGPipeline:
                 except Exception as e:
                     print(f"  [RAG] Local search failed: {e}")
                 
-                try:
-                    candidates.extend(future_arxiv.result())
-                except Exception as e:
-                    print(f"  [RAG] arXiv search failed: {e}")
+                if future_arxiv is not None:
+                    try:
+                        candidates.extend(future_arxiv.result())
+                    except Exception as e:
+                        print(f"  [RAG] arXiv search failed: {e}")
             # === 修改区结束 ===
 
             user_results = self.user_index.search(query_with_graph, top_k=top_k)
@@ -531,6 +534,17 @@ class HybridRAGPipeline:
         q = query.strip()
         if not q:
             return False
+        q_lower = q.lower()
+
+        # 0) 垃圾查询前置过滤：纯数字/字母乱序/无意义字符串
+        import re
+        # 如果查询中没有常见的中文字符和英文单词模式
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in q)
+        has_english_word = bool(re.search(r'[a-zA-Z]{3,}', q))
+        # 纯数字+标点的查询或长度>15的连续无意义字符
+        garbage_pattern = bool(re.match(r'^[a-z0-9\s\-_.,!?;:]+$', q_lower)) if not has_chinese else False
+        if (not has_chinese and not has_english_word) or (garbage_pattern and len(q) > 8 and not has_chinese):
+            return False
 
         # 1) 图谱节点直接命中
         for node in self.graph.nodes:
@@ -553,7 +567,6 @@ class HybridRAGPipeline:
             "gradient", "backprop", "relu", "tensor", "feature map",
             "loss function", "optimizer", "adam", "sgd",
         )
-        q_lower = q.lower()
         for kw in ml_keywords:
             if kw.lower() in q_lower:
                 return True

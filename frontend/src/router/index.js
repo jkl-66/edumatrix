@@ -1,4 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import Landing from '../views/Landing.vue'
+import Login from '../views/Login.vue'
+import Onboarding from '../views/Onboarding.vue'
 import Dashboard from '../views/Dashboard.vue'
 import Chat from '../views/Chat.vue'
 import Notes from '../views/Notes.vue'
@@ -12,19 +15,82 @@ import LearningPathGraph from '../views/LearningPathGraph.vue'
 import WrongQuestionBook from '../views/WrongQuestionBook.vue'
 import RevisionCalendar from '../views/RevisionCalendar.vue'
 
+import StudentAnalysis from '../views/StudentAnalysis.vue'
+
+function requireAuth() {
+  const token = localStorage.getItem('edumatrix_token')
+  if (!token) return '/landing'
+  const role = localStorage.getItem('edumatrix_role')
+  const onboarded = localStorage.getItem('edumatrix_onboarded') === 'true'
+  if (role === 'student' && !onboarded) {
+    return '/onboarding'
+  }
+  return true
+}
+
+// 教师路由守卫：只允许教师角色访问
+function requireTeacher() {
+  const token = localStorage.getItem('edumatrix_token')
+  if (!token) return '/landing'
+  const role = localStorage.getItem('edumatrix_role')
+  if (role !== 'teacher') return '/'
+  return true
+}
+
 const routes = [
-  { path: '/', name: 'Dashboard', component: Dashboard },
-  { path: '/learn', name: 'Learn', component: Chat },
-  { path: '/notes', name: 'Notes', component: Notes },
-  { path: '/review', name: 'Review', component: Review },
-  { path: '/teacher', name: 'Teacher', component: Teacher },
-  { path: '/history', name: 'History', component: History },
-  { path: '/knowledge', name: 'Knowledge', component: Knowledge },
-  { path: '/profile', name: 'ProfileDashboard', component: ProfileDashboard },
-  { path: '/settings', name: 'Settings', component: Settings },
-  { path: '/learning-path', name: 'LearningPathGraph', component: LearningPathGraph },
-  { path: '/wrong-questions', name: 'WrongQuestionBook', component: WrongQuestionBook },
-  { path: '/revision-calendar', name: 'RevisionCalendar', component: RevisionCalendar },
+  { 
+    path: '/landing', 
+    name: 'Landing', 
+    component: Landing,
+    meta: { layout: 'full' },
+    beforeEnter: () => {
+      const token = localStorage.getItem('edumatrix_token')
+      if (token) return '/'
+      return true
+    }
+  },
+  { 
+    path: '/login', 
+    name: 'Login', 
+    component: Login,
+    meta: { layout: 'full' },
+    beforeEnter: () => {
+      const token = localStorage.getItem('edumatrix_token')
+      if (token) return '/'
+      return true
+    }
+  },
+  {
+    path: '/onboarding',
+    name: 'Onboarding',
+    component: Onboarding,
+    meta: { layout: 'full' },
+    beforeEnter: () => {
+      const token = localStorage.getItem('edumatrix_token')
+      if (!token) return '/landing'
+      const role = localStorage.getItem('edumatrix_role')
+      if (role !== 'student') return '/'
+      const onboarded = localStorage.getItem('edumatrix_onboarded') === 'true'
+      if (onboarded) return '/'
+      return true
+    }
+  },
+  { path: '/', name: 'Dashboard', component: Dashboard, beforeEnter: requireAuth },
+  { path: '/learn', name: 'Learn', component: Chat, beforeEnter: requireAuth },
+  { path: '/notes', name: 'Notes', component: Notes, beforeEnter: requireAuth },
+  { path: '/review', name: 'Review', component: Review, beforeEnter: requireAuth },
+  { path: '/teacher', name: 'Teacher', component: Teacher, beforeEnter: requireTeacher, alias: ['/teacher/overview'] },
+  { path: '/teacher/students', name: 'TeacherStudents', component: Teacher, beforeEnter: requireTeacher },
+  { path: '/teacher/reviews', name: 'TeacherReviews', component: Teacher, beforeEnter: requireTeacher },
+  { path: '/teacher/reports', name: 'TeacherReports', component: Teacher, beforeEnter: requireTeacher },
+  { path: '/history', name: 'History', component: History, beforeEnter: requireAuth },
+  { path: '/knowledge', name: 'Knowledge', component: Knowledge, beforeEnter: requireAuth },
+  { path: '/profile', name: 'ProfileDashboard', component: ProfileDashboard, beforeEnter: requireAuth },
+  { path: '/settings', name: 'Settings', component: Settings, beforeEnter: requireAuth },
+  { path: '/learning-path', name: 'LearningPathGraph', component: LearningPathGraph, beforeEnter: requireAuth },
+  { path: '/wrong-questions', name: 'WrongQuestionBook', component: WrongQuestionBook, beforeEnter: requireAuth },
+  { path: '/revision-calendar', name: 'RevisionCalendar', component: RevisionCalendar, beforeEnter: requireAuth },
+  { path: '/student-analysis', name: 'StudentAnalysis', component: StudentAnalysis, beforeEnter: requireAuth },
 ]
 
 export default createRouter({

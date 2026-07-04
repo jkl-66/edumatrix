@@ -293,6 +293,7 @@ class StudentProfile:
     misconception_patterns: dict[str, float] = field(default_factory=dict)
     knowledge_traces: dict[str, KnowledgeTrace] = field(default_factory=dict)
     favorites: list[dict] = field(default_factory=list)
+    customized_fields: list[str] = field(default_factory=list)
 
     # === P1-1 情感与动机维度 ===
     frustration_index: float = 0.0         # 挫败感指数 0~1
@@ -308,6 +309,7 @@ class StudentProfile:
     recent_quiz_accuracy: dict[str, list[float]] = field(default_factory=dict)  # concept -> [最近3次正确率]
     metacognitive_mismatch: float = 0.0  # 元认知偏差指标 0~1
     last_update_timestamp: str = field(default_factory=_utc_now)  # 画像最后更新时间（用于遗忘衰减）
+    narrative_report: str = ""  # 📬 缓存的 StoryLensEdu 叙事学情成长信笺
     bkt_states: dict[str, dict] = field(default_factory=dict)  # BKT 状态快照: concept -> {p_mastered, history...}
 
     # === 替换 models.py 中的 add_favorite 方法 ===
@@ -364,6 +366,7 @@ class StudentProfile:
         accuracy: float | None = None,
         self_confidence: float | None = None,
         hint_count: int = 0,
+        concept: str | None = None,
     ) -> None:
         self.history.append(feedback)
         features = self._extract_features(feedback)
@@ -384,28 +387,72 @@ class StudentProfile:
             )
         )
         if accuracy is not None:
-            for point in self.weak_points:
+            update_points = [concept] if concept else list(self.weak_points)
+            for point in update_points:
+                if not point:
+                    continue
                 old = self.concept_mastery.get(point, 0.45)
-                self.concept_mastery[point] = _clamp(old * 0.72 + accuracy * 0.28)
+                base_updated = old * 0.72 + accuracy * 0.28
+                
                 trace = self.knowledge_traces.setdefault(point, KnowledgeTrace(concept=point, mastery=old))
-                trace.update(correct=accuracy >= 0.68, hinted=hint_count > 0)
-                self.concept_mastery[point] = trace.mastery
+                
+                is_correct = accuracy >= 0.68
+                hinted = hint_count > 0
+                if is_correct:
+                    learning_gain = 0.16
+                    if hinted:
+                        learning_gain *= 0.55
+                else:
+                    learning_gain = -0.10 - (0.68 - accuracy) * 0.32
+                    if hinted:
+                        learning_gain *= 1.15
+                
+                trace.attempts += 1
+                if is_correct:
+                    trace.correct_attempts += 1
+                
+                trace.mastery = round(_clamp(trace.mastery + learning_gain), 2)
+                trace.last_updated = _utc_now()
+                
+                self.concept_mastery[point] = min(round(base_updated, 2), trace.mastery)
+
+                # === LMCD 知识点掌握度扩散 (newplan.md 核心改进点一) ===
+                delta = self.concept_mastery[point] - old
+                if abs(delta) > 1e-5:
+                    from bkt_engine import KnowledgeDiffusionEngine
+                    from agent_swarm import DEFAULT_KNOWLEDGE_DAG
+                    diffuse_engine = KnowledgeDiffusionEngine()
+                    self.concept_mastery = diffuse_engine.diffuse(
+                        self.concept_mastery,
+                        point,
+                        delta,
+                        DEFAULT_KNOWLEDGE_DAG,
+                    )
         self._update_context(feedback)
         self._update_legacy_fields(feedback)
         self._refresh_dynamic_profile()
+        self.narrative_report = ""  # 清空 StoryLensEdu 缓存以便下一次生成最新的信笺
 
     def apply_llm_features(self, payload: dict[str, Any], *, source_text: str) -> None:
         if not payload:
             return
-        self.target_course = str(payload.get("course") or self.target_course or "机器学习导论")
-        major = str(payload.get("major") or "").strip()
-        if major:
-            self.major = major
-            self.major_preference = major
-        for goal in payload.get("goals", []) or []:
-            goal_text = str(goal).strip()
-            if goal_text and goal_text not in self.learning_goals:
-                self.learning_goals.append(goal_text)
+        
+        customs = getattr(self, "customized_fields", [])
+        
+        if "target_course" not in customs:
+            self.target_course = str(payload.get("course") or self.target_course or "机器学习导论")
+        
+        if "major" not in customs:
+            major = str(payload.get("major") or "").strip()
+            if major:
+                self.major = major
+                self.major_preference = major
+                
+        if "learning_goals" not in customs:
+            for goal in payload.get("goals", []) or []:
+                goal_text = str(goal).strip()
+                if goal_text and goal_text not in self.learning_goals:
+                    self.learning_goals.append(goal_text)
                 
         # 👇 强大的防御装甲：拦截大模型输出的坏数据
         raw_weak_points = payload.get("weak_points", [])
@@ -435,10 +482,12 @@ class StudentProfile:
                     confidence=0.70,
                 )
             )
-        for preference in payload.get("preferences", []) or []:
-            preference_text = str(preference).strip()
-            if preference_text and preference_text not in self.interaction_preferences:
-                self.interaction_preferences.append(preference_text)
+            
+        if "interaction_preferences" not in customs:
+            for preference in payload.get("preferences", []) or []:
+                preference_text = str(preference).strip()
+                if preference_text and preference_text not in self.interaction_preferences:
+                    self.interaction_preferences.append(preference_text)
         
         # 👇 接收大模型的语义意图打分
         mastery_updates = payload.get("mastery_updates", {})
@@ -454,10 +503,23 @@ class StudentProfile:
                         concept_text,
                         KnowledgeTrace(concept=concept_text, mastery=self.concept_mastery[concept_text])
                     )
+
+                    # === LMCD 知识点掌握度扩散 (newplan.md 核心改进点一) ===
+                    if abs(delta) > 1e-5:
+                        from bkt_engine import KnowledgeDiffusionEngine
+                        from agent_swarm import DEFAULT_KNOWLEDGE_DAG
+                        diffuse_engine = KnowledgeDiffusionEngine()
+                        self.concept_mastery = diffuse_engine.diffuse(
+                            self.concept_mastery,
+                            concept_text,
+                            delta,
+                            DEFAULT_KNOWLEDGE_DAG,
+                        )
                 except (ValueError, TypeError):
                     continue
                     
         self._refresh_dynamic_profile()
+        self.narrative_report = ""  # 清空 StoryLensEdu 缓存以便下一次生成最新的信笺
 
     def profile_prompt(self) -> str:
         dimensions = "；".join(
@@ -504,92 +566,137 @@ class StudentProfile:
         return "\n".join(lines)
 
     def _update_legacy_fields(self, message: str) -> None:
-        if any(word in message for word in ("看不懂", "不会", "迷糊", "不理解")):
+        # 语义增强：更细粒度的认知状态判断
+        if any(word in message for word in ("看不懂", "不会", "迷糊", "不理解", "不明白", "听不懂")):
             self.cognitive_load = min(1.0, self.cognitive_load + 0.12)
             self.focus_level = max(0.15, self.focus_level - 0.08)
-        if any(word in message for word in ("代码", "PyTorch", "python", "实操")):
-            self.cognitive_style = "代码实操导向"
-            if "代码实操" not in self.interaction_preferences:
-                self.interaction_preferences.append("代码实操")
-        if "图" in message or "演示" in message:
-            self.cognitive_style = "视觉演示导向"
-            if "图示演示" not in self.interaction_preferences:
-                self.interaction_preferences.append("图示演示")
-        for point in ("池化层", "卷积核", "反向传播", "链式法则", "梯度下降"):
+        # 解决困惑后认知负荷下降
+        if any(word in message for word in ("懂了", "明白了", "理解了", "搞懂了")):
+            self.cognitive_load = max(0.1, self.cognitive_load - 0.08)
+            self.focus_level = min(1.0, self.focus_level + 0.05)
+        customs = getattr(self, "customized_fields", [])
+        
+        if "cognitive_style" not in customs:
+            if any(word in message for word in ("代码", "PyTorch", "python", "实操", "实现", "写代码")):
+                self.cognitive_style = "代码实操导向"
+            elif "图" in message or "演示" in message or "可视化" in message:
+                self.cognitive_style = "视觉演示导向"
+                
+        if "interaction_preferences" not in customs:
+            if any(word in message for word in ("代码", "PyTorch", "python", "实操", "实现", "写代码")):
+                if "代码实操" not in self.interaction_preferences:
+                    self.interaction_preferences.append("代码实操")
+            if "图" in message or "演示" in message or "可视化" in message:
+                if "图示演示" not in self.interaction_preferences:
+                    self.interaction_preferences.append("图示演示")
+            # 公式推导偏好
+            if any(word in message for word in ("公式", "推导", "证明", "数学")):
+                if "数学推导" not in self.interaction_preferences:
+                    self.interaction_preferences.append("数学推导")
+                    
+        for point in ("池化层", "卷积核", "反向传播", "链式法则", "梯度下降", "逻辑回归",
+                      "线性回归", "决策树", "SVM", "朴素贝叶斯", "过拟合", "正则化"):
             if point in message and point not in self.weak_points:
                 self.weak_points.append(point)
 
     def _update_context(self, message: str) -> None:
-        major_patterns = (
-            (r"(计算机|软件工程|人工智能|数据科学|自动化|数学|物理|金融|医学|教育)[\u4e00-\u9fff]*(专业|方向)?", 0),
-        )
-        for pattern, group in major_patterns:
-            match = re.search(pattern, message)
-            if match:
-                self.major = match.group(group)
-                self.major_preference = self.major
-                break
-        goal_keywords = {
-            "考试": "通过考试",
-            "期末": "期末复习",
-            "考研": "考研备考",
-            "竞赛": "竞赛提升",
-            "项目": "项目应用",
-            "就业": "就业能力",
-            "面试": "面试准备",
-            "论文": "科研写作",
-        }
-        for keyword, goal in goal_keywords.items():
-            if keyword in message and goal not in self.learning_goals:
-                self.learning_goals.append(goal)
-        preference_keywords = {
-            "一步步": "分步引导",
-            "例子": "具体例子",
-            "对比": "对比辨析",
-            "反例": "反例辨析",
-            "别直接给答案": "提示阶梯",
-            "提示": "提示阶梯",
-            "视频": "视频脚本",
-            "语音": "语音讲解",
-        }
-        for keyword, preference in preference_keywords.items():
-            if keyword in message and preference not in self.interaction_preferences:
-                self.interaction_preferences.append(preference)
+        customs = getattr(self, "customized_fields", [])
+        
+        if "major" not in customs:
+            major_patterns = (
+                (r"(计算机|软件工程|人工智能|数据科学|自动化|数学|物理|金融|医学|教育|生物|统计|电子)[\u4e00-\u9fff]*(专业|方向)?", 0),
+                (r"(我是|就读|学习|主修)(\w+)", 2),
+            )
+            for pattern, group in major_patterns:
+                match = re.search(pattern, message)
+                if match:
+                    self.major = match.group(group)
+                    self.major_preference = self.major
+                    break
+                    
+        if "learning_goals" not in customs:
+            goal_keywords = {
+                "考试": "通过考试",
+                "期末": "期末复习",
+                "考研": "考研备考",
+                "竞赛": "竞赛提升",
+                "项目": "项目应用",
+                "就业": "就业能力",
+                "面试": "面试准备",
+                "论文": "科研写作",
+                "毕设": "毕业设计",
+                "课设": "课程设计",
+                "考证": "资格认证",
+            }
+            for keyword, goal in goal_keywords.items():
+                if keyword in message and goal not in self.learning_goals:
+                    self.learning_goals.append(goal)
+                    
+        if "interaction_preferences" not in customs:
+            preference_keywords = {
+                "一步步": "分步引导",
+                "例子": "具体例子",
+                "对比": "对比辨析",
+                "反例": "反例辨析",
+                "别直接给答案": "提示阶梯",
+                "提示": "提示阶梯",
+                "视频": "视频脚本",
+                "语音": "语音讲解",
+                "比喻": "类比讲解",
+                "图": "图示演示",
+                "代码": "代码实操",
+                "实操": "代码实操",
+                "推导": "数学推导",
+                "可视化": "可视化演示",
+            }
+            for keyword, preference in preference_keywords.items():
+                if keyword in message and preference not in self.interaction_preferences:
+                    self.interaction_preferences.append(preference)
 
-    # === P1-1 情感状态更新 ===
+    # === P1-1 情感状态更新（语义增强版） ===
     def _update_emotional_state(self, message: str) -> None:
-        """基于消息内容和历史模式推断情感状态。"""
-        # 挫败感：检测明确表达挫败的词，结合连续交互和认知负荷
+        """基于消息内容和历史模式推断情感状态（支持多轮对话上下文）。"""
         _frustration_words = ("焦虑", "害怕", "崩", "烦", "挫败", "没信心", "怕", "压力",
-                             "看不懂", "还是不会", "为什么不对", "怎么又错")
+                             "看不懂", "还是不会", "为什么不对", "怎么又错", "想放弃",
+                             "太难了", "跟不上了", "别人都会我不会", "心态崩")
+        _progress_words = ("懂了", "明白了", "理解了", "搞懂了", "解决了", "成功了",
+                          "试了", "可以了", "有进步", "效果不错", "提高了很多")
+        _inquiry_words = ("另外", "还有", "追问", "接着", "然后", "还有个问题",
+                         "还想问", "再问一个", "第二个问题")
+
         if any(w in message for w in _frustration_words):
             self.frustration_index = min(1.0, self.frustration_index + 0.15)
             self.consecutive_errors += 1
+        elif any(w in message for w in _progress_words):
+            # 进步信号：降低挫败感
+            self.frustration_index = max(0.0, self.frustration_index - 0.12)
+            self.consecutive_errors = 0
+        elif any(w in message for w in _inquiry_words):
+            # 主动追问说明参与度高
+            self.engagement_level = min(1.0, self.engagement_level + 0.08)
         else:
-            # 没有挫败信号时，逐渐衰减
             self.frustration_index = max(0.0, self.frustration_index - 0.03)
             self.consecutive_errors = 0
 
-        # 连续 3 次以上挫败，快速升高挫败感
         if self.consecutive_errors >= 3:
             self.frustration_index = min(1.0, self.frustration_index + 0.08)
-        
-        # 参与度：基于会话交互频率
+
         if self.session_interactions > 0:
             recency_bonus = min(0.05, 1.0 / self.session_interactions)
             self.engagement_level = min(1.0, self.engagement_level + recency_bonus)
 
-        # 动机类型推断
-        if any(w in message for w in ("考试", "期末", "考研")):
-            self.motivation_type = "外在动机"
-        elif any(w in message for w in ("感兴趣", "好奇", "想学", "有意思", "探究")):
-            self.motivation_type = "内在动机"
-        elif any(w in message for w in ("必须学", "没办法", "不知道为什么要学")):
-            self.motivation_type = "无动机"
-        elif self.motivation_type == "未诊断":
-            self.motivation_type = "外在动机"  # 默认假设
+        # 动机类型推断（增强版）
+        customs = getattr(self, "customized_fields", [])
+        if "motivation_type" not in customs:
+            if any(w in message for w in ("考试", "期末", "考研")):
+                self.motivation_type = "外在动机"
+            elif any(w in message for w in ("感兴趣", "好奇", "想学", "有意思", "探究", "热爱", "喜欢")):
+                self.motivation_type = "内在动机"
+            elif any(w in message for w in ("必须学", "没办法", "不知道为什么要学", "被迫")):
+                self.motivation_type = "无动机"
+            elif self.motivation_type == "未诊断":
+                self.motivation_type = "外在动机"
 
-        # 挫败感同时更新 legacy 字段
         if self.frustration_index > 0.3:
             self.focus_level = max(0.15, self.focus_level - 0.05)
         if self.frustration_index > 0.6:
@@ -613,15 +720,31 @@ class StudentProfile:
         self.bloom_levels[concept] = level
 
     def _update_concepts(self, message: str, features: set[str]) -> None:
-        # 为了演示倍速，这里的增减分被调高了
+        # 语义增强型概念更新：考虑对话上下文中的概念演进
         known_points = ("池化层", "最大池化", "平均池化", "卷积核", "反向传播", "链式法则", "梯度下降", "特征图")
         known_points += (
             "机器学习", "监督学习", "数据预处理", "特征工程", "线性回归", "逻辑回归", 
-            "决策树", "支持向量机", "朴素贝叶斯", "模型评估", "混淆矩阵", "过拟合", "正则化", "交叉验证"
+            "决策树", "支持向量机", "朴素贝叶斯", "模型评估", "混淆矩阵", "过拟合", "正则化", "交叉验证",
+            "神经网络", "卷积神经网络", "Transformer", "注意力机制", "K-Means", "PCA", "t-SNE",
+            "随机森林", "XGBoost", "AUC", "F1分数", "精确率", "召回率", "分类", "回归",
         )
-        for point in known_points:
-            if point in message:
-                if point not in self.weak_points and any(
+        matched_points = [p for p in known_points if p in message]
+        filtered_points = []
+        for p in matched_points:
+            if any(other != p and p in other for other in matched_points):
+                continue
+            filtered_points.append(p)
+
+        for point in filtered_points:
+            # 跨对话概念演进检测：如果之前已掌握的概念再次被问，说明可能有新困惑
+                prev = self.knowledge_traces.get(point)
+                if prev and prev.mastery >= 0.6 and any(
+                    word in message for word in ("还是不懂", "重新", "又忘了", "再讲", "还是不明白", "又遇到")
+                ):
+                    self.concept_mastery[point] = _clamp(self.concept_mastery.get(point, 0.48) - 0.15)
+                    if self.concept_mastery[point] < 0.5 and point not in self.weak_points:
+                        self.weak_points.append(point)
+                elif point not in self.weak_points and any(
                     cause in features
                     for cause in (
                         LearningStateCause.PREREQUISITE_GAP.value,
@@ -631,48 +754,65 @@ class StudentProfile:
                 ):
                     self.weak_points.append(point)
                 current = self.concept_mastery.get(point, 0.48)
-                if any(word in message for word in ("懂了", "会了", "明白了", "解决了")):
+                if any(word in message for word in ("懂了", "会了", "明白了", "解决了", "理解了", "搞懂了")):
                     self.concept_mastery[point] = _clamp(current + 0.35)
-                elif any(word in message for word in ("不会", "看不懂", "不理解", "混", "错")):
+                elif any(word in message for word in ("不会", "看不懂", "不理解", "混", "错", "不明白", "还是不懂")):
                     self.concept_mastery[point] = _clamp(current - 0.25)
                 else:
                     self.concept_mastery.setdefault(point, current)
+                    # 追问式学习：如果学生追问细节，说明有一定基础，微增掌握度
+                    if any(word in message for word in ("另外", "还有", "追问", "接着", "然后", "还有个问题", "还想问")):
+                        self.concept_mastery[point] = _clamp(self.concept_mastery.get(point, 0.48) + 0.05)
                 self.knowledge_traces.setdefault(point, KnowledgeTrace(concept=point, mastery=self.concept_mastery.get(point, current)))
-                # === P2-1 Bloom 层级同步更新 ===
                 self.update_bloom_level(point, self.concept_mastery[point])
         if LearningStateCause.MISCONCEPTION.value in features:
             pattern = self._detect_misconception_pattern(message)
             self.misconception_patterns[pattern] = _clamp(self.misconception_patterns.get(pattern, 0.0) + 0.22)
 
     def _extract_features(self, message: str) -> set[str]:
+        # 语义增强特征映射：更细粒度的关键词维度 + 口语化表达
         feature_map: tuple[tuple[str, tuple[str, ...]], ...] = (
             (
                 LearningStateCause.PREREQUISITE_GAP.value,
-                ("基础", "前置", "定义", "概念", "公式看不懂", "从哪来", "为什么", "不知道", "原理不懂"),
+                ("基础", "前置", "定义", "概念搞不懂", "公式看不懂", "从哪来", "为什么这么算",
+                 "不知道", "原理不懂", "没学过", "忘了基础", "基础不牢", "底层逻辑",
+                 "为什么是这样", "推导过程", "数学基础", "先修知识"),
             ),
             (
                 LearningStateCause.MISCONCEPTION.value,
-                ("总混", "混淆", "分不清", "老是错", "错题", "误区", "最大池化平均池化", "套公式"),
+                ("总混", "混淆", "分不清", "老是错", "错题", "误区", "最大池化平均池化", "套公式",
+                 "相似概念", "区别是什么", "差异在哪", "这两个有什么不同", "等价吗",
+                 "是不是一样的", "混为一谈", "容易搞混"),
             ),
             (
                 LearningStateCause.COGNITIVE_LOAD.value,
-                ("题干长", "条件", "漏看", "多步骤", "跳步", "信息太多", "绕", "复杂", "迷糊"),
+                ("题干长", "条件太多", "漏看", "多步骤", "跳步", "信息太多", "绕", "复杂", "迷糊",
+                 "步骤太多", "记不住步骤", "绕不过来", "参数太多", "看不过来",
+                 "哪里是重点", "抓不住关键"),
             ),
             (
                 LearningStateCause.STRATEGY_GAP.value,
-                ("看答案", "背", "不会复习", "忘了", "记不住", "刷题没用", "不知道怎么学", "只会看视频"),
+                ("看答案", "背下来", "不会复习", "忘了", "记不住", "刷题没用", "不知道怎么学",
+                 "只会看视频", "效率低", "学不进去", "没有方法", "死记硬背",
+                 "不知道怎么练", "该从哪开始"),
             ),
             (
                 LearningStateCause.METACOGNITIVE_MISMATCH.value,
-                ("以为会", "一做就错", "不确定", "不知道哪里不会", "感觉懂", "自评", "没法判断"),
+                ("以为会", "一做就错", "不确定", "不知道哪里不会", "感觉懂", "自评", "没法判断",
+                 "看懂了但不会做", "听懂了但写不出来", "眼高手低",
+                 "觉得自己会了", "一考试就懵"),
             ),
             (
                 LearningStateCause.AFFECTIVE_BARRIER.value,
-                ("焦虑", "害怕", "崩", "烦", "挫败", "没信心", "怕", "压力"),
+                ("焦虑", "害怕", "崩溃", "烦", "挫败", "没信心", "怕学不会", "压力大",
+                 "想放弃了", "太难了", "不适合", "跟不上了", "别人都会我不会",
+                 "心态崩了", "焦虑得睡不着"),
             ),
             (
                 LearningStateCause.INTERACTION_MISMATCH.value,
-                ("讲太快", "太抽象", "听不进去", "换种讲法", "别直接给答案", "要例子", "要图", "要代码"),
+                ("讲太快", "太抽象", "听不进去", "换种讲法", "别直接给答案", "要例子", "要图", "要代码",
+                 "有没有更直观的", "能不能用比喻", "听不懂", "讲得再细点",
+                 "需要实操", "能不能演示", "一步一步来"),
             ),
         )
         features: set[str] = set()
@@ -853,6 +993,13 @@ class StudentProfile:
                 recommended_interventions=list(interventions),
                 last_updated=_utc_now(),
             )
+
+        # === 互补调用：行为信号校验（硬拦截cap），链接 bkt_engine ===
+        try:
+            from bkt_engine import behavior_sanity_check
+            behavior_sanity_check(self)
+        except Exception:
+            pass
 
 
 @dataclass(frozen=True)

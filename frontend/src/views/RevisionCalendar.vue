@@ -1,7 +1,8 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { getReviewPlans, checkinReview, getCheckinStreak } from '../api'
-import { Calendar, CheckCircle2, Clock, TrendingUp, Flame, BookOpen, Loader2 } from '@lucide/vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { getReviewPlans, checkinReview, getCheckinStreak, getCheckinHistory } from '../api'
+import { Calendar, CheckCircle2, Clock, TrendingUp, Flame, BookOpen, Loader2, XCircle, ChevronDown, Search } from '@lucide/vue'
+import * as echarts from 'echarts'
 
 const props = defineProps({ studentId: String })
 
@@ -13,10 +14,51 @@ const checkedIn = ref(false)
 const checkinDuration = ref(10)
 const selectedConcept = ref('')
 
+const conceptSearchQuery = ref('')
+const isOpen = ref(false)
+const dropdownRef = ref(null)
+const searchInputRef = ref(null)
+
+const filteredReviewPlansForSelect = computed(() => {
+  if (!conceptSearchQuery.value) return reviewPlans.value
+  const q = conceptSearchQuery.value.trim().toLowerCase()
+  return reviewPlans.value.filter(p => p.concept.toLowerCase().includes(q))
+})
+
+function selectConcept(concept) {
+  selectedConcept.value = concept
+  isOpen.value = false
+}
+
+function handleClickOutside(event) {
+  if (dropdownRef.value && !dropdownRef.value.contains(event.target)) {
+    isOpen.value = false
+  }
+}
+
+watch(isOpen, async (newVal) => {
+  if (newVal) {
+    await nextTick()
+    searchInputRef.value?.focus()
+  }
+})
+
+// Modal States
+const showModal = ref(false)
+const currentConcept = ref('')
+const historyData = ref([])
+const modalLoading = ref(false)
+const chartRef = ref(null)
+let chartInstance = null
+
+function _handleResize() {
+  chartInstance?.resize()
+}
+
 // Group by priority
 const urgentReviews = computed(() =>
   reviewPlans.value
-    .filter(p => p.mastery < 0.5 || (p.priority || 1.0) < 1.5)
+    .filter(p => (p.mastery ?? 0) < 0.5)
     .slice(0, 10)
 )
 
@@ -43,12 +85,16 @@ async function loadData() {
 }
 
 async function doCheckin() {
+  if (!selectedConcept.value) return
   checkinLoading.value = true
   try {
     const result = await checkinReview(props.studentId, selectedConcept.value, checkinDuration.value)
     checkedIn.value = true
     checkinStreak.value = result.streak || checkinStreak.value
     setTimeout(() => { checkedIn.value = false }, 3000)
+    selectedConcept.value = ''
+    conceptSearchQuery.value = ''
+    await loadData()
   } catch (e) {
     console.error('打卡失败:', e)
   } finally {
@@ -62,7 +108,110 @@ function getMasteryColor(m) {
   return 'bg-red-500'
 }
 
-onMounted(loadData)
+async function openHistoryModal(concept) {
+  currentConcept.value = concept
+  showModal.value = true
+  modalLoading.value = true
+  historyData.value = []
+  
+  try {
+    const data = await getCheckinHistory(props.studentId, concept)
+    historyData.value = Array.isArray(data) ? data : []
+    
+    await nextTick()
+    initChart()
+  } catch (e) {
+    console.error('获取打卡历史失败:', e)
+  } finally {
+    modalLoading.value = false
+  }
+}
+
+function closeModal() {
+  showModal.value = false
+  if (chartInstance) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
+  window.removeEventListener('resize', _handleResize)
+}
+
+function initChart() {
+  if (!chartRef.value || historyData.value.length === 0) return
+  if (chartInstance) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
+  chartInstance = echarts.init(chartRef.value)
+  
+  const xAxisData = historyData.value.map(log => {
+    const d = new Date(log.checkin_date)
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const date = String(d.getDate()).padStart(2, '0')
+    const hours = String(d.getHours()).padStart(2, '0')
+    const minutes = String(d.getMinutes()).padStart(2, '0')
+    return `${month}-${date} ${hours}:${minutes}`
+  })
+  
+  const yAxisData = historyData.value.map(log => log.duration_minutes)
+  
+  const option = {
+    tooltip: {
+      trigger: 'axis',
+      formatter: '{b}<br/>复习时长: <b style="color:#3b82f6">{c}</b> 分钟',
+    },
+    grid: {
+      left: '4%',
+      right: '4%',
+      bottom: '12%',
+      top: '10%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      data: xAxisData,
+      axisLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.2)' } },
+      axisLabel: { color: '#64748b', fontSize: 10, rotate: 15 }
+    },
+    yAxis: {
+      type: 'value',
+      name: '分钟',
+      nameTextStyle: { color: '#64748b', fontSize: 10 },
+      axisLine: { show: false },
+      splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.1)' } },
+      axisLabel: { color: '#64748b', fontSize: 10 }
+    },
+    series: [
+      {
+        data: yAxisData,
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 8,
+        itemStyle: { color: '#3b82f6' },
+        lineStyle: { color: '#3b82f6', width: 3 },
+        areaStyle: { color: 'rgba(59, 130, 246, 0.1)' }
+      }
+    ]
+  }
+  
+  chartInstance.setOption(option)
+  window.addEventListener('resize', _handleResize)
+}
+
+onMounted(() => {
+  loadData()
+  document.addEventListener('click', handleClickOutside)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', _handleResize)
+  if (chartInstance) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
+  document.removeEventListener('click', handleClickOutside)
+})
 </script>
 
 <template>
@@ -116,15 +265,63 @@ onMounted(loadData)
         今日打卡签到
       </h3>
       <div class="flex flex-wrap items-end gap-3">
-        <div class="flex-1 min-w-[200px]">
-          <label class="text-xs text-gray-500 mb-1 block">复习知识点（可选）</label>
-          <input
-            v-model="selectedConcept"
-            class="input text-sm"
-            placeholder="如：逻辑回归"
-          />
+        <div class="flex-1 min-w-[320px]">
+          <label class="text-xs text-gray-500 mb-1 block">搜索并选择复习计划知识点 (一次只能打卡一项)</label>
+          <div ref="dropdownRef" class="relative w-full">
+            <!-- Trigger Button -->
+            <button
+              type="button"
+              @click="isOpen = !isOpen"
+              class="input text-left flex justify-between items-center bg-white cursor-pointer select-none text-sm pr-3"
+              :class="{ 'border-blue-500 ring-2 ring-blue-100': isOpen }"
+            >
+              <span v-if="selectedConcept" class="text-gray-800 font-medium">
+                {{ selectedConcept }} (掌握度 {{ ((reviewPlans.find(p => p.concept === selectedConcept)?.mastery || 0) * 100).toFixed(0) }}%)
+              </span>
+              <span v-else class="text-gray-400">-- 请选择并搜索打卡知识点 --</span>
+              <ChevronDown :size="16" class="text-gray-400 transition-transform duration-200" :class="{ 'rotate-180': isOpen }" />
+            </button>
+
+            <!-- Dropdown Menu -->
+            <div
+              v-if="isOpen"
+              class="absolute left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-2 space-y-2 max-h-72 flex flex-col animate-in fade-in slide-in-from-top-2 duration-150"
+            >
+              <!-- Search box inside dropdown -->
+              <div class="relative">
+                <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  ref="searchInputRef"
+                  v-model="conceptSearchQuery"
+                  type="text"
+                  class="input text-sm pl-8 py-1.5 focus:border-blue-500"
+                  placeholder="输入关键字搜索知识点..."
+                  @click.stop
+                  @keydown.esc="isOpen = false"
+                />
+              </div>
+
+              <!-- Options List -->
+              <div class="overflow-y-auto flex-1 divide-y divide-gray-50 scrollbar-thin max-h-48">
+                <button
+                  v-for="plan in filteredReviewPlansForSelect"
+                  :key="plan.concept"
+                  type="button"
+                  class="w-full text-left px-3 py-2.5 text-sm rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors flex items-center justify-between"
+                  :class="{ 'bg-blue-50 text-blue-600 font-medium': selectedConcept === plan.concept }"
+                  @click="selectConcept(plan.concept)"
+                >
+                  <span>{{ plan.concept }}</span>
+                  <span class="text-xs text-gray-400 font-normal">掌握度 {{ ((plan.mastery || 0) * 100).toFixed(0) }}%</span>
+                </button>
+                <div v-if="filteredReviewPlansForSelect.length === 0" class="text-center py-6 text-xs text-gray-400">
+                  未找到匹配的知识点
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="w-32">
+        <div class="w-32 shrink-0">
           <label class="text-xs text-gray-500 mb-1 block">复习时长（分钟）</label>
           <input
             v-model.number="checkinDuration"
@@ -135,8 +332,8 @@ onMounted(loadData)
           />
         </div>
         <button
-          class="btn btn-primary text-sm"
-          :disabled="checkinLoading || checkedIn"
+          class="btn btn-primary text-sm shrink-0"
+          :disabled="checkinLoading || checkedIn || !selectedConcept"
           @click="doCheckin"
         >
           <Loader2 v-if="checkinLoading" :size="14" class="animate-spin" />
@@ -173,7 +370,8 @@ onMounted(loadData)
           <div
             v-for="plan in urgentReviews"
             :key="plan.id || plan.concept"
-            class="card flex items-center gap-4"
+            class="card flex items-center gap-4 cursor-pointer hover:border-blue-300 hover:shadow-sm active:scale-[0.99] transition-all"
+            @click="openHistoryModal(plan.concept)"
           >
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
@@ -207,7 +405,8 @@ onMounted(loadData)
           <div
             v-for="plan in upcomingReviews"
             :key="plan.id || plan.concept"
-            class="card flex items-center gap-4"
+            class="card flex items-center gap-4 cursor-pointer hover:border-blue-300 hover:shadow-sm active:scale-[0.99] transition-all"
+            @click="openHistoryModal(plan.concept)"
           >
             <div class="flex-1 min-w-0">
               <p class="text-sm font-medium text-gray-800">{{ plan.concept }}</p>
@@ -226,6 +425,89 @@ onMounted(loadData)
               </p>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- History Modal -->
+    <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+      <div class="bg-white rounded-2xl w-full max-w-2xl shadow-xl border border-slate-100 flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        <!-- Modal Header -->
+        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0">
+          <div class="flex items-center gap-2">
+            <TrendingUp :size="18" class="text-blue-500" />
+            <h3 class="text-sm font-semibold text-slate-800">
+              <span class="text-blue-600">[{{ currentConcept }}]</span> 复习历史打卡曲线
+            </h3>
+          </div>
+          <button @click="closeModal" class="text-slate-400 hover:text-slate-600 transition-colors p-1 hover:bg-slate-50 rounded-lg">
+            <XCircle :size="20" />
+          </button>
+        </div>
+
+        <!-- Modal Body -->
+        <div class="p-6 space-y-4 overflow-y-auto flex-1">
+          <!-- Chart Container -->
+          <div class="relative bg-slate-50/50 rounded-xl border border-slate-100 p-4">
+            <h4 class="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1.5">
+              <Clock :size="12" />
+              <span>复习时长趋势图 (分钟)</span>
+            </h4>
+            <div ref="chartRef" class="w-full h-64 min-h-[250px]" />
+            <!-- Loading overlay inside chart -->
+            <div v-if="modalLoading" class="absolute inset-0 bg-white/60 flex items-center justify-center">
+              <Loader2 :size="24" class="text-blue-500 animate-spin" />
+            </div>
+            <!-- Empty state inside chart -->
+            <div v-else-if="historyData.length === 0" class="absolute inset-0 bg-slate-50/50 flex flex-col items-center justify-center text-slate-400 text-xs p-4 text-center">
+              <Flame :size="24" class="text-slate-300 mb-2 animate-pulse" />
+              <span>暂无该知识点的复习打卡时长记录</span>
+              <span class="text-[10px] text-slate-400 mt-0.5">今天打卡签到此概念后即可在此显示</span>
+            </div>
+          </div>
+
+          <!-- History Logs List -->
+          <div>
+            <h4 class="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1.5">
+              <Calendar :size="14" class="text-slate-500" />
+              <span>详细打卡记录</span>
+            </h4>
+            
+            <div v-if="modalLoading" class="flex items-center justify-center py-8">
+              <Loader2 :size="20" class="text-blue-500 animate-spin" />
+              <span class="ml-2 text-xs text-slate-400">加载打卡日志...</span>
+            </div>
+            
+            <div v-else-if="historyData.length === 0" class="card text-center py-6 border-dashed bg-slate-50/30 text-slate-400 text-xs">
+              暂无打卡日志
+            </div>
+            
+            <div v-else class="border border-slate-100 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto">
+              <table class="w-full border-collapse text-left text-xs">
+                <thead>
+                  <tr class="bg-slate-50 border-b border-slate-100 text-slate-500 font-semibold">
+                    <th class="px-4 py-2">打卡日期 (UTC)</th>
+                    <th class="px-4 py-2 text-right">复习时长 (分钟)</th>
+                    <th class="px-4 py-2">所关联的复习概念</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-50 text-slate-700">
+                  <tr v-for="log in historyData" :key="log.id" class="hover:bg-slate-50/50 transition-colors">
+                    <td class="px-4 py-2">{{ new Date(log.checkin_date).toLocaleString() }}</td>
+                    <td class="px-4 py-2 text-right font-medium text-blue-600">{{ log.duration_minutes }} 分钟</td>
+                    <td class="px-4 py-2 text-slate-500 truncate max-w-[200px]" :title="log.concepts_reviewed.join(', ')">
+                      {{ log.concepts_reviewed.join(', ') }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="px-6 py-3 border-t border-slate-100 bg-slate-50 flex justify-end shrink-0">
+          <button @click="closeModal" class="btn btn-outline text-xs py-1.5 px-4">关闭</button>
         </div>
       </div>
     </div>

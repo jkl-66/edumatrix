@@ -96,6 +96,8 @@ class DBStudentProfile(Base):
     target_course = Column(String(128), default="机器学习导论")
     knowledge_base = Column(String(64), default="初级")
     cognitive_style = Column(String(128), default="视觉+代码导向")
+    motivation_type = Column(String(64), default="未诊断")
+    frustration_index = Column(Float, default=0.0)
     focus_level = Column(Float, default=0.72)
     cognitive_load = Column(Float, default=0.45)
     
@@ -111,6 +113,7 @@ class DBStudentProfile(Base):
     learning_state_causes = Column(JSON, default=dict)   # 原因占比 Breakdown
     
     history_logs = Column(Text, default="")              # 提问历史（以换行符或JSON数组隔开）
+    narrative_report = Column(Text, default="")          # 📬 缓存的 StoryLensEdu 叙事学情成长信笺
     last_updated = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     # 扩充物理字段 (Task 6.2)
@@ -118,6 +121,7 @@ class DBStudentProfile(Base):
     favorites = Column(JSON, default=list)
     knowledge_traces = Column(JSON, default=dict)
     profile_evidence = Column(JSON, default=list)
+    customized_fields = Column(JSON, default=list)  # 用户手动设定的不可篡改字段列表
 
     # 级联删除配置关系 (Task 6.2)
     alignment_logs = relationship("DBAlignmentLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
@@ -138,6 +142,8 @@ class DBUser(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(64), unique=True, index=True, nullable=False) # 通常与 student_id 一致
     hashed_password = Column(String(128), nullable=False)
+    role = Column(String(16), default="student")  # "student" 或 "teacher"
+    display_name = Column(String(64), default="")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=_utcnow)
 
@@ -328,6 +334,40 @@ class DBArxivCache(Base):
 # 物理并网：自动创建所有本地 SQLite 数据库表
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # 增量迁移：为新添加的列做兼容
+    _migrate_schema()
+
+def _migrate_schema():
+    """SQLite 增量迁移：添加新列（如存在则跳过）"""
+    import sqlalchemy as sa
+    inspector = sa.inspect(engine)
+    columns = [c["name"] for c in inspector.get_columns("users")]
+    if "role" not in columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE users ADD COLUMN role VARCHAR(16) DEFAULT 'student'"))
+            conn.commit()
+    if "display_name" not in columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE users ADD COLUMN display_name VARCHAR(64) DEFAULT ''"))
+            conn.commit()
+            
+    profile_columns = [c["name"] for c in inspector.get_columns("student_profiles")]
+    if "narrative_report" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN narrative_report TEXT DEFAULT ''"))
+            conn.commit()
+    if "motivation_type" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN motivation_type VARCHAR(64) DEFAULT '未诊断'"))
+            conn.commit()
+    if "frustration_index" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN frustration_index FLOAT DEFAULT 0.0"))
+            conn.commit()
+    if "customized_fields" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN customized_fields TEXT DEFAULT '[]'"))
+            conn.commit()
 
 def get_db():
     db = SessionLocal()

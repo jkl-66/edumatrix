@@ -26,6 +26,12 @@ class EduMatrixConfig:
     llm_max_tokens: int = int(os.getenv("EDUMATRIX_LLM_MAX_TOKENS", "4096"))
     llm_timeout: int = int(os.getenv("EDUMATRIX_LLM_TIMEOUT", "120"))
 
+    # Configs for fallback multimodal LLM
+    multimodal_llm_provider: str = os.getenv("EDUMATRIX_MULTIMODAL_LLM_PROVIDER", "")
+    multimodal_llm_endpoint: str = os.getenv("EDUMATRIX_MULTIMODAL_LLM_ENDPOINT", "")
+    multimodal_llm_api_key: str = os.getenv("EDUMATRIX_MULTIMODAL_LLM_API_KEY", "")
+    multimodal_llm_model: str = os.getenv("EDUMATRIX_MULTIMODAL_LLM_MODEL", "")
+
     retrieval_top_k: int = int(os.getenv("EDUMATRIX_TOP_K", "6"))
     debate_min_score: float = float(os.getenv("EDUMATRIX_DEBATE_MIN_SCORE", "0.42"))
     alignment_threshold: float = float(os.getenv("EDUMATRIX_ALIGNMENT_THRESHOLD", "0.65"))
@@ -63,6 +69,10 @@ class EduMatrixConfig:
     auth_secret_key: str = os.getenv("EDUMATRIX_AUTH_SECRET_KEY", "edumatrix_super_secret_v1_2026")
     auth_algorithm: str = os.getenv("EDUMATRIX_AUTH_ALGORITHM", "HS256")
     auth_access_token_expire_minutes: int = int(os.getenv("EDUMATRIX_AUTH_TOKEN_EXPIRE_MINS", "1440")) # Default 24 hours
+
+    # Sandbox Settings
+    sandbox_timeout: float = float(os.getenv("EDUMATRIX_SANDBOX_TIMEOUT", "10.0"))
+
 
 
 CONFIG = EduMatrixConfig()

@@ -32,10 +32,10 @@ class AgentSpec:
 
 
 AGENT_MATRIX: tuple[AgentSpec, ...] = (
-    AgentSpec("tutor", "苏格拉底导师", "Interaction Hub", "唯一前台入口、意图识别、Handoff 路由"),
     AgentSpec("profile", "画像探针", "Cognitive Governance", "自然语言抽取 10 维动态画像、证据、置信度与不会原因占比"),
     AgentSpec("planner", "路径规划师", "Cognitive Governance", "基于 GraphRAG 与 ZPD 规划学习路径"),
     AgentSpec("evaluator", "量化评估师", "Cognitive Governance", "回收题目、沙盒、学生反馈与画像状态，触发重规划"),
+    AgentSpec("router", "教学路由", "Interaction Hub", "FSM 自适应模式路由、意图分发、Handoff"),
     AgentSpec("theory", "理论教授", "Resource Factory", "生成证据驱动专业讲义"),
     AgentSpec("mapper", "逻辑画师", "Resource Factory", "生成 Mermaid 思维导图"),
     AgentSpec("coder", "极客助教", "Resource Factory", "生成可运行代码实操案例"),
@@ -57,18 +57,22 @@ def _build_conversation_memory(profile: StudentProfile, max_turns: int = 6) -> s
 
 # 口语指代消解知识库：模糊指代 -> 可能映射的核心知识点前缀
 _COREFERENCE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    # 仅保留真正的模糊指代代词 —— 这些应该被替换为具体概念名
     "这个": ("逻辑回归", "池化层", "卷积核", "反向传播", "梯度下降", "Transformer",
              "线性回归", "决策树", "支持向量机", "过拟合", "正则化"),
     "这类": ("逻辑回归", "池化层", "卷积核", "反向传播", "梯度下降",
              "分类算法", "回归算法", "优化方法"),
     "这个代码": ("PyTorch", "TensorFlow", "代码实操", "编程实现"),
     "这个公式": ("链式法则", "梯度下降", "损失函数", "激活函数", "Softmax"),
+    "这个图": ("特征图", "计算图", "网络结构图"),
+}
+
+# 查询意图关键词 —— 不替换原文，仅用于辅助推断关联概念
+_QUERY_INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "怎么算": ("梯度下降", "反向传播", "链式法则", "卷积运算", "池化计算"),
     "怎么用": ("逻辑回归", "线性回归", "决策树", "支持向量机"),
     "为什么": ("反向传播", "梯度下降", "过拟合", "损失函数"),
     "应用场景": ("逻辑回归", "决策树", "支持向量机", "卷积神经网络"),
-    "它的": (),
-    "这个图": ("特征图", "计算图", "网络结构图"),
     "梯度下降这类": ("梯度下降", "优化算法", "SGD", "Adam"),
 }
 
@@ -90,7 +94,8 @@ def _resolve_coreference(
     """
     resolved = message
 
-    # 策略1：基于关键词知识库的直接替换
+    # 策略1：基于模糊指代关键词的替换
+    # 仅替换真正的指代代词，不替换查询意图关键词
     for fuzzy_phrase, targets in _COREFERENCE_KEYWORDS.items():
         if fuzzy_phrase in resolved:
             # 在已有的知识点中查找最可能的匹配
@@ -107,9 +112,15 @@ def _resolve_coreference(
     # 策略2：对独立的模糊代词 "它" "这个" "这类" 进行上下文推断
     # 从历史上下文中提取最后3个提及的知识点
     history_concepts = [c for c in existing_concepts if c.lower() in history_context.lower()]
+    if not history_concepts and existing_concepts:
+        # 兜底：如果滑动窗口中由于垃圾词或者长度被挤压没有提取出任何概念，
+        # 则直接使用用户画像中最近更新/学习的那个概念（即列表末尾元素）作为代词替换指代目标。
+        history_concepts = [existing_concepts[-1]]
+
     for pronoun in ("它", "这个", "这类"):
         # 仅当代词以独立词出现时才替换（非嵌入在其他词中）
-        pattern = re.compile(rf'(?<!\w){pronoun}(?!\w)')
+        # 使用 re.ASCII 确保 \w 仅匹配 [a-zA-Z0-9_]，不匹配中文
+        pattern = re.compile(rf'(?<!\w){pronoun}(?!\w)', re.ASCII)
         if pattern.search(resolved) and history_concepts:
             # 用最近提及的知识点替换
             resolved = pattern.sub(history_concepts[-1], resolved, count=1)
@@ -312,8 +323,10 @@ class ZPDPlannerAgent:
             project_to_ball,
         )
 
-        # 确定目标知识点
-        target = self._infer_target(profile)
+        # 确定目标知识点 (优先提取查询中的显式知识点，无显式指定时再fallback到画像诊断薄弱项)
+        target = self._extract_concept_from_query(query)
+        if not target:
+            target = self._infer_target(profile)
 
         # Step 1: 使用 BKT 引擎获取掌握度
         bkt = _get_bkt_engine()
@@ -367,6 +380,21 @@ class ZPDPlannerAgent:
 
     def get_path_plan(self) -> dict | None:
         return self._last_path_plan
+
+    def _extract_concept_from_query(self, query: str) -> str | None:
+        if not query:
+            return None
+        cleaned = query.strip()
+        # 1. 精确匹配
+        for concept in DEFAULT_KNOWLEDGE_DAG.keys():
+            if cleaned == concept:
+                return concept
+        # 2. 从长到短子串匹配，防止如“神经网络”被“卷积神经网络”遮蔽
+        sorted_concepts = sorted(DEFAULT_KNOWLEDGE_DAG.keys(), key=len, reverse=True)
+        for concept in sorted_concepts:
+            if concept in cleaned:
+                return concept
+        return None
 
     def _infer_target(self, profile: StudentProfile) -> str | None:
         if "最大池化与平均池化混淆" in profile.misconception_patterns:
@@ -583,43 +611,112 @@ class SwarmMediationRouter:
 
 
 class EffectEvaluatorAgent:
-    def evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
-        profile_causes = profile.learning_state_causes
+    """量化评估师 — 使用 LLM 评估资源包质量，触发重规划决策。
 
+    之前版本使用硬编码公式（cause_penalty + resource_coverage），
+    现在改为调用 LLM 做真实语义评估，传入学生画像和生成资源。
+    """
+
+    def __init__(self, llm: AsyncLLMBackend | None = None):
+        self._llm = llm
+
+    async def evaluate_async(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        if self._llm is not None and hasattr(self._llm, 'generate'):
+            try:
+                return await self._async_llm_evaluate(profile, resources)
+            except Exception:
+                pass
+        return self._fallback_evaluate(profile, resources)
+
+    def evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        if self._llm is not None and hasattr(self._llm, 'generate'):
+            try:
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                
+                if loop and loop.is_running():
+                    return self._fallback_evaluate(profile, resources)
+                else:
+                    return asyncio.run(self.evaluate_async(profile, resources))
+            except Exception:
+                pass
+        return self._fallback_evaluate(profile, resources)
+
+    def _llm_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        return self.evaluate(profile, resources)
+
+    async def _async_llm_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        prompt = (
+            "你是 EduMatrix 的量化评估师。根据以下信息评估资源包的质量和学生的学习效果。\n"
+            "请严格以JSON格式返回，字段如下：\n"
+            "{\n"
+            '  "accuracy": 0.0~1.0,       // 资源覆盖知识点的准确度\n'
+            '  "completeness": 0.0~1.0,   // 资源覆盖的完整度（是否包含讲义/代码/练习等）\n'
+            '  "depth_match": 0.0~1.0,    // 讲解深度是否匹配学生的掌握度\n'
+            '  "needs_replan": true/false // 是否需要重新规划学习路径\n'
+            "}\n"
+            "评估规则：\n"
+            "- 掌握度低且资源过深 → needs_replan=true\n"
+            "- 资源类型覆盖不足（缺代码/缺练习）→ completeness 降低\n"
+            "- 资源准确无幻觉 → accuracy 高"
+        )
+        user = (
+            f"学生画像：{profile.profile_prompt()}\n"
+            f"掌握度：{dict(profile.concept_mastery)}\n"
+            f"认知负荷：{profile.cognitive_load:.2f}\n"
+            f"挫败感：{profile.frustration_index:.2f}\n"
+            f"生成的资源({len(resources)}个)：\n"
+        )
+        for r in resources:
+            user += f"  [{r.agent}] {r.resource_type}: {r.content[:100]}...\n"
+
+        try:
+            content = await self._llm.generate(prompt, user, role="量化评估师")
+            import json
+            result = json.loads(content)
+            accuracy = max(0.0, min(1.0, float(result.get("accuracy", 0.7))))
+            needs_replan = bool(result.get("needs_replan", False))
+            sandbox_error_rate = 0.42
+            has_code = any(r.resource_type == "代码实操案例" for r in resources)
+            if has_code and profile.cognitive_load < 0.6:
+                sandbox_error_rate = 0.18
+            elif has_code:
+                sandbox_error_rate = 0.30
+            return LearningSignal(
+                accuracy=accuracy,
+                dwell_seconds=420,
+                sandbox_error_rate=sandbox_error_rate,
+            )
+        except Exception:
+            return self._fallback_evaluate(profile, resources)
+
+    def _fallback_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+        """回退：硬编码公式版。"""
+        profile_causes = profile.learning_state_causes
         cause_penalty = 0.0
         for key in ("prerequisite_gap", "misconception", "cognitive_load", "strategy_gap"):
             cause = profile_causes.get(key)
             if cause is not None:
                 cause_penalty += cause.percentage / 100 * 0.04
-
         has_code = any(r.resource_type == "代码实操案例" for r in resources)
         has_quiz = any(r.resource_type == "练习题" for r in resources)
         has_theory = any(r.resource_type == "专业讲义" for r in resources)
         has_mermaid = any(r.resource_type == "思维导图" for r in resources)
-
         resource_coverage = sum([has_code, has_quiz, has_theory, has_mermaid]) / 4.0
-
-        accuracy = 0.78
-        accuracy -= cause_penalty
-        accuracy += resource_coverage * 0.08
+        accuracy = 0.78 - cause_penalty + resource_coverage * 0.08
         accuracy += 0.04 if resource_coverage >= 0.75 else 0.0
         accuracy -= max(0.0, profile.cognitive_load - 0.5) * 0.12
-
         sandbox_error_rate = 0.42
         if has_code and profile.cognitive_load < 0.6:
             sandbox_error_rate = 0.18
         elif has_code:
             sandbox_error_rate = 0.30
-
-        dwell_seconds = 420
-        if profile.cognitive_style and "视觉" in profile.cognitive_style:
-            dwell_seconds = 480
-        if has_code or has_quiz:
-            dwell_seconds += 60
-
         return LearningSignal(
             accuracy=max(0.0, min(1.0, accuracy)),
-            dwell_seconds=dwell_seconds,
+            dwell_seconds=420,
             sandbox_error_rate=sandbox_error_rate,
         )
 
@@ -923,20 +1020,91 @@ class EduMatrixSwarm:
         self.rag = rag
         self.profile_store = profile_store if profile_store is not None else {}
         use_llm = llm if llm is not None else DEFAULT_ASYNC_LLM
+        self.llm = use_llm
         self.profile_probe = ProfileProbeAgent(use_llm)
         self.planner = ZPDPlannerAgent()
         self.debate = DebateAugmentedRAG()
         self.async_generator = AsyncInstructRAGGenerator(use_llm)
         self.factory = AsyncResourceFactory(self.async_generator)
         self.alignment = ManifoldAlignmentVerifier()
-        self.evaluator = EffectEvaluatorAgent()
+        self.evaluator = EffectEvaluatorAgent(use_llm)
         self.strategy_engine = LearningStrategyEngine()
         # 任务 7.3: 多门控自适应 FSM 路由器
         self.mediation_router = SwarmMediationRouter()
 
+    async def _check_academic_intent(self, message: str) -> dict[str, Any]:
+        """使用大语言模型快速分类学生输入的意图是学术学习相关，还是闲聊/无关内容。"""
+        system_prompt = (
+            "你是一个意图分类器。你需要判断用户输入的问题是否与学术学习、机器学习、数据科学、数学、人工智能、编程、计算机科学或此教学系统的使用说明相关。\n"
+            "如果输入仅仅是打招呼（如“你好”、“hello”），但在后续可能引发学术问题，也可以归为学术，但如果是纯粹的个人情况提问、系统无关闲聊（如“你是谁啊”、“你是谁”、“吃了吗”、“今天天气”、“给我讲个笑话”），请判定为非学术 (is_academic: false)。\n"
+            "回答必须是 JSON 格式：\n"
+            "{\n"
+            "  \"is_academic\": true 或 false,\n"
+            "  \"reason\": \"分类的理由简述\",\n"
+            "  \"reply\": \"如果 is_academic 为 false，请在此处提供一个友好的、引导学生回到学术学习范围的回复（Markdown格式，必须以 '## 智能答疑 / 系统说明\\n\\n' 开头）；如果为 true，此项为空串\"\n"
+            "}\n"
+            "引导回复示例：\n"
+            "\"## 智能答疑 / 系统说明\\n\\n您好！我是 EduMatrix 智能自适应助教。我专注于为您解答机器学习、深度学习、数据科学等学术与编程问题，并辅助您的学习进度。建议您向我提问相关的专业内容，例如：‘什么是梯度下降？’。\"\n"
+            "请严格遵循 JSON 格式返回，不要有任何 Markdown 包裹符之外的其他解释文本。"
+        )
+        user_prompt = f"用户输入: \"{message}\""
+        try:
+            response_text = await self.llm.generate(system_prompt, user_prompt, role="意图分类")
+            clean_text = response_text.strip()
+            if clean_text.startswith("```"):
+                lines = clean_text.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                clean_text = "\n".join(lines).strip()
+            import json
+            return json.loads(clean_text)
+        except Exception:
+            return {"is_academic": True, "reason": "分类器异常放行", "reply": ""}
+
     async def async_process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
         with timed_span(TELEMETRY, "swarm.process", student_id=student_id):
             profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
+
+            # === 意图分类与防闲聊拦截 ===
+            classification = await self._check_academic_intent(user_input)
+            if not classification.get("is_academic", True):
+                from models import AlignmentReport, LearningSignal
+                reply = classification.get("reply") or "## 智能答疑 / 系统说明\n\n您好！我是 EduMatrix 智能自适应助教。我目前专注于为您解答机器学习和数据科学等学术问题，请提出与学习相关的疑问，谢谢！"
+                resources = (
+                    AgentOutput(
+                        agent="Coordinator",
+                        resource_type="专业讲义",
+                        content=reply,
+                        citations=(),
+                        private_rationale="日常沟通/学习无关拦截",
+                    ),
+                )
+                alignment_report = AlignmentReport(
+                    passed=True,
+                    distance=0.0,
+                    threshold=0.65,
+                    conflicts=[],
+                    advice="非学术沟通拦截",
+                )
+                learning_signal = LearningSignal(
+                    accuracy=1.0,
+                    needs_replan=False,
+                    error_message="",
+                    grading_details={},
+                )
+                return ResourcePackage(
+                    student_id=student_id,
+                    target="系统沟通",
+                    profile=profile,
+                    retrieval=None,
+                    verdicts=(),
+                    resources=resources,
+                    alignment=alignment_report,
+                    learning_signal=learning_signal,
+                    strategy_plan=[],
+                )
 
             # === 任务 7.2: 应用 Ebbinghaus 遗忘衰减 ===
             from bkt_engine import EbbinghausDecayEngine, behavior_sanity_check
@@ -996,7 +1164,7 @@ class EduMatrixSwarm:
                     conflicts=[],
                     advice="低置信度自动拦截",
                 )
-                learning_signal = self.evaluator.evaluate(profile, resources)
+                learning_signal = await self.evaluator.evaluate_async(profile, resources)
                 TELEMETRY.record_metric("learning.estimated_accuracy", learning_signal.accuracy, target=retrieval.target)
                 if learning_signal.needs_replan:
                     profile.cognitive_load = min(1.0, profile.cognitive_load + 0.08)
@@ -1116,7 +1284,7 @@ class EduMatrixSwarm:
                 resources = tuple(new_resources)
 
             assert alignment_report is not None
-            learning_signal = self.evaluator.evaluate(profile, resources)
+            learning_signal = await self.evaluator.evaluate_async(profile, resources)
             TELEMETRY.record_metric("learning.estimated_accuracy", learning_signal.accuracy, target=retrieval.target)
             if learning_signal.needs_replan:
                 profile.cognitive_load = min(1.0, profile.cognitive_load + 0.08)
@@ -1155,3 +1323,31 @@ class EduMatrixSwarm:
                 return future.result()
         else:
             return loop.run_until_complete(self.async_process(user_input, student_id=student_id))
+
+
+def render_console_summary(package: ResourcePackage) -> str:
+    kept = [verdict.evidence_id for verdict in package.verdicts if verdict.keep] if package.verdicts else []
+    resource_lines = "\n".join(
+        f"- {resource.agent} / {resource.resource_type}: {resource.content[:88].replace(chr(10), ' ')}..."
+        for resource in package.resources
+    )
+    strategy_lines = ""
+    if package.strategy_plan and hasattr(package.strategy_plan, "actions"):
+        strategy_lines = "\n".join(
+            f"- {action.title}: {action.description}"
+            for action in package.strategy_plan.actions
+        )
+    learning_path = " -> ".join(package.retrieval.graph_context.learning_path) if (package.retrieval and package.retrieval.graph_context) else "无"
+    
+    return (
+        f"目标知识点: {package.target}\n"
+        f"学习路径: {learning_path}\n"
+        f"{package.profile.state_report()}\n"
+        f"学习策略引擎:\n{strategy_lines or '- 暂无额外策略'}\n"
+        f"DRAG保留证据: {', '.join(kept) if kept else '无'}\n"
+        f"流形对齐: {'通过' if package.alignment.passed else '失败'} "
+        f"(distance={package.alignment.distance:.3f}, threshold={package.alignment.threshold:.3f})\n"
+        f"量化评估: accuracy={package.learning_signal.accuracy:.2f}, "
+        f"sandbox_error_rate={package.learning_signal.sandbox_error_rate:.2f}\n"
+        f"资源包:\n{resource_lines}"
+    )

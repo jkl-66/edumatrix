@@ -56,7 +56,14 @@ const ALPHA = 0.25
 function getXfConfig() {
   try {
     const raw = localStorage.getItem('edumatrix_llm_config')
-    if (raw) return JSON.parse(raw)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      return {
+        xfAppId: (parsed.xfAppId || '').trim(),
+        xfApiKey: (parsed.xfApiKey || '').trim(),
+        xfApiSecret: (parsed.xfApiSecret || '').trim()
+      }
+    }
   } catch {}
   return {}
 }
@@ -88,7 +95,7 @@ async function getWebsocketUrl() {
   const authOrigin = `api_key="${apiKey}", algorithm="hmac-sha256", headers="host date request-line", signature="${signature}"`
   const authorization = btoa(authOrigin)
 
-  return `${url}?authorization=${authorization}&date=${encodeURIComponent(date)}&host=${host}`
+  return `${url}?authorization=${encodeURIComponent(authorization)}&date=${encodeURIComponent(date)}&host=${host}`
 }
 
 // --- Audio Playback Engine (Task 5.1: ScriptProcessor) ---
@@ -159,10 +166,44 @@ function pcm16ToFloat32(base64) {
   return float32Buffer
 }
 
+function cleanTextForSpeech(text) {
+  if (!text) return ''
+  let clean = text
+    .replace(/<svg[\s\S]*?<\/svg>/gi, '')
+    .replace(/<plot[\s\S]*?<\/plot>/gi, '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`[^`\n]+`/g, '')
+    .replace(/\$\$[\s\S]*?\$\$/g, '[公式]')
+    .replace(/\$([^$\n]+?)\$/g, (_, math) => {
+      return math
+        .replace(/\\alpha/g, '阿尔法')
+        .replace(/\\beta/g, '贝塔')
+        .replace(/\\sigma/g, '西格玛')
+        .replace(/\\theta/g, '西塔')
+        .replace(/\\lambda/g, '兰布达')
+        .replace(/\\partial/g, '偏导')
+        .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '$1的估计值')
+        .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '$2分之$1')
+        .replace(/\\cdot/g, '点')
+        .replace(/\\times/g, '乘')
+        .replace(/\\sum/g, '求和')
+        .replace(/\\infty/g, '无穷大')
+        .replace(/\\/g, '')
+        .replace(/[{}]/g, '')
+    })
+    .replace(/#+\s+/g, '')
+    .replace(/[*_~]+/g, '')
+    .replace(/<[^>]+>/g, '')
+  return clean.trim()
+}
+
 async function startTTS(text) {
   if (!text) return
+  const cleanedText = cleanTextForSpeech(text)
+  if (!cleanedText) return
   isLoading.value = true
   isSpeaking.value = true
+  isPaused.value = false
   audioStack = []
   
   initAudio()
@@ -181,14 +222,14 @@ async function startTTS(text) {
           sfl: 1,
           tte: 'UTF8',
           vcn: 'xiaoyan',
-          speed: _getEmpatheticSpeed(text),
+          speed: _getEmpatheticSpeed(cleanedText),
           volume: 50,
           pitch: 50,
           bgs: 0
         },
         data: {
           status: 2,
-          text: btoa(unescape(encodeURIComponent(_getEmpatheticPrefix(text))))
+          text: btoa(unescape(encodeURIComponent(_getEmpatheticPrefix(cleanedText))))
         }
       }
       ws.send(JSON.stringify(params))
@@ -198,6 +239,8 @@ async function startTTS(text) {
       const res = JSON.parse(e.data)
       if (res.code !== 0) {
         console.error('TTS Error:', res.message)
+        isLoading.value = false
+        isSpeaking.value = false
         ws.close()
         return
       }
@@ -290,6 +333,36 @@ function draw() {
   requestAnimationFrame(draw)
 }
 
+const isPaused = ref(false)
+
+function pauseTTS() {
+  if (audioContext && audioContext.state === 'running') {
+    audioContext.suspend()
+    isPaused.value = true
+  }
+}
+
+function resumeTTS() {
+  if (audioContext && audioContext.state === 'suspended') {
+    audioContext.resume()
+    isPaused.value = false
+  }
+}
+
+function stopTTS() {
+  isSpeaking.value = false
+  isPaused.value = false
+  audioStack = []
+  if (audioContext) {
+    try {
+      audioContext.close()
+    } catch (e) {}
+    audioContext = null
+    analyser = null
+    scriptNode = null
+  }
+}
+
 function toggleMute() {
   isMuted.value = !isMuted.value
   if (audioContext) {
@@ -303,10 +376,22 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (audioContext) audioContext.close()
+  if (audioContext) {
+    try {
+      audioContext.close()
+    } catch (e) {}
+  }
 })
 
-defineExpose({ speak: startTTS })
+defineExpose({
+  speak: startTTS,
+  pause: pauseTTS,
+  resume: resumeTTS,
+  stop: stopTTS,
+  isSpeaking,
+  isPaused,
+  isLoading,
+})
 </script>
 
 <template>

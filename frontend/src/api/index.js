@@ -327,6 +327,22 @@ export async function getCheckinStreak(studentId) {
   return r.data
 }
 
+// === 本地动画 API ===
+export async function getLocalAnimations(knowledgePoint) {
+  const r = await api.get(`/v1/animations/for/${encodeURIComponent(knowledgePoint)}`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function searchLocalAnimations(query) {
+  const r = await api.get(`/v1/animations/search?query=${encodeURIComponent(query)}`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function listAllAnimations() {
+  const r = await api.get('/v1/animations/list', { headers: buildHeaders() })
+  return r.data
+}
+
 // --- Anki Flashcard API ---
 export async function generateFlashcard(studentId, quizId = '') {
   const r = await api.post('/flashcard/generate', {
@@ -362,4 +378,3 @@ export async function generateSimilarQuiz(studentId, sourceQuizId, concept = '')
   }, { headers: buildHeaders() })
   return r.data
 }
-

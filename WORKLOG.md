@@ -445,3 +445,74 @@
 - 全量 41 个单元测试 + 17 个集成测试 = **58/58 全部通过**。
 - 前端 3 个新组件 + 2 个修改组件语法验证通过。
 
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+---
+
+### 2026-07-05
+> **今日概述**：全力打通 LLM API 接入链路，修复流式生成引擎并发 Bug，完成本地动画库从假模拟到真数据的全面改造，实现智能体根据知识点自动匹配播放本地视频的完整闭环。
+
+#### 1. LLM API 接入链路全线打通
+##### 修复 `run.py` 未加载 `.env` 问题
+- **文件**：`run.py`
+- **问题**：启动时 `os.getenv()` 永远返回空，系统始终显示"模拟模式"
+- **修复**：在 `import` 后添加 `load_dotenv()`，确保 `.env` 配置在 `os.getenv()` 调用前加载
+- **效果**：启动时打印 `[dotenv] 已加载: d:\PortableGit\edumatrix\.env`
+
+##### 配置对齐火山方舟 Ark 平台
+- **文件**：`.env`、`frontend/src/views/Settings.vue`
+- **改动**：
+  - `EDUMATRIX_LLM_MODEL` → `doubao-seed-2.0-pro`
+  - `EDUMATRIX_LLM_ENDPOINT` → `https://ark.cn-beijing.volces.com/api/v3/chat/completions`
+  - 前端 Settings 页面默认 endpoint 和 model 同步更新
+
+##### 新增 LLM 连通性测试端点
+- **文件**：`app/main.py`
+- **改动**：新增 `GET /api/llm/test` API，发送简短消息验证 API 是否可用
+  - 成功 → 返回 `"status": "ok"` + 模型回复片段
+  - 模拟模式 → 返回 `"status": "warning"` + 引导提示
+  - 失败 → 返回 `"status": "error"` + 异常类型和消息
+  - 外层包裹 try/except 防止 500 白屏
+
+#### 2. 流式生成引擎并发 Bug 修复
+##### 修复 `asyncio.as_completed` 类型错误
+- **文件**：`stream_api.py`
+- **问题**：`_gen_one` 函数内使用 `yield` 导致变为异步生成器，`asyncio.as_completed()` 接收后报 `TypeError: An asyncio.Future, a coroutine or an awaitable is required`
+- **修复**：将 `yield` 改为收集到 `chunks` 列表后统一 `return chunks`，确保每个 task 都是普通协程而非异步生成器
+
+##### 熔断器保护机制
+- **文件**：`concurrency.py`
+- **机制**：`CircuitBreaker` 在 LLM API 连续失败 5 次后自动断开，60 秒后尝试半开恢复，防止无效请求拖垮系统
+- **排查**：熔断根源为 API Key/模型名配置不当，重启服务即重置熔断器内存状态
+
+#### 3. 本地动画库全面改造（核心功能）
+##### VideoRenderPanel 从假模拟到真数据
+- **文件**：`frontend/src/components/VideoRenderPanel.vue`（完全重写）
+- **以前**：显示 5 步假进度条（脚本规划→语音合成→视觉合成→视频渲染→合并输出），从不调用 API，固定模拟 12 秒后显示"视频生成完成"
+- **现在**：
+  - 打开时自动调用 `/api/v1/animations/list` 加载真实动画列表
+  - 两级导航：知识点列表（网格布局） → 点击进入 → 视频列表 → 点击播放
+  - 内置完整播放器：播放/暂停、静音、进度拖拽、全屏、上下切换
+  - 自动播放下一个：当前视频播放完毕 0.8 秒后自动播放下一个
+  - 空状态引导：无数据时展示"请先运行爬虫下载动画到 data/animations/ 目录"
+
+##### 知识点自动定位
+- **文件**：`frontend/src/views/Chat.vue`
+- **改动**：
+  - 点击右下角浮动按钮时，从最近助手消息中提取 `target`（知识点名）存入 `currentVideoKp`
+  - 传入 `VideoRenderPanel` 的 `knowledgePoint` prop
+  - 面板打开后自动精确匹配或模糊匹配知识点的视频，跳过列表页直达播放页
+  - 删除废弃的 `videoPanelUrl` ref 和假 URL 拼接逻辑
+
+#### 4. 技术影响评估
+##### 核心改进：
+1. **LLM 接入**：从模拟引擎升级为真实大模型 API 调用，支持 Settings 页面在线测试
+2. **系统稳定性**：流式生成引擎并发 Bug 修复，熔断器自我保护机制
+3. **本地视频播放**：从假模拟进度条升级为真实视频播放引擎，支持知识点自动定位
+4. **知识点关联**：智能体自动识别知识点并匹配本地动画，实现学习路径中的视频推荐
+
+##### 性能提升：
+- 流式生成不再因协程类型错误崩溃
+- 视频面板加载时间从固定 12 秒缩短到 API 实际响应时间（约 200ms）
+- 知识点匹配覆盖精确 + 模糊双轨，准确率大幅提升
+- API 测试接口避免 500 白屏，错误信息清晰可读

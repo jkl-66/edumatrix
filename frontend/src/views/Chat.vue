@@ -5,13 +5,14 @@ import {
   generateQuiz, evaluateQuizAnswer, adaptQuiz,
   webSearch, loadUrl,
   runCode, getStudentProfile,
+  getLocalAnimations,
 } from '../api'
 import {
   Send, Bot, User, Loader2, BookOpen, Code2, LayoutGrid, HelpCircle, Video,
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles,
-  RotateCcw, Download, FileText, Maximize2, Minimize2,
+  RotateCcw, Download, FileText, Maximize2, Minimize2, Film,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
 import SandboxConsole from '../components/SandboxConsole.vue'
@@ -21,6 +22,7 @@ import AvatarSpeech from '../components/AvatarSpeech.vue'
 import AgentTimeline from '../components/AgentTimeline.vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
+import LocalVideoPlayer from '../components/LocalVideoPlayer.vue'
 
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
@@ -71,6 +73,19 @@ watch(messages, (newMsgs, oldMsgs) => {
       
       avatarRef.value.speak(cleanText)
     }
+    // 自动检测知识点并预加载本地动画
+    if (lastMsg.role === 'assistant' && lastMsg.target && !lastMsg.error) {
+      const idx = newMsgs.length - 1
+      if (!localVideoAttached.value.has(idx)) {
+        localVideoAttached.value.add(idx)
+        getLocalAnimations(lastMsg.target).then(data => {
+          if (data.videos?.length > 0) {
+            lastMsg._localVideos = data.videos
+            lastMsg._localVideoKp = data.knowledge_point || lastMsg.target
+          }
+        }).catch(() => {})
+      }
+    }
   }
 }, { deep: true })
 
@@ -94,12 +109,51 @@ const showSandbox = ref(false)
 
 // 任务 8.5: 视频渲染面板状态
 const showVideoPanel = ref(false)
-const videoPanelUrl = ref('')
+const currentVideoKp = ref('')
 function toggleVideoPanel() {
   showVideoPanel.value = !showVideoPanel.value
   if (showVideoPanel.value) {
-    videoPanelUrl.value = '/api/v1/video/stream?student_id=' + props.studentId + '&t=' + Date.now()
+    // 从最近的消息中提取当前知识点
+    const msgs = messages.value
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]
+      if (m.role === 'assistant' && m.target) {
+        currentVideoKp.value = m.target
+        return
+      }
+    }
+    currentVideoKp.value = ''
   }
+}
+
+// 本地动画播放器状态
+const showLocalVideo = ref(false)
+const localVideos = ref([])
+const localVideoKnowledgePoint = ref('')
+const localVideosLoading = ref(false)
+const localVideoAttached = ref(new Set()) // 已附加动画按钮的消息索引
+const inlineVideoIndex = ref(-1) // 内嵌视频播放的资源索引
+
+async function loadLocalAnimations(knowledgePoint) {
+  localVideosLoading.value = true
+  localVideoKnowledgePoint.value = knowledgePoint
+  try {
+    const data = await getLocalAnimations(knowledgePoint)
+    localVideos.value = data.videos || []
+    if (localVideos.value.length > 0) {
+      showLocalVideo.value = true
+    }
+  } catch (e) {
+    console.error('加载本地动画失败:', e)
+    localVideos.value = []
+  } finally {
+    localVideosLoading.value = false
+  }
+}
+
+function openLocalVideo(knowledgePoint) {
+  localVideoKnowledgePoint.value = knowledgePoint
+  loadLocalAnimations(knowledgePoint)
 }
 
 // --- Quiz State ---
@@ -553,6 +607,15 @@ async function doLoadUrl() {
                       <span class="text-[9px] text-gray-300">💡 点击代码块/公式可即时答疑</span>
                     </div>
                     <div class="prose prose-sm max-w-none text-sm whitespace-pre-wrap">{{ msg.content }}</div>
+                    <!-- 本地动画播放按钮 -->
+                    <div v-if="msg._localVideos?.length" class="mt-3 pt-2 border-t border-gray-100">
+                      <button
+                        class="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg text-sm font-medium hover:from-blue-600 hover:to-purple-700 transition-all shadow-sm"
+                        @click="openLocalVideo(msg._localVideoKp || msg.target)"
+                      >
+                        <Film :size="16" /> 播放本地动画 ({{ msg._localVideos.length }} 个视频)
+                      </button>
+                    </div>
                   </div>
 
                   <!-- 任务 8.3: 资源卡片 + 局部重生成按钮 -->
@@ -580,7 +643,46 @@ async function doLoadUrl() {
                         </div>
                       </div>
                       <div v-if="showResources.has(ri)" class="px-3 py-2 border-t border-gray-100 bg-gray-50/50">
-                        <p class="text-xs text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">{{ res.content.slice(0, 1000) }}{{ res.content.length > 1000 ? '...' : '' }}</p>
+                        <!-- 虚拟导演卡片：显示本地视频 -->
+                        <div v-if="res.agent === '虚拟导演' && msg._localVideos?.length" class="space-y-2">
+                          <div class="flex items-center gap-2 text-xs text-gray-500">
+                            <Film :size="14" class="text-blue-500" />
+                            <span>本地动画 · {{ msg._localVideoKp || msg.target }}</span>
+                            <span class="text-gray-300">|</span>
+                            <span>{{ msg._localVideos.length }} 个视频</span>
+                          </div>
+                          <!-- 视频列表 -->
+                          <div class="grid gap-2">
+                            <div v-for="(v, vi) in msg._localVideos.slice(0, 3)" :key="vi"
+                              class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                              <div class="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
+                                <span class="text-xs text-gray-600 truncate flex-1">{{ v.filename }}</span>
+                                <span class="text-[10px] text-gray-400 ml-2">{{ (v.size / 1024 / 1024).toFixed(1) }}MB</span>
+                              </div>
+                              <div v-if="inlineVideoIndex === ri + '_' + vi" class="bg-black">
+                                <video
+                                  :src="v.url"
+                                  class="w-full"
+                                  style="max-height: 300px"
+                                  controls
+                                  autoplay
+                                  @ended="inlineVideoIndex = -1"
+                                />
+                              </div>
+                              <div v-else class="p-2">
+                                <button
+                                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                                  @click="inlineVideoIndex = ri + '_' + vi"
+                                >
+                                  <Play :size="12" /> 播放
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                          <p class="text-[10px] text-gray-400 mt-1">视频脚本：{{ res.content.slice(0, 200) }}{{ res.content.length > 200 ? '...' : '' }}</p>
+                        </div>
+                        <!-- 普通资源卡片：显示文本 -->
+                        <p v-else class="text-xs text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">{{ res.content.slice(0, 1000) }}{{ res.content.length > 1000 ? '...' : '' }}</p>
                       </div>
                     </div>
                   </div>
@@ -966,16 +1068,21 @@ async function doLoadUrl() {
     <button
       v-if="activeTab === 'chat'"
       class="fixed bottom-24 right-6 z-40 w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center"
-      :title="showVideoPanel ? '关闭视频面板' : '生成讲解视频'"
+      :title="showVideoPanel ? '关闭视频面板' : '本地动画库'"
       @click="toggleVideoPanel"
     >
-      <Video :size="20" />
+      <Film :size="20" />
     </button>
     <VideoRenderPanel
       :visible="showVideoPanel"
-      :videoUrl="videoPanelUrl"
       :studentId="props.studentId"
+      :knowledgePoint="currentVideoKp"
       @close="showVideoPanel = false" />
+    <LocalVideoPlayer
+      :visible="showLocalVideo"
+      :videos="localVideos"
+      :knowledgePoint="localVideoKnowledgePoint"
+      @close="showLocalVideo = false" />
   </div>
 </template>
 

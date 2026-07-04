@@ -18,7 +18,7 @@ try:
     cursor.execute("ALTER TABLE student_profiles ADD COLUMN favorites TEXT DEFAULT '[]'")
     print("Added 'favorites' column")
     
-    # 添加 knowledge_traces 列
+    # 添加 knowledge_traces· 列
     cursor.execute("ALTER TABLE student_profiles ADD COLUMN knowledge_traces TEXT DEFAULT '{}'")
     print("Added 'knowledge_traces' column")
     

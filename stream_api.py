@@ -143,7 +143,8 @@ async def stream_chat(request: Request) -> StreamingResponse:
             streamed_parts = []
             completed = 0
 
-            async def _gen_one(role: str, rtype: str):
+            async def _gen_one(role: str, rtype: str) -> list:
+                chunks = []
                 nonlocal completed
                 try:
                     coro = swarm.async_generator.generate(
@@ -163,17 +164,18 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     
                     streamed_parts.append(result)
                     completed += 1
-                    yield _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10})
+                    chunks.append(_sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10}))
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
                     completed += 1
-                    yield _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10, "error": str(e)[:80]})
+                    chunks.append(_sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10, "error": str(e)[:80]}))
+                return chunks
 
             tasks = [_gen_one(role, rt) for role, rt in agent_jobs]
-            for task in asyncio.as_completed(tasks):
+            for coro in asyncio.as_completed(tasks):
                 await check_disconnection()
-                async for chunk in await task:
+                for chunk in await coro:
                     await check_disconnection()
                     yield chunk
 

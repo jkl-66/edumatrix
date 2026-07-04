@@ -1,9 +1,12 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { Settings, Save, Key, Globe, Cpu, Thermometer, Eye, EyeOff, CheckCircle2, Sparkles } from '@lucide/vue'
+import { Settings, Save, Key, Globe, Cpu, Thermometer, Eye, EyeOff, CheckCircle2, Sparkles, AlertTriangle, Loader2, Zap } from '@lucide/vue'
+import axios from 'axios'
 
 const showKey = ref(false)
 const saved = ref(false)
+const testing = ref(false)
+const testResult = ref(null)
 
 // 任务 9.2: 教学风格与致谢墙
 const teachingStyle = ref(localStorage.getItem('edumatrix_teaching_style') || 'socratic')
@@ -33,8 +36,8 @@ function saveTeachingStyle() {
 
 const config = ref({
   apiKey: '',
-  endpoint: 'https://windhub.cc/v1/chat/completions',
-  model: 'doubao-1-5-pro-32k-250115',
+  endpoint: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+  model: 'doubao-seed-2.0-pro',
   temperature: 0.3,
   maxTokens: 4096,
   xfAppId: '',
@@ -70,6 +73,27 @@ function save() {
 function clearKey() {
   config.value.apiKey = ''
   save()
+}
+
+async function testConnection() {
+  testing.value = true
+  testResult.value = null
+  try {
+    const headers = {}
+    if (config.value.apiKey) headers['X-EduMatrix-Api-Key'] = config.value.apiKey
+    if (config.value.endpoint) headers['X-EduMatrix-Endpoint'] = config.value.endpoint
+    if (config.value.model) headers['X-EduMatrix-Model'] = config.value.model
+
+    const r = await axios.get('/api/llm/test', { headers, timeout: 30000 })
+    testResult.value = r.data
+  } catch (e) {
+    testResult.value = {
+      status: 'error',
+      message: `请求失败: ${e.message || '网络错误'}`,
+    }
+  } finally {
+    testing.value = false
+  }
 }
 
 onMounted(load)
@@ -177,11 +201,28 @@ onMounted(load)
         </div>
       </div>
 
-      <div class="pt-2">
-        <button class="btn btn-primary w-full justify-center" @click="save">
+      <div class="pt-2 flex gap-2">
+        <button class="btn btn-primary flex-1 justify-center" @click="save">
           <Save :size="16" />
           保存配置
         </button>
+        <button class="btn btn-outline flex-1 justify-center" :disabled="testing" @click="testConnection">
+          <Loader2 v-if="testing" :size="16" class="animate-spin" />
+          <Zap v-else :size="16" />
+          测试连接
+        </button>
+      </div>
+
+      <!-- 测试结果 -->
+      <div v-if="testResult" class="mt-3 p-3 rounded-lg text-xs" :class="testResult.status === 'ok' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : testResult.status === 'warning' ? 'bg-yellow-50 text-yellow-700 border border-yellow-200' : 'bg-red-50 text-red-700 border border-red-200'">
+        <div class="flex items-center gap-1.5 mb-1">
+          <CheckCircle2 v-if="testResult.status === 'ok'" :size="14" />
+          <AlertTriangle v-else :size="14" />
+          <span class="font-medium">{{ testResult.message }}</span>
+        </div>
+        <div v-if="testResult.hint" class="text-gray-500 mt-1">{{ testResult.hint }}</div>
+        <div v-if="testResult.response" class="text-gray-500 mt-1 truncate">回复: {{ testResult.response }}</div>
+        <div v-if="testResult.endpoint" class="text-gray-400 mt-1">端点: {{ testResult.endpoint }} / {{ testResult.model }}</div>
       </div>
     </div>
 

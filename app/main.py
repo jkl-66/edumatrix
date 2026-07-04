@@ -37,6 +37,7 @@ from web_search_api import router as web_search_router
 from code_exec_api import router as code_exec_router
 from profile_api import router as profile_router
 from stream_api import router as stream_router
+from animation_api import router as animation_router
 from flashcard_api import router as flashcard_router
 from behavior_api import router as behavior_router
 from report_api import router as report_router
@@ -367,6 +368,7 @@ app.include_router(web_search_router)
 app.include_router(code_exec_router)
 app.include_router(profile_router)
 app.include_router(stream_router)
+app.include_router(animation_router)
 app.include_router(flashcard_router)
 app.include_router(behavior_router)
 app.include_router(report_router)
@@ -390,6 +392,48 @@ async def health_check(request: Request):
         "concurrent_llm": CONFIG.max_concurrent_llm,
         "rate_limit_rpm": CONFIG.llm_rate_limit_rpm,
     }
+
+
+@app.get("/api/llm/test")
+async def test_llm_connection(request: Request):
+    """测试 LLM 连通性：发送一条简短消息验证 API 是否可用"""
+    from llm_client import build_async_llm
+    from swarm_factory import build_swarm_from_headers
+
+    swarm_obj = build_swarm_from_headers(request.headers)
+    llm = swarm_obj.llm
+
+    llm_type = type(llm).__name__
+    if "Deterministic" in llm_type:
+        return {
+            "status": "warning",
+            "message": "当前使用模拟引擎（DeterministicEducationLLM），未接入真实大模型",
+            "hint": "请在 .env 中设置 EDUMATRIX_LLM_API_KEY 或在浏览器 Settings 页面配置 API Key",
+            "llm_type": llm_type,
+        }
+
+    try:
+        result = await llm.generate(
+            "你是一个教学助手，请用一句话简短回答。",
+            "请回复：API连接测试成功",
+            role="测试"
+        )
+        return {
+            "status": "ok",
+            "message": "LLM 连通性测试成功",
+            "llm_type": llm_type,
+            "response": result[:200],
+            "endpoint": CONFIG.llm_endpoint,
+            "model": CONFIG.llm_model,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"LLM 调用失败: {str(e)}",
+            "llm_type": llm_type,
+            "endpoint": CONFIG.llm_endpoint,
+            "model": CONFIG.llm_model,
+        }
 
 
 @app.get("/api/metrics")

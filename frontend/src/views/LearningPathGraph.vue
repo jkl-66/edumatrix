@@ -67,6 +67,16 @@ function goLearn(concept) {
   router.push({ path: '/learn', query: { q: concept } })
 }
 
+function goQuiz(concept) {
+  if (isTeacher.value) return
+  router.push({ path: '/learn', query: { quiz: concept } })
+}
+
+function goNotes(concept) {
+  if (isTeacher.value) return
+  router.push({ path: '/notes', query: { search: concept } })
+}
+
 function goAnalysis() {
   router.push({ path: '/student-analysis', query: { student_id: studentId.value } })
 }
@@ -211,8 +221,8 @@ onMounted(async () => {
           </div>
           <div v-if="!isTeacher" class="flex gap-2 mt-2">
             <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition-all" @click.stop="goLearn(n.concept)">开始学习</button>
-            <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 transition-all">🎯 生成练习题</button>
-            <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-all">📝 生成笔记</button>
+            <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 transition-all" @click.stop="goQuiz(n.concept)">🎯 生成练习题</button>
+            <button class="px-3 py-1 text-[9px] font-semibold rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-all" @click.stop="goNotes(n.concept)">📝 查看笔记</button>
           </div>
         </div>
       </div>

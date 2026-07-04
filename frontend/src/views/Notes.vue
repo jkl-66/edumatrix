@@ -6,7 +6,7 @@ import {
 } from '../api'
 import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 import { useQuizStore } from '../stores/quiz'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import {
   StickyNote, Plus, Trash2, Tag, Clock, Search, Edit3, Eye, Sparkles, BookOpen,
   Calendar, Download, ArrowRight, Loader2, ChevronRight, X, AlertCircle, HelpCircle, Check, RotateCw
@@ -15,6 +15,7 @@ import {
 const props = defineProps({ studentId: String })
 const quizStore = useQuizStore()
 const router = useRouter()
+const route = useRoute()
 
 const notes = ref([])
 const reviewPlans = ref([])
@@ -621,6 +622,11 @@ function forceRefreshDiagrams() {
 }
 
 onMounted(async () => {
+  if (route.query.search) {
+    searchQuery.value = route.query.search
+  } else if (route.query.q) {
+    searchQuery.value = route.query.q
+  }
   await load()
   renderAllDiagrams()
 })

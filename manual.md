@@ -7,7 +7,7 @@ EduMatrix 面向“中国软件杯”A3 教育智能体赛道，采用 **1+3+5 S
 本仓库已经实现一套离线可运行的工程骨架：
 
 - `app/main.py`：FastAPI 后端总挂载入口，初始化连接池、注册全局中间件并统一引入路由。
-- `stream_api.py` / `profile_api.py` / `quiz_api.py` / `report_api.py` 等：以独立路由形式提供高并发 SSE 流式输出、画像动态更新、自适应评测（CAT）以及 PDF 报告导出接口。
+- `stream_api.py` / `profile_api.py` / `quiz_api.py` / `report_api.py` / `animation_api.py` 等：以独立路由形式提供高并发 SSE 流式输出、画像动态更新、自适应评测（CAT）、PDF 报告导出以及本地动画 Range 分片推流服务。
 - `concurrency.py`：系统高可用限流熔断与异步线程工作池控制器。
 - `rag_engine.py`：GraphRAG 知识边界召回 + VisRAG 图像切片/文本证据混合检索。
 - `drag_debate.py`：正方、反方、法官三角色证据清洗，剔除低相关或矛盾证据。
@@ -17,9 +17,11 @@ EduMatrix 面向“中国软件杯”A3 教育智能体赛道，采用 **1+3+5 S
 - `models.py`：证据驱动动态学生画像，声明式 ORM 与内存状态双轨并网，支持 10 维画像、不会原因占比与情感计算。
 - `llm_client.py`：科大讯飞星火 WebSocket 适配器与离线 deterministic fallback。
 - `bkt_engine.py` / `anki_engine.py`：Bayesian Knowledge Tracing (BKT) 掌握度估计引擎、Ebbinghaus 记忆遗忘衰减模型与 SM2 算法排程闪卡管理器。
+- `app/utils/rl_planner.py` / `app/utils/recommendation_engine.py`：强化学习自适应路由调度决策器与五维资源战术编译器，支持破冰/实操/防忘/探究/跨界五大战术路线。
 - `code_exec_api.py`：独立子进程安全隔离代码沙箱，限制 CPU 与内存防逃逸。
 - `note_engine.py` / `learning_strategy.py`：智能笔记与错题反思提炼引擎，自适应 ZPD 教学策略规划器。
 - `document_parser.py` / `ingestion.py`：多模态课件文档解析器（PDF/docx/txt/LaTeX）与 GraphRAG 拓扑图谱索引入库管道。
+- `frontend/src/api/animations.js`：本地动画视频 Range 分片推流前端 API 适配。
 - `observability.py`：智能体执行链路可观测性遥测系统（Trace, Metrics）。
 - `swarm_orchestrator.py` / `run.py`：服务启动入口与命令行测试/仿真调度器。
 
@@ -248,16 +250,28 @@ EduMatrix 已把“对话式学习画像”落到 `models.py` 和 `agent_swarm.p
 
 占比不是装饰性指标，而是直接改变教学动作：误概念占比高则优先做最大池化/平均池化反例辨析；认知负荷高则先列题目条件清单；策略不足则减少直接给答案，改成提示阶梯和检索练习；元认知失准则每题前后做信心校准。
 
-**4. 随学随新**
+**4. 随学随新与多轮对话记忆**
 
-画像更新分两条入口：
+*   **自适应画像更新入口**：
+    - `update_from_message(message)`：处理自然语言对话，隐式抽取学生专业背景、学习目标、困惑概念、反馈偏好和焦虑/挫败情绪。
+    - `update_from_feedback(feedback, accuracy, self_confidence, hint_count)`：处理学习后的真实反馈与答题结果，定量更新掌握度、策略缺口和元认知校准。
+    - 当 `EffectEvaluatorAgent` 检测到答题正确率低或沙盒错误率高时，系统会把重规划信号写回画像，使下一轮资源生成自动降级或补充前置概念。
+*   **滑窗多轮对话上下文记忆系统**：
+    - 在 [stream_api.py](stream_api.py) 中持久化维护对话历史，并在用户提交后续请求时通过滑窗策略保留最近多轮上下文，送入统一 LLM 提示词进行渲染。
+    - 结合 `_resolve_coreference` 算法对“它、这个、为什么是这样”等指代不明口语进行消解自愈，支持连续深度追问，打破“单轮对话无记忆”瓶颈。
 
-- `update_from_message(message)`：处理自然语言对话，适合抽取学生专业、目标、困惑、反馈、偏好和情绪。
-- `update_from_feedback(feedback, accuracy, self_confidence, hint_count)`：处理学习后的真实反馈，适合更新掌握度、策略缺口和元认知校准。
+**5. 学情报告双轨分流生成（温情叙事 vs 理性诊断）**
 
-当 `EffectEvaluatorAgent` 检测到正确率低或沙盒错误率高时，系统会把重规划信号写回画像，使下一轮资源生成自动降低难度、补前置或加强诊断。
+为了适配不同页面的阅读语境，画像探针在画像更新时会同时触发双轨报告并行生成（采用 `asyncio.gather` 异步并发以优化响应耗时）：
+- **温暖鼓励的成长信笺（供学习画像页使用）**：
+  - 调用 `Storyteller Agent`，用温和体贴的语气肯定进度，并将掌握度与不会原因通过比喻形式（如“种子的萌发”、“地基的加固”、“背包精简行李”）轻柔道出，侧重于心理疏导与主动建构引导。
+  - 数据持久化在 `student_profiles.narrative_report` 字段中。
+- **严肃理性的诊断报告（供首页仪表盘使用）**：
+  - 调用 `Dashboard Agent`，字数精炼（250-350字），采用客观、中立、科学的学术诊断口吻，详细解释学情状态背后的成因与策略推导。
+  - 🚫**核心防污染规范**：通过正则表达式彻底剔除特殊表情/图标符号，清洗掉多余的段落空行，排版极其清爽好看。
+  - 数据持久化在 `student_profiles.dashboard_report` 字段中。
 
-**5. 画像进入生成链路**
+**6. 画像进入生成链路**
 
 `InstructRAGGenerator._build_plan()` 已把 `profile.profile_prompt()` 和 `profile.state_report()` 注入每个资源 Agent 的提示词。理论教授、逻辑画师、极客助教、考官智能体和虚拟导演不再只拿到 RAG 证据，还会拿到学生当前 10 维画像、不会原因占比、证据片段和推荐干预。因此同一个“池化层”主题会根据学生状态改变输出：
 
@@ -268,9 +282,35 @@ EduMatrix 已把“对话式学习画像”落到 `models.py` 和 `agent_swarm.p
 - 元认知失准高：每道题加入自评和题后校准。
 - 情绪阻滞高：降低首题难度，反馈只指向任务和下一步。
 
-**6. 学生可解释输出**
+**7. 学生可解释输出**
 
 `render_console_summary()` 会在资源包前展示 `profile.state_report()`，包括每个维度的分数、置信度、证据数量、证据片段，以及不会原因占比。这保证系统不仅“悄悄个性化”，还可以向学生和教师解释：为什么现在先补这个知识点，为什么这一轮不是直接给答案，为什么安排反例题或复习题。
+
+**8. 强化学习自适应资源调度决策 (Q-Learning)**
+
+传统的自适应引擎通常依赖纯规则（如：若掌握度低则推送讲义，若掌握度高则推送测验），但这难以适应学生复杂的实时动态心理状态变化。因此，本系统设计并实现了基于强化学习 Q-Learning 的自适应资源推荐算法：
+- **状态空间离散化 (State Space)**：将连续的三维动态指标进行离散化编码：
+  - 掌握度 $P(\text{Mastery})$：划分为 LOW ($<0.35$)、MID ($[0.35, 0.75]$)、HIGH ($>0.75$)。
+  - 认知负荷 $L_{\text{cognitive}}$：划分为 HIGH ($\ge 0.6$)、NORMAL ($<0.6$)。
+  - 挫败度 $F_{\text{frustration}}$：划分为 HIGH ($\ge 0.4$)、LOW ($<0.4$)。
+  这产生 12 种典型心智学情状态组合，构成了 Q-table 的行键。
+- **动作空间 (Action Space)**：包含 5 大物理教学动作，即 `ACTIONS = ["lecture", "mindmap", "code", "quiz", "video"]`。
+- **即时奖励计算 (Reward Function)**：综合评估学习效益与心智消耗：
+  $$R = (\text{mastery}_{\text{after}} - \text{mastery}_{\text{before}}) \times 100 + \text{quiz\_bonus} - (5.0 \times \text{frustration} + 2.0 \times \text{load})$$
+  当答题正确时，`quiz_bonus` 为 $+10$；答错时为 $-10$；闲聊或非评测交互时为 $0$。该公式平衡了“能力增长”与“情绪保护/负荷过载”之间的冲突，惩罚导致学生感到高度挫败或工作记忆过载的推荐动作。
+- **Q值时序更新与探索**：采用 Epsilon-Greedy 决策策略，以 $15\%$ 的探索概率进行随机动作探索，以 $85\%$ 的概率极可能选择 Q 矩阵中当前状态价值最高的动作类型。当所有动作价值均为 $0$ 时（冷启动），自动平滑回退至基于认知风格的静态启发式规则。
+
+**9. 战术大纲编译器与五维自适应资源矩阵**
+
+系统首创 **五维自适应资源矩阵** 视图（在 `Dashboard.vue` 和 `app/utils/recommendation_engine.py` 中实现），对任意核心概念（如池化层），均备齐了“讲义、思维导图、代码案例、练习题、视频脚本” 5 类资源：
+- **个性化大纲修饰器**：根据学生的专业背景与心理状态，对资源的大纲进行针对性修饰。例如，若检测到学生为计算机科学专业，代码案例大纲会自动标记“代码采用规范工程级写法”；若学生挫败感高于 0.7，讲义大纲会自动追加“融入通俗比喻以降低负荷”。
+- **战术生成路线 (Tactical Pathways)**：支持 5 大战术路线的一键切换与后台实时重编译：
+  1. **破冰路线 (ICE_BREAKER)**：重点梳理前置依赖概念，降低讲解梯度。
+  2. **实操路线 (PRACTITIONER)**：以完整的、带详细注释的算法代码演示为主，以干代讲。
+  3. **探究路线 (EXPLORER)**：采用严密数理逻辑，大量运用 LaTeX 进行推导，侧重学术深度。
+  4. **防忘路线 (RESCUE)**：使用 `[!WARNING]` 或 `[!CAUTION]` 在醒目位置标注核心易错混淆区，并提供抗遗忘口诀。
+  5. **跨界路线 (FUSION)**：引入跨学科关联和多领域应用场景。
+- **状态联动与本册持久化**：卡片与数据库中的 `DBNote` 状态实时联通。对于尚未生成的资源卡片，点击触发特定 Agent 进行后台并发流式生成，生成后写入 `DBNote`，将卡片状态标记为“已就绪”，实现真正的学情沉淀。
 
 ## 5. 本地运行
 
@@ -306,6 +346,8 @@ python -m unittest discover -s . -p "test_*.py" -v
 - **垃圾词与指代自愈**：测试口语指代消解在“这这那那”等垃圾词打断和历史长上下文下的自愈还原能力。
 - **自适应 ZPD 路径规划**：验证 BKT 状态下的 ZPD 教学档位判定、前置知识回滚计划以及二档路由（SIMPLIFIED/ADVANCED）降级分流。
 - **高可用与沙箱安全**：测试熔断器（CircuitBreaker）状态扭转，以及代码沙箱（SandboxRunner）在运行超时或恶意循环下的资源限制硬截断。
+- **强化学习自适应调度**：测试 Q-Learning 离散状态转换（get_state_key）、复合即时奖励（calculate_reward）计算、Q 矩阵的时序增量 TD 更新以及与画像库的持久化集成。
+- **五维资源战术编译器**：验证在破冰/实操/防忘/探究/跨界五大不同战术路线下，推荐算法能够生成包含定制指导词的个性化大纲，并与 `DBNote` 完成已就绪/待生成状态的闭环同步。
 - **高并发 PDF 与前端集成**：验证后台 BrowserPool 资源复用生命周期，以及前端 stores、致谢墙、Anki 闪卡、数字人嘴形滤波等核心组件的结构与字段一致性。
 
 ## 6. 生产部署升级路径

@@ -31,7 +31,10 @@ export async function updateStudentProfile(studentId, data) {
   return r.data
 }
 
-export async function getRecommendations(studentId) {
-  const r = await api.get(`/profile/${studentId}/recommendations`, { headers: buildHeaders() })
+export async function getRecommendations(studentId, concept = null, pathway = null) {
+  const params = {}
+  if (concept) params.concept = concept
+  if (pathway) params.pathway = pathway
+  const r = await api.get(`/profile/${studentId}/recommendations`, { params, headers: buildHeaders() })
   return r.data
 }

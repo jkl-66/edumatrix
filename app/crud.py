@@ -64,7 +64,10 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 profile.major = db_profile.major or ""
                 profile.favorites = list(db_profile.favorites or [])
                 profile.narrative_report = db_profile.narrative_report or ""
+                profile.dashboard_report = getattr(db_profile, "dashboard_report", "") or ""
                 profile.customized_fields = list(db_profile.customized_fields or [])
+                profile.rl_q_table = dict(getattr(db_profile, "rl_q_table", {}) or {})
+                profile.mental_state_history = list(getattr(db_profile, "mental_state_history", []) or [])
                 return profile
         return profile
 
@@ -93,7 +96,10 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
     profile.major = db_profile.major or ""
     profile.favorites = list(db_profile.favorites or [])
     profile.narrative_report = db_profile.narrative_report or ""
+    profile.dashboard_report = getattr(db_profile, "dashboard_report", "") or ""
     profile.customized_fields = list(db_profile.customized_fields or [])
+    profile.rl_q_table = dict(getattr(db_profile, "rl_q_table", {}) or {})
+    profile.mental_state_history = list(getattr(db_profile, "mental_state_history", []) or [])
     
     if db_profile.knowledge_traces:
         for k, v in db_profile.knowledge_traces.items():
@@ -176,9 +182,12 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     db_profile.major = profile.major
     db_profile.favorites = to_dict_safe(profile.favorites)
     db_profile.narrative_report = profile.narrative_report
+    db_profile.dashboard_report = profile.dashboard_report
     db_profile.knowledge_traces = to_dict_safe(profile.knowledge_traces)
     db_profile.profile_evidence = to_dict_safe(profile.profile_evidence)
     db_profile.customized_fields = to_dict_safe(profile.customized_fields)
+    db_profile.rl_q_table = to_dict_safe(profile.rl_q_table)
+    db_profile.mental_state_history = to_dict_safe(profile.mental_state_history)
     
     db_profile.dimension_states = to_dict_safe(profile.dimension_states)
     db_profile.learning_state_causes = to_dict_safe(profile.learning_state_causes)

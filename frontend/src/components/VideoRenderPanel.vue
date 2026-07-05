@@ -1,12 +1,7 @@
 <script setup>
-<<<<<<< HEAD
 import { ref, watch, computed } from 'vue'
 import { Video, Loader2, Play, Pause, Maximize2, Minimize2, Volume2, VolumeX, Film, ChevronLeft, ChevronRight, FolderOpen } from '@lucide/vue'
 import { listAllAnimations } from '../api'
-=======
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import { Video, Loader2, Play, Maximize2, Minimize2, Volume2, VolumeX } from '@lucide/vue'
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -32,6 +27,8 @@ const isFullscreen = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
 
+const isComplete = ref(false)
+
 const currentVideos = computed(() => {
   if (!selectedKp.value) return []
   return allAnimations.value[selectedKp.value] || []
@@ -48,6 +45,7 @@ watch(() => props.visible, async (val) => {
     selectedKp.value = ''
     selectedVideoIdx.value = 0
     isPlaying.value = false
+    isComplete.value = false
     loading.value = true
     error.value = ''
     try {
@@ -82,17 +80,20 @@ function selectKnowledgePoint(kp) {
   selectedKp.value = kp
   selectedVideoIdx.value = 0
   isPlaying.value = false
+  isComplete.value = false
 }
 
 function backToList() {
   selectedKp.value = ''
   selectedVideoIdx.value = 0
   isPlaying.value = false
+  isComplete.value = false
 }
 
 function selectVideo(idx) {
   selectedVideoIdx.value = idx
   isPlaying.value = false
+  isComplete.value = false
 }
 
 function togglePlay() {
@@ -129,6 +130,8 @@ function onTimeUpdate() {
 
 function onVideoEnded() {
   isPlaying.value = false
+  isComplete.value = true
+  emit('complete')
   if (selectedVideoIdx.value < currentVideos.value.length - 1) {
     setTimeout(() => {
       selectVideo(selectedVideoIdx.value + 1)
@@ -155,24 +158,11 @@ function formatTime(s) {
   return `${m}:${sec.toString().padStart(2, '0')}`
 }
 
-<<<<<<< HEAD
 function formatSize(bytes) {
   if (!bytes) return ''
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
-=======
-watch(() => props.visible, (newVal) => {
-  if (newVal) {
-    steps.forEach(s => s.status.value = 'pending')
-    simulateRender()
-  }
-})
-
-onUnmounted(() => {
-  // cleanup
-})
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
 </script>
 
 <template>

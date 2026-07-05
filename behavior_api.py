@@ -96,6 +96,15 @@ async def upload_behavior_logs(
 
     profile = load_student_profile(db, student_id)
 
+    # === Q-learning: 记录更新前的状态 ===
+    concept = payload.get("concept", "通用概念")
+    old_mastery = profile.concept_mastery.get(concept, 0.45)
+    old_load = profile.cognitive_load
+    old_frustration = profile.frustration_index
+    
+    from app.utils.rl_planner import QLearningPathPlanner
+    state_before = QLearningPathPlanner.get_state_key(old_mastery, old_load, old_frustration)
+
     # Step 1: 认知负荷滑动更新
     cognitive_new = _update_cognitive_load(profile, actual_stay, sandbox_errors)
     profile.cognitive_load = cognitive_new
@@ -129,6 +138,31 @@ async def upload_behavior_logs(
                     ],
                 )
             )
+            
+    # === Q-learning: 记录更新后的状态 ===
+    new_mastery = profile.concept_mastery.get(concept, 0.45)
+    new_load = profile.cognitive_load
+    new_frustration = profile.frustration_index
+    state_after = QLearningPathPlanner.get_state_key(new_mastery, new_load, new_frustration)
+    
+    action = payload.get("action", "lecture")
+    if action in ["lecture", "mindmap", "code", "quiz", "video"]:
+        # 对于阅读/交互行为，如果停留时间足够长（例如大于等于 15s），就是正向收益；如果短且有沙盒报错，就是负向收益
+        correct = (actual_stay >= 15.0 and sandbox_errors == 0)
+        reward = QLearningPathPlanner.calculate_reward(
+            old_mastery=old_mastery,
+            new_mastery=new_mastery,
+            correct=correct,
+            frustration=new_frustration,
+            load=new_load
+        )
+        QLearningPathPlanner.update_q_value(
+            profile=profile,
+            state_before=state_before,
+            action=action,
+            state_after=state_after,
+            reward=reward
+        )
 
     # Step 4: 持久化
     save_student_profile(db, profile)

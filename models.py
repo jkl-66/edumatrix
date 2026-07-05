@@ -310,7 +310,10 @@ class StudentProfile:
     metacognitive_mismatch: float = 0.0  # 元认知偏差指标 0~1
     last_update_timestamp: str = field(default_factory=_utc_now)  # 画像最后更新时间（用于遗忘衰减）
     narrative_report: str = ""  # 📬 缓存的 StoryLensEdu 叙事学情成长信笺
+    dashboard_report: str = ""  # 📊 缓存的仪表盘全局学情分析报告
     bkt_states: dict[str, dict] = field(default_factory=dict)  # BKT 状态快照: concept -> {p_mastered, history...}
+    rl_q_table: dict[str, dict[str, float]] = field(default_factory=dict)
+    mental_state_history: list[dict[str, Any]] = field(default_factory=list)
 
     # === 替换 models.py 中的 add_favorite 方法 ===
     def add_favorite(self, target: str, resource_type: str, content: str, note: str = "", fav_id: str = "") -> None:
@@ -432,6 +435,7 @@ class StudentProfile:
         self._update_legacy_fields(feedback)
         self._refresh_dynamic_profile()
         self.narrative_report = ""  # 清空 StoryLensEdu 缓存以便下一次生成最新的信笺
+        self.dashboard_report = ""  # 清空仪表盘全局学情分析缓存
 
     def apply_llm_features(self, payload: dict[str, Any], *, source_text: str) -> None:
         if not payload:
@@ -520,6 +524,7 @@ class StudentProfile:
                     
         self._refresh_dynamic_profile()
         self.narrative_report = ""  # 清空 StoryLensEdu 缓存以便下一次生成最新的信笺
+        self.dashboard_report = ""  # 清空仪表盘全局学情分析缓存
 
     def profile_prompt(self) -> str:
         dimensions = "；".join(
@@ -1000,6 +1005,20 @@ class StudentProfile:
             behavior_sanity_check(self)
         except Exception:
             pass
+
+        # === 记录时序心智状态（frustration, cognitive_load） ===
+        if not hasattr(self, "mental_state_history") or self.mental_state_history is None:
+            self.mental_state_history = []
+        
+        last_entry = self.mental_state_history[-1] if self.mental_state_history else None
+        if not last_entry or abs(last_entry.get("frustration", 0.0) - self.frustration_index) > 0.01 or abs(last_entry.get("cognitive_load", 0.0) - self.cognitive_load) > 0.01:
+            self.mental_state_history.append({
+                "timestamp": _utc_now(),
+                "frustration": round(self.frustration_index, 3),
+                "cognitive_load": round(self.cognitive_load, 3)
+            })
+            if len(self.mental_state_history) > 35:
+                self.mental_state_history = self.mental_state_history[-30:]
 
 
 @dataclass(frozen=True)

@@ -4,28 +4,18 @@ import { useRoute } from 'vue-router'
 import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 import {
   processMessage, getHistory,
-<<<<<<< HEAD
   generateQuiz, evaluateQuizAnswer, adaptQuiz,
-  webSearch, loadUrl,
-  runCode, getStudentProfile,
-  getLocalAnimations,
-=======
   webSearch, loadUrl, searchArxiv,
   runCode, getStudentProfile, regenerateComponent,
   aiPolishNote, createNote, createReviewPlan,
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
+  getLocalAnimations,
 } from '../api'
 import {
   Send, Bot, User, Loader2, BookOpen, Code2, LayoutGrid, HelpCircle, Video,
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
-<<<<<<< HEAD
-  BrainCircuit, Target, TrendingUp, Sparkles,
-  RotateCcw, Download, FileText, Maximize2, Minimize2, Film,
-=======
   BrainCircuit, Target, TrendingUp, Sparkles, Users,
-  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar, X,
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
+  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar, X, Film,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
 import { useQuizStore } from '../stores/quiz'
@@ -37,11 +27,8 @@ import SandboxVisualizer from '../components/SandboxVisualizer.vue'
 import AgentTimeline from '../components/AgentTimeline.vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
-<<<<<<< HEAD
 import LocalVideoPlayer from '../components/LocalVideoPlayer.vue'
-=======
 import ManifoldVisualizer from '../components/ManifoldVisualizer.vue'
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
 
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
@@ -370,7 +357,6 @@ function toggleVideoPanel() {
   }
 }
 
-<<<<<<< HEAD
 // 本地动画播放器状态
 const showLocalVideo = ref(false)
 const localVideos = ref([])
@@ -401,16 +387,6 @@ function openLocalVideo(knowledgePoint) {
   loadLocalAnimations(knowledgePoint)
 }
 
-// --- Quiz State ---
-const quizState = ref('idle') // idle | generating | answering | evaluating | adapting
-const quizData = ref(null)
-const quizAnswer = ref('')
-const quizConfidence = ref(5)
-const quizResult = ref(null)
-const quizAttempt = ref(1)
-const quizConcept = ref('')
-const quizSessionId = ref('')
-=======
 // --- Quiz State (Pinia Integrated) ---
 const quizState = computed(() => quizStore.quizState)
 const quizData = computed(() => quizStore.quizData)
@@ -429,7 +405,6 @@ const quizConcept = computed({
   set: (val) => { quizStore.quizConcept = val }
 })
 const quizSessionId = computed(() => quizStore.quizSessionId)
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
 
 // --- Code State ---
 const codeInput = ref('')
@@ -1779,8 +1754,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
                       </button>
                       <span class="text-[9px] text-gray-300">💡 点击代码块/公式可即时答疑</span>
                     </div>
-<<<<<<< HEAD
-                    <div class="prose prose-sm max-w-none text-sm whitespace-pre-wrap">{{ msg.content }}</div>
+                    <div class="prose prose-sm max-w-none text-sm" v-html="renderMarkdown(msg.content)"></div>
+                    <!-- 打字光标 -->
+                    <span v-if="idx === messages.length - 1 && chatStore.sending && chatStore.streamingMode !== 'matrix'"
+                      class="inline-block w-[2px] h-4 bg-blue-500 animate-pulse ml-0.5 align-text-bottom" />
+
                     <!-- 本地动画播放按钮 -->
                     <div v-if="msg._localVideos?.length" class="mt-3 pt-2 border-t border-gray-100">
                       <button
@@ -1790,11 +1768,6 @@ function renderMarkdown(text, type = '', conceptName = '') {
                         <Film :size="16" /> 播放本地动画 ({{ msg._localVideos.length }} 个视频)
                       </button>
                     </div>
-=======
-                    <div class="prose prose-sm max-w-none text-sm" v-html="renderMarkdown(msg.content)"></div>
-                    <!-- 打字光标 -->
-                    <span v-if="idx === messages.length - 1 && chatStore.sending && chatStore.streamingMode !== 'matrix'"
-                      class="inline-block w-[2px] h-4 bg-blue-500 animate-pulse ml-0.5 align-text-bottom" />
 
                     <!-- Grounded VisRAG Slide reference diagrams -->
                     <div v-if="getMatchedSlides(msg).length > 0" class="mt-3 bg-indigo-50/30 border border-indigo-100/50 p-3 rounded-xl">
@@ -1839,7 +1812,6 @@ function renderMarkdown(text, type = '', conceptName = '') {
                         </span>
                       </div>
                     </div>
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
                   </div>
 
                   <!-- 任务 8.3: 资源卡片 + 局部重生成按钮 -->
@@ -1880,62 +1852,57 @@ function renderMarkdown(text, type = '', conceptName = '') {
                           </div>
                         </div>
                         <div v-if="showResources.has(`${idx}-${ri}`)" class="px-5 py-4 border-t border-gray-100 bg-white">
-                          <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(res.content, res.type || res.resource_type || res.agent, msg.target)"></div>
-                          <!-- 如果是极客助教资源，添加一键挂载至沙箱按钮 -->
-                          <div v-if="getAgentConfig(res.agent, res.resource_type || res.type).label === '极客助教'" class="mt-3 flex justify-end">
-                            <button @click="mountToSandbox(res.content)" class="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg text-xs font-semibold shadow-sm transition-all flex items-center gap-1">
-                              <Terminal :size="12" /> 挂载至沙箱 →
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-<<<<<<< HEAD
-                      <div v-if="showResources.has(ri)" class="px-3 py-2 border-t border-gray-100 bg-gray-50/50">
-                        <!-- 虚拟导演卡片：显示本地视频 -->
-                        <div v-if="res.agent === '虚拟导演' && msg._localVideos?.length" class="space-y-2">
-                          <div class="flex items-center gap-2 text-xs text-gray-500">
-                            <Film :size="14" class="text-blue-500" />
-                            <span>本地动画 · {{ msg._localVideoKp || msg.target }}</span>
-                            <span class="text-gray-300">|</span>
-                            <span>{{ msg._localVideos.length }} 个视频</span>
-                          </div>
-                          <!-- 视频列表 -->
-                          <div class="grid gap-2">
-                            <div v-for="(v, vi) in msg._localVideos.slice(0, 3)" :key="vi"
-                              class="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                              <div class="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
-                                <span class="text-xs text-gray-600 truncate flex-1">{{ v.filename }}</span>
-                                <span class="text-[10px] text-gray-400 ml-2">{{ (v.size / 1024 / 1024).toFixed(1) }}MB</span>
-                              </div>
-                              <div v-if="inlineVideoIndex === ri + '_' + vi" class="bg-black">
-                                <video
-                                  :src="v.url"
-                                  class="w-full"
-                                  style="max-height: 300px"
-                                  controls
-                                  autoplay
-                                  @ended="inlineVideoIndex = -1"
-                                />
-                              </div>
-                              <div v-else class="p-2">
-                                <button
-                                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
-                                  @click="inlineVideoIndex = ri + '_' + vi"
-                                >
-                                  <Play :size="12" /> 播放
-                                </button>
+                          <!-- 虚拟导演卡片：显示本地视频 -->
+                          <div v-if="(res.agent === '虚拟导演' || res.resource_type === 'video' || res.type === 'video') && msg._localVideos?.length" class="space-y-2">
+                            <div class="flex items-center gap-2 text-xs text-gray-500">
+                              <Film :size="14" class="text-blue-500" />
+                              <span>本地动画 · {{ msg._localVideoKp || msg.target }}</span>
+                              <span class="text-gray-300">|</span>
+                              <span>{{ msg._localVideos.length }} 个视频</span>
+                            </div>
+                            <!-- 视频列表 -->
+                            <div class="grid gap-2">
+                              <div v-for="(v, vi) in msg._localVideos.slice(0, 3)" :key="vi"
+                                class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                                <div class="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
+                                  <span class="text-xs text-gray-600 truncate flex-1">{{ v.filename }}</span>
+                                  <span class="text-[10px] text-gray-400 ml-2">{{ (v.size / 1024 / 1024).toFixed(1) }}MB</span>
+                                </div>
+                                <div v-if="inlineVideoIndex === ri + '_' + vi" class="bg-black">
+                                  <video
+                                    :src="v.url"
+                                    class="w-full"
+                                    style="max-height: 300px"
+                                    controls
+                                    autoplay
+                                    @ended="inlineVideoIndex = -1"
+                                  />
+                                </div>
+                                <div v-else class="p-2">
+                                  <button
+                                    class="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                                    @click="inlineVideoIndex = ri + '_' + vi"
+                                  >
+                                    <Play :size="12" /> 播放
+                                  </button>
+                                </div>
                               </div>
                             </div>
+                            <p class="text-[10px] text-gray-400 mt-1">视频脚本：{{ res.content.slice(0, 200) }}{{ res.content.length > 200 ? '...' : '' }}</p>
                           </div>
-                          <p class="text-[10px] text-gray-400 mt-1">视频脚本：{{ res.content.slice(0, 200) }}{{ res.content.length > 200 ? '...' : '' }}</p>
+                          <!-- 普通资源卡片：Markdown 渲染 -->
+                          <div v-else>
+                            <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(res.content, res.type || res.resource_type || res.agent, msg.target)"></div>
+                            <!-- 如果是极客助教资源，添加一键挂载至沙箱按钮 -->
+                            <div v-if="getAgentConfig(res.agent, res.resource_type || res.type).label === '极客助教'" class="mt-3 flex justify-end">
+                              <button @click="mountToSandbox(res.content)" class="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg text-xs font-semibold shadow-sm transition-all flex items-center gap-1">
+                                <Terminal :size="12" /> 挂载至沙箱 →
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                        <!-- 普通资源卡片：显示文本 -->
-                        <p v-else class="text-xs text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">{{ res.content.slice(0, 1000) }}{{ res.content.length > 1000 ? '...' : '' }}</p>
                       </div>
-                    </div>
-=======
                     </template>
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
                   </div>
                 </div>
               </div>
@@ -2503,7 +2470,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
       @close="socraticPopup.visible = false" />
 
     <!-- 可视化分析悬浮按钮 -->
-    <div v-if="rightPanelCollapsed && activeTab === 'chat'" class="fixed bottom-[152px] right-6 z-40 group">
+    <div v-if="activeTab === 'chat'" class="fixed bottom-[152px] right-6 z-50 group">
       <button
         class="w-12 h-12 rounded-full bg-gradient-to-br from-green-500 to-teal-600 text-white shadow-lg hover:scale-110 transition-all flex items-center justify-center cursor-pointer"
         @click="rightPanelActiveTab = 'visualizer'; rightPanelCollapsed = false"
@@ -2517,31 +2484,21 @@ function renderMarkdown(text, type = '', conceptName = '') {
     </div>
 
     <!-- 任务 8.5: 视频渲染面板 -->
-<<<<<<< HEAD
-    <button
-      v-if="activeTab === 'chat'"
-      class="fixed bottom-24 right-6 z-40 w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center"
-      :title="showVideoPanel ? '关闭视频面板' : '本地动画库'"
-      @click="toggleVideoPanel"
-    >
-      <Film :size="20" />
-    </button>
-=======
-    <div v-if="rightPanelCollapsed && activeTab === 'chat'" class="fixed bottom-[88px] right-6 z-40 group">
+    <div v-if="activeTab === 'chat'" class="fixed bottom-[88px] right-6 z-50 group">
       <button
         class="w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 hover:scale-110 transition-all flex items-center justify-center cursor-pointer"
         @click="toggleVideoPanel"
       >
-        <Video :size="22" />
+        <Film :size="20" />
       </button>
       <!-- Tooltip -->
       <div class="absolute right-full mr-3 top-1/2 -translate-y-1/2 scale-75 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-200 bg-gray-900/90 text-white text-xs px-2.5 py-1.5 rounded-lg border border-gray-700/50 shadow-xl pointer-events-none whitespace-nowrap">
-        生成讲解视频
+        本地动画库
       </div>
     </div>
 
     <!-- 知识点速览悬浮按钮 -->
-    <div v-if="rightPanelCollapsed && activeTab === 'chat'" class="fixed bottom-6 right-6 z-50 group">
+    <div v-if="activeTab === 'chat'" class="fixed bottom-6 right-6 z-50 group">
       <button
         class="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 shadow-lg flex items-center justify-center cursor-pointer hover:scale-110 transition-all hover:shadow-xl"
         @click="rightPanelActiveTab = 'knowledge'; rightPanelCollapsed = false"
@@ -2553,19 +2510,16 @@ function renderMarkdown(text, type = '', conceptName = '') {
         展开知识点速览
       </div>
     </div>
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
     <VideoRenderPanel
       :visible="showVideoPanel"
       :studentId="props.studentId"
       :knowledgePoint="currentVideoKp"
       @close="showVideoPanel = false" />
-<<<<<<< HEAD
     <LocalVideoPlayer
       :visible="showLocalVideo"
       :videos="localVideos"
       :knowledgePoint="localVideoKnowledgePoint"
       @close="showLocalVideo = false" />
-=======
 
     <!-- 思维导图放大模态框 -->
     <Teleport to="body">
@@ -2652,7 +2606,6 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </button>
       </div>
     </div>
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf
   </div>
 </template>
 
@@ -2680,10 +2633,6 @@ function renderMarkdown(text, type = '', conceptName = '') {
   color: #2563eb;
   font-weight: 600;
 }
-<<<<<<< HEAD
-</style>
-=======
-
 .scroll-fab-container {
   position: fixed;
   bottom: 280px;
@@ -2707,4 +2656,3 @@ function renderMarkdown(text, type = '', conceptName = '') {
   }
 }
 </style>
->>>>>>> 43f1824ba63ff132bda169e82f662d2ff1f1e5cf

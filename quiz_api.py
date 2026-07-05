@@ -434,13 +434,47 @@ async def evaluate_answer(
         # 重新获取 record 以绑定到当前 session
         local_record = session.query(DBQuizRecord).filter(DBQuizRecord.id == quiz_id).first()
         profile = load_student_profile(session, student_id)
+        
+        # === Q-learning: 记录更新前的状态 ===
+        concept = local_record.target_concept if local_record else "通用概念"
+        old_mastery = profile.concept_mastery.get(concept, 0.45)
+        old_load = profile.cognitive_load
+        old_frustration = profile.frustration_index
+        
+        from app.utils.rl_planner import QLearningPathPlanner
+        state_before = QLearningPathPlanner.get_state_key(old_mastery, old_load, old_frustration)
+        
+        # 执行更新
         profile.update_from_feedback(
             feedback=student_answer,
             accuracy=accuracy_score,
             self_confidence=student_confidence,
             hint_count=0,
-            concept=local_record.target_concept if local_record else None,
+            concept=concept,
         )
+        
+        # === Q-learning: 记录更新后的状态 ===
+        new_mastery = profile.concept_mastery.get(concept, 0.45)
+        new_load = profile.cognitive_load
+        new_frustration = profile.frustration_index
+        state_after = QLearningPathPlanner.get_state_key(new_mastery, new_load, new_frustration)
+        
+        # 触发 Q 值迭代
+        reward = QLearningPathPlanner.calculate_reward(
+            old_mastery=old_mastery,
+            new_mastery=new_mastery,
+            correct=(accuracy_score >= 0.6),
+            frustration=new_frustration,
+            load=new_load
+        )
+        QLearningPathPlanner.update_q_value(
+            profile=profile,
+            state_before=state_before,
+            action="quiz",
+            state_after=state_after,
+            reward=reward
+        )
+        
         save_student_profile(session, profile)
 
         if local_record:

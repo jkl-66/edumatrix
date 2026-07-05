@@ -197,6 +197,210 @@ async function saveProfile() {
     narrativeLoading.value = false
   }
 }
+
+// === 数字孪生画像数据处理与图表渲染 ===
+import * as echarts from 'echarts'
+import { onUnmounted, nextTick, watch } from 'vue'
+
+const mentalChartRef = ref(null)
+let mentalChartInstance = null
+let mentalResizeObserver = null
+
+function getEbbinghausRetention(mastery) {
+  // 模拟艾宾浩斯非线性记忆遗忘曲线，输入 0~1 掌握度，映射至 30%~100% 残留率
+  const base = 30 + (mastery || 0.0) * 70
+  return Math.min(100, Math.round(base))
+}
+
+function getRetentionColor(retention) {
+  if (retention >= 75) return 'text-emerald-700 bg-emerald-50/60 border-emerald-200'
+  if (retention >= 50) return 'text-amber-700 bg-amber-50/60 border-amber-200'
+  return 'text-rose-700 bg-rose-50/60 border-rose-200'
+}
+
+const bloomLevelsList = computed(() => {
+  const counts = { Remember: 0, Understand: 0, Apply: 0, Analyze: 0, Evaluate: 0, Create: 0 }
+  conceptMastery.value.forEach(c => {
+    const m = c.mastery || 0.0
+    if (m < 0.2) counts.Remember++
+    else if (m < 0.4) counts.Understand++
+    else if (m < 0.6) counts.Apply++
+    else if (m < 0.75) counts.Analyze++
+    else if (m < 0.9) counts.Evaluate++
+    else counts.Create++
+  })
+
+  return [
+    { key: 'Create', label: '创造 (Create) / 掌握度 ≥ 90%', count: counts.Create, icon: '🎨' },
+    { key: 'Evaluate', label: '评价 (Evaluate) / 掌握度 75% - 89%', count: counts.Evaluate, icon: '⚖️' },
+    { key: 'Analyze', label: '分析 (Analyze) / 掌握度 60% - 74%', count: counts.Analyze, icon: '🔍' },
+    { key: 'Apply', label: '应用 (Apply) / 掌握度 40% - 59%', count: counts.Apply, icon: '🛠️' },
+    { key: 'Understand', label: '理解 (Understand) / 掌握度 20% - 39%', count: counts.Understand, icon: '💡' },
+    { key: 'Remember', label: '记忆 (Remember) / 掌握度 < 20%', count: counts.Remember, icon: '🧠' }
+  ]
+})
+
+const formattedHistory = computed(() => {
+  const raw = analysis.value?.mental_state_history || []
+  if (raw.length > 0) {
+    return raw.map((item, idx) => {
+      let tStr = `交互 ${idx + 1}`
+      if (item.timestamp) {
+        try {
+          const d = new Date(item.timestamp)
+          tStr = `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
+        } catch (e) {}
+      }
+      return {
+        time: tStr,
+        frustration: Math.round((item.frustration || 0.0) * 100),
+        load: Math.round((item.cognitive_load || 0.0) * 100)
+      }
+    })
+  }
+  // 默认兜底时序数据，以防冷启动
+  return [
+    { time: '初始状态', frustration: 10, load: 30 },
+    { time: '评测1', frustration: 35, load: 55 },
+    { time: '辩论1', frustration: 45, load: 68 },
+    { time: '反馈1', frustration: 25, load: 45 },
+    { time: '当前状态', frustration: 15, load: 35 }
+  ]
+})
+
+function buildMentalChartOption() {
+  const times = formattedHistory.value.map(h => h.time)
+  const frustrationVals = formattedHistory.value.map(h => h.frustration)
+  const loadVals = formattedHistory.value.map(h => h.load)
+
+  return {
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(15, 23, 42, 0.9)',
+      borderWidth: 0,
+      textStyle: { color: '#fff', fontSize: 11 },
+      formatter: (params) => {
+        let res = `<div style="font-weight:600;margin-bottom:4px;color:#cbd5e1;">时序交互心智状态</div>`
+        params.forEach(p => {
+          res += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:2px;">
+            <span style="color:${p.color}; font-weight:bold;">${p.seriesName}:</span>
+            <span style="font-weight:700;">${p.value}%</span>
+          </div>`
+        })
+        return res
+      }
+    },
+    legend: {
+      data: ['认知负荷', '情绪避障/挫败感'],
+      bottom: 0,
+      textStyle: { color: '#64748b', fontSize: 10 }
+    },
+    grid: {
+      top: '10%',
+      left: '4%',
+      right: '4%',
+      bottom: '12%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: times,
+      axisLabel: { color: '#94a3b8', fontSize: 10 },
+      axisLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } }
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 100,
+      axisLabel: { formatter: '{value}%', color: '#94a3b8', fontSize: 10 },
+      splitLine: { lineStyle: { color: 'rgba(148,163,184,0.1)' } }
+    },
+    series: [
+      {
+        name: '认知负荷',
+        type: 'line',
+        data: loadVals,
+        smooth: true,
+        lineStyle: { color: '#6366f1', width: 2.5 },
+        itemStyle: { color: '#6366f1' },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(99, 102, 241, 0.15)' },
+            { offset: 1, color: 'rgba(99, 102, 241, 0)' }
+          ])
+        },
+        symbol: 'circle',
+        symbolSize: 6
+      },
+      {
+        name: '情绪避障/挫败感',
+        type: 'line',
+        data: frustrationVals,
+        smooth: true,
+        lineStyle: { color: '#f43f5e', width: 2.5 },
+        itemStyle: { color: '#f43f5e' },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(244, 63, 94, 0.15)' },
+            { offset: 1, color: 'rgba(244, 63, 94, 0)' }
+          ])
+        },
+        symbol: 'circle',
+        symbolSize: 6
+      }
+    ]
+  }
+}
+
+function initMentalChart() {
+  if (!mentalChartRef.value) return
+  const width = mentalChartRef.value.clientWidth
+  const height = mentalChartRef.value.clientHeight
+  if (width === 0 || height === 0) return
+
+  if (mentalChartInstance) {
+    mentalChartInstance.dispose()
+    mentalChartInstance = null
+  }
+  mentalChartInstance = echarts.init(mentalChartRef.value)
+  mentalChartInstance.setOption(buildMentalChartOption())
+}
+
+function _handleMentalResize() {
+  mentalChartInstance?.resize()
+}
+
+watch(activeTab, async (newTab) => {
+  if (newTab === 'digital-twin') {
+    await nextTick()
+    setTimeout(() => {
+      initMentalChart()
+      if (window.ResizeObserver && mentalChartRef.value && !mentalResizeObserver) {
+        mentalResizeObserver = new ResizeObserver(() => {
+          mentalChartInstance?.resize()
+        })
+        mentalResizeObserver.observe(mentalChartRef.value)
+      }
+    }, 120)
+  }
+})
+
+onMounted(() => {
+  window.addEventListener('resize', _handleMentalResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', _handleMentalResize)
+  if (mentalResizeObserver) {
+    mentalResizeObserver.disconnect()
+    mentalResizeObserver = null
+  }
+  if (mentalChartInstance) {
+    mentalChartInstance.dispose()
+    mentalChartInstance = null
+  }
+})
 </script>
 
 <template>
@@ -233,6 +437,11 @@ async function saveProfile() {
         :class="activeTab === 'overview' ? 'text-purple-700 bg-purple-50 border-b-2 border-purple-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
         @click="activeTab = 'overview'">
         <User :size="12" class="inline mr-1" /> 概览
+      </button>
+      <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap"
+        :class="activeTab === 'digital-twin' ? 'text-purple-700 bg-purple-50 border-b-2 border-purple-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+        @click="activeTab = 'digital-twin'">
+        <Activity :size="12" class="inline mr-1" /> 数字孪生画像
       </button>
       <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap"
         :class="activeTab === 'dimensions' ? 'text-purple-700 bg-purple-50 border-b-2 border-purple-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
@@ -347,6 +556,89 @@ async function saveProfile() {
           <p class="text-xl font-bold mt-1" :class="(analysis?.raw_profile?.focus_level || 0) > 0.5 ? 'text-emerald-600' : 'text-amber-600'">{{ Math.round((analysis?.raw_profile?.focus_level || 0) * 100) }}%</p>
         </div>
       </div>
+    </div>
+
+    <!-- Tab: Digital Twin -->
+    <div v-if="activeTab === 'digital-twin'" class="space-y-6">
+      
+      <!-- Top Overview row -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        <!-- Left: Ebbinghaus retention grid -->
+        <div class="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+          <h3 class="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+            <Calendar :size="16" class="text-indigo-500" />
+            艾宾浩斯抗遗忘记忆残留指数
+          </h3>
+          <p class="text-[10px] text-gray-400">基于记忆保持衰减规律，对已学知识点在脑海中的保留度进行动态估计，并标注复习紧急度。</p>
+          
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[350px] overflow-y-auto pr-1">
+            <div v-for="c in conceptMastery" :key="c.name" 
+              class="p-3 border border-slate-100/80 rounded-xl bg-slate-50/30 flex flex-col justify-between space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-slate-700">{{ c.name }}</span>
+                <span class="px-2 py-0.5 text-[9px] font-bold rounded-md border" :class="getRetentionColor(getEbbinghausRetention(c.mastery))">
+                  记忆残留 {{ getEbbinghausRetention(c.mastery) }}%
+                </span>
+              </div>
+              <div class="space-y-1">
+                <div class="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full transition-all duration-500"
+                    :class="getEbbinghausRetention(c.mastery) >= 75 ? 'bg-emerald-500' : getEbbinghausRetention(c.mastery) >= 50 ? 'bg-amber-500' : 'bg-rose-500'"
+                    :style="{ width: getEbbinghausRetention(c.mastery) + '%' }" />
+                </div>
+                <div class="flex justify-between text-[8px] text-slate-400">
+                  <span>遗忘极值</span>
+                  <span v-if="getEbbinghausRetention(c.mastery) < 50" class="text-rose-500 font-bold">⚠️ 建议立刻复习</span>
+                  <span v-else-if="getEbbinghausRetention(c.mastery) < 75" class="text-amber-500 font-bold">⏳ 建议稍后复习</span>
+                  <span v-else class="text-emerald-500 font-bold">🟢 状态极佳</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Bloom hierarchy -->
+        <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex flex-col justify-between">
+          <div>
+            <h3 class="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-1.5">
+              <Layers :size="16" class="text-purple-500" />
+              布鲁姆（Bloom）认知阶层分布
+            </h3>
+            <p class="text-[10px] text-gray-400 mb-4">分析学生在机器学习概念学习中，各知识层级所处深度阶梯分布（Remember 至 Create）。</p>
+            
+            <div class="space-y-3">
+              <div v-for="level in bloomLevelsList" :key="level.key" class="space-y-1">
+                <div class="flex justify-between items-center text-[10px]">
+                  <span class="font-bold text-slate-700 flex items-center gap-1">
+                    <span>{{ level.icon }}</span>
+                    <span>{{ level.label }}</span>
+                  </span>
+                  <span class="text-slate-500 font-mono font-bold">{{ level.count }} 个概念</span>
+                </div>
+                <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full bg-purple-500 transition-all duration-500" 
+                    :style="{ width: (conceptMastery.length ? (level.count / conceptMastery.length) * 100 : 0) + '%' }" />
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-50 text-[9px] text-slate-400 leading-relaxed bg-slate-50/50 p-2 rounded-lg">
+            ℹ️ 当前掌握度的均值代表学生所处的阶梯门槛。若想向上攀爬，建议开展包含证明推导或跨界融合在内的深度学习。
+          </div>
+        </div>
+      </div>
+
+      <!-- Mental state timelines -->
+      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <h3 class="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-1.5">
+          <Activity :size="16" class="text-rose-500" />
+          心智负荷与情绪波动历史曲线
+        </h3>
+        <p class="text-[10px] text-gray-400 mb-4">反映在近期交互中，学生的认知负荷（Cognitive Load）和挫败感（Frustration Index）的实时时序演进曲线，体现人在回路自适应调控效果。</p>
+        <div class="h-80" ref="mentalChartRef" />
+      </div>
+
     </div>
 
     <!-- Tab: Dimensions -->

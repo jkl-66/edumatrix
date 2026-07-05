@@ -129,12 +129,14 @@ export function streamChat(message, studentId, onEvent, onError, mode = 'chat', 
   return () => abortStream(studentId)
 }
 
-export async function regenerateComponent(studentId, role, resourceType, query) {
+export async function regenerateComponent(studentId, role, resourceType, query, overview = null, pathway = null) {
   const r = await api.post('/stream/regenerate', {
     student_id: studentId,
     role,
     resource_type: resourceType,
     query,
+    overview,
+    pathway,
   }, { headers: buildHeaders() })
   return r.data
 }

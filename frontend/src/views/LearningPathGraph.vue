@@ -39,8 +39,22 @@ const displayChain = computed(() => {
 
 const conceptRecommendations = computed(() => {
   const activeConcept = nextSteps.value[0]?.concept
-  if (!activeConcept || !recommendations.value) return []
-  return recommendations.value.filter(r => r.concept === activeConcept)
+  if (!activeConcept || !recommendations.value || !Array.isArray(recommendations.value)) return []
+  const conceptObj = recommendations.value.find(r => r.concept === activeConcept)
+  if (!conceptObj || !conceptObj.resources) return []
+  return Object.entries(conceptObj.resources).map(([key, res]) => {
+    return {
+      concept: activeConcept,
+      title: res.resource_type,
+      content: res.overview,
+      badge: res.status === "generated" ? "✅ 已就绪" : "⚡ 待生成",
+      source_name: res.role,
+      resource_type: key, // "lecture", "mindmap", "code", "quiz", "video"
+      url: key === 'video' ? `/api/v1/video/stream?concept=${activeConcept}&student_id=${studentId.value}` : '',
+      status: res.status,
+      note_id: res.note_id
+    }
+  })
 })
 
 function statusIcon(status) {

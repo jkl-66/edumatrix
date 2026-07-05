@@ -239,6 +239,27 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _format_chat_history(profile, max_turns: int = 5) -> str:
+    """从 profile.history 中提取最近的对话历史（包含学生提问和助教回答）。"""
+    if not profile or not hasattr(profile, "history") or not profile.history:
+        return ""
+    # 我们希望获取当前消息之前的历史，因为当前消息通常在最后
+    history_len = min(max_turns * 2, len(profile.history) - 1)
+    # 确保 history_len 为偶数，以便由学生提问开始，系统回答结束
+    if history_len % 2 != 0:
+        history_len -= 1
+    if history_len <= 0:
+        return ""
+
+    recent = profile.history[-(history_len + 1):-1]
+    lines = []
+    for i, msg in enumerate(recent):
+        role = "学生" if i % 2 == 0 else "助教"
+        # 截断过长消息以防 Token 膨胀
+        lines.append(f"【{role}】: {msg[:1000]}")
+    return "\n\n".join(lines)
+
+
 @router.post("/chat")
 async def stream_chat(request: Request) -> StreamingResponse:
     payload = await request.json()
@@ -507,6 +528,21 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     await check_disconnection()
                     yield _sse("progress", {"step": "ocr_done", "message": "图片解析完成，正在提取关联知识点...", "progress": 35})
 
+                # P1-1: 实时画像前置更新与对话历史记录追踪 (双轨并网)
+                if profile:
+                    try:
+                        if is_academic:
+                            if hasattr(swarm.profile_probe, "async_update"):
+                                await swarm.profile_probe.async_update(profile, message)
+                            else:
+                                profile.update_from_message(message)
+                        else:
+                            profile.update_from_message(message)
+                    except Exception as e:
+                        print(f"  [StreamAPI] Failed to run profile probe: {e}")
+                        if hasattr(profile, "update_from_message"):
+                            profile.update_from_message(message)
+
                 # 3. 运行 RAG 检索
                 retrieval = None
                 debate_result = None
@@ -543,6 +579,37 @@ async def stream_chat(request: Request) -> StreamingResponse:
                                 }
                         except Exception:
                             pass
+
+                        # P1-1: 低置信度拦截时更新画像对话历史，以维护交替的历史结构
+                        if profile and hasattr(profile, "update_from_feedback"):
+                            try:
+                                profile.update_from_feedback(
+                                    feedback=refusal_msg,
+                                    accuracy=None,
+                                    self_confidence=None,
+                                    hint_count=0,
+                                )
+                                from app.database import run_db_op
+                                from app.crud import save_student_profile
+                                await run_db_op(save_student_profile, profile)
+                            except Exception as e:
+                                print(f"  [StreamAPI] Failed to update profile with refusal: {e}")
+
+                        # 记录低置信度拒答对话到历史数据库
+                        try:
+                            from app.crud import record_conversation
+                            from app.database import run_db_op
+                            await run_db_op(
+                                record_conversation,
+                                student_id,
+                                message,
+                                refusal_msg,
+                                "未知",
+                                0,
+                                True
+                            )
+                        except Exception as e:
+                            print(f"  [StreamAPI] Failed to record conversation on low confidence refusal: {e}")
                         
                         yield _sse("complete", {
                             "target": "未知",
@@ -562,23 +629,26 @@ async def stream_chat(request: Request) -> StreamingResponse:
 
                 # 4. 构建 System Prompt & User Prompt 进行自适应问答/日常引导
                 if is_academic:
+                    history_str = _format_chat_history(profile, max_turns=5)
                     system_prompt = (
                         "你是一个极具教育学底蕴的 EduMatrix 自适应智能助教。你致力于通过微步启发、苏格拉底式对话引导学生思考，而不是直接给出完整答案。\n"
-                        "请根据检索到的背景知识库证据，回答学生提出的学术或题目疑问。\n"
+                        "请根据检索到的背景知识库证据，并结合【历史对话记录】的上下文，回答学生提出的学术或题目疑问。\n"
                         "【要求】：\n"
                         "- 必须使用中文回答，格式为漂亮的 Markdown。\n"
                         "- 如果学生上传了题目图片（根据提供的图片文字内容），请分步解析题目，提示核心公式和关键步骤，然后向学生提出一个引导性的思考问题。\n"
                         "- 回答结尾必须提供一个具体的启发式问题引导学生下一步动作。\n"
                         f"- 教学风格：{teaching_style or '苏格拉底启发式'}。\n"
                     )
-                    user_prompt = (
-                        f"学生提问：{message}\n"
-                    )
+                    user_prompt = ""
+                    if history_str:
+                        user_prompt += f"【历史对话记录】：\n{history_str}\n\n"
+                    user_prompt += f"学生当前提问：{message}\n"
                     if ocr_text:
                         user_prompt += f"图片解析出的内容：{ocr_text}\n"
                     user_prompt += f"背景知识库匹配证据：\n{context_str}\n"
                     user_prompt += "请开始提供启发式解答："
                 else:
+                    history_str = _format_chat_history(profile, max_turns=3)
                     system_prompt = (
                         "你是一个温和友好、极具亲和力的 EduMatrix 自适应智能助教。\n"
                         "【任务与要求】：\n"
@@ -586,7 +656,10 @@ async def stream_chat(request: Request) -> StreamingResponse:
                         "2. 在回答的结尾，用一句话温馨、生动地将话题**引导回机器学习、数据科学或编程学术学习上**，并向学生推荐一两个可以提问的例子（例如提示学生可以询问‘什么是最大池化？’或‘神经网络是如何学习的？’来开始学习）。\n"
                         "3. 必须使用中文回答，格式为漂亮的 Markdown。\n"
                     )
-                    user_prompt = f"学生提问：{message}\n请提供简短的日常回应并引导回学习上："
+                    user_prompt = ""
+                    if history_str:
+                        user_prompt += f"【历史对话记录】：\n{history_str}\n\n"
+                    user_prompt += f"学生当前提问：{message}\n请提供简短的日常回应并引导回学习上："
 
                 # 5. 调用大模型流式响应
                 full_response = ""
@@ -603,23 +676,23 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 if not safety_result["passed"]:
                     full_response = f"[内容安全提示] 部分敏感内容已过滤。\n\n{full_response}"
 
-                # 7. 更新画像 (仅在学术模式下更新能力状态)
-                if is_academic:
-                    try:
-                        p = swarm.profile_store.get(student_id)
-                        if p and hasattr(p, "update_from_feedback"):
-                            p.update_from_feedback(
-                                feedback=full_response,
-                                accuracy=1.0,
-                                self_confidence=None,
-                                hint_count=0,
-                            )
-                            from app.database import run_db_op
-                            from app.crud import save_student_profile
-                            await run_db_op(save_student_profile, p)
-                    except Exception as e:
-                        print(f"  [StreamAPI] Failed to update profile in chat mode: {e}")
+                # 7. 更新画像与对话历史 (学术模式下更新能力状态，非学术模式下轻量维护历史)
+                try:
+                    p = swarm.profile_store.get(student_id)
+                    if p and hasattr(p, "update_from_feedback"):
+                        p.update_from_feedback(
+                            feedback=full_response,
+                            accuracy=1.0 if is_academic else None,
+                            self_confidence=None,
+                            hint_count=0,
+                        )
+                        from app.database import run_db_op
+                        from app.crud import save_student_profile
+                        await run_db_op(save_student_profile, p)
+                except Exception as e:
+                    print(f"  [StreamAPI] Failed to update profile in chat mode: {e}")
 
+                if is_academic:
                     # 自动为本次学习的知识点生成/更新复习安排
                     try:
                         target_concept = getattr(retrieval, "target", "")
@@ -641,7 +714,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                         record_conversation,
                         student_id,
                         message,
-                        "单轮流式对话" if is_academic else "自适应日常引导",
+                        full_response,
                         target_concept,
                         0,
                         True
@@ -1105,6 +1178,8 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
     role = str(payload.get("role", ""))
     resource_type = str(payload.get("resource_type", ""))
     query = str(payload.get("query", ""))
+    overview = payload.get("overview")
+    pathway = payload.get("pathway")
     
     if not role or not resource_type or not query:
         raise HTTPException(status_code=400, detail="参数缺失")
@@ -1129,6 +1204,39 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
             downstream_edges=(),
         )
         
+    forced_inst = overview or ""
+    if pathway:
+        from app.utils.recommendation_engine import evaluate_tactical_pathway
+        try:
+            pathway_meta = evaluate_tactical_pathway(profile, query, pathway)
+            pathway_instructions = {
+                "ICE_BREAKER": (
+                    "【战术指令：破冰路线】此资源应突出前置背景连接。请特别增加对前置依赖概念的梳理，"
+                    "降低讲解梯度，建立与已知知识点的清晰过渡，使讲解浅显易懂。"
+                ),
+                "PRACTITIONER": (
+                    "【战术指令：实操路线】此资源应极度注重编码、实操或应用案例。对于理论讲解应当极其简明，"
+                    "重点展示完整的、带注释的代码/操作片段，以实干代替空谈。"
+                ),
+                "EXPLORER": (
+                    "【战术指令：探究路线】此资源应采用严密的数理逻辑与学术探究风格。请大量运用 LaTex 进行推导，"
+                    "进行概念深层剖析，并提出思考拓展方向。"
+                ),
+                "RESCUE": (
+                    "【战术指令：防忘路线】针对低掌握度或艾宾浩斯遗忘临界点。请先划出致命误区（以 [!WARNING] 或 [!CAUTION] 强调），"
+                    "指出易错概念，提供抗遗忘记忆口诀或重点回顾。"
+                ),
+                "FUSION": (
+                    "【战术指令：跨界路线】交叉学科融合。请将当前概念与相邻或其它领域的知识进行融合展示，"
+                    "解释跨学科交叉应用场景与宏观视角。"
+                )
+            }
+            inst_text = pathway_instructions.get(pathway, "")
+            if inst_text:
+                forced_inst = f"{inst_text}\n{forced_inst}"
+        except Exception as e:
+            print(f"  [StreamAPI] Failed to evaluate pathway instructions: {e}")
+
     try:
         result = await swarm.async_generator.generate(
             role=role,
@@ -1137,11 +1245,61 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
             graph_context=graph_context,
             evidence=evidence,
             profile=profile,
+            forced_instruction=forced_inst,
         )
         content = result.content if hasattr(result, "content") else str(result)
+        
+        # 将生成的资源保存到数据库中以实现统一持久化
+        import uuid
+        from app.database import DBNote
+        
+        note_id = f"note-{uuid.uuid4().hex[:12]}"
+        db_tag = resource_type
+        if "代码" in resource_type:
+            db_tag = "代码案例"
+        elif "视频" in resource_type or "脚本" in resource_type:
+            db_tag = "视频脚本"
+        elif "讲义" in resource_type:
+            db_tag = "专业讲义"
+        elif "思维" in resource_type or "导图" in resource_type:
+            db_tag = "思维导图"
+        elif "练习" in resource_type or "题" in resource_type:
+            db_tag = "练习题"
+
+        def save_generated_note(session):
+            existing = session.query(DBNote).filter(
+                DBNote.student_id == student_id,
+            ).all()
+            
+            target_note = None
+            for n in existing:
+                if query in (n.concepts or []) and db_tag in (n.tags or []):
+                    target_note = n
+                    break
+            
+            if target_note:
+                target_note.content = content
+                session.commit()
+                return target_note.id
+            else:
+                new_note = DBNote(
+                    id=note_id,
+                    student_id=student_id,
+                    source="adaptive_hub",
+                    content=content,
+                    tags=[db_tag],
+                    concepts=[query]
+                )
+                session.add(new_note)
+                session.commit()
+                return note_id
+
+        saved_note_id = await run_db_op(save_generated_note)
+
         return {
             "status": "success",
-            "content": content
+            "content": content,
+            "note_id": saved_note_id
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"重算失败: {str(e)}")

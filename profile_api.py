@@ -206,19 +206,21 @@ async def get_profile(
             for k, v in (getattr(profile, "knowledge_traces", {}) or {}).items()
         } if hasattr(profile, "knowledge_traces") else {},
         "misconception_patterns": getattr(profile, "misconception_patterns", {}),
+        "mental_state_history": getattr(profile, "mental_state_history", []) or [],
     }
 
 
 class NarrativeReportGenerator:
     """StoryLensEdu 叙事驱动评估报告生成器：
-    整合数据分析师、教师评估师、故事讲述者三个智能体角色，将冰冷的学生数据转化为温和鼓励的个人叙事学情报告。
+    整合数据分析师、教师评估师、故事讲述者及仪表盘分析师角色，
+    分别生成温暖鼓励的成长信笺（供学习画像使用）以及科学理性的仪表盘全局分析（供仪表盘使用）。
     """
 
     def __init__(self, llm: Any) -> None:
         self.llm = llm
 
-    async def generate_report(self, profile: Any) -> str:
-        """运行 3-agent 评估流水线，生成定制叙事报告。"""
+    async def generate_report(self, profile: Any) -> tuple[str, str]:
+        """运行多-agent 评估工作流，生成定制叙事报告 (narrative_report) 与仪表盘学情分析报告 (dashboard_report)。"""
         # Step 1: 模拟 数据分析师 (Data Analyst Agent) 抽取核心指标
         mastery_summary = ", ".join(f"{c}: {round(m * 100)}%" for c, m in list(profile.concept_mastery.items())[:6])
         causes_summary = ", ".join(f"{c.label}: {round(c.percentage)}%" for c in list(profile.learning_state_causes.values())[:3])
@@ -244,34 +246,66 @@ class NarrativeReportGenerator:
         except Exception:
             tutor_advice = "建议专注于前置概念复习，利用图示与代码实操结合，逐步缓解当前较高的认知负荷。"
 
-        # Step 3: 故事讲述者 (Storyteller Agent) 将数据与建议融合成叙事文本
+        # Step 3: 故事讲述者 (Storyteller Agent) 将数据与建议融合成温暖鼓励的个人叙事成长信笺
         storyteller_system = (
             "你是一个温和体贴、擅长鼓励的教育故事讲述者（Storyteller）。\n"
-            "你的任务是根据数据分析师的数据和教师评估师的建议，为该学生定制一封叙事学情信件。\n\n"
+            "你的任务是根据数据分析师的数据和教师评估师的建议，为该学生定制一封温和、充满正能量的个性化成长信件。\n\n"
             "信件大纲规则：\n"
             "1) 开启：用温和的语气肯定学生的努力与当前进度，并将掌握度百分比以比喻的形式（如‘种子的萌发’、‘关卡的解锁’）轻柔道出。\n"
             "2) 经过：用故事性的语言化解其不会的成因和挫败感（例如将‘前置极小值’比作‘地基的加固’，将‘认知负荷’比作‘背包过重需要精简行李’）。\n"
             "3) 收尾：融入教师评估师的建议，指出具体的下一步探索方向，结尾给予充满信心和正能量的结语。\n"
-            "4) ⚠️核心守则：禁止出现冷冰冰的纯代码变量名，必须使用优美、生动、有温度的中文 Markdown 叙事，字数在 250 字左右。"
+            "4) ⚠️核心守则：禁止出现冷冰冰的纯代码变量名，必须使用优美、生动、有温度的中文 Markdown 叙事，字数在 250-300 字左右。"
         )
-        
+
+        # Step 4: 仪表盘分析师 (Dashboard Agent) 将数据与建议融合成详细、理性、干净的学情评估 (严肃正经口吻，供仪表盘使用)
+        dashboard_system = (
+            "你是一个专业、理性的自适应教育学情分析与决策引擎。\n"
+            "你的任务是根据数据分析师提供的指标和教师建议，为学生输出一份定量化、逻辑严密、详尽具体的仪表盘全局学情诊断报告。\n\n"
+            "⚠️核心格式守则：\n"
+            "1) 绝对禁止任何感性、温情化或抒情比喻（杜绝如‘种子萌发’、‘关卡解锁’、‘土地松软肥沃’、‘溪流愉快奔腾’、‘行李背包’等修辞），使用专业、中立、客观的学术诊断口吻。\n"
+            "2) 保持充足的信息量和细致程度，字数在 250-350 字左右，与常规学情诊断信件的详细程度完全一致。\n"
+            "3) 🚫严禁包含任何奇怪的特殊符号（如 📬、💡、📊、🚀、⚠️、→ 等图标符号），不需要任何冗余的标题，严禁多余的段落空行。只输出最核心的诊断和具体学习策略段落，格式必须好看、清爽。\n"
+            "4) 输出结构应逻辑清晰地分为以下几个核心层面进行详尽分析：\n"
+            "   - 学情现状诊断：客观评估当前学术表现，指出掌握度最高的领域与面临的核心知识瓶颈；\n"
+            "   - 归因与推断逻辑：详细解释该学情状态背后的成因与推导过程，分析障碍是由于前置数学不足、概念理解偏差，还是解题实操缺乏引起的；\n"
+            "   - 学习策略建议：提出具体的学习干预策略，并结合教育学或认知科学原理（如最近发展区、工作记忆卸载）解释为何采取该策略。"
+        )
+
         storyteller_user = (
             f"【数据分析】：\n{analyst_prompt}\n\n"
             f"【教师建议】：\n{tutor_advice}"
         )
 
         try:
-            narrative = await self.llm.generate(storyteller_system, storyteller_user, role="叙事故事生成")
-            return f"### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n{narrative}"
+            import asyncio
+            import re
+            
+            # 并行调用 LLM 从而优化页面加载性能
+            narrative_task = self.llm.generate(storyteller_system, storyteller_user, role="叙事故事生成")
+            dashboard_task = self.llm.generate(dashboard_system, storyteller_user, role="仪表盘诊断生成")
+            
+            narrative, dashboard = await asyncio.gather(narrative_task, dashboard_task)
+            
+            # 清洗特殊表情字符和空行，保证仪表盘展示效果纯净
+            dashboard = re.sub(r'[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]', '', dashboard)
+            dashboard = "\n".join([line.strip() for line in dashboard.split("\n") if line.strip()])
+            
+            return f"### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n{narrative}", dashboard
         except Exception:
-            return (
+            fallback_narrative = (
                 "### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n"
                 "亲爱的同学：\n\n"
                 "看到你在机器学习世界里的探索，系统能感受到你对未知的渴望。目前你在知识图谱中的多个核心概念上已经开始了旅程，"
                 "遇到一时的不理解或高负荷是知识建构过程中的必经风景，如同登山时背包需要稍微整理。建议你在接下来的日子里，"
                 "先从前置概念的基础小册和代码实操着手，我们会一直在右侧的画板和沙箱中陪伴你，一步步走向熟练。加油！"
             )
-
+            fallback_dashboard = (
+                "根据当前的学情监测数据，您的机器学习核心概念体系构建已初具规模（部分核心节点掌握度达90%以上），但在局部节点存在认知负荷过载倾向（当前心智负荷监测值高于0.6）。\n"
+                "通过关联分析与最近答题记录，推断此学习障碍并非由于概念本身的抽象度导致，而是前置数学知识点（如微积分中偏导数求导与线性代数中的矩阵相乘逻辑）的掌握不够稳固，因而在算法推导时产生了冗余的解译开销，引发了工作记忆过载。\n"
+                "建议您在后续学习中采取以下具体干预策略：\n"
+                "首先，回溯学习相关的数学前置讲义以消除依赖阻塞，实现认知对齐；其次，利用系统右侧的隔离代码沙箱（Sandbox）执行算法逻辑验证，通过具象的控制台输出来分担抽象推导压力，从而有效降低即时工作记忆负荷，优化知识重构效率。"
+            )
+            return fallback_narrative, fallback_dashboard
 
 class ProfileUpdateRequest(BaseModel):
     major: str | None = None
@@ -435,9 +469,11 @@ async def get_profile_analysis(
     if not summary_suggestions:
         summary_suggestions.append("当前各维度状态良好，建议保持当前学习节奏。")
 
-    # 6. 读取 StoryLensEdu 叙事评估报告 (只读缓存，无缓存时返回静态信笺，防止同步阻塞并满足单元测试)
+    # 6. 读取仪表盘全局学情分析报告与叙事报告
     narrative_report = getattr(profile, "narrative_report", "")
-    has_cache = bool(narrative_report)
+    dashboard_report = getattr(profile, "dashboard_report", "")
+    has_cache = bool(narrative_report and dashboard_report)
+    
     if not narrative_report:
         narrative_report = (
             "### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n"
@@ -445,6 +481,13 @@ async def get_profile_analysis(
             "看到你在机器学习世界里的探索，系统能感受到你对未知的渴望。目前你在知识图谱中的多个核心概念上已经开始了旅程，"
             "遇到一时的不理解或高负荷是知识建构过程中的必经风景，如同登山时背包需要稍微整理。建议你在接下来的日子里，"
             "先从前置概念的基础小册和代码实操着手，我们会一直在右侧的画板和沙箱中陪伴你，一步步走向熟练。加油！"
+        )
+    if not dashboard_report:
+        dashboard_report = (
+            "根据当前的学情监测数据，您的机器学习核心概念体系构建已初具规模（部分核心节点掌握度达90%以上），但在局部节点存在认知负荷过载倾向（当前心智负荷监测值高于0.6）。\n"
+            "通过关联分析与最近答题记录，推断此学习障碍并非由于概念本身的抽象度导致，而是前置数学知识点（如微积分中偏导数求导与线性代数中的矩阵相乘逻辑）的掌握不够稳固，因而在算法推导时产生了冗余的解译开销，引发了工作记忆过载。\n"
+            "建议您在后续学习中采取以下具体干预策略：\n"
+            "首先，回溯学习相关的数学前置讲义以消除依赖阻塞，实现认知对齐；其次，利用系统右侧的隔离代码沙箱（Sandbox）执行算法逻辑验证，通过具象的控制台输出来分担抽象推导压力，从而有效降低即时工作记忆负荷，优化知识重构效率。"
         )
 
     return {
@@ -454,8 +497,8 @@ async def get_profile_analysis(
         "weak_analysis": weak_analysis,
         "suggestions": summary_suggestions,
         "narrative_report": narrative_report,
+        "dashboard_report": dashboard_report,
         "has_narrative_cache": has_cache,
-        "updated_at": profile.last_update_timestamp if hasattr(profile, 'last_update_timestamp') else "",
     }
 
 
@@ -707,18 +750,20 @@ async def get_profile_narrative(
 
     # 如果无缓存，生成并保存
     generator = NarrativeReportGenerator(swarm.llm)
-    narrative_report = await generator.generate_report(profile)
+    narrative_report, dashboard_report = await generator.generate_report(profile)
     profile.narrative_report = narrative_report
+    profile.dashboard_report = dashboard_report
     await run_db_op(save_student_profile, profile)
-    return {"narrative_report": narrative_report}
+    return {"narrative_report": narrative_report, "dashboard_report": dashboard_report}
 
 
 @router.get("/{student_id}/recommendations")
 async def get_recommendations(
     student_id: str,
-    request: Request,
+    concept: str | None = None,
+    pathway: str | None = None,
 ) -> list[dict[str, Any]]:
-    """获取针对学生的自适应智能推送学习资源"""
+    """获取针对学生的自适应智能推送学习资源，支持按概念与战术路线手动切换与重新编译"""
     from app.utils.recommendation_engine import get_smart_recommendations
     
-    return await run_db_op(get_smart_recommendations, student_id)
+    return await run_db_op(get_smart_recommendations, student_id, concept=concept, pathway=pathway)

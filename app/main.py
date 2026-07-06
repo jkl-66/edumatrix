@@ -27,6 +27,7 @@ from app.crud import (
     delete_note,
     get_review_plan,
     upsert_review_plan,
+    review_plan_to_dict,
     record_conversation,
     get_conversation_history,
     update_note,
@@ -986,18 +987,7 @@ async def get_review(student_id: str):
     plans = await run_db_op(get_review_plan, student_id)
     return {
         "student_id": student_id,
-        "due_reviews": [
-            {
-                "id": p.id,
-                "concept": p.concept,
-                "interval_days": p.interval_days,
-                "next_review_at": p.next_review_at.isoformat(),
-                "mastery": p.mastery,
-                "review_count": p.review_count,
-                "created_at": p.created_at.isoformat() if p.created_at else None,
-            }
-            for p in plans
-        ],
+        "due_reviews": [review_plan_to_dict(p) for p in plans],
     }
 
 
@@ -1010,14 +1000,7 @@ async def update_review(student_id: str, request: Request):
     if not concept:
         raise HTTPException(status_code=400, detail="concept is required")
     plan = await run_db_op(upsert_review_plan, student_id, concept, mastery, interval_days)
-    return {
-        "id": plan.id,
-        "concept": plan.concept,
-        "next_review_at": plan.next_review_at.isoformat(),
-        "interval_days": plan.interval_days,
-        "mastery": plan.mastery,
-        "created_at": plan.created_at.isoformat() if plan.created_at else None,
-    }
+    return review_plan_to_dict(plan)
 
 
 # ============================================================

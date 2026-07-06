@@ -516,3 +516,23 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 - 视频面板加载时间从固定 12 秒缩短到 API 实际响应时间（约 200ms）
 - 知识点匹配覆盖精确 + 模糊双轨，准确率大幅提升
 - API 测试接口避免 500 白屏，错误信息清晰可读
+
+---
+
+### 📅 2026-07-06
+* **suu（成员 2：自适应路径规划与复习模块）**:
+  * **已完成**:
+    - 完成 `review_plans` 持久化 SM-2 闭环：手动创建复习计划、提交困难/一般/简单反馈、更新 E-Factor/间隔/下次复习时间并在 `Review.vue` 展示。
+    - 在 `learning_strategy.py` 实现 `PathPlanner`、微概念图谱、跨学科混合图谱、确定性图嵌入与 A* 多约束动态路径生成。
+    - 在 `profile_api.py` 复用既有 `getLearningPath` 接口扩展 `adaptive_route`、`micro_concept_graph`、`cross_domain_micro_graph` 字段，保持原有字段兼容。
+    - 在 `LearningPathGraph.vue` 展示 A* 5-8 步推荐路线、路径代价、置信度、图谱约束和跨学科补强建议。
+    - 在 `App.vue` 增加窄屏自动折叠侧边栏，减少成员 2 页面在移动端被固定导航挤压的问题。
+    - 复核 `RevisionCalendar.vue` 现有复习打卡、连续天数、搜索选择知识点、历史曲线和日志能力，确认成员 2 前端页面均有对应实现。
+  * **验证**:
+    - `pytest test_edumatrix.py -q`：50 passed。
+    - `cd frontend && npm run build`：通过；仅保留既有 KaTeX 路径、axios 混合导入和 chunk 体积警告。
+    - 浏览器验证 `/learning-path`：A* 8 步路线、跨学科补强、桌面/390px 移动端展示通过，控制台无 error/warn。
+    - 浏览器验证 `/review`：新建复习计划后点击“简单”，页面从 3 天/0 次/E-Factor 2.50 更新到 8 天/1 次/E-Factor 2.51。
+  * **计划**:
+    - 推送前按团队流程确认远端分支状态，避免直接推送 main。
+  * **Block风险**: 无；仅需注意当前本地分支名为 `suu`，与守则示例中的 `feat/姓名缩写-模块名` 命名格式不完全一致，如团队强制检查分支名，建议提交 PR 前确认是否需要改名。

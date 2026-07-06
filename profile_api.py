@@ -6,6 +6,10 @@ from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from app.database import run_db_op
 from app.crud import load_student_profile, save_student_profile
+from learning_strategy import (
+    PathPlanner,
+    suggest_cross_domain_supports,
+)
 from swarm_factory import build_swarm_from_headers
 
 # 知识点依赖图：concept -> [prerequisites]
@@ -37,6 +41,8 @@ KNOWLEDGE_DAG: dict[str, list[str]] = {
     "神经网络": ["反向传播", "梯度下降"],
     "卷积神经网络": ["神经网络", "卷积核", "池化层"],
 }
+
+PATH_PLANNER = PathPlanner(KNOWLEDGE_DAG)
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -519,6 +525,8 @@ async def get_learning_path(
 
     # === 拓扑排序：计算每个概念的学习层级 ===
     all_concepts = set(mastery.keys()) | set(KNOWLEDGE_DAG.keys())
+    for prereqs in KNOWLEDGE_DAG.values():
+        all_concepts.update(prereqs or [])
     all_concepts.discard("")
     all_concepts.discard(None)
 
@@ -670,6 +678,38 @@ async def get_learning_path(
         "next_up": [n["concept"] for n in next_steps[:3]],
     }
 
+    cognitive_load = getattr(profile, "cognitive_load", 0.45) or 0.45
+    frustration = getattr(profile, "frustration_index", 0.0) or 0.0
+    micro_concept_graph = PATH_PLANNER.build_micro_graph(
+        mastery,
+        concept_tier=concept_tier,
+        cognitive_load=cognitive_load,
+        frustration=frustration,
+    )
+    cross_domain_micro_graph = PATH_PLANNER.build_cross_disciplinary_graph(
+        mastery,
+        concept_tier=concept_tier,
+        cognitive_load=cognitive_load,
+        frustration=frustration,
+    )
+    adaptive_route = PATH_PLANNER.plan(
+        mastery,
+        learning_goals=getattr(profile, "learning_goals", []) or [],
+        weak_points=getattr(profile, "weak_points", []) or [],
+        concept_tier=concept_tier,
+        cognitive_load=cognitive_load,
+        frustration=frustration,
+        max_steps=8,
+    )
+    route_concepts = [node["concept"] for node in adaptive_route.get("nodes", [])]
+    adaptive_route["cross_domain_supports"] = suggest_cross_domain_supports(
+        cross_domain_micro_graph,
+        route_concepts,
+    )
+    progress_summary["adaptive_target"] = adaptive_route.get("target_concept", "")
+    progress_summary["adaptive_route_steps"] = len(adaptive_route.get("nodes", []))
+    progress_summary["cross_domain_supports"] = len(adaptive_route.get("cross_domain_supports", []))
+
     return {
         "student_id": student_id,
         "learning_chain": learning_chain,
@@ -678,6 +718,9 @@ async def get_learning_path(
         "gap_chains": gap_chains[:5],
         "strategy_suggestions": strategy_suggestions[:5],
         "progress_summary": progress_summary,
+        "adaptive_route": adaptive_route,
+        "micro_concept_graph": micro_concept_graph,
+        "cross_domain_micro_graph": cross_domain_micro_graph,
         "concept_tiers": {str(k): [n["concept"] for n in v] for k, v in sorted(tiers.items())},
         "updated_at": profile.last_update_timestamp if hasattr(profile, 'last_update_timestamp') else "",
     }

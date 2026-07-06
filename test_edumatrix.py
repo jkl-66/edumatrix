@@ -755,6 +755,211 @@ print("Val:", s.val)
         finally:
             session.close()
 
+    def test_flashcard_review_updates_persisted_sm2_plan_without_memory_card(self):
+        """The review API should update review_plans even if no in-memory card exists."""
+        from app.database import SessionLocal, DBReviewPlan, DBStudentProfile
+        from app.crud import upsert_review_plan
+        from fastapi.testclient import TestClient
+        from app.main import app
+        import uuid
+
+        student_id = f"test-sm2-api-{uuid.uuid4().hex[:8]}"
+        concept = f"sm2-concept-{uuid.uuid4().hex[:8]}"
+
+        session = SessionLocal()
+        try:
+            upsert_review_plan(session, student_id, concept, 0.5, 1)
+        finally:
+            session.close()
+
+        client = TestClient(app)
+        try:
+            for expected_count, quality in enumerate((2, 4, 5), start=1):
+                response = client.post(
+                    "/api/flashcard/review",
+                    json={"student_id": student_id, "concept": concept, "quality": quality},
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                data = response.json()
+                self.assertIn("review_plan", data)
+                self.assertEqual(data["review_plan"]["last_quality"], quality)
+                self.assertEqual(data["review_plan"]["review_count"], expected_count)
+                self.assertGreaterEqual(data["review_plan"]["easiness_factor"], 1.3)
+                self.assertGreaterEqual(data["review_plan"]["interval_days"], 1)
+                self.assertIn("next_review_at", data["review_plan"])
+                self.assertIn("+00:00", data["flashcard"]["next_review_at"])
+                self.assertEqual(data["flashcard"]["review_count"], expected_count)
+
+            bad = client.post(
+                "/api/flashcard/review",
+                json={"student_id": student_id, "concept": concept, "quality": 1},
+            )
+            self.assertEqual(bad.status_code, 400)
+            bad_text = client.post(
+                "/api/flashcard/review",
+                json={"student_id": student_id, "concept": concept, "quality": "hard"},
+            )
+            self.assertEqual(bad_text.status_code, 400)
+
+            due = client.get("/api/flashcard/due", params={"student_id": student_id})
+            self.assertEqual(due.status_code, 200, due.text)
+            self.assertEqual(due.json()["due_count"], 0)
+
+            verify_session = SessionLocal()
+            try:
+                plan = verify_session.query(DBReviewPlan).filter_by(student_id=student_id, concept=concept).first()
+                self.assertIsNotNone(plan)
+                self.assertEqual(plan.last_quality, 5)
+                self.assertEqual(plan.review_count, 3)
+                self.assertIsNotNone(plan.next_review_at)
+            finally:
+                verify_session.close()
+        finally:
+            cleanup = SessionLocal()
+            try:
+                for plan in cleanup.query(DBReviewPlan).filter_by(student_id=student_id).all():
+                    cleanup.delete(plan)
+                profile = cleanup.query(DBStudentProfile).filter_by(student_id=student_id).first()
+                if profile:
+                    cleanup.delete(profile)
+                cleanup.commit()
+            finally:
+                cleanup.close()
+
+    def test_adaptive_astar_route_expands_prerequisites_deterministically(self):
+        """A* 路径应稳定生成，并补齐多前置概念中的必要依赖。"""
+        from learning_strategy import (
+            PathPlanner,
+            build_adaptive_astar_route,
+            build_cross_disciplinary_micro_graph,
+            build_micro_concept_graph,
+            suggest_cross_domain_supports,
+        )
+        from profile_api import KNOWLEDGE_DAG
+
+        mastery = {"机器学习": 0.2, "线性回归": 0.1, "梯度下降": 0.1}
+        route1 = build_adaptive_astar_route(
+            KNOWLEDGE_DAG,
+            mastery,
+            learning_goals=["Transformer"],
+            weak_points=["反向传播"],
+            cognitive_load=0.62,
+            frustration=0.15,
+        )
+        route2 = build_adaptive_astar_route(
+            KNOWLEDGE_DAG,
+            mastery,
+            learning_goals=["Transformer"],
+            weak_points=["反向传播"],
+            cognitive_load=0.62,
+            frustration=0.15,
+        )
+        planner = PathPlanner(KNOWLEDGE_DAG)
+        planner_route = planner.plan(
+            mastery,
+            learning_goals=["Transformer"],
+            weak_points=["反向传播"],
+            cognitive_load=0.62,
+            frustration=0.15,
+        )
+
+        concepts1 = [node["concept"] for node in route1["nodes"]]
+        concepts2 = [node["concept"] for node in route2["nodes"]]
+        planner_concepts = [node["concept"] for node in planner_route["nodes"]]
+        self.assertEqual(concepts1, concepts2)
+        self.assertEqual(concepts1, planner_concepts)
+        self.assertGreaterEqual(len(concepts1), 5)
+        self.assertLessEqual(len(concepts1), 8)
+        self.assertEqual(len(concepts1), len(set(concepts1)))
+        self.assertEqual(route1["target_concept"], "Transformer")
+        self.assertEqual(planner_route["strategy"], "A* 多约束动态路径生成")
+        self.assertIn("反向传播", concepts1)
+        self.assertLess(concepts1.index("反向传播"), concepts1.index("神经网络"))
+        self.assertGreater(route1["total_cost"], 0)
+        self.assertTrue(route1["edges"])
+
+        graph = planner.build_micro_graph(mastery, cognitive_load=0.62)
+        function_graph = build_micro_concept_graph(KNOWLEDGE_DAG, mastery, cognitive_load=0.62)
+        self.assertEqual(graph["metadata"]["node_count"], function_graph["metadata"]["node_count"])
+        self.assertGreaterEqual(graph["metadata"]["node_count"], 20)
+        self.assertTrue(any(edge["from"] == "机器学习" and edge["to"] == "线性回归" for edge in graph["edges"]))
+
+        cross_graph = planner.build_cross_disciplinary_graph(mastery, cognitive_load=0.62)
+        function_cross_graph = build_cross_disciplinary_micro_graph(KNOWLEDGE_DAG, mastery, cognitive_load=0.62)
+        self.assertEqual(cross_graph["metadata"]["cross_domain_edge_count"], function_cross_graph["metadata"]["cross_domain_edge_count"])
+        cross_nodes = {node["concept"] for node in cross_graph["nodes"]}
+        self.assertIn("偏导数", cross_nodes)
+        self.assertTrue(any(node["concept"] == "偏导数" and node["domain_label"] == "数学" for node in cross_graph["nodes"]))
+        self.assertIn("mathematics", cross_graph["metadata"]["domains"])
+        self.assertIn("physics", cross_graph["metadata"]["domains"])
+        self.assertEqual(cross_graph["metadata"]["graph_backend"], "networkx")
+        self.assertGreater(cross_graph["metadata"]["cross_domain_edge_count"], 0)
+        self.assertGreater(cross_graph["metadata"]["semantic_edge_count"], 0)
+        self.assertTrue(any(
+            edge["from"] == "偏导数" and edge["to"] == "梯度下降" and edge["type"] == "cross_domain_prerequisite"
+            for edge in cross_graph["edges"]
+        ))
+        supports = suggest_cross_domain_supports(cross_graph, concepts1)
+        self.assertTrue(any(item["concept"] == "偏导数" and item["target"] == "梯度下降" for item in supports))
+
+    def test_learning_path_api_exposes_adaptive_astar_route(self):
+        """学习路径 API 应暴露成员 2 的微概念图谱与 A* 动态路线。"""
+        from app.database import SessionLocal, DBStudentProfile
+        from app.crud import save_student_profile
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from models import StudentProfile
+        import uuid
+
+        student_id = f"test-astar-path-{uuid.uuid4().hex[:8]}"
+        profile = StudentProfile(student_id=student_id)
+        profile.concept_mastery = {
+            "机器学习": 0.25,
+            "线性回归": 0.15,
+            "梯度下降": 0.12,
+        }
+        profile.learning_goals = ["Transformer"]
+        profile.weak_points = ["反向传播"]
+        profile.cognitive_load = 0.62
+        profile.frustration_index = 0.2
+
+        session = SessionLocal()
+        try:
+            save_student_profile(session, profile)
+        finally:
+            session.close()
+
+        client = TestClient(app)
+        try:
+            response = client.get(f"/api/profile/{student_id}/learning-path")
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()
+            self.assertIn("adaptive_route", data)
+            self.assertIn("micro_concept_graph", data)
+            self.assertIn("cross_domain_micro_graph", data)
+
+            route = data["adaptive_route"]
+            self.assertEqual(route["target_concept"], "Transformer")
+            self.assertGreaterEqual(len(route["nodes"]), 5)
+            self.assertLessEqual(len(route["nodes"]), 8)
+            self.assertGreater(route["total_cost"], 0)
+            self.assertIn("cross_domain_supports", route)
+            self.assertTrue(any(item["concept"] == "偏导数" for item in route["cross_domain_supports"]))
+            self.assertTrue(any(item["domain_label"] == "数学" for item in route["cross_domain_supports"]))
+            self.assertEqual(data["progress_summary"]["adaptive_target"], "Transformer")
+            self.assertGreater(data["progress_summary"]["cross_domain_supports"], 0)
+            self.assertGreaterEqual(data["micro_concept_graph"]["metadata"]["edge_count"], 20)
+            self.assertGreater(data["cross_domain_micro_graph"]["metadata"]["cross_domain_edge_count"], 0)
+        finally:
+            cleanup = SessionLocal()
+            try:
+                db_profile = cleanup.query(DBStudentProfile).filter_by(student_id=student_id).first()
+                if db_profile:
+                    cleanup.delete(db_profile)
+                    cleanup.commit()
+            finally:
+                cleanup.close()
+
     def test_note_matrix_closed_loop(self):
         """验证矩阵闭环学习流：笔记更新、AI 润色解析以及错题反思追加这套完整链路的正确性"""
         from app.database import SessionLocal, DBNote, DBQuizRecord, DBStudentProfile

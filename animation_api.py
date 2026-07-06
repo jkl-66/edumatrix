@@ -3,6 +3,7 @@ animation_api.py — 本地动画视频服务
 提供知识点 → 本地视频文件的映射和静态文件服务
 """
 from pathlib import Path
+from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 import json
@@ -18,7 +19,8 @@ KNOWLEDGE_POINTS = [
     "池化层", "最大池化", "平均池化", "卷积核", "特征图",
     "反向传播", "链式法则", "梯度下降", "逻辑回归", "线性回归",
     "决策树", "支持向量机", "过拟合", "正则化", "交叉验证",
-    "机器学习", "监督学习", "模型评估",
+    "机器学习", "监督学习", "模型评估", "前向传播", "损失函数",
+    "欠拟合", "激活函数",
     "Transformer", "注意力机制", "神经网络", "卷积神经网络",
 ]
 
@@ -35,7 +37,7 @@ def _get_knowledge_videos(knowledge_point: str) -> list[dict]:
                 "filename": f.name,
                 "path": f"{knowledge_point}/{f.name}",
                 "size": f.stat().st_size,
-                "url": f"/api/v1/animations/video/{knowledge_point}/{f.name}",
+                "url": f"/api/v1/animations/video/{quote(knowledge_point)}/{quote(f.name)}",
             })
     return videos
 

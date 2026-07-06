@@ -599,8 +599,12 @@ class StudentProfile:
                 if "数学推导" not in self.interaction_preferences:
                     self.interaction_preferences.append("数学推导")
                     
-        for point in ("池化层", "卷积核", "反向传播", "链式法则", "梯度下降", "逻辑回归",
-                      "线性回归", "决策树", "SVM", "朴素贝叶斯", "过拟合", "正则化"):
+        for point in ("池化层", "最大池化", "平均池化", "卷积核", "特征图",
+                      "反向传播", "链式法则", "梯度下降", "逻辑回归", "线性回归",
+                      "决策树", "支持向量机", "过拟合", "正则化", "交叉验证",
+                      "机器学习", "监督学习", "模型评估", "前向传播", "损失函数",
+                      "欠拟合", "激活函数", "Transformer", "注意力机制",
+                      "神经网络", "卷积神经网络", "SVM", "朴素贝叶斯"):
             if point in message and point not in self.weak_points:
                 self.weak_points.append(point)
 
@@ -732,6 +736,7 @@ class StudentProfile:
             "决策树", "支持向量机", "朴素贝叶斯", "模型评估", "混淆矩阵", "过拟合", "正则化", "交叉验证",
             "神经网络", "卷积神经网络", "Transformer", "注意力机制", "K-Means", "PCA", "t-SNE",
             "随机森林", "XGBoost", "AUC", "F1分数", "精确率", "召回率", "分类", "回归",
+            "前向传播", "损失函数", "欠拟合", "激活函数",
         )
         matched_points = [p for p in known_points if p in message]
         filtered_points = []

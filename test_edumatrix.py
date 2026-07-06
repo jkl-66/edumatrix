@@ -663,13 +663,13 @@ print("Val:", s.val)
         from agent_swarm import _resolve_coreference
         from models import StudentProfile
         
-        # 1. 正常问一个问题："逻辑回归损失函数"
+        # 1. 正常问一个问题："逻辑回归该怎么理解"
         profile = StudentProfile(student_id="test_coref")
-        profile.update_from_message("逻辑回归的损失函数是什么")
+        profile.update_from_message("逻辑回归该怎么理解")
         profile.concept_mastery["逻辑回归"] = 0.5 # 确保在 concept_mastery 中
         
         # 2. 模拟系统回复
-        profile.update_from_feedback(feedback="逻辑回归的损失函数是交叉熵损失函数。")
+        profile.update_from_feedback(feedback="逻辑回归是一个经典的二分类算法。")
         
         # 3. 输入一段垃圾词："这这那那，今天天气真好"
         profile.update_from_message("这这那那，今天天气真好")

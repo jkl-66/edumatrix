@@ -57,6 +57,26 @@ CONCEPT_VIDEO_MAP = {
         "title": "一元线性回归与最小二乘拟合演算微课",
         "url": "/api/v1/video/stream?concept=线性回归",
         "duration": "04:05",
+    },
+    "前向传播": {
+        "title": "前向传播计算与多层感知机特征流演示微课",
+        "url": "/api/v1/video/stream?concept=前向传播",
+        "duration": "03:15",
+    },
+    "损失函数": {
+        "title": "损失函数与优化目标三维空间几何直观演示",
+        "url": "/api/v1/video/stream?concept=损失函数",
+        "duration": "04:00",
+    },
+    "欠拟合": {
+        "title": "欠拟合表现及其与模型复杂度权衡关系微课",
+        "url": "/api/v1/video/stream?concept=欠拟合",
+        "duration": "03:30",
+    },
+    "激活函数": {
+        "title": "激活函数非线性转换与梯度流失效应直观演示",
+        "url": "/api/v1/video/stream?concept=激活函数",
+        "duration": "04:45",
     }
 }
 

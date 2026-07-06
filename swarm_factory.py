@@ -14,6 +14,10 @@ def build_swarm_from_headers(headers: dict[str, str] | Any) -> EduMatrixSwarm:
     model = headers.get("x-edumatrix-model", "")
     temp_str = headers.get("x-edumatrix-temperature", "")
     mt_str = headers.get("x-edumatrix-max-tokens", "")
+    
+    mm_api_key = headers.get("x-edumatrix-multimodal-api-key", "")
+    mm_endpoint = headers.get("x-edumatrix-multimodal-endpoint", "")
+    mm_model = headers.get("x-edumatrix-multimodal-model", "")
 
     if not api_key:
         default = _swarm_cache.get("__default__")
@@ -36,7 +40,7 @@ def build_swarm_from_headers(headers: dict[str, str] | Any) -> EduMatrixSwarm:
         except Exception:
             pass
 
-    cache_key = f"{api_key[-8:]}::{endpoint}::{model}::{temperature}::{max_tokens}"
+    cache_key = f"{api_key[-8:]}::{endpoint}::{model}::{temperature}::{max_tokens}::{mm_api_key[-8:] if mm_api_key else ''}::{mm_endpoint}::{mm_model}"
     cached = _swarm_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -47,6 +51,9 @@ def build_swarm_from_headers(headers: dict[str, str] | Any) -> EduMatrixSwarm:
         model=model or None,
         temperature=temperature,
         max_tokens=max_tokens,
+        multimodal_api_key=mm_api_key or None,
+        multimodal_endpoint=mm_endpoint or None,
+        multimodal_model=mm_model or None,
     )
     new_swarm = EduMatrixSwarm(rag=hybrid_rag, llm=dynamic_llm)
     _swarm_cache[cache_key] = new_swarm

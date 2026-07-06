@@ -40,9 +40,9 @@ const config = ref({
   model: 'doubao-seed-2.0-pro',
   temperature: 0.3,
   maxTokens: 4096,
-  xfAppId: '',
-  xfApiKey: '',
-  xfApiSecret: '',
+  multimodalApiKey: '',
+  multimodalEndpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+  multimodalModel: 'glm-4v',
 })
 
 function save(silent = false) {
@@ -52,9 +52,9 @@ function save(silent = false) {
     model: config.value.model,
     temperature: config.value.temperature,
     maxTokens: config.value.maxTokens,
-    xfAppId: config.value.xfAppId,
-    xfApiKey: config.value.xfApiKey,
-    xfApiSecret: config.value.xfApiSecret,
+    multimodalApiKey: config.value.multimodalApiKey,
+    multimodalEndpoint: config.value.multimodalEndpoint,
+    multimodalModel: config.value.multimodalModel,
   }))
   if (!silent) {
     saved.value = true
@@ -85,6 +85,11 @@ function load() {
         parsed.maxTokens = 4096
         needsSave = true
       }
+      if (parsed.multimodalEndpoint === undefined) {
+        parsed.multimodalEndpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+        parsed.multimodalModel = 'glm-4v'
+        needsSave = true
+      }
       Object.assign(config.value, parsed)
       if (needsSave) {
         save(true)
@@ -97,6 +102,11 @@ function load() {
 
 function clearKey() {
   config.value.apiKey = ''
+  save()
+}
+
+function clearMultimodalKey() {
+  config.value.multimodalApiKey = ''
   save()
 }
 
@@ -212,25 +222,35 @@ onMounted(load)
         <input v-model.number="config.maxTokens" type="range" min="512" max="8192" step="512" class="w-full" @input="triggerAutoSave" />
       </div>
 
+      <!-- 视觉模型配置 -->
       <div class="border-t border-gray-100 pt-5">
         <h3 class="text-sm font-bold text-gray-800 mb-4 flex items-center gap-2">
-          <Sparkles :size="16" class="text-blue-500" />
-          科大讯飞 TTS 设置
+          <Eye :size="16" class="text-indigo-500" />
+          多模态视觉模型设置 (用于图片答疑与VisRAG)
           <span v-if="autoSaved" class="text-[10px] text-emerald-600 font-normal ml-2 animate-pulse bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/50">已实时保存</span>
         </h3>
         
         <div class="space-y-4">
           <div>
-            <label class="text-xs font-medium text-gray-600 mb-1.5 block">APPID</label>
-            <input v-model="config.xfAppId" class="input text-sm" placeholder="讯飞控制台获取的 APPID" @input="triggerAutoSave" />
+            <label class="text-xs font-medium text-gray-600 mb-1.5 block">API Key (视觉)</label>
+            <div class="flex gap-2">
+              <input
+                v-model="config.multimodalApiKey"
+                type="password"
+                class="input text-sm flex-1"
+                placeholder="多模态模型 API Key；留空则默认降级使用全局 API Key"
+                @input="triggerAutoSave"
+              />
+              <button v-if="config.multimodalApiKey" class="btn btn-outline text-xs shrink-0" @click="clearMultimodalKey">清除</button>
+            </div>
           </div>
           <div>
-            <label class="text-xs font-medium text-gray-600 mb-1.5 block">API Key</label>
-            <input v-model="config.xfApiKey" class="input text-sm" placeholder="讯飞控制台获取的 API Key" @input="triggerAutoSave" />
+            <label class="text-xs font-medium text-gray-600 mb-1.5 block">API Endpoint (视觉)</label>
+            <input v-model="config.multimodalEndpoint" class="input text-sm" placeholder="https://open.bigmodel.cn/api/paas/v4/chat/completions" @input="triggerAutoSave" />
           </div>
           <div>
-            <label class="text-xs font-medium text-gray-600 mb-1.5 block">API Secret</label>
-            <input v-model="config.xfApiSecret" type="password" class="input text-sm" placeholder="讯飞控制台获取的 API Secret" @input="triggerAutoSave" />
+            <label class="text-xs font-medium text-gray-600 mb-1.5 block">视觉模型名称</label>
+            <input v-model="config.multimodalModel" class="input text-sm" placeholder="glm-4v 或 gpt-4o-mini" @input="triggerAutoSave" />
           </div>
         </div>
       </div>

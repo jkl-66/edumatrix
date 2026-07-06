@@ -15,7 +15,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles, Users,
-  RotateCcw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar, X, Film,
+  RotateCcw, RotateCw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar, X, Film,
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
 import { useQuizStore } from '../stores/quiz'
@@ -984,6 +984,51 @@ async function generateReviewPlan(msgIdx) {
   }
 }
 
+async function regenerateMessage(idx) {
+  if (chatStore.sending) return
+  // Find the corresponding user message
+  let userMsg = null
+  let userMsgIndex = -1
+  for (let i = idx - 1; i >= 0; i--) {
+    if (chatStore.messages[i].role === 'user') {
+      userMsg = chatStore.messages[i]
+      userMsgIndex = i
+      break
+    }
+  }
+  if (!userMsg) return
+
+  // Remove all messages after the user message
+  chatStore.messages.splice(userMsgIndex + 1)
+  chatStore.saveMessages()
+
+  // Resend the user message
+  try {
+    const studentId = props.studentId || 'default'
+    await chatStore.sendChatMessage(userMsg.content, studentId, 'chat', userMsg.images || [])
+  } catch (err) {
+    console.error('Regenerate failed:', err)
+  }
+}
+
+async function regenerateFromUserMsg(idx) {
+  if (chatStore.sending) return
+  const userMsg = chatStore.messages[idx]
+  if (!userMsg || userMsg.role !== 'user') return
+
+  // Remove the user message and all subsequent messages
+  chatStore.messages.splice(idx)
+  chatStore.saveMessages()
+
+  // Resend
+  try {
+    const studentId = props.studentId || 'default'
+    await chatStore.sendChatMessage(userMsg.content, studentId, 'chat', userMsg.images || [])
+  } catch (err) {
+    console.error('Regenerate failed:', err)
+  }
+}
+
 /**
  * 导出完整讲义为 Markdown
  */
@@ -1567,9 +1612,16 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
   // Helper to render math
   function renderMath(math, display) {
+    const cleanMathContent = math
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+
     if (window.katex) {
       try {
-        return window.katex.renderToString(math, {
+        return window.katex.renderToString(cleanMathContent, {
           displayMode: display,
           throwOnError: false,
           trust: true
@@ -1579,7 +1631,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
       }
     }
     // Fallback: raw but clean formatting with math symbols
-    const cleanMath = math
+    const cleanMath = cleanMathContent
       .replace(/\\Sigma/g, '∑')
       .replace(/\\sigma/g, 'σ')
       .replace(/\\mu/g, 'μ')
@@ -1714,7 +1766,17 @@ function renderMarkdown(text, type = '', conceptName = '') {
           </div>
 
           <div v-for="(msg, idx) in messages" :key="idx">
-            <div v-if="msg.role === 'user'" class="flex justify-end mb-3">
+            <div v-if="msg.role === 'user'" class="flex justify-end items-center gap-2 mb-3">
+              <!-- 重新提问按钮 (顺时针旋转小箭头) -->
+              <button 
+                class="w-7 h-7 rounded-lg border border-gray-200/60 bg-white hover:bg-purple-50 text-gray-400 hover:text-purple-600 shadow-sm hover:shadow active:scale-95 transition-all flex items-center justify-center cursor-pointer shrink-0"
+                title="重新问一遍问题" 
+                :disabled="sending"
+                @click="regenerateFromUserMsg(idx)"
+              >
+                <RotateCw :size="12" />
+              </button>
+
               <!-- 用户消息气泡：圆角矩形，加深蓝色精致边框，大行距，优雅字体 -->
               <div class="max-w-[75%] chat-card-user text-blue-600 shadow-sm flex flex-col gap-2">
                 <p class="text-sm whitespace-pre-wrap leading-relaxed">{{ msg.content }}</p>
@@ -1751,6 +1813,10 @@ function renderMarkdown(text, type = '', conceptName = '') {
                       <button @click="exportAsMarkdown(idx)" class="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-blue-50 rounded transition-colors"
                         title="导出为 Markdown">
                         <Download :size="10" /> 导出
+                      </button>
+                      <button @click="regenerateMessage(idx)" class="text-[10px] text-gray-400 hover:text-purple-600 flex items-center gap-0.5 px-1.5 py-0.5 hover:bg-purple-50 rounded transition-colors"
+                        title="重新回答" :disabled="sending">
+                        <RotateCcw :size="10" /> 重新回答
                       </button>
                       <span class="text-[9px] text-gray-300">💡 点击代码块/公式可即时答疑</span>
                     </div>

@@ -666,7 +666,11 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 await check_disconnection()
                 yield _sse("progress", {"step": "generating", "message": "自适应助教正在组织回复...", "progress": 65})
                 
-                async for chunk in swarm.llm.generate_stream(system_prompt, user_prompt, role="自适应助教", images=images):
+                # 如果当前主模型不支持多模态，且我们已经提取了 OCR 文本，则最终生成时将图片置空。
+                # 这能够强行让高认知能力的文本主模型 (如 DeepSeek) 承接后续的苏格拉底启发式回答与 RAG 融合，避免 fallback 视觉小模型直接吐出直接答案。
+                final_images = images if getattr(swarm.llm, "has_vision", False) else []
+
+                async for chunk in swarm.llm.generate_stream(system_prompt, user_prompt, role="自适应助教", images=final_images):
                     await check_disconnection()
                     full_response += chunk
                     yield _sse("chat_chunk", {"content": chunk})

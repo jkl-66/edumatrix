@@ -14,6 +14,9 @@ export function buildHeaders() {
   if (cfg.apiKey) headers['X-EduMatrix-Api-Key'] = cfg.apiKey
   if (cfg.endpoint) headers['X-EduMatrix-Endpoint'] = cfg.endpoint
   if (cfg.model) headers['X-EduMatrix-Model'] = cfg.model
+  if (cfg.multimodalApiKey) headers['X-EduMatrix-Multimodal-Api-Key'] = cfg.multimodalApiKey
+  if (cfg.multimodalEndpoint) headers['X-EduMatrix-Multimodal-Endpoint'] = cfg.multimodalEndpoint
+  if (cfg.multimodalModel) headers['X-EduMatrix-Multimodal-Model'] = cfg.multimodalModel
   const token = localStorage.getItem('edumatrix_token')
   if (token) headers['Authorization'] = `Bearer ${token}`
   if (cfg.temperature != null) headers['X-EduMatrix-Temperature'] = String(cfg.temperature)

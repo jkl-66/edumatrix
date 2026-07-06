@@ -62,6 +62,10 @@ class AsyncOpenAIChatLLM:
     temperature: float = 0.3
     max_tokens: int = 4096
     timeout_seconds: int = 120
+    multimodal_endpoint: str | None = None
+    multimodal_api_key: str | None = None
+    multimodal_model: str | None = None
+    is_multimodal_fallback: bool = False
 
     rate_limiter: APIRateLimiter = field(init=False)
     circuit_breaker: CircuitBreaker = field(init=False)
@@ -78,6 +82,13 @@ class AsyncOpenAIChatLLM:
             failure_threshold=CONFIG.llm_circuit_breaker_threshold,
             recovery_timeout=float(CONFIG.llm_circuit_breaker_window),
         ))
+
+    @property
+    def has_vision(self) -> bool:
+        model_lower = self.model.lower()
+        return self.is_multimodal_fallback or any(
+            x in model_lower for x in ["vision", "vl", "vlm", "gpt-4", "claude-3", "gemini", "glm-4v", "glm-4.5v", "glm-4.6v", "glm-5v", "omni"]
+        )
 
     async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
         estimated_tokens = len(system_prompt + user_prompt) // 2 + 500
@@ -130,13 +141,14 @@ class AsyncOpenAIChatLLM:
     async def generate_stream(self, system_prompt: str, user_prompt: str, *, role: str, images: list[str] = []) -> AsyncGenerator[str, None]:
         import os
 
-        # Check if the active client is DeepSeek and we have images to process
-        is_deepseek = "deepseek" in self.endpoint.lower() or "deepseek" in self.model.lower()
-        if is_deepseek and images:
+        # Check if the active model supports vision
+        has_vision = self.has_vision
+        
+        if not has_vision and images:
             # Look for configured fallback multimodal variables from CONFIG
-            fallback_endpoint = CONFIG.multimodal_llm_endpoint
-            fallback_api_key = CONFIG.multimodal_llm_api_key
-            fallback_model = CONFIG.multimodal_llm_model
+            fallback_endpoint = self.multimodal_endpoint or CONFIG.multimodal_llm_endpoint
+            fallback_api_key = self.multimodal_api_key or CONFIG.multimodal_llm_api_key
+            fallback_model = self.multimodal_model or CONFIG.multimodal_llm_model
 
             # If not explicitly configured, fallback to Zhipu GLM-4v using ZHIPUAI_API_KEY
             if not fallback_endpoint:
@@ -154,14 +166,15 @@ class AsyncOpenAIChatLLM:
                     model=fallback_model,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
+                    is_multimodal_fallback=True,
                 )
-                print(f"  [EduMatrix] 检测到 DeepSeek 不支持多模态输入，已自动路由流式请求至多模态备用节点 ({fallback_model})。")
+                print(f"  [EduMatrix] 检测到当前主模型 ({self.model}) 不支持多模态输入，已自动路由流式请求至多模态备用节点 ({fallback_model})。")
                 async for chunk in fallback_backend.generate_stream(system_prompt, user_prompt, role=role, images=images):
                     yield chunk
                 return
             else:
                 # If no multimodal fallback configured/available, yield warning in stream and run text-only query
-                yield "【⚠️ 系统提示：当前主模型 (DeepSeek) 不支持多模态图片输入。请在 `.env` 中配置 `ZHIPUAI_API_KEY` 或专用的多模态模型以开启图片/公式识别。】\n\n"
+                yield f"【⚠️ 系统提示：当前主模型 ({self.model} / DeepSeek) 不支持多模态图片输入。请在网页的 Settings 页面配置多模态视觉模型，或在 `.env` 中设置多模态 API Key 以开启图片与公式识别。】\n\n"
                 async for chunk in self._generate_stream_internal(system_prompt, user_prompt, role=role, images=[]):
                     yield chunk
                 return
@@ -570,6 +583,10 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
             temperature=overrides.get("temperature", config.llm_temperature),
             max_tokens=overrides.get("max_tokens", config.llm_max_tokens),
             timeout_seconds=config.llm_timeout,
+            multimodal_endpoint=overrides.get("multimodal_endpoint", config.multimodal_llm_endpoint),
+            multimodal_api_key=overrides.get("multimodal_api_key", config.multimodal_llm_api_key),
+            multimodal_model=overrides.get("multimodal_model", config.multimodal_llm_model),
+            is_multimodal_fallback=overrides.get("is_multimodal_fallback", False),
         )
     return AsyncDeterministicEducationLLM()
 

@@ -545,6 +545,9 @@ def build_adaptive_astar_route(
     affect = _clamp_score(frustration, 0.0)
     goal_set = {g for g in (learning_goals or []) if g}
     weak_set = {w for w in (weak_points or []) if w}
+    goal_related = set(goal_set)
+    for goal in goal_set:
+        goal_related.update(_ancestors_for_target(dag, goal))
 
     adjacency: dict[str, list[tuple[str, float]]] = {concept: [] for concept in concepts}
     edge_map: dict[tuple[str, str], dict[str, Any]] = {}
@@ -559,9 +562,11 @@ def build_adaptive_astar_route(
         tier = tiers.get(concept, 0)
         priority = (1.0 - score) * 1.8 + tier * 0.22
         if concept in goal_set:
-            priority += 1.2
+            priority += 3.2
+        elif concept in goal_related:
+            priority += 1.1
         if concept in weak_set:
-            priority += 1.0
+            priority += 1.3
         if score < 0.3:
             priority += 0.25
         if len(dag.get(concept, []) or []) >= 2:
@@ -754,7 +759,7 @@ def build_adaptive_astar_route(
         "edges": route_edges,
         "reasons": [
             "按前置依赖边展开搜索，避免跳过必要基础概念",
-            "边权同时考虑目标掌握缺口、前置薄弱度、认知负荷与情绪阻力",
+            "路线会同时考虑目标掌握缺口、前置薄弱度、认知负荷与情绪阻力",
             "优先选择 5-8 步的可执行微路线，便于一周内分段推进",
         ],
         "constraints": {

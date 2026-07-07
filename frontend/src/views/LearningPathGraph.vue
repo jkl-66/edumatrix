@@ -101,11 +101,6 @@ function routeActionColor(action) {
   return 'bg-amber-50 text-amber-700 border-amber-100'
 }
 
-function formatRouteCost(cost) {
-  const value = Number(cost || 0)
-  return value.toFixed(2)
-}
-
 function formatMinutes(minutes) {
   const value = Number(minutes || 0)
   if (value >= 180) return `${(value / 60).toFixed(1)} 小时`
@@ -215,8 +210,8 @@ onMounted(async () => {
             <p class="text-xs font-bold text-indigo-700 truncate max-w-[90px]">{{ adaptiveRoute.target_concept }}</p>
           </div>
           <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-100">
-            <p class="text-[9px] text-slate-500">总代价</p>
-            <p class="text-xs font-bold text-slate-700">{{ formatRouteCost(adaptiveRoute.total_cost) }}</p>
+            <p class="text-[9px] text-slate-500">预计</p>
+            <p class="text-xs font-bold text-slate-700">{{ formatMinutes(adaptiveRoute.estimated_minutes) }}</p>
           </div>
           <div class="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-100">
             <p class="text-[9px] text-emerald-500">置信度</p>
@@ -239,7 +234,7 @@ onMounted(async () => {
             <div class="mt-2 h-1.5 bg-white rounded-full overflow-hidden">
               <div class="h-full rounded-full" :class="masteryBarColor(node.percentage)" :style="{ width: node.percentage + '%' }" />
             </div>
-            <p class="text-[9px] text-gray-500 mt-1">掌握 {{ node.percentage }}% · 累计成本 {{ formatRouteCost(node.cumulative_cost) }}</p>
+            <p class="text-[9px] text-gray-500 mt-1">掌握 {{ node.percentage }}% · 预计 {{ formatMinutes(node.estimated_minutes) }}</p>
           </button>
           <div v-if="idx < routeNodes.length - 1" class="hidden md:flex items-center text-indigo-300">
             <ArrowRight :size="14" />
@@ -255,12 +250,12 @@ onMounted(async () => {
           </div>
         </div>
         <div class="rounded-xl bg-slate-50 border border-slate-100 p-3">
-          <p class="text-[10px] font-bold text-slate-700 mb-2">图谱约束</p>
+          <p class="text-[10px] font-bold text-slate-700 mb-2">推荐依据</p>
           <div class="grid grid-cols-2 gap-2 text-[10px] text-slate-600">
-            <p>微概念边：{{ graphEdgeCount }}</p>
-            <p>预计：{{ formatMinutes(adaptiveRoute.estimated_minutes) }}</p>
+            <p>知识联系：{{ graphEdgeCount }} 条</p>
+            <p>预计学习：{{ formatMinutes(adaptiveRoute.estimated_minutes) }}</p>
             <p>认知负荷：{{ Math.round((adaptiveRoute.constraints?.cognitive_load || 0) * 100) }}%</p>
-            <p>掌握阈值：{{ Math.round((adaptiveRoute.constraints?.mastery_threshold || 0.7) * 100) }}%</p>
+            <p>目标掌握：{{ Math.round((adaptiveRoute.constraints?.mastery_threshold || 0.7) * 100) }}%</p>
           </div>
         </div>
       </div>
@@ -268,12 +263,12 @@ onMounted(async () => {
       <div v-if="crossDomainSupports.length" class="mt-3 rounded-xl bg-amber-50/70 border border-amber-100 p-3">
         <div class="flex items-center justify-between gap-3 mb-2">
           <p class="text-[10px] font-bold text-amber-700">跨学科补强</p>
-          <span class="text-[9px] text-amber-600">{{ crossGraph?.metadata?.embedding_algorithm || 'graph embedding' }}</span>
+          <span class="text-[9px] text-amber-600">跨学科图谱推荐</span>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
           <div v-for="item in crossDomainSupports" :key="`${item.concept}-${item.target}`" class="rounded-lg bg-white/70 border border-amber-100 px-3 py-2">
             <p class="text-xs font-semibold text-gray-800">{{ item.concept }} → {{ item.target }}</p>
-            <p class="text-[9px] text-amber-700 mt-0.5">{{ item.domain_label || item.domain }} · 权重 {{ formatRouteCost(item.weight) }}</p>
+            <p class="text-[9px] text-amber-700 mt-0.5">{{ item.domain_label || item.domain }}补强 · 指向 {{ item.target_domain_label || item.target_domain || '目标概念' }}</p>
             <p class="text-[9px] text-gray-500 mt-1 line-clamp-2">{{ item.reason }}</p>
           </div>
         </div>

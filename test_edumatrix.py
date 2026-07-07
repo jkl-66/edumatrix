@@ -902,6 +902,62 @@ print("Val:", s.val)
         supports = suggest_cross_domain_supports(cross_graph, concepts1)
         self.assertTrue(any(item["concept"] == "偏导数" and item["target"] == "梯度下降" for item in supports))
 
+    def test_path_planner_respects_goal_variants_and_mastered_boundary(self):
+        """PathPlanner 应能针对不同目标/薄弱点生成稳定路线，并处理全掌握边界。"""
+        from learning_strategy import PathPlanner
+        from profile_api import KNOWLEDGE_DAG
+
+        planner = PathPlanner(KNOWLEDGE_DAG)
+
+        overfit_route = planner.plan(
+            {
+                "机器学习": 0.1,
+                "线性回归": 0.1,
+                "正则化": 0.1,
+                "交叉验证": 0.1,
+            },
+            learning_goals=["过拟合"],
+            weak_points=["正则化"],
+            cognitive_load=0.45,
+            frustration=0.0,
+        )
+        overfit_concepts = [node["concept"] for node in overfit_route["nodes"]]
+        self.assertEqual(overfit_route["target_concept"], "过拟合")
+        self.assertGreaterEqual(len(overfit_concepts), 5)
+        self.assertLessEqual(len(overfit_concepts), 8)
+        self.assertIn("正则化", overfit_concepts)
+        self.assertIn("交叉验证", overfit_concepts)
+        self.assertLess(overfit_concepts.index("正则化"), overfit_concepts.index("过拟合"))
+        self.assertLess(overfit_concepts.index("交叉验证"), overfit_concepts.index("过拟合"))
+
+        cnn_route = planner.plan(
+            {
+                "机器学习": 0.9,
+                "线性回归": 0.2,
+                "梯度下降": 0.2,
+            },
+            learning_goals=["卷积神经网络"],
+            weak_points=["卷积核", "池化层"],
+            cognitive_load=0.35,
+            frustration=0.05,
+        )
+        cnn_concepts = [node["concept"] for node in cnn_route["nodes"]]
+        self.assertNotEqual(cnn_route["target_concept"], "Transformer")
+        self.assertIn(cnn_route["target_concept"], {"卷积核", "特征图", "池化层", "卷积神经网络"})
+        self.assertGreaterEqual(len(cnn_concepts), 5)
+        self.assertLessEqual(len(cnn_concepts), 8)
+        self.assertIn("卷积核", cnn_concepts)
+        self.assertIn("池化层", cnn_concepts)
+        self.assertLess(cnn_concepts.index("卷积核"), cnn_concepts.index("池化层"))
+        self.assertGreater(cnn_route["estimated_minutes"], 0)
+
+        all_concepts = set(KNOWLEDGE_DAG.keys())
+        for prereqs in KNOWLEDGE_DAG.values():
+            all_concepts.update(prereqs or [])
+        mastered_route = planner.plan({concept: 0.95 for concept in all_concepts})
+        self.assertEqual(mastered_route["nodes"], [])
+        self.assertEqual(mastered_route["total_cost"], 0.0)
+
     def test_learning_path_api_exposes_adaptive_astar_route(self):
         """学习路径 API 应暴露成员 2 的微概念图谱与 A* 动态路线。"""
         from app.database import SessionLocal, DBStudentProfile

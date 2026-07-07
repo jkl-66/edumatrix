@@ -125,6 +125,8 @@ class DBStudentProfile(Base):
     customized_fields = Column(JSON, default=list)  # 用户手动设定的不可篡改字段列表
     rl_q_table = Column(JSON, default=dict)
     mental_state_history = Column(JSON, default=list)
+    concept_layers = Column(JSON, default=dict)
+    bkt_states = Column(JSON, default=dict)
 
     # 级联删除配置关系 (Task 6.2)
     alignment_logs = relationship("DBAlignmentLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
@@ -378,6 +380,14 @@ def _migrate_schema():
     if "mental_state_history" not in profile_columns:
         with engine.connect() as conn:
             conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN mental_state_history TEXT DEFAULT '[]'"))
+            conn.commit()
+    if "concept_layers" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN concept_layers TEXT DEFAULT '{}'"))
+            conn.commit()
+    if "bkt_states" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN bkt_states TEXT DEFAULT '{}'"))
             conn.commit()
 
 def get_db():

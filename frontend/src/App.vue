@@ -94,11 +94,18 @@ function logout() {
     .forEach(k => localStorage.removeItem(k))
   router.push('/login')
 }
+function handleCaptureError(e) {
+  // 过滤掉 img/video/audio 等媒体资源的加载失败（404等），它们是浏览器正常行为，不属于 Vue 渲染异常
+  if (e.target && ['IMG', 'VIDEO', 'AUDIO'].includes(e.target.tagName)) {
+    return
+  }
+  console.warn('[EduMatrix] 渲染异常:', e)
+}
 </script>
 
 <template>
   <div v-if="route.meta.layout === 'full'" class="h-screen w-screen overflow-hidden bg-[#0b0f19]">
-    <div @error.capture="(e) => console.warn('[EduMatrix] 渲染异常:', e)">
+    <div @error.capture="handleCaptureError">
       <router-view :key="route.fullPath" :student-id="studentId" />
     </div>
   </div>
@@ -165,7 +172,7 @@ function logout() {
 
       <!-- Page content -->
       <main class="flex-1 overflow-y-auto p-5">
-        <div @error.capture="(e) => console.warn('[EduMatrix] 渲染异常:', e)">
+        <div @error.capture="handleCaptureError">
           <router-view :key="route.fullPath" :student-id="studentId" />
         </div>
       </main>

@@ -73,7 +73,12 @@ const dimensionList = computed(() => {
 
 const conceptMastery = computed(() => {
   const raw = analysis.value?.raw_profile?.concept_mastery || {}
-  return Object.entries(raw).map(([name, score]) => ({ name, mastery: score }))
+  const errs = analysis.value?.raw_profile?.concept_p_err || {}
+  return Object.entries(raw).map(([name, score]) => ({
+    name,
+    mastery: score,
+    p_err: errs[name] !== undefined ? errs[name] : 0.1
+  }))
 })
 
 const avgMastery = computed(() => {
@@ -353,6 +358,97 @@ function buildMentalChartOption() {
   }
 }
 
+const kalmanHistory = computed(() => analysis.value?.kalman_history || [])
+const kalmanConcept = computed(() => analysis.value?.kalman_concept || '池化层')
+const lastKalman = computed(() => {
+  const h = kalmanHistory.value
+  return h.length > 0 ? h[h.length - 1] : { gain: 0.18, q: 0.0100, r: 0.85, p: 0.082 }
+})
+const kalmanGain = computed(() => lastKalman.value.gain)
+const kalmanQ = computed(() => lastKalman.value.q)
+const kalmanR = computed(() => lastKalman.value.r)
+const kalmanP = computed(() => lastKalman.value.p)
+
+function buildKalmanChartOption() {
+  const historyData = kalmanHistory.value
+  const times = historyData.map(h => h.time)
+  const rawVals = historyData.map(h => h.raw)
+  const smoothVals = historyData.map(h => h.smoothed)
+
+  return {
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(15, 23, 42, 0.9)',
+      borderWidth: 0,
+      textStyle: { color: '#fff', fontSize: 11 },
+      formatter: (params) => {
+        let res = `<div style="font-weight:600;margin-bottom:4px;color:#cbd5e1;">卡尔曼滤波防抖分析 (${kalmanConcept.value})</div>`
+        params.forEach(p => {
+          res += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:2px;">
+            <span style="color:${p.color}; font-weight:bold;">${p.seriesName}:</span>
+            <span style="font-weight:700;">${p.value}%</span>
+          </div>`
+        })
+        return res
+      }
+    },
+    legend: {
+      data: ['原始观测掌握度', '卡尔曼平滑掌握度'],
+      bottom: 0,
+      textStyle: { color: '#64748b', fontSize: 10 }
+    },
+    grid: {
+      top: '10%',
+      left: '4%',
+      right: '4%',
+      bottom: '12%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: times,
+      axisLabel: { color: '#94a3b8', fontSize: 10 },
+      axisLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } }
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 100,
+      axisLabel: { formatter: '{value}%', color: '#94a3b8', fontSize: 10 },
+      splitLine: { lineStyle: { color: 'rgba(148,163,184,0.1)' } }
+    },
+    series: [
+      {
+        name: '原始观测掌握度',
+        type: 'line',
+        data: rawVals,
+        smooth: true,
+        lineStyle: { color: 'rgba(148, 163, 184, 0.4)', type: 'dashed', width: 1.5 },
+        itemStyle: { color: 'rgba(148, 163, 184, 0.6)' },
+        symbol: 'circle',
+        symbolSize: 4
+      },
+      {
+        name: '卡尔曼平滑掌握度',
+        type: 'line',
+        data: smoothVals,
+        smooth: true,
+        lineStyle: { color: '#6366f1', width: 3, shadowBlur: 8, shadowColor: 'rgba(99, 102, 241, 0.5)' },
+        itemStyle: { color: '#6366f1' },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(99, 102, 241, 0.2)' },
+            { offset: 1, color: 'rgba(99, 102, 241, 0)' }
+          ])
+        },
+        symbol: 'circle',
+        symbolSize: 7
+      }
+    ]
+  }
+}
+
 function initMentalChart() {
   if (!mentalChartRef.value) return
   const width = mentalChartRef.value.clientWidth
@@ -367,8 +463,30 @@ function initMentalChart() {
   mentalChartInstance.setOption(buildMentalChartOption())
 }
 
+const kalmanChartRef = ref(null)
+let kalmanChartInstance = null
+let kalmanResizeObserver = null
+
+function initKalmanChart() {
+  if (!kalmanChartRef.value) return
+  const width = kalmanChartRef.value.clientWidth
+  const height = kalmanChartRef.value.clientHeight
+  if (width === 0 || height === 0) return
+
+  if (kalmanChartInstance) {
+    kalmanChartInstance.dispose()
+    kalmanChartInstance = null
+  }
+  kalmanChartInstance = echarts.init(kalmanChartRef.value)
+  kalmanChartInstance.setOption(buildKalmanChartOption())
+}
+
 function _handleMentalResize() {
   mentalChartInstance?.resize()
+}
+
+function _handleKalmanResize() {
+  kalmanChartInstance?.resize()
 }
 
 watch(activeTab, async (newTab) => {
@@ -376,11 +494,18 @@ watch(activeTab, async (newTab) => {
     await nextTick()
     setTimeout(() => {
       initMentalChart()
+      initKalmanChart()
       if (window.ResizeObserver && mentalChartRef.value && !mentalResizeObserver) {
         mentalResizeObserver = new ResizeObserver(() => {
           mentalChartInstance?.resize()
         })
         mentalResizeObserver.observe(mentalChartRef.value)
+      }
+      if (window.ResizeObserver && kalmanChartRef.value && !kalmanResizeObserver) {
+        kalmanResizeObserver = new ResizeObserver(() => {
+          kalmanChartInstance?.resize()
+        })
+        kalmanResizeObserver.observe(kalmanChartRef.value)
       }
     }, 120)
   }
@@ -388,17 +513,27 @@ watch(activeTab, async (newTab) => {
 
 onMounted(() => {
   window.addEventListener('resize', _handleMentalResize)
+  window.addEventListener('resize', _handleKalmanResize)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', _handleMentalResize)
+  window.removeEventListener('resize', _handleKalmanResize)
   if (mentalResizeObserver) {
     mentalResizeObserver.disconnect()
     mentalResizeObserver = null
   }
+  if (kalmanResizeObserver) {
+    kalmanResizeObserver.disconnect()
+    kalmanResizeObserver = null
+  }
   if (mentalChartInstance) {
     mentalChartInstance.dispose()
     mentalChartInstance = null
+  }
+  if (kalmanChartInstance) {
+    kalmanChartInstance.dispose()
+    kalmanChartInstance = null
   }
 })
 </script>
@@ -637,6 +772,46 @@ onUnmounted(() => {
         </h3>
         <p class="text-[10px] text-gray-400 mb-4">反映在近期交互中，学生的认知负荷（Cognitive Load）和挫败感（Frustration Index）的实时时序演进曲线，体现人在回路自适应调控效果。</p>
         <div class="h-80" ref="mentalChartRef" />
+      </div>
+
+      <!-- Kalman Denoising Chart -->
+      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <h3 class="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-1.5">
+          <Activity :size="16" class="text-indigo-500" />
+          卡尔曼滤波学情去噪估计 (掌握度防震荡)
+        </h3>
+        <p class="text-[10px] text-gray-400 mb-4">对比展示近期测验的原始答题掌握度（虚线）与卡尔曼估计器平滑修正后的学情掌握度（实线）。在学生发生偶发性粗心或手滑失误时，系统能自动抑制作业曲线的大幅波动，还原真实的渐进学习轨迹。</p>
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          <div class="lg:col-span-3 h-80" ref="kalmanChartRef" />
+          <div class="lg:col-span-1 bg-slate-50 border border-slate-100 rounded-xl p-4 flex flex-col justify-between text-[11px] space-y-4">
+            <div class="space-y-3">
+              <span class="font-bold text-slate-700 block text-xs">实时卡尔曼滤波器状态</span>
+              <div class="flex justify-between border-b border-slate-200/50 pb-1.5">
+                <span class="text-slate-500">卡尔曼增益 K_t</span>
+                <span class="font-mono font-bold text-indigo-600">{{ kalmanGain.toFixed(2) }}</span>
+              </div>
+              <div class="flex justify-between border-b border-slate-200/50 pb-1.5">
+                <span class="text-slate-500">系统转移噪声 Q_t</span>
+                <span class="font-mono font-bold text-slate-700">{{ kalmanQ.toFixed(4) }}</span>
+              </div>
+              <div class="flex justify-between border-b border-slate-200/50 pb-1.5">
+                <span class="text-slate-500">测量观测噪声 R_t</span>
+                <span class="font-mono font-bold" :class="kalmanR > 0.3 ? 'text-rose-600 font-extrabold' : 'text-slate-700'">
+                  {{ kalmanR.toFixed(2) }}
+                </span>
+              </div>
+              <div class="flex justify-between border-b border-slate-200/50 pb-1.5">
+                <span class="text-slate-500">掌握度估计协方差 P_t</span>
+                <span class="font-mono font-bold text-emerald-600">{{ kalmanP.toFixed(3) }}</span>
+              </div>
+            </div>
+            <div class="p-2.5 bg-indigo-50/50 border border-indigo-100/50 rounded-lg text-[10px] text-indigo-700 leading-relaxed">
+              <strong>学情诊断说明：</strong><br>
+              <span v-if="kalmanR > 0.3">在最近一次测验中答题用时过短（少于 3 秒）且出现答错，被判定为偶发性粗心/手滑。卡尔曼滤波器已自动上调测量噪声 $R_t$ 并调小滤波增益，防止该异常观测分数值导致您的整体掌握度产生震荡或失真下跌。</span>
+              <span v-else>近期测验答题节奏与正确率分布正常，卡尔曼状态估计器正常拟合，掌握度数据可信度较高。</span>
+            </div>
+          </div>
+        </div>
       </div>
 
     </div>

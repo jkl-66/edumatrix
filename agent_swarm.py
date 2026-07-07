@@ -312,7 +312,7 @@ class ZPDPlannerAgent:
     def __init__(self):
         self._last_path_plan: dict | None = None
 
-    def plan(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile):
+    def plan(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile, loop: Any = None):
         """执行 ZPD 路径规划。"""
         from bkt_engine import (
             BKTEngine,
@@ -324,13 +324,13 @@ class ZPDPlannerAgent:
         )
 
         # 确定目标知识点 (优先提取查询中的显式知识点，无显式指定时再fallback到画像诊断薄弱项)
-        target = self._extract_concept_from_query(query)
+        target = self._extract_concept_from_query(query, profile, loop)
         if not target:
             target = self._infer_target(profile)
 
         # Step 1: 使用 BKT 引擎获取掌握度
         bkt = _get_bkt_engine()
-        target_mastery = bkt.get_mastery(target) if target else 0.48
+        target_mastery = bkt.get_mastery(target, profile.bkt_states) if target else 0.48
 
         # 同时也从 profile.concept_mastery 获取参考值
         profile_mastery = profile.concept_mastery.get(target, 0.48) if target else 0.48
@@ -338,16 +338,28 @@ class ZPDPlannerAgent:
         mastery = target_mastery * 0.6 + profile_mastery * 0.4
 
         # Step 2: 获取前置依赖掌握度
-        prereqs = DEFAULT_KNOWLEDGE_DAG.get(target, []) if target else []
+        # 优先使用动态 GraphRAG 中的前置依赖关系，不存在时降级使用默认 DAG
+        try:
+            from rag_engine import graph_rag
+            if graph_rag and getattr(graph_rag, "reverse", None) and target in graph_rag.reverse:
+                prereqs = list(graph_rag.reverse[target])
+                active_dag = {node: list(prereqs) for node, prereqs in graph_rag.reverse.items()}
+            else:
+                prereqs = DEFAULT_KNOWLEDGE_DAG.get(target, []) if target else []
+                active_dag = DEFAULT_KNOWLEDGE_DAG
+        except Exception:
+            prereqs = DEFAULT_KNOWLEDGE_DAG.get(target, []) if target else []
+            active_dag = DEFAULT_KNOWLEDGE_DAG
+
         prereq_masteries: dict[str, float] = {}
         for p in prereqs:
-            prereq_masteries[p] = bkt.get_mastery(p) * 0.6 + profile.concept_mastery.get(p, 0.3) * 0.4
+            prereq_masteries[p] = bkt.get_mastery(p, profile.bkt_states) * 0.6 + profile.concept_mastery.get(p, 0.3) * 0.4
 
         # Step 3: 执行 ZPD 路径规划
         path_plan = get_zpd_path_plan(
             target=target or query,
             target_mastery=mastery,
-            graph_neighbors=DEFAULT_KNOWLEDGE_DAG,
+            graph_neighbors=active_dag,
             prereq_masteries=prereq_masteries,
         )
         self._last_path_plan = path_plan
@@ -376,32 +388,108 @@ class ZPDPlannerAgent:
         （EduMatrixSwarm.async_process 同时驱动多个 LLM 调用与检索）。
         """
         import asyncio
-        return await asyncio.to_thread(self.plan, rag, query, profile)
+        loop = asyncio.get_running_loop()
+        return await asyncio.to_thread(self.plan, rag, query, profile, loop)
 
     def get_path_plan(self) -> dict | None:
         return self._last_path_plan
 
-    def _extract_concept_from_query(self, query: str) -> str | None:
+    def _extract_concept_from_query(self, query: str, profile: StudentProfile | None = None, loop: Any = None) -> str | None:
+        import asyncio
         if not query:
             return None
         cleaned = query.strip()
-        # 1. 精确匹配
-        for concept in DEFAULT_KNOWLEDGE_DAG.keys():
+
+        # 1. 动态拉取活跃节点（避免白名单硬编码）
+        try:
+            from rag_engine import graph_rag
+            if graph_rag and getattr(graph_rag, "nodes", None):
+                concepts = list(graph_rag.nodes)
+            else:
+                concepts = list(DEFAULT_KNOWLEDGE_DAG.keys())
+        except Exception:
+            concepts = list(DEFAULT_KNOWLEDGE_DAG.keys())
+
+        # 2. 精确匹配
+        for concept in concepts:
             if cleaned == concept:
                 return concept
-        # 2. 从长到短子串匹配，防止如“神经网络”被“卷积神经网络”遮蔽
-        sorted_concepts = sorted(DEFAULT_KNOWLEDGE_DAG.keys(), key=len, reverse=True)
+
+        # 3. 从长到短子串匹配，防止如“神经网络”被“卷积神经网络”遮蔽
+        sorted_concepts = sorted(concepts, key=len, reverse=True)
         for concept in sorted_concepts:
             if concept in cleaned:
                 return concept
+
+        # 4. 动态指代消解 (Pronoun Reference Resolution)
+        # 检测是否包含指示代词/指代倾向
+        pronouns = ("这个", "那个", "这", "那", "它", "上面", "刚才", "这个概念", "如何理解", "怎么算", "解释一下")
+        has_pronoun = any(p in cleaned for p in pronouns)
+
+        if has_pronoun and profile and profile.history:
+            # 提取最近 5 条对话作为上下文
+            recent_history = profile.history[-5:] if len(profile.history) >= 5 else profile.history
+            history_str = "\n".join(recent_history)
+
+            system_prompt = "你是一个学术概念实体消解与指代对齐助手。请仅根据下述对话上下文与活跃概念列表，消解并识别学生最新输入中代词所指的具体概念。"
+            prompt = (
+                f"活跃概念列表: {', '.join(concepts)}\n\n"
+                f"对话上下文:\n{history_str}\n\n"
+                f"学生最新输入: \"{query}\"\n\n"
+                f"要求：\n"
+                f"1. 直接输出识别出来的概念名称（必须是活跃概念列表中的一个，拼写完全一致，没有任何标点符号）。\n"
+                f"2. 如果上下文不足以判断，或者指代概念不在活跃概念列表中，请直接输出 \"None\"，不要包含任何多余解释。"
+            )
+            
+            try:
+                from llm_client import DEFAULT_ASYNC_LLM
+                response = None
+                if loop and loop.is_running():
+                    # 线程安全地在主事件循环中运行 async 函数并等待其完成
+                    coro = DEFAULT_ASYNC_LLM.generate(
+                        system_prompt=system_prompt,
+                        user_prompt=prompt,
+                        role="user"
+                    )
+                    future = asyncio.run_coroutine_threadsafe(coro, loop)
+                    response = future.result(timeout=10.0)
+                else:
+                    # 兜底：如果是在非异步上下文（如单元测试）中运行且没有 loop，
+                    # 尝试直接运行协程（新建事件循环）
+                    async def _run_fallback():
+                        return await DEFAULT_ASYNC_LLM.generate(
+                            system_prompt=system_prompt,
+                            user_prompt=prompt,
+                            role="user"
+                        )
+                    response = asyncio.run(_run_fallback())
+                
+                resolved = response.strip() if response else "None"
+                # 过滤出合法的活跃概念
+                if resolved in concepts:
+                    return resolved
+            except Exception as e:
+                print(f"  [Swarm Entity Resolution] LLM 指代消解失败: {e}")
+
         return None
 
     def _infer_target(self, profile: StudentProfile) -> str | None:
         if "最大池化与平均池化混淆" in profile.misconception_patterns:
             return "池化层"
         if profile.weak_points:
-            for point in ("池化层", "逻辑回归", "过拟合", "反向传播", "链式法则"):
-                if point in profile.weak_points:
+            # 动态拉取活跃节点（避免白名单硬编码）
+            try:
+                from rag_engine import graph_rag
+                if graph_rag and getattr(graph_rag, "nodes", None):
+                    concepts = list(graph_rag.nodes)
+                else:
+                    concepts = list(DEFAULT_KNOWLEDGE_DAG.keys())
+            except Exception:
+                concepts = list(DEFAULT_KNOWLEDGE_DAG.keys())
+
+            # 优先返回第一个属于当前活跃概念树中的薄弱点
+            for point in profile.weak_points:
+                if point in concepts:
                     return point
             return profile.weak_points[-1]
         return None
@@ -1007,6 +1095,63 @@ class AsyncResourceFactory:
         return tuple(sorted(results, key=lambda item: order.get(item.resource_type, 999)))
 
 
+class CausalConflictAttributionEngine:
+    """因果冲突归因与自愈引擎：分析多模态对齐校验冲突，定位根本责任 Agent 并生成自愈校准指令。"""
+    
+    @staticmethod
+    def attribute_and_heal(alignment_report, resources: tuple[AgentOutput, ...], rollback_count: int) -> dict[str, str]:
+        """归因决策核心：返回需要追加到特定 Agent 下次生成时的自愈指令字典 {agent_name: healing_instruction}。"""
+        healing_instructions = {}
+        if not alignment_report.conflicts:
+            return healing_instructions
+            
+        for conflict in alignment_report.conflicts:
+            conflict_type = conflict.get("type", "generic")
+            description = conflict.get("description", "")
+            involved_resources = conflict.get("resources", [])
+            
+            # 定位具体责任 Agent
+            responsible_agent = None
+            
+            # 策略一：根据冲突类型归因
+            if "code" in conflict_type or "sandbox" in conflict_type:
+                responsible_agent = "极客助教"
+            elif "diagram" in conflict_type or "mermaid" in conflict_type or "visual" in conflict_type:
+                responsible_agent = "逻辑画师"
+            elif "academic" in conflict_type or "prerequisite" in conflict_type:
+                responsible_agent = "理论教授"
+            else:
+                # 策略二：根据描述文本归因
+                desc_lower = description.lower()
+                if any(x in desc_lower for x in ("代码", "code", "run", "syntax", "eval")):
+                    responsible_agent = "极客助教"
+                elif any(x in desc_lower for x in ("图", "mermaid", "flowchart", "diagram")):
+                    responsible_agent = "逻辑画师"
+                elif any(x in desc_lower for x in ("讲义", "理论", "概念", "定义", "lecture")):
+                    responsible_agent = "理论教授"
+            
+            # 兜底
+            if not responsible_agent and involved_resources:
+                r_name = involved_resources[0]
+                for res in resources:
+                    if res.agent in r_name or r_name in res.agent:
+                        responsible_agent = res.agent
+                        break
+                        
+            if responsible_agent:
+                rule = (
+                    f"\n【🚫 系统自愈指令 - 对齐冲突归因重试 (第 {rollback_count} 次纠偏)】\n"
+                    f"在上一轮生成中，系统校验发现您负责的部分与其它智能体产生了以下一致性冲突：\n"
+                    f"“{description}”\n"
+                    f"请您针对上述冲突，在本次重新生成中：\n"
+                    f"1. 严格检查内容输出的一致性，修正导致冲突的数据/公式/逻辑细节；\n"
+                    f"2. 确保输出格式完美合规，特别是避免再次引发同类对齐校验失效。"
+                )
+                healing_instructions[responsible_agent] = rule
+                
+        return healing_instructions
+
+
 class EduMatrixSwarm:
     """1+3+5 full-band orchestration for EduMatrix with async concurrency control."""
 
@@ -1239,13 +1384,39 @@ class EduMatrixSwarm:
                 if alignment_report.passed:
                     break
 
+                # 归因与自愈引擎介入
+                healing_inst = CausalConflictAttributionEngine.attribute_and_heal(
+                    alignment_report, resources, attempt + 1
+                )
+                
+                # 将自愈指令动态注入到 mediation_instructions，传递给下一次重试
+                if not mediation_instructions:
+                    mediation_instructions = {}
+                for r_agent, r_inst in healing_inst.items():
+                    if r_agent in mediation_instructions:
+                        mediation_instructions[r_agent] = mediation_instructions[r_agent] + "\n" + r_inst
+                    else:
+                        mediation_instructions[r_agent] = r_inst
+
+                # 异步记录中间失败日志至持久化数据库
+                try:
+                    from app.database import run_db_op
+                    from app.crud import record_alignment_log
+                    
+                    def _db_log_conflict(session):
+                        record_alignment_log(session, student_id, alignment_report, retrieval.target)
+                        
+                    import asyncio
+                    asyncio.create_task(run_db_op(_db_log_conflict))
+                except Exception:
+                    pass
+
                 # 任务 8.9: 从冲突报告中提取失败的 Agent 名称
                 failed_agent_name = ""
                 if alignment_report.conflicts:
                     for conflict in alignment_report.conflicts:
                         conflict_resources = conflict.get("resources", [])
                         if conflict_resources:
-                            # 尝试从冲突的 resource 名称中提取 Agent 名
                             for r_name in conflict_resources:
                                 for res in resources:
                                     if res.agent in r_name or r_name in res.agent:

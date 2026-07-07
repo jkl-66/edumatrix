@@ -129,31 +129,77 @@ function drawPoincareDisk() {
     time += 0.008
     const t = (Math.sin(time) + 1) / 2
 
-    // 测地线路径
-    ctx.beginPath()
+    // 计算 Poincaré 圆盘中的真实双曲测地线 (Hyperbolic Geodesics)
+    // 测地线在此空间中为正交于边界的圆弧或过原点的直线
+    const ux = (sp.x - cx) / radius
+    const uy = (sp.y - cy) / radius
+    const vx = (tp.x - cx) / radius
+    const vy = (tp.y - cy) / radius
+
+    const cross = ux * vy - uy * vx
+    let arcInfo = null
+
+    // 渐变色样式
     const grad = ctx.createLinearGradient(sp.x, sp.y, tp.x, tp.y)
     grad.addColorStop(0, `hsla(210, 80%, 60%, ${0.2 + sp.alpha * 0.3})`)
     grad.addColorStop(1, `hsla(45, 90%, 60%, ${0.2 + tp.alpha * 0.3})`)
     ctx.strokeStyle = grad
     ctx.lineWidth = props.conflictDetected ? 3 : 1.5
 
-    // 如果冲突，用虚线 + 红色（减慢频闪至极其柔和的缓慢呼吸）
     if (props.conflictDetected) {
       ctx.setLineDash([5, 5])
       ctx.strokeStyle = `rgba(239, 68, 68, ${0.45 + Math.sin(time * 0.6) * 0.15})`
     }
 
-    ctx.moveTo(sp.x, sp.y)
-    // 双曲测地线近似：二次贝塞尔弯曲
-    const cpX = (sp.x + tp.x) / 2 + (tp.y - sp.y) * (props.conflictDetected ? 0.5 : 0.2)
-    const cpY = (sp.y + tp.y) / 2 - (tp.x - sp.x) * (props.conflictDetected ? 0.5 : 0.2)
-    ctx.quadraticCurveTo(cpX, cpY, tp.x, tp.y)
-    ctx.stroke()
-    ctx.setLineDash([])
+    if (Math.abs(cross) > 1e-4) {
+      // 非共线情况：求解正交于单位圆且通过 u, v 两点圆的圆心和半径
+      const u2 = ux * ux + uy * uy
+      const v2 = vx * vx + vy * vy
+      const denom = 2.0 * cross
 
-    // 动画粒子沿测地线移动（代表对齐过程）
-    const ax = (1 - t) * (1 - t) * sp.x + 2 * (1 - t) * t * cpX + t * t * tp.x
-    const ay = (1 - t) * (1 - t) * sp.y + 2 * (1 - t) * t * cpY + t * t * tp.y
+      const ox = (vy * (1.0 + u2) - uy * (1.0 + v2)) / denom
+      const oy = (ux * (1.0 + v2) - vx * (1.0 + u2)) / denom
+      const or = Math.sqrt(ox * ox + oy * oy - 1.0)
+
+      // 投影回 Canvas 物理坐标系
+      const canvas_ox = ox * radius + cx
+      const canvas_oy = oy * radius + cy
+      const canvas_or = or * radius
+
+      // 起始与终止角
+      const theta_u = Math.atan2(sp.y - canvas_oy, sp.x - canvas_ox)
+      const theta_v = Math.atan2(tp.y - canvas_oy, tp.x - canvas_ox)
+
+      let diff = theta_v - theta_u
+      while (diff < -Math.PI) diff += Math.PI * 2
+      while (diff > Math.PI) diff -= Math.PI * 2
+
+      ctx.beginPath()
+      ctx.arc(canvas_ox, canvas_oy, canvas_or, theta_u, theta_u + diff, diff < 0)
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      arcInfo = { ox: canvas_ox, oy: canvas_oy, or: canvas_or, theta_u, diff }
+    } else {
+      // 共线情况：双曲测地线退化为直连线段
+      ctx.beginPath()
+      ctx.moveTo(sp.x, sp.y)
+      ctx.lineTo(tp.x, tp.y)
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+
+    // 动画粒子沿双曲测地线移动
+    let ax, ay
+    if (arcInfo) {
+      const angle = arcInfo.theta_u + t * arcInfo.diff
+      ax = arcInfo.ox + Math.cos(angle) * arcInfo.or
+      ay = arcInfo.oy + Math.sin(angle) * arcInfo.or
+    } else {
+      ax = sp.x + t * (tp.x - sp.x)
+      ay = sp.y + t * (tp.y - sp.y)
+    }
+
     ctx.beginPath()
     ctx.arc(ax, ay, 2, 0, Math.PI * 2)
     ctx.fillStyle = props.conflictDetected

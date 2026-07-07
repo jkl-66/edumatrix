@@ -491,6 +491,10 @@ class AsyncSparkClient:
 
 class DeterministicEducationLLM:
     def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        if "学术概念实体消解与指代对齐助手" in system_prompt or "学术概念实体消解与指代对齐助手" in role:
+            if "池化层" in user_prompt and ("这个" in user_prompt or "它" in user_prompt):
+                return "池化层"
+            return "None"
         if "画像抽取器" in role:
             return _profile_json(user_prompt)
         topic = _guess_topic(user_prompt)

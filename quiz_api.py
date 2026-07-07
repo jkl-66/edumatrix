@@ -261,7 +261,18 @@ async def generate_quiz(
 
     profile = await run_db_op(load_student_profile, student_id)
     if not target_concept:
-        if profile.weak_points:
+        # 主动探索不确定性消除：寻找估计误差协方差 p_err 最大的概念进行测试，快速消除认知地图的熵
+        max_err_concept = None
+        max_err_val = -1.0
+        for concept, state in (profile.bkt_states or {}).items():
+            p_err = state.get("p_err", 0.0)
+            if p_err > max_err_val:
+                max_err_val = p_err
+                max_err_concept = concept
+                
+        if max_err_concept and max_err_val > 0.15:
+            target_concept = max_err_concept
+        elif profile.weak_points:
             target_concept = profile.weak_points[0]
         else:
             target_concept = "机器学习基础"

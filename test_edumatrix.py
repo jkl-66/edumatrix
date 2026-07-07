@@ -194,6 +194,59 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertEqual(dashboard["course"], "机器学习导论")
         self.assertTrue(dashboard["heatmap"])
         self.assertTrue(dashboard["interventions"])
+    def test_kalman_filter_smoothing_and_state_recovery(self):
+        """验证自适应卡尔曼滤波平滑估计以及从数据库快照冷启动状态恢复"""
+        from bkt_engine import BKTEngine
+        engine = BKTEngine()
+        
+        # 1. 验证自适应卡尔曼滤波更新与平滑效果
+        smoothed_1 = engine.update("逻辑回归", correct=True, cognitive_load=0.4, frustration=0.1)
+        self.assertGreater(smoothed_1, 0.3)
+        self.assertLess(smoothed_1, 0.6)
+        
+        # 2. 模拟由于情绪和高认知负荷导致的波动：连续做错，且挫败感极大 (观测噪声 R 增加)
+        smoothed_2 = engine.update("逻辑回归", correct=False, cognitive_load=0.9, frustration=0.8)
+        self.assertLess(smoothed_2, smoothed_1)
+        
+        # 3. 验证冷启动状态恢复
+        snap = engine.snapshot()
+        self.assertIn("逻辑回归", snap)
+        self.assertIn("smoothed_mastery", snap["逻辑回归"])
+        self.assertIn("p_err", snap["逻辑回归"])
+        
+        # 重新创建引擎，模拟冷启动，并传入 profile_bkt_states 恢复状态
+        new_engine = BKTEngine()
+        self.assertEqual(new_engine.get_mastery("逻辑回归"), 0.3)
+        
+        # 传入 profile_bkt_states，应能成功还原状态值（使用一个全新干净的引擎避免污染）
+        recovery_engine = BKTEngine()
+        self.assertAlmostEqual(recovery_engine.get_mastery("逻辑回归", snap), snap["逻辑回归"]["smoothed_mastery"])
+        
+        # 测试在恢复状态后进行更新，误差协方差应正常传承
+        recovered_state = recovery_engine.get_or_create("逻辑回归", snap)
+        self.assertAlmostEqual(recovered_state.p_err, snap["逻辑回归"]["p_err"])
+
+    def test_dynamic_concept_resolution_and_pronoun_alignment(self):
+        """验证无白名单硬编码的动态指代消解与实体链接功能"""
+        from agent_swarm import ZPDPlannerAgent
+        from models import StudentProfile
+        
+        planner = ZPDPlannerAgent()
+        profile = StudentProfile(student_id="test_resolution_student")
+        
+        # 1. 模拟历史对话中提到了“池化层”
+        profile.history = [
+            "User: 请问最大池化和平均池化有什么区别？",
+            "Assistant: 最大池化保留局部最大激活值，而平均池化对窗口内的值取平均，两者都属于池化层。",
+        ]
+        
+        # 2. 当学生输入含指代代词的问题时，应能成功消解并链接到“池化层”
+        resolved = planner._extract_concept_from_query("这个该怎么实现？", profile)
+        self.assertEqual(resolved, "池化层")
+        
+        # 3. 校验如果上下文无匹配词，应安全退回到 None
+        resolved_none = planner._extract_concept_from_query("刚才说的那个该怎么做？", None)
+        self.assertIsNone(resolved_none)
 
     def test_drag_debate_cleans_low_quality_evidence(self):
         from drag_debate import DebateAugmentedRAG
@@ -1744,6 +1797,202 @@ print("Val:", s.val)
         finally:
             session.close()
 
+    def test_multi_layer_cognitive_dimension_tracking(self):
+        """验证多层级认知维度分解：单独更新不同维度时，BKT 与画像中的 concept_layers 可以正确分离与同步。"""
+        from bkt_engine import BKTEngine
+        from models import StudentProfile
+        
+        profile = StudentProfile(student_id="test-p2-dims")
+        bkt = BKTEngine()
+        
+        # 1. 更新 "code" 维度
+        bkt.update("池化层", correct=True, cognitive_load=0.4, frustration=0.1, profile_bkt_states=profile.bkt_states, dimension="code")
+        snap = bkt.snapshot()
+        self.assertIn("layers", snap["池化层"])
+        self.assertIn("code", snap["池化层"]["layers"])
+        
+        # 2. 模拟事件总线分类同步
+        from swarm_factory import build_swarm_from_headers
+        swarm = build_swarm_from_headers({})
+        profile = swarm.profile_store.setdefault("test-p2-dims", StudentProfile(student_id="test-p2-dims"))
+
+        from learning_event_bus import QuizAttemptedEvent, _on_quiz_attempted
+        import asyncio
+        
+        event = QuizAttemptedEvent(
+            student_id="test-p2-dims",
+            concept="池化层",
+            accuracy=1.0,
+            ai_confidence=0.9,
+            student_confidence=0.9,
+            attempt_number=2,
+            question="请编写一段 PyTorch 代码实现最大池化。",
+            answer="import torch.nn as nn..."
+        )
+        
+        # 显式调用 _on_quiz_attempted
+        async def _run_event():
+            await _on_quiz_attempted(event)
+        asyncio.run(_run_event())
+        
+        # 确认 concept_layers 中 code 维度已被正确提升并同步
+        self.assertIn("池化层", profile.concept_layers)
+        self.assertIn("code", profile.concept_layers["池化层"])
+
+    def test_collaborative_peer_based_prior_calibration(self):
+        """验证协同画像先验校准：新冷启动学生会根据匹配相似度的 Peer 数据做画像先验合并与状态恢复。"""
+        from app.database import SessionLocal, DBStudentProfile
+        from app.crud import load_student_profile, save_student_profile, calibrate_student_prior_collaborative
+        from models import StudentProfile
+        import uuid
+        
+        session = SessionLocal()
+        # 备份已有画像，避免清除开发环境下的测试数据
+        backup_profiles = []
+        try:
+            for p in session.query(DBStudentProfile).all():
+                data = {c.name: getattr(p, c.name) for c in DBStudentProfile.__table__.columns}
+                backup_profiles.append(data)
+        except Exception:
+            pass
+
+        # 清空画像，避免其它测试产生的遗留数据污染
+        session.query(DBStudentProfile).delete()
+        session.commit()
+        peer_id_1 = f"peer1-{uuid.uuid4().hex[:4]}"
+        peer_id_2 = f"peer2-{uuid.uuid4().hex[:4]}"
+        new_student_id = f"newstud-{uuid.uuid4().hex[:4]}"
+        
+        try:
+            # 1. 准备 Peer 1 画像（相同专业，有答题记录和掌握度）
+            peer1 = load_student_profile(session, peer_id_1)
+            peer1.major = "数据科学"
+            peer1.cognitive_style = "代码导向"
+            peer1.concept_mastery = {"逻辑回归": 0.85, "链式法则": 0.90}
+            peer1.bkt_states = {
+                "逻辑回归": {"p_mastered": 0.85, "smoothed_mastery": 0.85, "p_err": 0.05, "layers": {}}
+            }
+            save_student_profile(session, peer1)
+            
+            # 2. 准备 Peer 2 画像（不同专业，不参与强校准）
+            peer2 = load_student_profile(session, peer_id_2)
+            peer2.major = "艺术设计"
+            peer2.cognitive_style = "仅文本讲解"
+            peer2.motivation_type = "外部型"
+            peer2.concept_mastery = {"线性回归": 0.20}
+            save_student_profile(session, peer2)
+            
+            # 3. 创建新冷启动学生
+            new_student = StudentProfile(student_id=new_student_id)
+            new_student.major = "数据科学"
+            new_student.cognitive_style = "代码导向"
+            
+            # 4. 执行协同校准
+            calibrate_student_prior_collaborative(session, new_student)
+            
+            # 5. 断言先验值是否成功合并了相似 Peer 1 的数据，且排除了 Peer 2
+            self.assertIn("逻辑回归", new_student.concept_mastery)
+            self.assertEqual(new_student.concept_mastery["逻辑回归"], 0.85)
+            self.assertNotIn("线性回归", new_student.concept_mastery)
+            
+            # 清理
+            for pid in (peer_id_1, peer_id_2, new_student_id):
+                db_p = session.query(DBStudentProfile).filter_by(student_id=pid).first()
+                if db_p:
+                    session.delete(db_p)
+            session.commit()
+        finally:
+            # 恢复之前备份的本地画像数据
+            try:
+                for data in backup_profiles:
+                    p = DBStudentProfile(**data)
+                    session.add(p)
+                session.commit()
+            except Exception:
+                session.rollback()
+            session.close()
+
+    def test_uncertainty_aware_active_learning(self):
+        """验证主动探索与不确定性消除：若未显式指定，生成测试题时优先寻找估计误差协方差 p_err 最大的概念。"""
+        from app.database import SessionLocal, DBStudentProfile
+        from app.crud import load_student_profile, save_student_profile
+        from quiz_api import generate_quiz
+        from fastapi import Request
+        import uuid
+        import asyncio
+        
+        session = SessionLocal()
+        student_id = f"test-active-{uuid.uuid4().hex[:4]}"
+        try:
+            profile = load_student_profile(session, student_id)
+            profile.concept_mastery = {
+                "逻辑回归": 0.5,
+                "线性回归": 0.9
+            }
+            profile.bkt_states = {
+                "逻辑回归": {"p_mastered": 0.5, "smoothed_mastery": 0.5, "p_err": 0.8, "layers": {}},
+                "线性回归": {"p_mastered": 0.9, "smoothed_mastery": 0.9, "p_err": 0.1, "layers": {}}
+            }
+            profile.weak_points = ["线性回归", "逻辑回归"]
+            save_student_profile(session, profile)
+            
+            # 构造模拟 FastAPI 请求，不指定 target_concept
+            class MockRequest:
+                def __init__(self):
+                    self.headers = {}
+                async def json(self):
+                    return {"student_id": student_id}
+            
+            async def _run_gen():
+                return await generate_quiz(MockRequest())
+                
+            res = asyncio.run(_run_gen())
+            # 应该选中了高不确定性的 "逻辑回归"，而不是 weak_points 的第一个 "线性回归"
+            self.assertEqual(res["concept"], "逻辑回归")
+            
+            # 清理
+            db_p = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if db_p:
+                session.delete(db_p)
+                session.commit()
+        finally:
+            session.close()
+
+    def test_causal_conflict_attribution_and_self_healing(self):
+        """验证因果冲突归因与自愈引擎：一致性冲突发生时，能准确归因责任智能体，并在下次循环中注入自愈提示规则。"""
+        from agent_swarm import CausalConflictAttributionEngine, AgentOutput, EduMatrixSwarm
+        from models import AlignmentReport
+        
+        # 1. 构造一个包含代码和讲义不一致的冲突报告
+        report = AlignmentReport(
+            passed=False,
+            distance=0.9,
+            threshold=0.6,
+            conflicts=[{
+                "type": "code_mismatch",
+                "description": "极客助教生成的代码使用了 AvgPool2d，但理论教授生成的讲义讲述的是最大池化(MaxPool2d)",
+                "resources": ["理论教授讲义", "极客助教代码案例"]
+            }],
+            advice=" AvgPool2d 与 MaxPool2d 存在定义冲突 "
+        )
+        
+        resources = (
+            AgentOutput(agent="理论教授", resource_type="专业讲义", content="最大池化", citations=()),
+            AgentOutput(agent="极客助教", resource_type="代码实操案例", content="AvgPool2d", citations=()),
+            AgentOutput(agent="逻辑画师", resource_type="思维导图", content="Diagram", citations=())
+        )
+        
+        # 2. 执行因果归因与自愈
+        healing_instructions = CausalConflictAttributionEngine.attribute_and_heal(report, resources, rollback_count=1)
+        
+        # 3. 断言责任被正确划分到“极客助教”（因为冲突类型是 code_mismatch / 描述含代码）
+        self.assertIn("极客助教", healing_instructions)
+        self.assertNotIn("逻辑画师", healing_instructions)
+        self.assertIn("AvgPool2d", healing_instructions["极客助教"])
+        self.assertIn("MaxPool2d", healing_instructions["极客助教"])
+        self.assertIn("系统自愈指令", healing_instructions["极客助教"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

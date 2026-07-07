@@ -314,6 +314,7 @@ class StudentProfile:
     bkt_states: dict[str, dict] = field(default_factory=dict)  # BKT 状态快照: concept -> {p_mastered, history...}
     rl_q_table: dict[str, dict[str, float]] = field(default_factory=dict)
     mental_state_history: list[dict[str, Any]] = field(default_factory=list)
+    concept_layers: dict[str, dict[str, float]] = field(default_factory=dict)  # concept -> {factual, math, code, transfer}
 
     # === 替换 models.py 中的 add_favorite 方法 ===
     def add_favorite(self, target: str, resource_type: str, content: str, note: str = "", fav_id: str = "") -> None:

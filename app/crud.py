@@ -26,6 +26,69 @@ def to_dict_safe(obj):
         return [to_dict_safe(v) for v in obj]
     return obj
 
+def calibrate_student_prior_collaborative(db: Session, profile: StudentProfile) -> None:
+    """协同画像先验校准：若当前画像无掌握度数据，寻找相似 Peer 的特征均值进行初始化。"""
+    from app.database import DBStudentProfile
+    peers = db.query(DBStudentProfile).filter(DBStudentProfile.student_id != profile.student_id).all()
+    if not peers:
+        return
+        
+    peer_scores = []
+    for peer in peers:
+        score = 0.0
+        if peer.major and profile.major and peer.major == profile.major:
+            score += 3.0
+        if peer.cognitive_style and profile.cognitive_style and peer.cognitive_style == profile.cognitive_style:
+            score += 2.0
+        if peer.motivation_type and profile.motivation_type and peer.motivation_type == profile.motivation_type:
+            score += 1.0
+        
+        if score > 0.0 and peer.concept_mastery:
+            peer_scores.append((score, peer))
+            
+    if not peer_scores:
+        return
+        
+    peer_scores.sort(key=lambda x: x[0], reverse=True)
+    top_peers = [p for _, p in peer_scores[:3]]
+    
+    mastery_sum = {}
+    mastery_count = {}
+    bkt_states_merged = {}
+    
+    for peer in top_peers:
+        for c, m in (peer.concept_mastery or {}).items():
+            mastery_sum[c] = mastery_sum.get(c, 0.0) + m
+            mastery_count[c] = mastery_count.get(c, 0) + 1
+            
+        for c, bkt in (peer.bkt_states or {}).items():
+            if c not in bkt_states_merged:
+                bkt_states_merged[c] = {
+                    "p_mastered": bkt.get("p_mastered", 0.3),
+                    "smoothed_mastery": bkt.get("smoothed_mastery", 0.3),
+                    "p_err": bkt.get("p_err", 0.1),
+                    "attempts": bkt.get("attempts", 0),
+                    "accuracy": bkt.get("accuracy", 0.0),
+                    "history": bkt.get("history", []),
+                    "layers": bkt.get("layers", {})
+                }
+            else:
+                bkt_states_merged[c]["p_mastered"] += bkt.get("p_mastered", 0.3)
+                bkt_states_merged[c]["smoothed_mastery"] += bkt.get("smoothed_mastery", 0.3)
+                bkt_states_merged[c]["p_err"] += bkt.get("p_err", 0.1)
+                
+    for c in mastery_sum:
+        count = mastery_count[c]
+        profile.concept_mastery[c] = round(mastery_sum[c] / count, 4)
+        
+    for c in bkt_states_merged:
+        count = len(top_peers)
+        bkt_states_merged[c]["p_mastered"] = round(bkt_states_merged[c]["p_mastered"] / count, 4)
+        bkt_states_merged[c]["smoothed_mastery"] = round(bkt_states_merged[c]["smoothed_mastery"] / count, 4)
+        bkt_states_merged[c]["p_err"] = round(bkt_states_merged[c]["p_err"] / count, 4)
+        
+    profile.bkt_states = bkt_states_merged
+
 def load_student_profile(db: Session, student_id: str) -> StudentProfile:
     """从 SQLite 中加载学生画像，如果不存在则初始化并存入数据库
     
@@ -68,6 +131,8 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 profile.customized_fields = list(db_profile.customized_fields or [])
                 profile.rl_q_table = dict(getattr(db_profile, "rl_q_table", {}) or {})
                 profile.mental_state_history = list(getattr(db_profile, "mental_state_history", []) or [])
+                profile.concept_layers = dict(getattr(db_profile, "concept_layers", {}) or {})
+                profile.bkt_states = dict(getattr(db_profile, "bkt_states", {}) or {})
                 return profile
         return profile
 
@@ -100,6 +165,8 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
     profile.customized_fields = list(db_profile.customized_fields or [])
     profile.rl_q_table = dict(getattr(db_profile, "rl_q_table", {}) or {})
     profile.mental_state_history = list(getattr(db_profile, "mental_state_history", []) or [])
+    profile.concept_layers = dict(getattr(db_profile, "concept_layers", {}) or {})
+    profile.bkt_states = dict(getattr(db_profile, "bkt_states", {}) or {})
     
     if db_profile.knowledge_traces:
         for k, v in db_profile.knowledge_traces.items():
@@ -149,8 +216,14 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 confidence=v.get("confidence", 0.0),
                 evidence_count=v.get("evidence_count", 0),
                 evidence_fragments=list(v.get("evidence_fragments", [])),
-                recommended_interventions=list(v.get("recommended_interventions", []))
             )
+            
+    if not profile.concept_mastery:
+        try:
+            calibrate_student_prior_collaborative(db, profile)
+            save_student_profile(db, profile)
+        except Exception:
+            pass
 
     return profile
 
@@ -188,6 +261,8 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     db_profile.customized_fields = to_dict_safe(profile.customized_fields)
     db_profile.rl_q_table = to_dict_safe(profile.rl_q_table)
     db_profile.mental_state_history = to_dict_safe(profile.mental_state_history)
+    db_profile.concept_layers = to_dict_safe(profile.concept_layers)
+    db_profile.bkt_states = to_dict_safe(profile.bkt_states)
     
     db_profile.dimension_states = to_dict_safe(profile.dimension_states)
     db_profile.learning_state_causes = to_dict_safe(profile.learning_state_causes)

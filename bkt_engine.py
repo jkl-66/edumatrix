@@ -21,9 +21,33 @@ BKT_DEFAULTS = {
 }
 
 
+class KalmanFilter:
+    """一维自适应卡尔曼滤波器，用于学情状态防抖平滑。"""
+    
+    def __init__(self, x_init: float = 0.3, p_init: float = 1.0) -> None:
+        self.x = x_init  # 状态估计值 (掌握度)
+        self.p = p_init  # 误差协方差
+        
+    def step(self, z: float, q: float, r: float) -> tuple[float, float]:
+        """运行一步预测与更新。
+        z: 观测值 (当前测量到的掌握度)
+        q: 系统噪声协方差 (State Transition Noise)
+        r: 测量噪声协方差 (Measurement Noise)
+        """
+        # 1. 预测 (Prediction)
+        p_pred = self.p + q
+        
+        # 2. 更新 (Update)
+        k_gain = p_pred / (p_pred + r)
+        self.x = self.x + k_gain * (z - self.x)
+        self.x = max(0.0, min(1.0, self.x))
+        self.p = (1.0 - k_gain) * p_pred
+        return self.x, k_gain
+
+
 @dataclass
 class BKTState:
-    """单个知识点的 BKT 状态。"""
+    """单个知识点的 BKT 状态，整合卡尔曼滤波器。"""
     concept: str
     p_mastered: float = BKT_DEFAULTS["p_init"]      # P(L_t) 掌握概率
     p_learn: float = BKT_DEFAULTS["p_learn"]
@@ -31,24 +55,103 @@ class BKTState:
     p_guess: float = BKT_DEFAULTS["p_guess"]
     history: list[bool] = field(default_factory=list)  # 答题序列 (True=正确)
 
-    def update(self, correct: bool) -> float:
-        """根据答题结果更新 P(L_t)，返回更新后的掌握概率。"""
+    # 新增 Kalman 状态存储字段（便于序列化与持久化）
+    smoothed_mastery: float = BKT_DEFAULTS["p_init"]
+    p_err: float = 0.1
+    layers: dict[str, dict[str, Any]] = field(default_factory=dict)  # dimension -> {p_mastered, smoothed_mastery, p_err}
+
+    kf: KalmanFilter = field(init=False, default=None)
+
+    def __post_init__(self):
+        self.kf = KalmanFilter(x_init=self.smoothed_mastery, p_init=self.p_err)
+        if not self.layers:
+            self.layers = {
+                l: {
+                    "p_mastered": self.p_mastered,
+                    "smoothed_mastery": self.smoothed_mastery,
+                    "p_err": self.p_err
+                }
+                for l in ("factual", "math", "code", "transfer")
+            }
+
+    def update(self, correct: bool, cognitive_load: float = 0.45, frustration: float = 0.0, dimension: str = "factual") -> float:
+        """根据答题结果更新 BKT 状态，并通过自适应卡尔曼滤波器进行防抖平滑，支持特定认知层级维度。"""
+        # 1. 更新全局主状态
         p_t = self.p_mastered
         if correct:
-            # P(correct) = p_t * (1 - slip) + (1 - p_t) * guess
-            p_correct = p_t * (1 - self.p_slip) + (1 - p_t) * self.p_guess
-            # P(L_t | correct) = p_t * (1 - slip) / P(correct)
-            p_mastered_given_obs = (p_t * (1 - self.p_slip)) / max(p_correct, 1e-10)
+            p_correct = p_t * (1.0 - self.p_slip) + (1.0 - p_t) * self.p_guess
+            p_mastered_given_obs = (p_t * (1.0 - self.p_slip)) / max(p_correct, 1e-10)
         else:
-            p_wrong = p_t * self.p_slip + (1 - p_t) * (1 - self.p_guess)
+            p_wrong = p_t * self.p_slip + (1.0 - p_t) * (1.0 - self.p_guess)
             p_mastered_given_obs = (p_t * self.p_slip) / max(p_wrong, 1e-10)
 
-        # HMM 转义：考虑从未掌握到掌握的学习转换
-        # P(L_{t+1}) = P(L_t|obs) + (1 - P(L_t|obs)) * p_learn
-        self.p_mastered = p_mastered_given_obs + (1 - p_mastered_given_obs) * self.p_learn
-        self.p_mastered = max(0.0, min(1.0, self.p_mastered))
+        # HMM 状态转移
+        raw_bkt_mastery = p_mastered_given_obs + (1.0 - p_mastered_given_obs) * self.p_learn
+        raw_bkt_mastery = max(0.0, min(1.0, raw_bkt_mastery))
+        
+        self.p_mastered = raw_bkt_mastery
         self.history.append(correct)
-        return self.p_mastered
+
+        # 自适应协方差调整
+        q_base = 0.01
+        q_penalty = max(0.0, cognitive_load - 0.5) * 0.05 + max(0.0, frustration - 0.3) * 0.03
+        q = q_base + q_penalty
+
+        r_base = 0.1
+        r_penalty = max(0.0, frustration - 0.5) * 0.08
+        r = r_base + r_penalty
+
+        # 执行卡尔曼滤波防抖更新
+        if getattr(self, "kf", None) is None:
+            self.kf = KalmanFilter(x_init=self.smoothed_mastery, p_init=self.p_err)
+            
+        x_smooth, k_gain = self.kf.step(raw_bkt_mastery, q, r)
+        self.smoothed_mastery = x_smooth
+        self.p_err = self.kf.p
+
+        # 2. 更新指定认知层级（factual, math, code, transfer）
+        if not self.layers:
+            self.layers = {
+                l: {
+                    "p_mastered": BKT_DEFAULTS["p_init"],
+                    "smoothed_mastery": BKT_DEFAULTS["p_init"],
+                    "p_err": 0.1
+                }
+                for l in ("factual", "math", "code", "transfer")
+            }
+        
+        if dimension not in self.layers:
+            self.layers[dimension] = {
+                "p_mastered": BKT_DEFAULTS["p_init"],
+                "smoothed_mastery": BKT_DEFAULTS["p_init"],
+                "p_err": 0.1
+            }
+            
+        layer_state = self.layers[dimension]
+        p_t_l = layer_state.get("p_mastered", BKT_DEFAULTS["p_init"])
+        
+        if correct:
+            p_correct_l = p_t_l * (1.0 - self.p_slip) + (1.0 - p_t_l) * self.p_guess
+            p_mastered_given_obs_l = (p_t_l * (1.0 - self.p_slip)) / max(p_correct_l, 1e-10)
+        else:
+            p_wrong_l = p_t_l * self.p_slip + (1.0 - p_t_l) * (1.0 - self.p_guess)
+            p_mastered_given_obs_l = (p_t_l * self.p_slip) / max(p_wrong_l, 1e-10)
+            
+        raw_bkt_l = p_mastered_given_obs_l + (1.0 - p_mastered_given_obs_l) * self.p_learn
+        raw_bkt_l = max(0.0, min(1.0, raw_bkt_l))
+        layer_state["p_mastered"] = raw_bkt_l
+        
+        # 执行图层 Kalman 估计
+        layer_kf = KalmanFilter(
+            x_init=layer_state.get("smoothed_mastery", BKT_DEFAULTS["p_init"]),
+            p_init=layer_state.get("p_err", 0.1)
+        )
+        x_smooth_l, _ = layer_kf.step(raw_bkt_l, q, r)
+        layer_state["smoothed_mastery"] = x_smooth_l
+        layer_state["p_err"] = layer_kf.p
+        self.layers[dimension] = layer_state
+
+        return self.smoothed_mastery
 
 
 class BKTEngine:
@@ -57,23 +160,51 @@ class BKTEngine:
     def __init__(self) -> None:
         self.states: dict[str, BKTState] = {}
 
-    def get_or_create(self, concept: str) -> BKTState:
+    def get_or_create(self, concept: str, profile_bkt_states: dict[str, Any] | None = None) -> BKTState:
         if concept not in self.states:
-            self.states[concept] = BKTState(concept=concept)
+            # 冷启动容错：若内存中没有，但数据库 Profile 缓存中存有历史状态快照，则进行反序列化重置
+            if profile_bkt_states and concept in profile_bkt_states:
+                snap = profile_bkt_states[concept]
+                state = BKTState(
+                    concept=concept,
+                    p_mastered=snap.get("p_mastered", BKT_DEFAULTS["p_init"]),
+                    p_learn=snap.get("p_learn", BKT_DEFAULTS["p_learn"]),
+                    p_slip=snap.get("p_slip", BKT_DEFAULTS["p_slip"]),
+                    p_guess=snap.get("p_guess", BKT_DEFAULTS["p_guess"]),
+                    history=snap.get("history", []),
+                    smoothed_mastery=snap.get("smoothed_mastery", snap.get("p_mastered", BKT_DEFAULTS["p_init"])),
+                    p_err=snap.get("p_err", 0.1),
+                    layers=snap.get("layers", {})
+                )
+                self.states[concept] = state
+            else:
+                self.states[concept] = BKTState(concept=concept)
         return self.states[concept]
 
-    def update(self, concept: str, correct: bool) -> float:
-        return self.get_or_create(concept).update(correct)
+    def update(
+        self,
+        concept: str,
+        correct: bool,
+        cognitive_load: float = 0.45,
+        frustration: float = 0.0,
+        profile_bkt_states: dict[str, Any] | None = None,
+        dimension: str = "factual"
+    ) -> float:
+        return self.get_or_create(concept, profile_bkt_states).update(correct, cognitive_load, frustration, dimension)
 
-    def get_mastery(self, concept: str) -> float:
-        return self.states[concept].p_mastered if concept in self.states else BKT_DEFAULTS["p_init"]
+    def get_mastery(self, concept: str, profile_bkt_states: dict[str, Any] | None = None) -> float:
+        state = self.get_or_create(concept, profile_bkt_states)
+        return getattr(state, "smoothed_mastery", state.p_mastered)
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
         return {
             concept: {
                 "p_mastered": round(state.p_mastered, 4),
+                "smoothed_mastery": round(getattr(state, "smoothed_mastery", state.p_mastered), 4),
+                "p_err": round(getattr(state, "p_err", 0.1), 4),
                 "attempts": len(state.history),
                 "accuracy": sum(state.history) / max(len(state.history), 1),
+                "layers": getattr(state, "layers", {})
             }
             for concept, state in self.states.items()
         }

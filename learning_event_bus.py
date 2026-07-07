@@ -209,11 +209,37 @@ async def _on_quiz_attempted(event: QuizAttemptedEvent) -> None:
     try:
         from agent_swarm import _get_bkt_engine
         bkt = _get_bkt_engine()
-        bkt.update(event.concept, correct=event.accuracy >= 0.6)
-        # 也同步到 profile.bkt_states
+        
+        # 1. 动态对答题分类到不同认知层级
+        question_text = (event.question or "").lower()
+        dimension = "factual"
+        if any(k in question_text for k in ("代码", "code", "def ", "import", "class", "function")):
+            dimension = "code"
+        elif any(k in question_text for k in ("公式", "求导", "偏导", "计算", "推导", "数学", "equation", "+", "-", "*", "/", "=")):
+            dimension = "math"
+        elif any(k in question_text for k in ("迁移", "类比", "比喻", "场景", "应用", "transfer", "analogy")):
+            dimension = "transfer"
+            
+        bkt.update(
+            event.concept,
+            correct=event.accuracy >= 0.6,
+            cognitive_load=getattr(profile, "cognitive_load", 0.45),
+            frustration=getattr(profile, "frustration_index", 0.0),
+            profile_bkt_states=profile.bkt_states,
+            dimension=dimension
+        )
+        # 也同步到 profile.bkt_states 和 profile.concept_layers
         snapshot = bkt.snapshot()
         if event.concept in snapshot:
             profile.bkt_states[event.concept] = snapshot[event.concept]
+            layers_snap = snapshot[event.concept].get("layers", {})
+            if layers_snap:
+                if not getattr(profile, "concept_layers", None):
+                    profile.concept_layers = {}
+                profile.concept_layers[event.concept] = {
+                    l: round(layers_snap[l].get("smoothed_mastery", 0.3), 4)
+                    for l in layers_snap
+                }
     except Exception:
         pass
 

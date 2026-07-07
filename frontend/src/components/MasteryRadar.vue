@@ -19,10 +19,40 @@ function buildOption() {
   const names = props.concepts.map(c => c.name)
   const currentValues = props.concepts.map(c => (c.mastery || 0) * 100)
   
-  // 模拟初始掌握度状态（比当前状态低 25%，最低 20%），用以渲染灰色的初始对比圈
+  // 计算基于卡尔曼协方差 P_k 的置信环带宽度 (p_err 范围一般为 0.01~1.0)
+  const confidenceMargins = props.concepts.map(c => {
+    const err = c.p_err !== undefined ? c.p_err : 0.1
+    return Math.max(2, Math.min(22, err * 20))
+  })
+  
+  const upperBounds = currentValues.map((val, idx) => Math.min(100, val + confidenceMargins[idx]))
+  const lowerBounds = currentValues.map((val, idx) => Math.max(0, val - confidenceMargins[idx]))
+
+  // 模拟初始掌握度状态
   const initialValues = currentValues.map(val => Math.max(20, Math.min(val, val - 25 + Math.sin(val) * 5)))
 
   const seriesData = []
+
+  // 1. 置信度外边界圈 (发光环带上界)
+  seriesData.push({
+    value: upperBounds,
+    name: '置信度上限 (测不准偏差)',
+    areaStyle: { color: 'rgba(99, 102, 241, 0.09)' },
+    lineStyle: { color: 'rgba(99, 102, 241, 0.25)', type: 'dashed', width: 1 },
+    itemStyle: { color: 'rgba(99, 102, 241, 0.4)' },
+    symbol: 'none'
+  })
+
+  // 2. 置信度内边界圈 (利用 85% 透明度遮罩白底，形成中空发光置信环带)
+  seriesData.push({
+    value: lowerBounds,
+    name: '置信度下限',
+    areaStyle: { color: 'rgba(255, 255, 255, 0.85)' },
+    lineStyle: { color: 'rgba(99, 102, 241, 0.25)', type: 'dashed', width: 1 },
+    itemStyle: { color: 'rgba(99, 102, 241, 0.4)' },
+    symbol: 'none'
+  })
+
   if (props.showComparison) {
     // 灰色虚线圈（上一次/初始状态）
     seriesData.push({
@@ -33,30 +63,20 @@ function buildOption() {
       itemStyle: { color: 'rgba(148, 163, 184, 0.6)' },
       symbol: 'none'
     })
-    // 蓝色实线圈（当前状态）
-    seriesData.push({
-      value: currentValues,
-      name: '当前状态',
-      areaStyle: { color: 'rgba(59, 130, 246, 0.15)' },
-      lineStyle: { color: '#3b82f6', width: 2.5 },
-      itemStyle: { color: '#3b82f6' },
-      symbol: 'circle',
-      symbolSize: 6
-    })
-  } else {
-    // 仅显示蓝色实线圈（当前状态）
-    seriesData.push({
-      value: currentValues,
-      name: '当前状态',
-      areaStyle: { color: 'rgba(59, 130, 246, 0.15)' },
-      lineStyle: { color: '#3b82f6', width: 2.5 },
-      itemStyle: { color: '#3b82f6' },
-      symbol: 'circle',
-      symbolSize: 6
-    })
   }
 
-  const legendData = props.showComparison ? ['上一次状态', '当前状态'] : []
+  // 3. 当前掌握度流动发光实线圈
+  seriesData.push({
+    value: currentValues,
+    name: '当前掌握度 (BKT卡尔曼估计值)',
+    areaStyle: { color: 'rgba(99, 102, 241, 0.12)' },
+    lineStyle: { color: '#6366f1', width: 2.5, shadowBlur: 6, shadowColor: 'rgba(99, 102, 241, 0.5)' },
+    itemStyle: { color: '#6366f1' },
+    symbol: 'circle',
+    symbolSize: 6
+  })
+
+  const legendData = props.showComparison ? ['上一次状态', '当前掌握度 (BKT卡尔曼估计值)'] : []
 
   return {
     radar: {

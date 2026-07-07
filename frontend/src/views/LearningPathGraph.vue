@@ -28,6 +28,13 @@ const gapChains = computed(() => pathData.value?.gap_chains || [])
 const stages = computed(() => pathData.value?.stages || [])
 const progress = computed(() => pathData.value?.progress_summary || {})
 const strategySuggestions = computed(() => pathData.value?.strategy_suggestions || [])
+const adaptiveRoute = computed(() => pathData.value?.adaptive_route || null)
+const routeNodes = computed(() => adaptiveRoute.value?.nodes || [])
+const routeEdges = computed(() => adaptiveRoute.value?.edges || [])
+const routeConfidence = computed(() => Math.round((adaptiveRoute.value?.confidence || 0) * 100))
+const graphEdgeCount = computed(() => pathData.value?.micro_concept_graph?.metadata?.edge_count || routeEdges.value.length)
+const crossGraph = computed(() => pathData.value?.cross_domain_micro_graph || null)
+const crossDomainSupports = computed(() => adaptiveRoute.value?.cross_domain_supports || [])
 
 const totalSteps = computed(() => learningChain.value.length)
 const masteredCount = computed(() => learningChain.value.filter(n => n.mastered).length)
@@ -85,6 +92,24 @@ function masteryBarColor(score) {
   if (score >= 60) return 'bg-emerald-500'
   if (score >= 30) return 'bg-amber-500'
   return 'bg-red-500'
+}
+
+function routeActionColor(action) {
+  if (action === '快速复核') return 'bg-emerald-50 text-emerald-700 border-emerald-100'
+  if (action === '进阶攻克') return 'bg-purple-50 text-purple-700 border-purple-100'
+  if (action === '巩固推进') return 'bg-blue-50 text-blue-700 border-blue-100'
+  return 'bg-amber-50 text-amber-700 border-amber-100'
+}
+
+function formatRouteCost(cost) {
+  const value = Number(cost || 0)
+  return value.toFixed(2)
+}
+
+function formatMinutes(minutes) {
+  const value = Number(minutes || 0)
+  if (value >= 180) return `${(value / 60).toFixed(1)} 小时`
+  return `${Math.round(value)} 分钟`
 }
 
 function goLearn(concept) {
@@ -156,7 +181,7 @@ onMounted(async () => {
     </div>
 
     <!-- Progress summary -->
-    <div class="grid grid-cols-4 gap-2">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
       <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
         <p class="text-[9px] text-gray-500">已完成</p>
         <p class="text-lg font-bold text-emerald-600 mt-0.5">{{ progress.mastered || 0 }}</p>
@@ -172,6 +197,86 @@ onMounted(async () => {
       <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
         <p class="text-[9px] text-gray-500">总概念</p>
         <p class="text-lg font-bold text-gray-700 mt-0.5">{{ progress.total_concepts || 0 }}</p>
+      </div>
+    </div>
+
+    <!-- Adaptive A* route -->
+    <div v-if="routeNodes.length" class="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
+      <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+        <div>
+          <h2 class="text-sm font-semibold text-gray-800 flex items-center gap-2">
+            <BrainCircuit :size="15" class="text-indigo-500" /> A* 动态推荐路线
+          </h2>
+          <p class="text-[10px] text-gray-400 mt-1">根据微概念图谱、掌握缺口、认知负荷和情绪阻力生成</p>
+        </div>
+        <div class="grid grid-cols-3 gap-2 text-center shrink-0">
+          <div class="px-3 py-2 rounded-xl bg-indigo-50 border border-indigo-100">
+            <p class="text-[9px] text-indigo-500">目标</p>
+            <p class="text-xs font-bold text-indigo-700 truncate max-w-[90px]">{{ adaptiveRoute.target_concept }}</p>
+          </div>
+          <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-100">
+            <p class="text-[9px] text-slate-500">总代价</p>
+            <p class="text-xs font-bold text-slate-700">{{ formatRouteCost(adaptiveRoute.total_cost) }}</p>
+          </div>
+          <div class="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-100">
+            <p class="text-[9px] text-emerald-500">置信度</p>
+            <p class="text-xs font-bold text-emerald-700">{{ routeConfidence }}%</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-stretch gap-2">
+        <template v-for="(node, idx) in routeNodes" :key="node.concept">
+          <button
+            class="min-w-[118px] flex-1 rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-3 text-left hover:border-indigo-200 hover:bg-indigo-50/50 transition-all"
+            @click="goLearn(node.concept)"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold shrink-0">{{ node.step }}</span>
+              <span class="text-[9px] px-1.5 py-0.5 rounded border" :class="routeActionColor(node.action)">{{ node.action }}</span>
+            </div>
+            <p class="text-xs font-semibold text-gray-800 mt-2 truncate">{{ node.concept }}</p>
+            <div class="mt-2 h-1.5 bg-white rounded-full overflow-hidden">
+              <div class="h-full rounded-full" :class="masteryBarColor(node.percentage)" :style="{ width: node.percentage + '%' }" />
+            </div>
+            <p class="text-[9px] text-gray-500 mt-1">掌握 {{ node.percentage }}% · 累计成本 {{ formatRouteCost(node.cumulative_cost) }}</p>
+          </button>
+          <div v-if="idx < routeNodes.length - 1" class="hidden md:flex items-center text-indigo-300">
+            <ArrowRight :size="14" />
+          </div>
+        </template>
+      </div>
+
+      <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="rounded-xl bg-indigo-50/60 border border-indigo-100 p-3">
+          <p class="text-[10px] font-bold text-indigo-700 mb-2">路径解释</p>
+          <div class="space-y-1.5">
+            <p v-for="reason in adaptiveRoute.reasons || []" :key="reason" class="text-[10px] text-indigo-700 leading-relaxed">· {{ reason }}</p>
+          </div>
+        </div>
+        <div class="rounded-xl bg-slate-50 border border-slate-100 p-3">
+          <p class="text-[10px] font-bold text-slate-700 mb-2">图谱约束</p>
+          <div class="grid grid-cols-2 gap-2 text-[10px] text-slate-600">
+            <p>微概念边：{{ graphEdgeCount }}</p>
+            <p>预计：{{ formatMinutes(adaptiveRoute.estimated_minutes) }}</p>
+            <p>认知负荷：{{ Math.round((adaptiveRoute.constraints?.cognitive_load || 0) * 100) }}%</p>
+            <p>掌握阈值：{{ Math.round((adaptiveRoute.constraints?.mastery_threshold || 0.7) * 100) }}%</p>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="crossDomainSupports.length" class="mt-3 rounded-xl bg-amber-50/70 border border-amber-100 p-3">
+        <div class="flex items-center justify-between gap-3 mb-2">
+          <p class="text-[10px] font-bold text-amber-700">跨学科补强</p>
+          <span class="text-[9px] text-amber-600">{{ crossGraph?.metadata?.embedding_algorithm || 'graph embedding' }}</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div v-for="item in crossDomainSupports" :key="`${item.concept}-${item.target}`" class="rounded-lg bg-white/70 border border-amber-100 px-3 py-2">
+            <p class="text-xs font-semibold text-gray-800">{{ item.concept }} → {{ item.target }}</p>
+            <p class="text-[9px] text-amber-700 mt-0.5">{{ item.domain_label || item.domain }} · 权重 {{ formatRouteCost(item.weight) }}</p>
+            <p class="text-[9px] text-gray-500 mt-1 line-clamp-2">{{ item.reason }}</p>
+          </div>
+        </div>
       </div>
     </div>
 

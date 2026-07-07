@@ -1,38 +1,43 @@
-"""任务 7.5: 自适应 Anki 间隔记忆闪卡 API
+"""Adaptive Anki-style flashcard API.
 
-前端交互：
-- POST /api/flashcard/generate — 从错题生成闪卡
-- POST /api/flashcard/review — 提交复习质量反馈 (q={2,4,5})
-- GET  /api/flashcard/due — 获取到期待复习的闪卡列表
-- GET  /api/flashcard/all — 获取全部闪卡
+Endpoints:
+- POST /api/flashcard/generate: create a flashcard from a wrong quiz or weak point.
+- POST /api/flashcard/review: record review quality and persist SM-2 scheduling.
+- GET  /api/flashcard/due: list in-memory cards due for review.
+- GET  /api/flashcard/all: list all in-memory cards.
 """
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from anki_engine import FlashCard, get_sm2_engine
+from anki_engine import get_sm2_engine
+from app.crud import apply_review_feedback, load_student_profile, review_plan_to_dict
 from app.database import DBQuizRecord, DBReviewPlan, get_db
-from app.crud import load_student_profile, save_student_profile
 
 router = APIRouter(prefix="/api/flashcard", tags=["flashcard"])
 
 
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _iso_utc(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.replace(microsecond=0).isoformat()
+
+
 @router.post("/generate")
 async def generate_flashcard(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """从错题自动生成闪卡。
-
-    请求体:
-        student_id: str
-        quiz_id: str (可选，指定来源答题记录)
-
-    返回:
-        {flashcard: {...}, concept, front, back}
-    """
+    """Create or load a flashcard and mirror it into review_plans."""
     payload = await request.json()
     student_id = str(payload.get("student_id", "default"))
     quiz_id = str(payload.get("quiz_id", "")).strip()
@@ -42,28 +47,27 @@ async def generate_flashcard(request: Request, db: Session = Depends(get_db)) ->
     back = ""
 
     if quiz_id:
-        # 从指定答题记录提取知识点
         record = db.query(DBQuizRecord).filter(
             DBQuizRecord.id == quiz_id,
             DBQuizRecord.student_id == student_id,
         ).first()
         if record:
-            concept = record.target_concept or "通用概念"
-            front = f"请解释 {concept} 的核心概念和关键原理"
+            concept = record.target_concept or "General Concept"
+            front = f"Explain the core idea and key principle of {concept}."
             back = (
-                f"参考答案要点：{record.correct_answer or '暂无'}\n"
-                f"你的回答：{record.student_answer or '未记录'}\n"
-                f"正确率：{record.accuracy_score or 0.0:.2f}"
+                f"Reference answer: {record.correct_answer or 'N/A'}\n"
+                f"Your answer: {record.student_answer or 'N/A'}\n"
+                f"Accuracy: {record.accuracy_score or 0.0:.2f}"
             )
     else:
-        # 无 quiz_id 时从画像薄弱点生成
         profile = load_student_profile(db, student_id)
         if profile.weak_points:
             concept = profile.weak_points[0]
-            front = f"请解释 {concept} 的核心概念"
-            back = f"{concept} 的关键要点和原理解析"
-        else:
-            raise HTTPException(status_code=400, detail="无可用知识点生成闪卡")
+            front = f"Explain the core idea of {concept}."
+            back = f"Key points and principle explanation for {concept}."
+
+    if not concept:
+        raise HTTPException(status_code=400, detail="No available concept for flashcard generation")
 
     engine = get_sm2_engine()
     card = engine.get_or_create(
@@ -74,24 +78,23 @@ async def generate_flashcard(request: Request, db: Session = Depends(get_db)) ->
         source_quiz_id=quiz_id,
     )
 
-    # 同步到数据库 review_plans 表
     existing = db.query(DBReviewPlan).filter(
         DBReviewPlan.student_id == student_id,
         DBReviewPlan.concept == concept,
     ).first()
     if existing:
-        existing.easiness_factor = card.easiness
-        existing.interval_days = card.interval_days
-        existing.last_quality = card.last_quality
-        existing.review_count = card.review_count
+        existing.easiness_factor = existing.easiness_factor or card.easiness
+        existing.interval_days = existing.interval_days or card.interval_days
+        existing.last_quality = existing.last_quality or card.last_quality
+        existing.review_count = existing.review_count or card.review_count
         existing.mastery = max(existing.mastery or 0.0, 0.3)
+        existing.priority = existing.priority if existing.priority is not None else 1.0
     else:
-        now = datetime.now(timezone.utc)
         plan = DBReviewPlan(
             student_id=student_id,
             concept=concept,
             interval_days=card.interval_days,
-            next_review_at=now,
+            next_review_at=_utcnow_naive(),
             mastery=0.3,
             review_count=0,
             easiness_factor=card.easiness,
@@ -106,53 +109,41 @@ async def generate_flashcard(request: Request, db: Session = Depends(get_db)) ->
 
 @router.post("/review")
 async def review_flashcard(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """提交复习质量反馈，触发 SM-2 调度更新。
-
-    请求体:
-        student_id: str
-        concept: str
-        quality: int  — {2=困难, 4=一般, 5=简单}
-
-    返回:
-        {flashcard: 更新后的闪卡, easiness_new, interval_new, next_review_at}
-    """
+    """Record review quality and persist the SM-2 schedule."""
     payload = await request.json()
     student_id = str(payload.get("student_id", "default"))
     concept = str(payload.get("concept", "")).strip()
-    quality = int(payload.get("quality", 4))
+    try:
+        quality = int(payload.get("quality", 4))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="quality must be one of 2, 4, 5")
 
     if quality not in (2, 4, 5):
-        raise HTTPException(status_code=400, detail="质量评分必须为 2(困难), 4(一般) 或 5(简单)")
+        raise HTTPException(status_code=400, detail="quality must be one of 2, 4, 5")
+    if not concept:
+        raise HTTPException(status_code=400, detail="concept is required")
 
+    try:
+        plan = apply_review_feedback(db, student_id, concept, quality)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # SQLite is the source of truth; the in-memory card is only a fast mirror.
     engine = get_sm2_engine()
-    card = engine.review(concept, student_id, quality)
-    if card is None:
-        raise HTTPException(status_code=404, detail=f"概念 '{concept}' 的闪卡不存在，请先生成")
-
-    # 同步到数据库
-    plan = db.query(DBReviewPlan).filter(
-        DBReviewPlan.student_id == student_id,
-        DBReviewPlan.concept == concept,
-    ).first()
-    if plan:
-        plan.easiness_factor = card.easiness
-        plan.interval_days = card.interval_days
-        plan.last_quality = quality
-        plan.review_count = card.review_count
-        plan.mastery = min(1.0, (plan.mastery or 0.0) + 0.05 if quality >= 4 else max(0.0, (plan.mastery or 0.0) - 0.1))
-        try:
-            plan.next_review_at = datetime.fromisoformat(card.next_review_at)
-        except (ValueError, TypeError):
-            from datetime import timezone
-            plan.next_review_at = datetime.now(timezone.utc) + __import__('datetime').timedelta(days=card.interval_days)
-        db.commit()
+    card = engine.get_or_create(concept=concept, student_id=student_id)
+    card.easiness = plan.easiness_factor or card.easiness
+    card.interval_days = plan.interval_days or card.interval_days
+    card.last_quality = plan.last_quality or quality
+    card.review_count = plan.review_count or 0
+    card.next_review_at = _iso_utc(plan.next_review_at)
 
     return {
         "flashcard": card.to_dict(),
-        "easiness_new": round(card.easiness, 2),
-        "interval_new": card.interval_days,
-        "next_review_at": card.next_review_at,
-        "message": f"复习成功！下次复习间隔 {card.interval_days} 天",
+        "review_plan": review_plan_to_dict(plan),
+        "easiness_new": round(plan.easiness_factor or card.easiness, 2),
+        "interval_new": plan.interval_days,
+        "next_review_at": _iso_utc(plan.next_review_at),
+        "message": f"Review recorded. Next review interval: {plan.interval_days} days.",
     }
 
 
@@ -162,7 +153,7 @@ async def get_due_cards(
     student_id: str = "default",
     max_count: int = 20,
 ) -> dict[str, Any]:
-    """获取到期待复习的闪卡列表。"""
+    """Return due in-memory cards."""
     engine = get_sm2_engine()
     due = engine.get_due_cards(student_id, max_count)
     return {
@@ -176,7 +167,7 @@ async def get_all_cards(
     request: Request,
     student_id: str = "default",
 ) -> dict[str, Any]:
-    """获取全部闪卡（含 SM-2 参数）。"""
+    """Return all in-memory cards for a student."""
     engine = get_sm2_engine()
     cards = engine.get_all_cards(student_id)
     return {

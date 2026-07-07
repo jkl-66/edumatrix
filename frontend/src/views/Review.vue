@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { getReviewPlans, createReviewPlan } from '../api'
+import { getReviewPlans, createReviewPlan, reviewFlashcard } from '../api'
 import { Calendar, Plus, CheckCircle2, Clock, Brain } from '@lucide/vue'
 
 const props = defineProps({ studentId: String })
@@ -10,6 +10,13 @@ const loading = ref(true)
 const showForm = ref(false)
 const form = ref({ concept: '', mastery: 0.5, interval_days: 3 })
 const actionFeedback = ref('')
+const reviewingKey = ref('')
+
+const qualityActions = [
+  { quality: 2, label: '困难', tone: 'border-red-200 text-red-600 hover:bg-red-50' },
+  { quality: 4, label: '一般', tone: 'border-amber-200 text-amber-600 hover:bg-amber-50' },
+  { quality: 5, label: '简单', tone: 'border-emerald-200 text-emerald-600 hover:bg-emerald-50' },
+]
 
 function setAction(fb) {
   actionFeedback.value = fb
@@ -45,6 +52,22 @@ async function addPlan() {
   }
 }
 
+async function submitReview(plan, quality) {
+  if (!plan?.concept) return
+  const key = `${plan.id || plan.concept}:${quality}`
+  reviewingKey.value = key
+  try {
+    const result = await reviewFlashcard(props.studentId, plan.concept, quality)
+    const interval = result?.review_plan?.interval_days || result?.interval_new || '-'
+    setAction(`复习反馈已记录，下次间隔 ${interval} 天`)
+    await load()
+  } catch (e) {
+    setAction(`反馈提交失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    reviewingKey.value = ''
+  }
+}
+
 const intervals = [1, 3, 7, 14, 30]
 
 function masteryColor(m) {
@@ -56,6 +79,20 @@ function masteryColor(m) {
 function nextReviewDate(plan) {
   if (!plan.next_review_at) return '待安排'
   return new Date(plan.next_review_at).toLocaleDateString('zh-CN')
+}
+
+function dueText(plan) {
+  if (plan.is_due) return '今日到期'
+  if (plan.days_until_due == null) return '待安排'
+  return `${plan.days_until_due}天后到期`
+}
+
+function statusClass(plan) {
+  return plan.is_due ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'
+}
+
+function easinessText(plan) {
+  return Number(plan.easiness_factor || 2.5).toFixed(2)
 }
 
 onMounted(load)
@@ -121,7 +158,7 @@ onMounted(load)
     </div>
 
     <div v-else class="space-y-2">
-      <div v-for="plan in reviews" :key="plan.id" class="card flex items-center gap-4">
+      <div v-for="plan in reviews" :key="plan.id" class="card flex flex-col sm:flex-row sm:items-center gap-4">
         <CheckCircle2 :size="20" class="text-emerald-500 shrink-0" />
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2">
@@ -133,6 +170,8 @@ onMounted(load)
           <div class="flex items-center gap-3 mt-1 text-xs text-gray-400">
             <span class="flex items-center gap-1"><Clock :size="12" /> 间隔 {{ plan.interval_days || '-' }}天</span>
             <span class="flex items-center gap-1"><Brain :size="12" /> 下次复习 {{ nextReviewDate(plan) }}</span>
+            <span>复习 {{ plan.review_count || 0 }} 次</span>
+            <span>E-Factor {{ easinessText(plan) }}</span>
           </div>
           <div class="mt-1.5 h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <div
@@ -142,7 +181,22 @@ onMounted(load)
             />
           </div>
         </div>
-        <span class="badge bg-blue-50 text-blue-700 text-xs shrink-0">{{ plan.interval_days }}天后复习</span>
+        <div class="flex flex-col items-end gap-2 shrink-0">
+          <span class="badge text-xs" :class="statusClass(plan)">{{ dueText(plan) }}</span>
+          <div class="flex gap-1">
+            <button
+              v-for="action in qualityActions"
+              :key="`${plan.id}-${action.quality}`"
+              type="button"
+              class="px-2 py-1 rounded-lg border text-[11px] font-medium transition-colors disabled:opacity-50"
+              :class="action.tone"
+              :disabled="!!reviewingKey"
+              @click.prevent="submitReview(plan, action.quality)"
+            >
+              {{ reviewingKey === `${plan.id || plan.concept}:${action.quality}` ? '提交中' : action.label }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

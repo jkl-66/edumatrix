@@ -11,9 +11,6 @@ import { abortAllStreams } from './api'
 const route = useRoute()
 const router = useRouter()
 
-onMounted(() => window.addEventListener('beforeunload', abortAllStreams))
-onUnmounted(() => window.removeEventListener('beforeunload', abortAllStreams))
-
 const getOrInitStudentId = () => {
   let id = localStorage.getItem('edumatrix_student_id')
   if (!id) {
@@ -26,7 +23,22 @@ const getOrInitStudentId = () => {
 const studentId = ref('')
 const role = ref('student')
 const displayName = ref('')
-const sidebarCollapsed = ref(false)
+const isNarrowViewport = () => typeof window !== 'undefined' && window.innerWidth < 768
+const sidebarCollapsed = ref(isNarrowViewport())
+
+function syncSidebarForViewport() {
+  if (isNarrowViewport()) sidebarCollapsed.value = true
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', abortAllStreams)
+  window.addEventListener('resize', syncSidebarForViewport)
+  syncSidebarForViewport()
+})
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', abortAllStreams)
+  window.removeEventListener('resize', syncSidebarForViewport)
+})
 
 const updateSessionInfo = () => {
   studentId.value = localStorage.getItem('edumatrix_student_id') || getOrInitStudentId()

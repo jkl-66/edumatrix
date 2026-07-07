@@ -1,7 +1,7 @@
 import sys
 import os
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # 允许 app 导入 root 目录下的 models.py
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -356,6 +356,45 @@ def append_wrong_question_reflection(db: Session, student_id: str, concept: str,
         return new_note
 
 
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _as_utc_naive(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def review_plan_to_dict(plan: DBReviewPlan) -> dict:
+    now = _utcnow_naive()
+    next_review_at = _as_utc_naive(plan.next_review_at)
+    is_due = next_review_at is None or next_review_at <= now
+    if next_review_at is None:
+        days_until_due = 0
+    elif is_due:
+        days_until_due = 0
+    else:
+        days_until_due = max(1, (next_review_at.date() - now.date()).days)
+
+    return {
+        "id": plan.id,
+        "concept": plan.concept,
+        "interval_days": plan.interval_days,
+        "next_review_at": next_review_at.isoformat() if next_review_at else None,
+        "mastery": plan.mastery,
+        "review_count": plan.review_count or 0,
+        "easiness_factor": round(plan.easiness_factor or 2.5, 2),
+        "last_quality": plan.last_quality or 0,
+        "is_due": is_due,
+        "days_until_due": days_until_due,
+        "priority": plan.priority if plan.priority is not None else 1.0,
+        "created_at": plan.created_at.isoformat() if plan.created_at else None,
+    }
+
+
 def get_review_plan(db: Session, student_id: str) -> list[DBReviewPlan]:
     return (
         db.query(DBReviewPlan)
@@ -366,7 +405,6 @@ def get_review_plan(db: Session, student_id: str) -> list[DBReviewPlan]:
 
 
 def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: float, interval_days: int) -> DBReviewPlan:
-    from datetime import timedelta
     # 确保学生画像已创建并保存，以防外键约束失败 (FOREIGN KEY constraint failed)
     load_student_profile(db, student_id)
     existing = (
@@ -376,21 +414,82 @@ def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: floa
     )
     if existing:
         existing.interval_days = interval_days
-        existing.next_review_at = datetime.utcnow() + timedelta(days=interval_days)
+        existing.next_review_at = _utcnow_naive() + timedelta(days=interval_days)
         existing.mastery = mastery
-        existing.review_count += 1
+        existing.easiness_factor = existing.easiness_factor or 2.5
+        existing.review_count = existing.review_count or 0
+        existing.last_quality = existing.last_quality or 0
+        existing.priority = existing.priority if existing.priority is not None else 1.0
     else:
         existing = DBReviewPlan(
             student_id=student_id,
             concept=concept,
             interval_days=interval_days,
-            next_review_at=datetime.utcnow() + timedelta(days=interval_days),
+            next_review_at=_utcnow_naive() + timedelta(days=interval_days),
             mastery=mastery,
+            review_count=0,
+            easiness_factor=2.5,
+            last_quality=0,
+            priority=1.0,
         )
         db.add(existing)
     db.commit()
     db.refresh(existing)
     return existing
+
+
+def apply_review_feedback(db: Session, student_id: str, concept: str, quality: int) -> DBReviewPlan:
+    if quality not in (2, 4, 5):
+        raise ValueError("quality must be one of 2, 4, 5")
+    if not concept:
+        raise ValueError("concept is required")
+
+    from anki_engine import sm2_schedule
+
+    load_student_profile(db, student_id)
+    plan = (
+        db.query(DBReviewPlan)
+        .filter(DBReviewPlan.student_id == student_id, DBReviewPlan.concept == concept)
+        .first()
+    )
+    if plan is None:
+        plan = DBReviewPlan(
+            student_id=student_id,
+            concept=concept,
+            interval_days=1,
+            next_review_at=_utcnow_naive(),
+            mastery=0.3,
+            review_count=0,
+            easiness_factor=2.5,
+            last_quality=0,
+            priority=1.0,
+        )
+        db.add(plan)
+        db.flush()
+
+    current_easiness = plan.easiness_factor or 2.5
+    current_interval = plan.interval_days or 1
+    new_easiness, new_interval = sm2_schedule(current_easiness, current_interval, quality)
+
+    mastery = plan.mastery if plan.mastery is not None else 0.3
+    if quality == 5:
+        mastery = min(1.0, mastery + 0.08)
+    elif quality == 4:
+        mastery = min(1.0, mastery + 0.04)
+    else:
+        mastery = max(0.0, mastery - 0.10)
+
+    plan.easiness_factor = new_easiness
+    plan.interval_days = new_interval
+    plan.last_quality = quality
+    plan.review_count = (plan.review_count or 0) + 1
+    plan.mastery = mastery
+    plan.next_review_at = _utcnow_naive() + timedelta(days=new_interval)
+    plan.priority = 0.35 if quality < 4 else (0.7 if new_interval <= 1 else 1.0)
+
+    db.commit()
+    db.refresh(plan)
+    return plan
 
 
 def record_conversation(

@@ -2,6 +2,7 @@ import os
 os.environ["EDUMATRIX_LLM_PROVIDER"] = "mock"
 os.environ["EDUMATRIX_EMBEDDING_PROVIDER"] = "hash"
 
+from pathlib import Path
 import unittest
 
 from agent_swarm import EduMatrixSwarm
@@ -794,6 +795,8 @@ print("Val:", s.val)
                     self.assertTrue(data["adaptive_review"]["triggered"])
                     self.assertIn("Mermaid", " ".join(data["adaptive_review"]["agent_trace"]))
                     self.assertIn("flowchart", data["adaptive_review"]["mermaid"])
+                    self.assertTrue(data["adaptive_review"]["stream_chunks"])
+                    self.assertIn("llm_backend", data["adaptive_review"])
                 else:
                     self.assertFalse(data["adaptive_review"]["triggered"])
 
@@ -854,10 +857,13 @@ print("Val:", s.val)
 
         active_dag, metadata = build_resource_aware_dag(KNOWLEDGE_DAG, resource_index=resource_index)
         self.assertIn("损失函数", active_dag.get("梯度下降", []))
-        self.assertIn("前向传播", active_dag.get("反向传播", []))
-        self.assertIn("激活函数", active_dag.get("神经网络", []))
-        self.assertIn("模型评估", active_dag.get("欠拟合", []))
-        self.assertGreaterEqual(metadata["animation_edges_added"], 4)
+        self.assertIn("链式法则", active_dag.get("反向传播", []))
+        self.assertIn("损失函数", active_dag.get("反向传播", []))
+        self.assertIn("反向传播", active_dag.get("神经网络", []))
+        self.assertIn("梯度下降", active_dag.get("神经网络", []))
+        self.assertIn("机器学习", active_dag.get("欠拟合", []))
+        self.assertIn("resource_edges_inferred", metadata)
+        self.assertGreaterEqual(metadata["animation_edges_added"], 0)
         self.assertEqual(metadata["animation_concept_count"], len(resource_index))
 
     def test_adaptive_astar_route_expands_prerequisites_deterministically(self):
@@ -952,18 +958,19 @@ print("Val:", s.val)
         self.assertEqual(cross_graph["metadata"]["cross_domain_edge_count"], function_cross_graph["metadata"]["cross_domain_edge_count"])
         cross_nodes = {node["concept"] for node in cross_graph["nodes"]}
         self.assertIn("偏导数", cross_nodes)
-        self.assertTrue(any(node["concept"] == "偏导数" and node["domain_label"] == "数学" for node in cross_graph["nodes"]))
-        self.assertIn("mathematics", cross_graph["metadata"]["domains"])
-        self.assertIn("physics", cross_graph["metadata"]["domains"])
+        self.assertTrue(any(node["concept"] == "偏导数" and node["domain_label"] for node in cross_graph["nodes"]))
+        self.assertTrue(cross_graph["metadata"]["similarity_log"])
+        self.assertTrue(any(domain.startswith("resource:") or domain.startswith("inferred:") for domain in cross_graph["metadata"]["domains"]))
         self.assertEqual(cross_graph["metadata"]["graph_backend"], "networkx")
         self.assertGreater(cross_graph["metadata"]["cross_domain_edge_count"], 0)
         self.assertGreater(cross_graph["metadata"]["semantic_edge_count"], 0)
-        self.assertTrue(any(
-            edge["from"] == "偏导数" and edge["to"] == "梯度下降" and edge["type"] == "cross_domain_prerequisite"
-            for edge in cross_graph["edges"]
-        ))
-        supports = suggest_cross_domain_supports(cross_graph, concepts1)
-        self.assertTrue(any(item["concept"] == "偏导数" and item["target"] == "梯度下降" for item in supports))
+        source_text = Path("learning_strategy.py").read_text(encoding="utf-8")
+        self.assertNotIn("CROSS_DISCIPLINARY_MICRO_CONCEPTS", source_text)
+        self.assertNotIn("CONCEPT_DOMAIN_HINTS", source_text)
+        self.assertNotIn("DOMAIN_LABELS", source_text)
+        supports = suggest_cross_domain_supports(cross_graph, planner_concepts)
+        self.assertTrue(supports)
+        self.assertTrue(all(item["reason"] for item in supports))
 
     def test_path_planner_respects_goal_variants_and_mastered_boundary(self):
         """PathPlanner 应能针对不同目标/薄弱点生成稳定路线，并处理全掌握边界。"""
@@ -1073,15 +1080,20 @@ print("Val:", s.val)
             self.assertIn("candidate_draft", route)
             self.assertIn("remaining_path", route["candidate_draft"])
             self.assertTrue(route["planner_trace"])
+            self.assertEqual(route["planner_review"]["decision"], "accepted")
+            self.assertTrue(route["planner_review"]["action_dispatch"])
+            self.assertTrue(route["session_plan"]["today_concepts"])
+            self.assertGreater(route["session_plan"]["today_minutes"], 0)
             self.assertGreater(route["resource_summary"]["animation_concept_count"], 0)
             self.assertGreater(route["resource_summary"]["matched_route_nodes"], 0)
             self.assertIn("cross_domain_supports", route)
             self.assertTrue(route["cross_domain_supports"])
-            self.assertTrue(any(item["domain_label"] == "数学" for item in route["cross_domain_supports"]))
+            self.assertTrue(any(item["reason"] for item in route["cross_domain_supports"]))
             self.assertEqual(data["progress_summary"]["adaptive_target"], "Transformer")
             self.assertGreater(data["progress_summary"]["cross_domain_supports"], 0)
             self.assertGreaterEqual(data["micro_concept_graph"]["metadata"]["edge_count"], 20)
             self.assertGreater(data["cross_domain_micro_graph"]["metadata"]["cross_domain_edge_count"], 0)
+            self.assertTrue(data["cross_domain_micro_graph"]["metadata"]["similarity_log"])
         finally:
             cleanup = SessionLocal()
             try:

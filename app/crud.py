@@ -518,14 +518,35 @@ def build_review_adaptation_payload(concept: str, quality: int, mastery: float |
                 "Director Agent: 复习反馈已记录，保持原卡片结构。",
                 "SM-2 Engine: 已根据评分更新下次复习间隔。",
             ],
+            "stream_chunks": [],
         }
 
-    simplified = (
+    fallback_simplified = (
         f"检测到「{concept}」仍然吃力，先把它拆成三步："
         f"第一步只确认它要解决什么问题；第二步看输入怎样一步步变成输出；"
         f"第三步再回到公式或代码细节。当前掌握度约 {round(mastery_score * 100)}%，"
         "建议先看一遍可视化例子，再做一道最小变式题。"
     )
+    llm_backend = "deterministic-fallback"
+    simplified = fallback_simplified
+    try:
+        from llm_client import DEFAULT_LLM
+
+        llm_backend = getattr(DEFAULT_LLM, "__class__", type(DEFAULT_LLM)).__name__
+        generated = DEFAULT_LLM.generate(
+            "你是 EduMatrix 的 Visualizer Agent 和 Director Agent。学生复习反馈为困难，请把概念降维成生活化解释。",
+            (
+                f"概念: {concept}\n"
+                f"当前掌握度: {mastery_score:.2f}\n"
+                "请输出一段不超过 120 字的中文解释，先讲直觉，再给最小行动建议。"
+            ),
+            role="概念可视化导师",
+        )
+        if generated and len(generated.strip()) >= 12 and "已基于检索证据处理主题" not in generated:
+            simplified = generated.strip()
+    except Exception:
+        simplified = fallback_simplified
+
     mermaid = (
         "flowchart LR\n"
         f"    A[直觉问题: {concept}] --> B[生活化类比]\n"
@@ -533,19 +554,23 @@ def build_review_adaptation_payload(concept: str, quality: int, mastery: float |
         "    C --> D[最小例题]\n"
         "    D --> E[重新复述]\n"
     )
+    card_back = simplified + "\n\n" + mermaid
+    stream_chunks = [card_back[i : i + 28] for i in range(0, len(card_back), 28)]
     return {
         "triggered": True,
         "concept": concept,
         "quality": quality,
         "mastery": round(mastery_score, 2),
         "mode": "generative_morphing",
+        "llm_backend": llm_backend,
         "title": f"「{concept}」降维解释已生成",
         "simplified_explanation": simplified,
         "mermaid": mermaid,
-        "card_back": simplified + "\n\n" + mermaid,
+        "card_back": card_back,
+        "stream_chunks": stream_chunks,
         "agent_trace": [
             "Director Agent: 检测到困难反馈，切换为降维解释模式。",
-            "Visualizer Agent: 已生成 Mermaid 思维对比图。",
+            f"Visualizer Agent: 已通过 {llm_backend} 生成降维解释与 Mermaid 思维对比图。",
             "Profile Agent: 已下调该概念掌握度，并写入薄弱点列表。",
             "Planner Agent: 下一次学习路径会重新考虑该薄弱点。",
         ],

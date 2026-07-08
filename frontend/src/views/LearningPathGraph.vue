@@ -1,11 +1,12 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getLearningPath, getRecommendations } from '../api'
+import * as echarts from 'echarts'
 import {
   BookOpen, BrainCircuit, Target, TrendingUp, ChevronRight,
   ArrowRight, AlertTriangle, CheckCircle2, Layers, Sparkles,
-  Clock, Zap, ChevronLeft, Play, Activity, Unlock
+  Clock, Zap, ChevronLeft, Play, Activity, Unlock, RefreshCw, Search
 } from '@lucide/vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 
@@ -18,6 +19,11 @@ const loading = ref(true)
 const error = ref('')
 const showAll = ref(false)
 const isTeacher = computed(() => localStorage.getItem('edumatrix_role') === 'teacher')
+const regenerating = ref(false)
+const semanticQuery = ref('')
+const showSimilarityLog = ref(false)
+const semanticChartRef = ref(null)
+let semanticChart = null
 
 const showVideoPanel = ref(false)
 const videoPanelUrl = ref('')
@@ -45,6 +51,11 @@ const remainingRoute = computed(() => adaptiveRoute.value?.candidate_draft?.rema
 const graphEdgeCount = computed(() => pathData.value?.micro_concept_graph?.metadata?.edge_count || routeEdges.value.length)
 const crossGraph = computed(() => pathData.value?.cross_domain_micro_graph || null)
 const crossDomainSupports = computed(() => adaptiveRoute.value?.cross_domain_supports || [])
+const semanticLog = computed(() => crossGraph.value?.metadata?.similarity_log || [])
+const todayPlan = computed(() => adaptiveRoute.value?.session_plan || {})
+const visibleEstimatedMinutes = computed(() => todayPlan.value?.today_minutes || adaptiveRoute.value?.estimated_minutes || 0)
+const plannerReview = computed(() => adaptiveRoute.value?.planner_review || {})
+const topSemanticLog = computed(() => semanticLog.value.slice(0, 4))
 
 const totalSteps = computed(() => learningChain.value.length)
 const masteredCount = computed(() => learningChain.value.filter(n => n.mastered).length)
@@ -142,7 +153,9 @@ function playVideo(url, concept = '') {
   showVideoPanel.value = true
 }
 
-onMounted(async () => {
+async function loadData() {
+  loading.value = true
+  error.value = ''
   try {
     const [path, recs] = await Promise.all([
       getLearningPath(studentId.value),
@@ -150,10 +163,101 @@ onMounted(async () => {
     ])
     pathData.value = path
     recommendations.value = recs || []
+    if (!semanticQuery.value && path?.adaptive_route?.final_goal_concept) {
+      semanticQuery.value = path.adaptive_route.final_goal_concept
+    }
   } catch (e) {
     error.value = e.response?.data?.detail || e.message || '加载失败'
   } finally {
     loading.value = false
+    regenerating.value = false
+    await nextTick()
+    renderSemanticGraph()
+  }
+}
+
+async function regeneratePath() {
+  regenerating.value = true
+  await loadData()
+}
+
+function renderSemanticGraph() {
+  if (!semanticChartRef.value || !crossGraph.value) return
+  if (!semanticChart) {
+    semanticChart = echarts.init(semanticChartRef.value)
+  }
+  const routeSet = new Set(routeNodes.value.map(node => node.concept))
+  const query = semanticQuery.value.trim()
+  const logPairs = new Set()
+  semanticLog.value.forEach(item => {
+    logPairs.add(item.source)
+    logPairs.add(item.target)
+  })
+  const rawNodes = (crossGraph.value.nodes || []).filter(node => {
+    if (routeSet.has(node.concept)) return true
+    if (logPairs.has(node.concept)) return true
+    if (query && String(node.concept).includes(query)) return true
+    return node.resource?.has_animation
+  }).slice(0, 42)
+  const nodeSet = new Set(rawNodes.map(node => node.concept))
+  const categories = Array.from(new Set(rawNodes.map(node => node.domain_label || '课程图谱'))).map(name => ({ name }))
+  const nodes = rawNodes.map(node => {
+    const active = routeSet.has(node.concept) || (query && String(node.concept).includes(query))
+    return {
+      id: node.concept,
+      name: node.concept,
+      value: Math.round((node.mastery || 0) * 100),
+      category: node.domain_label || '课程图谱',
+      symbolSize: active ? 42 : (node.resource?.has_animation ? 34 : 26),
+      itemStyle: {
+        shadowBlur: active ? 18 : 6,
+        shadowColor: active ? '#6366f1' : '#cbd5e1',
+      },
+      label: { show: active, fontSize: 10 },
+    }
+  })
+  const links = (crossGraph.value.edges || [])
+    .filter(edge => nodeSet.has(edge.from) && nodeSet.has(edge.to))
+    .slice(0, 80)
+    .map(edge => ({
+      source: edge.from,
+      target: edge.to,
+      value: edge.similarity || 0.5,
+      lineStyle: {
+        opacity: edge.type === 'cross_domain_prerequisite' ? 0.55 : 0.28,
+        width: edge.type === 'cross_domain_prerequisite' ? 1.6 : 1,
+      },
+    }))
+  semanticChart.setOption({
+    tooltip: {
+      formatter: params => {
+        if (params.dataType === 'edge') return `${params.data.source} -> ${params.data.target}`
+        return `${params.name}<br/>掌握度 ${params.value || 0}%`
+      },
+    },
+    legend: [{ type: 'scroll', top: 0, textStyle: { fontSize: 10 } }],
+    series: [{
+      type: 'graph',
+      layout: 'force',
+      roam: true,
+      categories,
+      data: nodes,
+      links,
+      edgeSymbol: ['none', 'arrow'],
+      edgeSymbolSize: 6,
+      force: { repulsion: 110, edgeLength: 80, gravity: 0.08 },
+      emphasis: { focus: 'adjacency' },
+      label: { color: '#334155' },
+    }],
+  })
+}
+
+watch([crossGraph, routeNodes, semanticQuery], () => nextTick(renderSemanticGraph), { deep: true })
+onMounted(loadData)
+onUnmounted(() => {
+  if (semanticChart) {
+    semanticChart.dispose()
+    semanticChart = null
   }
 })
 </script>
@@ -215,22 +319,33 @@ onMounted(async () => {
           </h2>
           <p class="text-[10px] text-gray-400 mt-1">根据微概念图谱、掌握缺口、认知负荷和情绪阻力生成</p>
         </div>
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center shrink-0">
-          <div class="px-3 py-2 rounded-xl bg-indigo-50 border border-indigo-100">
-            <p class="text-[9px] text-indigo-500">本阶段</p>
-            <p class="text-xs font-bold text-indigo-700 truncate max-w-[90px]">{{ routeStageTarget }}</p>
-          </div>
-          <div class="px-3 py-2 rounded-xl bg-violet-50 border border-violet-100">
-            <p class="text-[9px] text-violet-500">最终目标</p>
-            <p class="text-xs font-bold text-violet-700 truncate max-w-[90px]">{{ routeFinalTarget }}</p>
-          </div>
-          <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-100">
-            <p class="text-[9px] text-slate-500">预计</p>
-            <p class="text-xs font-bold text-slate-700">{{ formatMinutes(adaptiveRoute.estimated_minutes) }}</p>
-          </div>
-          <div class="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-100">
-            <p class="text-[9px] text-emerald-500">置信度</p>
-            <p class="text-xs font-bold text-emerald-700">{{ routeConfidence }}%</p>
+        <div class="flex flex-col items-stretch gap-2 shrink-0">
+          <button
+            type="button"
+            class="self-end inline-flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-white px-3 py-1.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 transition-colors"
+            :disabled="regenerating"
+            @click="regeneratePath"
+          >
+            <RefreshCw :size="12" :class="regenerating ? 'animate-spin' : ''" />
+            {{ regenerating ? '生成中' : '重新生成路线' }}
+          </button>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+            <div class="px-3 py-2 rounded-xl bg-indigo-50 border border-indigo-100">
+              <p class="text-[9px] text-indigo-500">本阶段</p>
+              <p class="text-xs font-bold text-indigo-700 truncate max-w-[90px]">{{ routeStageTarget }}</p>
+            </div>
+            <div class="px-3 py-2 rounded-xl bg-violet-50 border border-violet-100">
+              <p class="text-[9px] text-violet-500">最终目标</p>
+              <p class="text-xs font-bold text-violet-700 truncate max-w-[90px]">{{ routeFinalTarget }}</p>
+            </div>
+            <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-100">
+              <p class="text-[9px] text-slate-500">今日建议</p>
+              <p class="text-xs font-bold text-slate-700">{{ formatMinutes(visibleEstimatedMinutes) }}</p>
+            </div>
+            <div class="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-100">
+              <p class="text-[9px] text-emerald-500">置信度</p>
+              <p class="text-xs font-bold text-emerald-700">{{ routeConfidence }}%</p>
+            </div>
           </div>
         </div>
       </div>
@@ -284,12 +399,35 @@ onMounted(async () => {
           <p class="text-[10px] font-bold text-slate-700 mb-2">推荐依据</p>
           <div class="grid grid-cols-2 gap-2 text-[10px] text-slate-600">
             <p>知识联系：{{ graphEdgeCount }} 条</p>
-            <p>预计学习：{{ formatMinutes(adaptiveRoute.estimated_minutes) }}</p>
+            <p>今日建议：{{ formatMinutes(visibleEstimatedMinutes) }}</p>
             <p>认知负荷：{{ Math.round((adaptiveRoute.constraints?.cognitive_load || 0) * 100) }}%</p>
             <p>目标掌握：{{ Math.round((adaptiveRoute.constraints?.mastery_threshold || 0.7) * 100) }}%</p>
             <p>动态图谱：{{ graphFusion.active_node_count || 0 }} 节点</p>
             <p>动画命中：{{ routeResourceSummary.matched_route_nodes || 0 }} 个</p>
+            <p class="col-span-2">阶段总量：{{ formatMinutes(adaptiveRoute.estimated_minutes) }}</p>
           </div>
+        </div>
+      </div>
+
+      <div v-if="plannerReview.personalized_guidance" class="mt-3 rounded-xl bg-violet-50/70 border border-violet-100 p-3">
+        <div class="flex flex-col md:flex-row md:items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-[10px] font-bold text-violet-700 mb-1">Planner Agent 导学寄语</p>
+            <p class="text-[10px] text-violet-700 leading-relaxed">{{ plannerReview.personalized_guidance }}</p>
+          </div>
+          <div v-if="todayPlan.today_concepts?.length" class="shrink-0 rounded-lg bg-white/80 border border-violet-100 px-3 py-2">
+            <p class="text-[9px] font-bold text-violet-600">今日切片</p>
+            <p class="text-[10px] text-violet-700 mt-1">{{ todayPlan.today_concepts.join(' → ') }}</p>
+          </div>
+        </div>
+        <div v-if="plannerReview.action_dispatch?.length" class="mt-3 flex flex-wrap gap-2">
+          <span
+            v-for="item in plannerReview.action_dispatch.slice(0, 6)"
+            :key="`${item.concept}-${item.action}`"
+            class="rounded-lg bg-white/80 border border-violet-100 px-2.5 py-1 text-[9px] text-violet-700"
+          >
+            {{ item.concept }} · {{ item.mode }}
+          </span>
         </div>
       </div>
 
@@ -308,6 +446,58 @@ onMounted(async () => {
           >
             {{ node.concept }} · {{ node.resource.video_count }} 个动画
           </button>
+        </div>
+      </div>
+
+      <div v-if="crossGraph" class="mt-3 rounded-xl bg-white border border-slate-100 p-3">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-3">
+          <div>
+            <p class="text-[10px] font-bold text-slate-700">语义图谱匹配</p>
+            <p class="text-[9px] text-slate-400 mt-0.5">节点来自当前图谱、RAG 和本地动画资源</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="flex items-center gap-1.5 rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5">
+              <Search :size="11" class="text-slate-400" />
+              <input
+                v-model="semanticQuery"
+                class="w-28 bg-transparent text-[10px] text-slate-600 outline-none"
+                placeholder="检索概念"
+              />
+            </label>
+            <button
+              type="button"
+              class="rounded-lg border border-slate-100 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
+              @click="showSimilarityLog = !showSimilarityLog"
+            >
+              {{ showSimilarityLog ? '收起日志' : '相似度日志' }}
+            </button>
+          </div>
+        </div>
+        <div ref="semanticChartRef" class="semantic-graph h-64 rounded-xl bg-slate-50/60 border border-slate-100" />
+        <div v-if="topSemanticLog.length" class="mt-3 flex flex-wrap gap-2">
+          <div
+            v-for="item in topSemanticLog"
+            :key="`pulse-${item.source}-${item.target}`"
+            class="ripple-chip rounded-lg border border-indigo-100 bg-indigo-50/70 px-2.5 py-1.5 text-[9px] text-indigo-700"
+          >
+            <span class="ripple-dot" />
+            {{ item.source }} ↔ {{ item.target }} · {{ Math.round((item.similarity || 0) * 100) }}%
+          </div>
+        </div>
+        <div v-if="showSimilarityLog" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div
+            v-for="item in semanticLog"
+            :key="`${item.source}-${item.target}`"
+            class="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-[10px] font-semibold text-slate-700 truncate">{{ item.source }} → {{ item.target }}</p>
+              <span class="text-[9px] font-mono text-indigo-600">{{ Math.round((item.similarity || 0) * 100) }}%</span>
+            </div>
+            <p class="text-[9px] text-slate-500 mt-1">
+              {{ item.source_domain_label }} / {{ item.target_domain_label }} · {{ item.evidence }}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -563,6 +753,34 @@ onMounted(async () => {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
+.semantic-graph {
+  min-height: 16rem;
+}
+
+.ripple-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ripple-dot {
+  position: relative;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #6366f1;
+  flex: 0 0 auto;
+}
+
+.ripple-dot::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: inherit;
+  border: 1px solid rgba(99, 102, 241, 0.45);
+  animation: ripple-pulse 1.5s ease-out infinite;
+}
+
 .terminal-line {
   opacity: 0;
   transform: translateY(4px);
@@ -573,6 +791,17 @@ onMounted(async () => {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes ripple-pulse {
+  from {
+    opacity: 0.9;
+    transform: scale(0.45);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.8);
   }
 }
 </style>

@@ -11,6 +11,7 @@ const showForm = ref(false)
 const form = ref({ concept: '', mastery: 0.5, interval_days: 3 })
 const actionFeedback = ref('')
 const reviewingKey = ref('')
+const adaptiveReview = ref(null)
 
 const qualityActions = [
   { quality: 2, label: '困难', tone: 'border-red-200 text-red-600 hover:bg-red-50' },
@@ -59,6 +60,7 @@ async function submitReview(plan, quality) {
   try {
     const result = await reviewFlashcard(props.studentId, plan.concept, quality)
     const interval = result?.review_plan?.interval_days || result?.interval_new || '-'
+    adaptiveReview.value = result?.adaptive_review?.triggered ? result.adaptive_review : null
     setAction(`复习反馈已记录，下次间隔 ${interval} 天`)
     await load()
   } catch (e) {
@@ -113,6 +115,28 @@ onMounted(load)
 
     <div v-if="actionFeedback" class="mb-4 text-sm text-emerald-600 bg-emerald-50 px-3 py-2 rounded-lg">
       {{ actionFeedback }}
+    </div>
+
+    <div v-if="adaptiveReview" class="mb-4 review-morphing rounded-xl border border-amber-100 bg-amber-50/70 p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-sm font-semibold text-amber-900">{{ adaptiveReview.title }}</p>
+          <p class="text-xs text-amber-700 mt-1">{{ adaptiveReview.simplified_explanation }}</p>
+        </div>
+        <span class="shrink-0 rounded-lg bg-white/80 border border-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700">
+          掌握 {{ Math.round((adaptiveReview.mastery || 0) * 100) }}%
+        </span>
+      </div>
+      <pre class="mt-3 overflow-x-auto rounded-lg bg-white/80 border border-amber-100 p-3 text-[10px] leading-relaxed text-slate-700">{{ adaptiveReview.mermaid }}</pre>
+      <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+        <p
+          v-for="line in adaptiveReview.agent_trace || []"
+          :key="line"
+          class="rounded-lg bg-white/70 border border-amber-100 px-3 py-2 text-[10px] text-amber-800"
+        >
+          {{ line }}
+        </p>
+      </div>
     </div>
 
     <!-- New plan form -->
@@ -201,3 +225,9 @@ onMounted(load)
     </div>
   </div>
 </template>
+
+<style scoped>
+.review-morphing {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+</style>

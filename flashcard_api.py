@@ -15,7 +15,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from anki_engine import get_sm2_engine
-from app.crud import apply_review_feedback, load_student_profile, review_plan_to_dict
+from app.crud import (
+    apply_review_feedback,
+    build_review_adaptation_payload,
+    load_student_profile,
+    review_plan_to_dict,
+)
 from app.database import DBQuizRecord, DBReviewPlan, get_db
 
 router = APIRouter(prefix="/api/flashcard", tags=["flashcard"])
@@ -136,10 +141,14 @@ async def review_flashcard(request: Request, db: Session = Depends(get_db)) -> d
     card.last_quality = plan.last_quality or quality
     card.review_count = plan.review_count or 0
     card.next_review_at = _iso_utc(plan.next_review_at)
+    adaptation = build_review_adaptation_payload(concept, quality, plan.mastery)
+    if adaptation.get("triggered"):
+        card.back = adaptation.get("card_back", card.back)
 
     return {
         "flashcard": card.to_dict(),
         "review_plan": review_plan_to_dict(plan),
+        "adaptive_review": adaptation,
         "easiness_new": round(plan.easiness_factor or card.easiness, 2),
         "interval_new": plan.interval_days,
         "next_review_at": _iso_utc(plan.next_review_at),

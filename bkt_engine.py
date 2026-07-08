@@ -448,6 +448,8 @@ class KnowledgeDiffusionEngine:
 
         from embedding_models import EMBEDDINGS, cosine_similarity
 
+        active_dag = self._resolve_active_dag(dag)
+
         # 获取目标概念的 Embedding
         target_vec = EMBEDDINGS.embed(target_concept)
         if not target_vec:
@@ -456,7 +458,7 @@ class KnowledgeDiffusionEngine:
         new_mastery = dict(concept_mastery)
 
         # 预计算到目标概念的拓扑距离（通过 BFS 寻找图中最短无向距离）
-        topo_dist = self._compute_topo_distances(target_concept, dag)
+        topo_dist = self._compute_topo_distances(target_concept, active_dag)
 
         for concept in concept_mastery:
             if concept == target_concept:
@@ -468,9 +470,9 @@ class KnowledgeDiffusionEngine:
 
             # 2. 拓扑依赖度计算 (如果 concept 是 target_concept 的直接前置或后继)
             prereq_weight = 0.0
-            if concept in dag.get(target_concept, []):
+            if concept in active_dag.get(target_concept, []):
                 prereq_weight = 0.7  # 直接前置依赖
-            elif target_concept in dag.get(concept, []):
+            elif target_concept in active_dag.get(concept, []):
                 prereq_weight = 0.5  # 直接后继影响
 
             # 3. 转移概率权重
@@ -486,6 +488,34 @@ class KnowledgeDiffusionEngine:
             new_mastery[concept] = max(0.0, min(1.0, new_val))
 
         return new_mastery
+
+    def _resolve_active_dag(self, dag: dict[str, list[str]]) -> dict[str, list[str]]:
+        """Merge caller DAG with GraphRAG dynamic prerequisites when available."""
+        active: dict[str, list[str]] = {
+            str(concept): [str(item) for item in (prereqs or []) if item]
+            for concept, prereqs in (dag or {}).items()
+            if concept
+        }
+        try:
+            from rag_engine import graph_rag
+
+            reverse = getattr(graph_rag, "reverse", {}) or {}
+            nodes = getattr(graph_rag, "nodes", set()) or set()
+            if not nodes or not reverse:
+                return active
+            for target, prereqs in reverse.items():
+                target_text = str(target).strip()
+                if not target_text:
+                    continue
+                merged = active.setdefault(target_text, [])
+                for prereq in prereqs or []:
+                    prereq_text = str(prereq).strip()
+                    if prereq_text and prereq_text != target_text and prereq_text not in merged:
+                        merged.append(prereq_text)
+                    active.setdefault(prereq_text, active.get(prereq_text, []))
+        except Exception:
+            return active
+        return active
 
     def _compute_topo_distances(self, start: str, dag: dict[str, list[str]]) -> dict[str, int]:
         """通过无向 BFS 计算目标点到图中其他各概念的拓扑最短距离。"""

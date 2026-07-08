@@ -21,6 +21,7 @@ const isTeacher = computed(() => localStorage.getItem('edumatrix_role') === 'tea
 
 const showVideoPanel = ref(false)
 const videoPanelUrl = ref('')
+const videoPanelConcept = ref('')
 
 const learningChain = computed(() => pathData.value?.learning_chain || [])
 const nextSteps = computed(() => pathData.value?.next_steps || [])
@@ -32,6 +33,15 @@ const adaptiveRoute = computed(() => pathData.value?.adaptive_route || null)
 const routeNodes = computed(() => adaptiveRoute.value?.nodes || [])
 const routeEdges = computed(() => adaptiveRoute.value?.edges || [])
 const routeConfidence = computed(() => Math.round((adaptiveRoute.value?.confidence || 0) * 100))
+const plannerTrace = computed(() => adaptiveRoute.value?.planner_trace || [])
+const routeResourceSummary = computed(() => adaptiveRoute.value?.resource_summary || {})
+const graphFusion = computed(() => adaptiveRoute.value?.graph_fusion || {})
+const routeResourceNodes = computed(() =>
+  routeNodes.value.filter(node => node.resource?.has_animation)
+)
+const routeStageTarget = computed(() => adaptiveRoute.value?.stage_target_concept || adaptiveRoute.value?.target_concept || '')
+const routeFinalTarget = computed(() => adaptiveRoute.value?.final_goal_concept || adaptiveRoute.value?.target_concept || '')
+const remainingRoute = computed(() => adaptiveRoute.value?.candidate_draft?.remaining_path || [])
 const graphEdgeCount = computed(() => pathData.value?.micro_concept_graph?.metadata?.edge_count || routeEdges.value.length)
 const crossGraph = computed(() => pathData.value?.cross_domain_micro_graph || null)
 const crossDomainSupports = computed(() => adaptiveRoute.value?.cross_domain_supports || [])
@@ -126,8 +136,9 @@ function goAnalysis() {
   router.push({ path: '/student-analysis', query: { student_id: studentId.value } })
 }
 
-function playVideo(url) {
+function playVideo(url, concept = '') {
   videoPanelUrl.value = url
+  videoPanelConcept.value = concept
   showVideoPanel.value = true
 }
 
@@ -204,10 +215,14 @@ onMounted(async () => {
           </h2>
           <p class="text-[10px] text-gray-400 mt-1">根据微概念图谱、掌握缺口、认知负荷和情绪阻力生成</p>
         </div>
-        <div class="grid grid-cols-3 gap-2 text-center shrink-0">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center shrink-0">
           <div class="px-3 py-2 rounded-xl bg-indigo-50 border border-indigo-100">
-            <p class="text-[9px] text-indigo-500">目标</p>
-            <p class="text-xs font-bold text-indigo-700 truncate max-w-[90px]">{{ adaptiveRoute.target_concept }}</p>
+            <p class="text-[9px] text-indigo-500">本阶段</p>
+            <p class="text-xs font-bold text-indigo-700 truncate max-w-[90px]">{{ routeStageTarget }}</p>
+          </div>
+          <div class="px-3 py-2 rounded-xl bg-violet-50 border border-violet-100">
+            <p class="text-[9px] text-violet-500">最终目标</p>
+            <p class="text-xs font-bold text-violet-700 truncate max-w-[90px]">{{ routeFinalTarget }}</p>
           </div>
           <div class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-100">
             <p class="text-[9px] text-slate-500">预计</p>
@@ -222,9 +237,12 @@ onMounted(async () => {
 
       <div class="flex flex-wrap items-stretch gap-2">
         <template v-for="(node, idx) in routeNodes" :key="node.concept">
-          <button
+          <div
             class="min-w-[118px] flex-1 rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-3 text-left hover:border-indigo-200 hover:bg-indigo-50/50 transition-all"
+            role="button"
+            tabindex="0"
             @click="goLearn(node.concept)"
+            @keydown.enter="goLearn(node.concept)"
           >
             <div class="flex items-center justify-between gap-2">
               <span class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold shrink-0">{{ node.step }}</span>
@@ -235,7 +253,17 @@ onMounted(async () => {
               <div class="h-full rounded-full" :class="masteryBarColor(node.percentage)" :style="{ width: node.percentage + '%' }" />
             </div>
             <p class="text-[9px] text-gray-500 mt-1">掌握 {{ node.percentage }}% · 预计 {{ formatMinutes(node.estimated_minutes) }}</p>
-          </button>
+            <div v-if="node.resource?.has_animation" class="mt-2 flex items-center justify-between gap-2 rounded-lg bg-white/80 border border-indigo-100 px-2 py-1">
+              <span class="text-[9px] text-indigo-700 truncate">{{ node.resource.video_count }} 个本地动画</span>
+              <button
+                type="button"
+                class="text-[9px] font-semibold text-indigo-700 hover:text-indigo-900 shrink-0"
+                @click.stop="playVideo(node.resource.first_video_url, node.concept)"
+              >
+                播放
+              </button>
+            </div>
+          </div>
           <div v-if="idx < routeNodes.length - 1" class="hidden md:flex items-center text-indigo-300">
             <ArrowRight :size="14" />
           </div>
@@ -247,6 +275,9 @@ onMounted(async () => {
           <p class="text-[10px] font-bold text-indigo-700 mb-2">路径解释</p>
           <div class="space-y-1.5">
             <p v-for="reason in adaptiveRoute.reasons || []" :key="reason" class="text-[10px] text-indigo-700 leading-relaxed">· {{ reason }}</p>
+            <p v-if="remainingRoute.length" class="text-[10px] text-indigo-700 leading-relaxed">
+              · 后续承接：{{ remainingRoute.slice(0, 6).join(' → ') }}{{ remainingRoute.length > 6 ? ' …' : '' }}
+            </p>
           </div>
         </div>
         <div class="rounded-xl bg-slate-50 border border-slate-100 p-3">
@@ -256,7 +287,44 @@ onMounted(async () => {
             <p>预计学习：{{ formatMinutes(adaptiveRoute.estimated_minutes) }}</p>
             <p>认知负荷：{{ Math.round((adaptiveRoute.constraints?.cognitive_load || 0) * 100) }}%</p>
             <p>目标掌握：{{ Math.round((adaptiveRoute.constraints?.mastery_threshold || 0.7) * 100) }}%</p>
+            <p>动态图谱：{{ graphFusion.active_node_count || 0 }} 节点</p>
+            <p>动画命中：{{ routeResourceSummary.matched_route_nodes || 0 }} 个</p>
           </div>
+        </div>
+      </div>
+
+      <div v-if="routeResourceNodes.length" class="mt-3 rounded-xl bg-sky-50/70 border border-sky-100 p-3">
+        <div class="flex items-center justify-between gap-3 mb-2">
+          <p class="text-[10px] font-bold text-sky-700">资源感知规划</p>
+          <span class="text-[9px] text-sky-600">本地动画数据集 {{ routeResourceSummary.animation_concept_count || 0 }} 个知识点</span>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-for="node in routeResourceNodes"
+            :key="`resource-${node.concept}`"
+            type="button"
+            class="px-2.5 py-1.5 rounded-lg bg-white border border-sky-100 text-[10px] text-sky-700 hover:border-sky-300 hover:bg-sky-50 transition-colors"
+            @click="playVideo(node.resource.first_video_url, node.concept)"
+          >
+            {{ node.concept }} · {{ node.resource.video_count }} 个动画
+          </button>
+        </div>
+      </div>
+
+      <div v-if="plannerTrace.length" class="mt-3 swarm-terminal rounded-xl border border-slate-800 bg-slate-950 p-3">
+        <div class="flex items-center justify-between mb-2">
+          <p class="text-[10px] font-bold text-slate-100">Swarm Terminal</p>
+          <span class="text-[9px] text-emerald-300">Planner Agent 已审核</span>
+        </div>
+        <div class="space-y-1.5">
+          <p
+            v-for="(line, i) in plannerTrace"
+            :key="line"
+            class="terminal-line text-[10px] leading-relaxed text-emerald-100"
+            :style="{ animationDelay: `${i * 120}ms` }"
+          >
+            {{ line }}
+          </p>
         </div>
       </div>
 
@@ -482,10 +550,29 @@ onMounted(async () => {
     <!-- 视频微课播放模态窗 -->
     <VideoRenderPanel
       :visible="showVideoPanel"
-      :videoUrl="videoPanelUrl"
       :studentId="studentId"
+      :knowledgePoint="videoPanelConcept"
       @close="showVideoPanel = false"
     />
 
   </div>
 </template>
+
+<style scoped>
+.swarm-terminal {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.terminal-line {
+  opacity: 0;
+  transform: translateY(4px);
+  animation: terminal-enter 360ms ease forwards;
+}
+
+@keyframes terminal-enter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+</style>

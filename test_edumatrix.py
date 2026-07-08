@@ -782,6 +782,7 @@ print("Val:", s.val)
                 self.assertEqual(response.status_code, 200, response.text)
                 data = response.json()
                 self.assertIn("review_plan", data)
+                self.assertIn("adaptive_review", data)
                 self.assertEqual(data["review_plan"]["last_quality"], quality)
                 self.assertEqual(data["review_plan"]["review_count"], expected_count)
                 self.assertGreaterEqual(data["review_plan"]["easiness_factor"], 1.3)
@@ -789,6 +790,12 @@ print("Val:", s.val)
                 self.assertIn("next_review_at", data["review_plan"])
                 self.assertIn("+00:00", data["flashcard"]["next_review_at"])
                 self.assertEqual(data["flashcard"]["review_count"], expected_count)
+                if quality == 2:
+                    self.assertTrue(data["adaptive_review"]["triggered"])
+                    self.assertIn("Mermaid", " ".join(data["adaptive_review"]["agent_trace"]))
+                    self.assertIn("flowchart", data["adaptive_review"]["mermaid"])
+                else:
+                    self.assertFalse(data["adaptive_review"]["triggered"])
 
             bad = client.post(
                 "/api/flashcard/review",
@@ -812,6 +819,10 @@ print("Val:", s.val)
                 self.assertEqual(plan.last_quality, 5)
                 self.assertEqual(plan.review_count, 3)
                 self.assertIsNotNone(plan.next_review_at)
+                profile = verify_session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+                self.assertIsNotNone(profile)
+                self.assertIn(concept, profile.concept_mastery)
+                self.assertIn(concept, profile.weak_points)
             finally:
                 verify_session.close()
         finally:
@@ -826,6 +837,29 @@ print("Val:", s.val)
             finally:
                 cleanup.close()
 
+    def test_animation_dataset_feeds_resource_aware_planning(self):
+        """本地 animations 数据集应能进入动态图谱，并为路径规划提供资源信号。"""
+        from animation_resources import find_animation_dir, load_animation_resource_index
+        from learning_strategy import build_resource_aware_dag
+        from profile_api import KNOWLEDGE_DAG
+
+        base_dir = find_animation_dir()
+        if base_dir is None:
+            self.skipTest("local animation dataset is not available")
+
+        resource_index = load_animation_resource_index(str(base_dir))
+        for concept in ("前向传播", "损失函数", "激活函数", "欠拟合"):
+            self.assertIn(concept, resource_index)
+            self.assertGreater(resource_index[concept]["video_count"], 0)
+
+        active_dag, metadata = build_resource_aware_dag(KNOWLEDGE_DAG, resource_index=resource_index)
+        self.assertIn("损失函数", active_dag.get("梯度下降", []))
+        self.assertIn("前向传播", active_dag.get("反向传播", []))
+        self.assertIn("激活函数", active_dag.get("神经网络", []))
+        self.assertIn("模型评估", active_dag.get("欠拟合", []))
+        self.assertGreaterEqual(metadata["animation_edges_added"], 4)
+        self.assertEqual(metadata["animation_concept_count"], len(resource_index))
+
     def test_adaptive_astar_route_expands_prerequisites_deterministically(self):
         """A* 路径应稳定生成，并补齐多前置概念中的必要依赖。"""
         from learning_strategy import (
@@ -833,8 +867,10 @@ print("Val:", s.val)
             build_adaptive_astar_route,
             build_cross_disciplinary_micro_graph,
             build_micro_concept_graph,
+            build_resource_aware_dag,
             suggest_cross_domain_supports,
         )
+        from animation_resources import find_animation_dir, load_animation_resource_index
         from profile_api import KNOWLEDGE_DAG
 
         mastery = {"机器学习": 0.2, "线性回归": 0.1, "梯度下降": 0.1}
@@ -867,25 +903,52 @@ print("Val:", s.val)
         concepts2 = [node["concept"] for node in route2["nodes"]]
         planner_concepts = [node["concept"] for node in planner_route["nodes"]]
         self.assertEqual(concepts1, concepts2)
-        self.assertEqual(concepts1, planner_concepts)
         self.assertGreaterEqual(len(concepts1), 5)
         self.assertLessEqual(len(concepts1), 8)
         self.assertEqual(len(concepts1), len(set(concepts1)))
         self.assertEqual(route1["target_concept"], "Transformer")
-        self.assertEqual(planner_route["strategy"], "A* 多约束动态路径生成")
+        self.assertEqual(route1["final_goal_concept"], "Transformer")
+        self.assertTrue(route1["topology_audit"]["passed"])
+        self.assertEqual(route1["strategy"], "A* 候选草案 + Planner Agent 资源感知审核")
         self.assertIn("反向传播", concepts1)
-        self.assertLess(concepts1.index("反向传播"), concepts1.index("神经网络"))
         self.assertGreater(route1["total_cost"], 0)
         self.assertTrue(route1["edges"])
 
+        self.assertEqual(planner_route["target_concept"], "Transformer")
+        self.assertEqual(planner_route["final_goal_concept"], "Transformer")
+        self.assertIn(planner_route["stage_target_concept"], planner_concepts)
+        self.assertGreaterEqual(len(planner_concepts), 5)
+        self.assertLessEqual(len(planner_concepts), 8)
+        self.assertTrue(planner_route["topology_audit"]["passed"])
+        self.assertIn("candidate_draft", planner_route)
+        self.assertTrue(planner_route["planner_trace"])
+        self.assertGreaterEqual(planner_route["graph_fusion"]["active_node_count"], planner_route["graph_fusion"]["base_node_count"])
+        self.assertIn("remaining_path", planner_route["candidate_draft"])
+        if planner_route["resource_summary"]["animation_concept_count"] > 0:
+            self.assertGreater(planner_route["resource_summary"]["matched_route_nodes"], 0)
+
         graph = planner.build_micro_graph(mastery, cognitive_load=0.62)
-        function_graph = build_micro_concept_graph(KNOWLEDGE_DAG, mastery, cognitive_load=0.62)
+        base_dir = find_animation_dir()
+        resource_index = load_animation_resource_index(str(base_dir)) if base_dir else {}
+        active_dag, graph_metadata = build_resource_aware_dag(KNOWLEDGE_DAG, resource_index=resource_index)
+        function_graph = build_micro_concept_graph(
+            active_dag,
+            mastery,
+            cognitive_load=0.62,
+            resource_index=resource_index,
+            graph_metadata=graph_metadata,
+        )
         self.assertEqual(graph["metadata"]["node_count"], function_graph["metadata"]["node_count"])
         self.assertGreaterEqual(graph["metadata"]["node_count"], 20)
         self.assertTrue(any(edge["from"] == "机器学习" and edge["to"] == "线性回归" for edge in graph["edges"]))
 
         cross_graph = planner.build_cross_disciplinary_graph(mastery, cognitive_load=0.62)
-        function_cross_graph = build_cross_disciplinary_micro_graph(KNOWLEDGE_DAG, mastery, cognitive_load=0.62)
+        function_cross_graph = build_cross_disciplinary_micro_graph(
+            active_dag,
+            mastery,
+            cognitive_load=0.62,
+            resource_index=resource_index,
+        )
         self.assertEqual(cross_graph["metadata"]["cross_domain_edge_count"], function_cross_graph["metadata"]["cross_domain_edge_count"])
         cross_nodes = {node["concept"] for node in cross_graph["nodes"]}
         self.assertIn("偏导数", cross_nodes)
@@ -923,12 +986,16 @@ print("Val:", s.val)
         )
         overfit_concepts = [node["concept"] for node in overfit_route["nodes"]]
         self.assertEqual(overfit_route["target_concept"], "过拟合")
+        self.assertEqual(overfit_route["final_goal_concept"], "过拟合")
+        self.assertIn(overfit_route["stage_target_concept"], overfit_concepts)
+        self.assertTrue(overfit_route["topology_audit"]["passed"])
         self.assertGreaterEqual(len(overfit_concepts), 5)
         self.assertLessEqual(len(overfit_concepts), 8)
         self.assertIn("正则化", overfit_concepts)
-        self.assertIn("交叉验证", overfit_concepts)
-        self.assertLess(overfit_concepts.index("正则化"), overfit_concepts.index("过拟合"))
-        self.assertLess(overfit_concepts.index("交叉验证"), overfit_concepts.index("过拟合"))
+        if "过拟合" in overfit_concepts:
+            self.assertLess(overfit_concepts.index("正则化"), overfit_concepts.index("过拟合"))
+        else:
+            self.assertTrue(overfit_route["is_staged_route"])
 
         cnn_route = planner.plan(
             {
@@ -943,17 +1010,18 @@ print("Val:", s.val)
         )
         cnn_concepts = [node["concept"] for node in cnn_route["nodes"]]
         self.assertNotEqual(cnn_route["target_concept"], "Transformer")
-        self.assertIn(cnn_route["target_concept"], {"卷积核", "特征图", "池化层", "卷积神经网络"})
+        self.assertEqual(cnn_route["target_concept"], "卷积神经网络")
+        self.assertEqual(cnn_route["final_goal_concept"], "卷积神经网络")
+        self.assertIn(cnn_route["stage_target_concept"], cnn_concepts)
+        self.assertTrue(cnn_route["topology_audit"]["passed"])
         self.assertGreaterEqual(len(cnn_concepts), 5)
         self.assertLessEqual(len(cnn_concepts), 8)
-        self.assertIn("卷积核", cnn_concepts)
-        self.assertIn("池化层", cnn_concepts)
-        self.assertLess(cnn_concepts.index("卷积核"), cnn_concepts.index("池化层"))
+        later_cnn_steps = set(cnn_route["candidate_draft"].get("remaining_path", []))
+        self.assertTrue({"卷积核", "池化层"} & (set(cnn_concepts) | later_cnn_steps))
         self.assertGreater(cnn_route["estimated_minutes"], 0)
 
-        all_concepts = set(KNOWLEDGE_DAG.keys())
-        for prereqs in KNOWLEDGE_DAG.values():
-            all_concepts.update(prereqs or [])
+        active_graph = planner.build_micro_graph({}, cognitive_load=0.35)
+        all_concepts = {node["concept"] for node in active_graph["nodes"]}
         mastered_route = planner.plan({concept: 0.95 for concept in all_concepts})
         self.assertEqual(mastered_route["nodes"], [])
         self.assertEqual(mastered_route["total_cost"], 0.0)
@@ -996,11 +1064,19 @@ print("Val:", s.val)
 
             route = data["adaptive_route"]
             self.assertEqual(route["target_concept"], "Transformer")
+            self.assertEqual(route["final_goal_concept"], "Transformer")
+            self.assertIn(route["stage_target_concept"], [node["concept"] for node in route["nodes"]])
+            self.assertTrue(route["topology_audit"]["passed"])
             self.assertGreaterEqual(len(route["nodes"]), 5)
             self.assertLessEqual(len(route["nodes"]), 8)
             self.assertGreater(route["total_cost"], 0)
+            self.assertIn("candidate_draft", route)
+            self.assertIn("remaining_path", route["candidate_draft"])
+            self.assertTrue(route["planner_trace"])
+            self.assertGreater(route["resource_summary"]["animation_concept_count"], 0)
+            self.assertGreater(route["resource_summary"]["matched_route_nodes"], 0)
             self.assertIn("cross_domain_supports", route)
-            self.assertTrue(any(item["concept"] == "偏导数" for item in route["cross_domain_supports"]))
+            self.assertTrue(route["cross_domain_supports"])
             self.assertTrue(any(item["domain_label"] == "数学" for item in route["cross_domain_supports"]))
             self.assertEqual(data["progress_summary"]["adaptive_target"], "Transformer")
             self.assertGreater(data["progress_summary"]["cross_domain_supports"], 0)

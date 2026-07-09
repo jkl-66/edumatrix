@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import os
 import re
 from io import BytesIO
@@ -15,7 +17,7 @@ except ImportError:
         def __init__(self, **kwargs):
             for k, v in kwargs.items():
                 setattr(self, k, v)
-    
+
     class StrEnumMock:
         """模拟 Enum 成员，提供 .value 属性以兼容真实 EvidenceModality 的调用方式"""
         def __init__(self, value: str):
@@ -30,7 +32,220 @@ except ImportError:
     class EvidenceModality:
         TEXT = StrEnumMock('text')
         CODE = StrEnumMock('code')
+        IMAGE = StrEnumMock('image')
 
+
+# ---------------------------------------------------------------------------
+# 多模态视觉文档 RAG 管道 (Task 1)
+# ---------------------------------------------------------------------------
+
+_VISION_LLM_AVAILABLE: bool | None = None  # 延迟检测缓存
+
+
+def _check_vision_llm() -> bool:
+    """检测是否配置了多模态视觉大模型，结果缓存到模块级变量。"""
+    global _VISION_LLM_AVAILABLE
+    if _VISION_LLM_AVAILABLE is not None:
+        return _VISION_LLM_AVAILABLE
+    try:
+        from config import CONFIG
+        if CONFIG.multimodal_llm_api_key and CONFIG.multimodal_llm_endpoint:
+            _VISION_LLM_AVAILABLE = True
+            return True
+        if os.getenv("ZHIPUAI_API_KEY", ""):
+            _VISION_LLM_AVAILABLE = True
+            return True
+    except Exception:
+        pass
+    _VISION_LLM_AVAILABLE = False
+    return False
+
+
+def _render_pdf_to_images(raw: bytes, dpi: int = 150) -> list[dict]:
+    """使用 PyMuPDF 将 PDF 每一页渲染为 PNG 图像。
+
+    Args:
+        raw: PDF 文件原始字节
+        dpi: 渲染分辨率
+
+    Returns:
+        [{page: int, image_bytes: bytes, width: int, height: int}, ...]
+        如果 PyMuPDF 不可用或渲染失败，返回空列表
+    """
+    pages = []
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=raw, filetype="pdf")
+        zoom = dpi / 72.0  # PDF 默认 72 DPI
+        matrix = fitz.Matrix(zoom, zoom)
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            pix = page.get_pixmap(matrix=matrix)
+            pages.append({
+                "page": page_num + 1,
+                "image_bytes": pix.tobytes("png"),
+                "width": pix.width,
+                "height": pix.height,
+            })
+        doc.close()
+    except ImportError:
+        pass  # fitz 未安装
+    except Exception as e:
+        print(f"  [document_parser] PDF 页面渲染失败: {e}")
+    return pages
+
+
+def _describe_image_with_multimodal_llm(image_base64: str, page_num: int, filename: str) -> str | None:
+    """调用多模态视觉大模型描述 PDF 页面图片内容。
+
+    Args:
+        image_base64: Base64 编码的图片
+        page_num: 页码（用于提示词）
+        filename: 文件名（用于提示词）
+
+    Returns:
+        大模型生成的图片语义描述；如果调用失败返回 None
+    """
+    if not _check_vision_llm():
+        return None
+    try:
+        import requests
+        from config import CONFIG
+
+        endpoint = CONFIG.multimodal_llm_endpoint
+        api_key = CONFIG.multimodal_llm_api_key
+        model = CONFIG.multimodal_llm_model or "glm-4v"
+
+        if not endpoint or not api_key:
+            # 尝试智谱 GLM-4v 兜底
+            zhipu_key = os.getenv("ZHIPUAI_API_KEY", "")
+            if zhipu_key:
+                endpoint = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+                api_key = zhipu_key
+                model = "glm-4v"
+            else:
+                return None
+
+        prompt = (
+            f"你是一位知识图谱助教。请仔细查看这份教材 PDF ({filename}) 的第 {page_num} 页，"
+            f"用 2-4 句话描述该页面的核心教学内容，包括：\n"
+            f"1. 页面主要讲解的知识点/概念\n"
+            f"2. 出现的公式、图表或代码的作用\n"
+            f"3. 与机器学习课程中哪些前置知识相关\n\n"
+            f"请用中文直接回答，不要加前缀。"
+        )
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
+                    ],
+                }
+            ],
+            "temperature": 0.2,
+            "max_tokens": 1024,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        resp = requests.post(endpoint, json=payload, headers=headers, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except ImportError:
+        return None  # requests 未安装
+    except Exception as e:
+        print(f"  [document_parser] 多模态大模型图片描述失败 (第{page_num}页): {e}")
+        return None
+
+
+def _describe_image_with_pil(image_bytes: bytes) -> str:
+    """使用 PIL 生成基础图片元数据描述（非视觉模型时的降级方案）。"""
+    try:
+        from PIL import Image
+        img = Image.open(BytesIO(image_bytes))
+        w, h = img.size
+        mode = img.mode
+        fmt = img.format or "PNG"
+        dominant = _get_dominant_colors(img)
+        return f"教材图片 {fmt} {w}x{h} 模式:{mode} 主色调:{dominant}"
+    except Exception:
+        return f"教材图片 {len(image_bytes)} bytes"
+
+
+def parse_pdf_visually(raw: bytes, filename: str) -> list[Evidence]:
+    """解析 PDF 的视觉内容：逐页渲染为图片 → 调用多模态大模型生成语义描述。
+
+    Args:
+        raw: PDF 文件原始字节
+        filename: 文件名（用于生成 Evidence ID）
+
+    Returns:
+        Evidence 列表（modality=IMAGE），包含视觉描述和页面图片路径
+    """
+    pages = _render_pdf_to_images(raw, dpi=150)
+    if not pages:
+        return []
+
+    # 确保 patches 目录存在
+    patches_dir = Path("data/patches")
+    patches_dir.mkdir(parents=True, exist_ok=True)
+
+    evidence_list = []
+    base_name = Path(filename).stem
+    vision_available = _check_vision_llm()
+
+    for page_info in pages:
+        page_num = page_info["page"]
+        img_bytes = page_info["image_bytes"]
+
+        # 保存页面图片到 patches 目录
+        img_filename = f"{base_name}_p{page_num}.png"
+        img_path = patches_dir / img_filename
+        with open(img_path, "wb") as f:
+            f.write(img_bytes)
+
+        # 生成图片语义描述
+        if vision_available:
+            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+            description = _describe_image_with_multimodal_llm(img_b64, page_num, filename)
+            if not description:
+                description = _describe_image_with_pil(img_bytes)
+        else:
+            description = _describe_image_with_pil(img_bytes)
+
+        # 自动推断标签
+        tags = _infer_tags(description)
+
+        evidence_id = hashlib.sha256(f"{filename}:page{page_num}".encode()).hexdigest()[:16]
+        evidence_list.append(Evidence(
+            id=f"VIS_{evidence_id}",
+            title=f"{filename} 第{page_num}页 视觉解析",
+            content=description,
+            modality=EvidenceModality.IMAGE,
+            source=f"PDF视觉解析:{filename}",
+            tags=tags,
+            anchors=tuple(),
+            metadata={
+                "raw_image_ref": str(img_path),
+                "page": page_num,
+                "width": page_info["width"],
+                "height": page_info["height"],
+                "doc_source": filename,
+            },
+        ))
+
+    return evidence_list
+
+
+# ---------------------------------------------------------------------------
+# 原有文档解析逻辑
+# ---------------------------------------------------------------------------
 
 def parse_uploaded_file(file: BinaryIO, filename: str) -> str:
     ext = Path(filename).suffix.lower()

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 import hashlib
 import re
 
@@ -146,16 +147,12 @@ def _stable_chunk_id(source: str, index: int, content: str) -> str:
 
 def _infer_tags(text: str) -> tuple[str, ...]:
     concepts = (
-        "\u673a\u5668\u5b66\u4e60",
-        "\u76d1\u7763\u5b66\u4e60",
-        "\u903b\u8f91\u56de\u5f52",
-        "\u6df7\u6dc6\u77e9\u9635",
-        "\u8fc7\u62df\u5408",
-        "\u6b63\u5219\u5316",
-        "\u5377\u79ef\u6838",
-        "\u6c60\u5316\u5c42",
-        "\u6700\u5927\u6c60\u5316",
-        "\u5e73\u5747\u6c60\u5316",
+        "\u673a\u5668\u5b66\u4e60", "\u76d1\u7763\u5b66\u4e60", "\u903b\u8f91\u56de\u5f52", "\u6df7\u6dc6\u77e9\u9635", "\u8fc7\u62df\u5408",
+        "\u6b63\u5219\u5316", "\u5377\u79ef\u6838", "\u6c60\u5316\u5c42", "\u6700\u5927\u6c60\u5316", "\u5e73\u5747\u6c60\u5316",
+        "\u68af\u5ea6\u4e0b\u964d", "\u53cd\u5411\u4f20\u64ad", "\u94fe\u5f0f\u6cd5\u5219", "\u6fc0\u6d3b\u51fd\u6570", "\u635f\u5931\u51fd\u6570",
+        "\u795e\u7ecf\u7f51\u7edc", "\u51b3\u7b56\u6811", "\u652f\u6301\u5411\u91cf\u673a", "\u7ebf\u6027\u56de\u5f52", "\u4ea4\u53c9\u9a8c\u8bc1",
+        "\u7279\u5f81\u56fe", "\u524d\u5411\u4f20\u64ad", "\u6b20\u62df\u5408", "Transformer", "\u6ce8\u610f\u529b\u673a\u5236",
+        "\u6a21\u578b\u8bc4\u4f30", "\u5377\u79ef\u795e\u7ecf\u7f51\u7edc",
     )
     return tuple(concept for concept in concepts if concept in text)
 
@@ -163,3 +160,100 @@ def _infer_tags(text: str) -> tuple[str, ...]:
 def _infer_anchors(text: str) -> tuple[str, ...]:
     anchors = re.findall(r"\b[A-Za-z][A-Za-z0-9_.-]{2,}\b", text)
     return tuple(dict.fromkeys(anchors[:8]))
+
+
+# ---------------------------------------------------------------------------
+# \u53e5\u7ea7\u522b diff & \u589e\u91cf\u56fe\u8c31\u81ea\u751f\u957f (Task 2)
+# ---------------------------------------------------------------------------
+
+def _sentence_diff(previous_text: str, new_text: str) -> list[str]:
+    """\u5bf9\u4e24\u6bb5\u6587\u672c\u505a\u53e5\u7ea7\u522b diff\uff0c\u8fd4\u56de\u4ec5\u5b58\u5728\u4e8e\u65b0\u6587\u672c\u4e2d\u7684\u53e5\u5b50\u3002
+
+    \u6309\u4e2d\u82f1\u6587\u6807\u70b9\u65ad\u53e5\uff0cHashSet \u6bd4\u8f83\uff0cO(n) \u590d\u6742\u5ea6\u3002
+    \u5f53 previous_text \u4e3a\u7a7a\u65f6\uff0c\u8fd4\u56de new_text \u7684\u6240\u6709\u53e5\u5b50\uff08\u9996\u6b21\u4e0a\u4f20\uff09\u3002
+    """
+    def _split_sentences(text: str) -> list[str]:
+        if not text or not text.strip():
+            return []
+        # \u6309 \u3002\uff01\uff1f\n \u65ad\u53e5\uff0c\u4fdd\u7559\u957f\u5ea6>=4 \u7684\u6709\u610f\u4e49\u53e5\u5b50
+        parts = re.split(r"[\u3002\uff01\uff1f\n]+", text)
+        return [p.strip() for p in parts if len(p.strip()) >= 4]
+
+    new_sentences = _split_sentences(new_text)
+    if not new_sentences:
+        return []
+
+    if not previous_text or not previous_text.strip():
+        return new_sentences  # \u9996\u6b21\u4e0a\u4f20\uff0c\u5168\u91cf\u8fd4\u56de
+
+    old_set = set(_split_sentences(previous_text))
+    # \u8fd4\u56de\u4ec5\u5728 new \u4e2d\u51fa\u73b0\u7684\u65b0\u53e5\u5b50
+    diff = [s for s in new_sentences if s not in old_set]
+    return diff
+
+
+# \u61d2\u52a0\u8f7d\u5168\u5c40\u56fe\u8c31\u6784\u5efa\u5668
+_graph_builder: Any = None
+
+
+def _get_graph_builder():
+    """\u5ef6\u8fdf\u521d\u59cb\u5316\u56fe\u8c31\u6784\u5efa\u5668\uff08InMemory \u540e\u7aef\uff0c\u79cd\u5b50\u6570\u636e\u9884\u586b\u5145\uff09\u3002"""
+    global _graph_builder
+    if _graph_builder is not None:
+        return _graph_builder
+    try:
+        from app.utils.graph_builder import GraphBuilder, create_graph_repository, seed_default_graph
+        repo = create_graph_repository()
+        _graph_builder = GraphBuilder(repository=repo)
+        seed_default_graph(_graph_builder)
+    except Exception as e:
+        print(f"  [ingestion] \u56fe\u8c31\u6784\u5efa\u5668\u521d\u59cb\u5316\u5931\u8d25: {e}")
+        _graph_builder = None
+    return _graph_builder
+
+
+def build_graph_after_upload(
+    evidence_chunks: tuple,
+    source: str,
+    previous_text: str = "",
+) -> Any | None:
+    """\u6587\u6863\u4e0a\u4f20\u540e\u89e6\u53d1\u589e\u91cf\u56fe\u8c31\u81ea\u751f\u957f (Task 2)\u3002
+
+    1. \u63d0\u53d6\u65b0\u6587\u672c\u7684\u53e5\u7ea7\u522b diff
+    2. \u4ec5\u5bf9\u5dee\u5f02\u53e5\u8c03\u7528 GraphBuilder \u63d0\u53d6\u4e09\u5143\u7ec4
+    3. \u65b0\u8fb9\u5408\u5e76\u5230\u56fe\u8c31\u5e76\u540c\u6b65\u5230 RAG \u5f15\u64ce
+
+    Args:
+        evidence_chunks: chunk_document \u8f93\u51fa\u7684 Evidence \u5143\u7ec4
+        source: \u6587\u4ef6\u540d\uff08\u4f5c\u4e3a\u56fe\u8c31\u6784\u5efa\u7684 source \u6807\u8bc6\uff09
+        previous_text: \u540c\u4e00\u6587\u6863\u7684\u65e7\u6587\u672c\uff08\u9996\u6b21\u4e0a\u4f20\u4f20\u7a7a\u5b57\u7b26\u4e32\uff09
+
+    Returns:
+        GraphBuildReport \u6216 None\uff08\u56fe\u8c31\u4e0d\u53ef\u7528\u65f6\uff09
+    """
+    builder = _get_graph_builder()
+    if builder is None:
+        return None
+
+    # \u7ec4\u88c5\u65b0\u4e0a\u4f20\u6587\u672c
+    new_text = "\n".join(
+        chunk.content for chunk in evidence_chunks if getattr(chunk, "content", "").strip()
+    )
+    if not new_text.strip():
+        return None
+
+    # \u53e5\u7ea7\u522b diff\uff1a\u53ea\u5bf9\u65b0\u589e\u5185\u5bb9\u63d0\u53d6\u4e09\u5143\u7ec4
+    diff_sentences = _sentence_diff(previous_text, new_text)
+    if not diff_sentences:
+        return None
+
+    try:
+        report = builder.build_from_chunks(tuple(diff_sentences), source=source)
+        # \u5c06\u65b0\u8fb9\u540c\u6b65\u5230 RAG \u5f15\u64ce
+        from rag_engine import hybrid_rag
+        if hasattr(builder.repository, "edges") and builder.repository.edges:
+            hybrid_rag.graph._load_dynamic_edges(builder.repository)
+        return report
+    except Exception as e:
+        print(f"  [ingestion] \u56fe\u8c31\u81ea\u751f\u957f\u5931\u8d25\uff08\u975e\u81f4\u547d\uff09: {e}")
+        return None

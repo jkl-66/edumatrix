@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { listKnowledgeDocuments, uploadKnowledgeDocument, deleteKnowledgeDocument } from '../api'
-import { BookOpen, Upload, Trash2, FileText, File, FileImage, FileVideo, Presentation, Tag, Clock, AlertCircle, CheckCircle, Image, Film, ArrowRight, GitBranch } from '@lucide/vue'
+import { listKnowledgeDocuments, uploadKnowledgeDocument, deleteKnowledgeDocument, getGraphStats, crossModalSearch } from '../api'
+import { BookOpen, Upload, Trash2, FileText, File, FileImage, FileVideo, Presentation, Tag, Clock, AlertCircle, CheckCircle, Image, Film, ArrowRight, GitBranch, Sparkles, Search, X, Zap } from '@lucide/vue'
 import KnowledgeGraphExplorer from '../components/KnowledgeGraphExplorer.vue'
 
 const props = defineProps({ studentId: String })
@@ -100,7 +100,7 @@ async function handleUpload(event) {
         if (e.total) uploadProgress.value = Math.round((e.loaded / e.total) * 100)
       })
       const typeLabel = result.is_multimodal ? (result.file_category === 'video' ? '视频' : 'PPT') : '文档'
-      uploadSuccess.value = `${file.name} ${typeLabel}上传成功 (${result.chunk_count} 个知识块)`
+      uploadSuccess.value = `${file.name} ${typeLabel}上传成功 (${result.chunk_count} 个知识块${result.visual_pages_parsed ? ', ' + result.visual_pages_parsed + ' 页视觉解析' : ''}${result.graph_edges_written ? ', ' + result.graph_edges_written + ' 条图谱边' : ''})`
       await load()
     } catch (e) {
       uploadError.value = `${file.name} 上传失败: ` + (e.response?.data?.detail || e.message)
@@ -193,106 +193,194 @@ const graphEdges = computed(() => {
 })
 
 onMounted(load)
+
+// ── 成员 3: 图谱统计 ──
+const graphStats = ref({ status: 'loading', nodes: 0, edges: 0, backend: 'loading' })
+async function loadGraphStats() {
+  try { graphStats.value = await getGraphStats() } catch (e) { /* 忽略 */ }
+}
+watch(docs, () => { loadGraphStats() })
+
+// ── 成员 3: 跨模态搜索 ──
+const crossModalQuery = ref('')
+const crossModalMode = ref('text')
+const crossModalLoading = ref(false)
+const crossModalResults = ref([])
+const crossModalError = ref('')
+async function doCrossModalSearch() {
+  if (!crossModalQuery.value.trim()) return
+  crossModalLoading.value = true; crossModalError.value = ''
+  try {
+    const data = await crossModalSearch(crossModalQuery.value, crossModalMode.value, 5)
+    crossModalResults.value = data.results || []
+  } catch (e) {
+    crossModalError.value = e.response?.data?.detail || e.message
+  } finally { crossModalLoading.value = false }
+}
 </script>
 
 <template>
-  <div class="max-w-4xl mx-auto">
+  <div class="max-w-4xl mx-auto text-[#f3f4f6]">
+    <!-- 头部：标题 + 图谱状态 -->
     <div class="flex items-center justify-between mb-6">
-      <h2 class="text-sm font-semibold text-gray-800">知识库 ({{ docs.length }})</h2>
+      <h2 class="text-sm font-semibold text-[#f3f4f6]">
+        知识库 ({{ docs.length }})
+        <span v-if="graphStats.backend !== 'loading'" class="ml-3 text-[10px] font-normal text-[#64748b]">
+          <GitBranch :size="10" class="inline mr-1" />
+          {{ graphStats.nodes }} 节点 / {{ graphStats.edges }} 边
+          <span class="ml-1 px-1 py-0.5 rounded text-[8px]"
+            :class="graphStats.backend === 'neo4j' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-[#64748b]/20 text-[#64748b]'">
+            {{ graphStats.backend }}
+          </span>
+        </span>
+      </h2>
     </div>
 
+    <!-- 上传区域：暗色玻璃风格 -->
     <div class="relative mb-6">
       <input ref="fileInput" type="file" :accept="acceptedTypes" multiple class="hidden" @change="handleUpload" />
-      <div 
-        class="border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer"
-        :class="dragOver ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-blue-300 hover:bg-gray-50'"
+      <div
+        class="border-2 border-dashed rounded-xl p-8 text-center transition-all duration-300 cursor-pointer"
+        :class="dragOver
+          ? 'border-[#0ea5e9]/60 bg-[#0ea5e9]/5 shadow-lg shadow-[#0ea5e9]/10'
+          : 'border-[#1e293b] hover:border-[#0ea5e9]/30 hover:bg-[#0ea5e9]/[0.03]'"
         @click="triggerSelect"
         @dragover.prevent="onDragOver"
         @dragleave.prevent="onDragLeave"
         @drop.prevent="onDrop"
       >
-        <Upload :size="36" class="mx-auto mb-3 pointer-events-none" :class="dragOver ? 'text-blue-500' : 'text-gray-400'" />
-        <p class="text-sm font-medium text-gray-700 pointer-events-none">{{ dragOver ? '释放文件以上传' : '拖拽文件到此处，或点击选择文件' }}</p>
-        <p class="text-xs text-gray-400 mt-1 pointer-events-none">支持 文档(.md/.txt/.pdf/.docx) / PPT(.pptx) / 视频(.mp4/.avi/.mov) 自动解析</p>
+        <Upload :size="36" class="mx-auto mb-3 pointer-events-none transition-colors" :class="dragOver ? 'text-[#0ea5e9]' : 'text-[#475569]'" />
+        <p class="text-sm font-medium text-[#cbd5e1] pointer-events-none">{{ dragOver ? '释放文件以上传' : '拖拽文件到此处，或点击选择文件' }}</p>
+        <p class="text-xs text-[#475569] mt-1 pointer-events-none">支持 文档(.md/.txt/.pdf/.docx) / PPT(.pptx) / 视频(.mp4/.avi/.mov) 自动解析</p>
       </div>
     </div>
 
-    <div v-if="uploading" class="card mb-4">
+    <!-- 上传进度条 -->
+    <div v-if="uploading" class="bg-[#131926]/70 backdrop-blur-md border border-white/[0.06] rounded-xl p-4 mb-4">
       <div class="flex items-center gap-3">
         <div class="flex-1">
-          <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
-            <div class="h-full bg-blue-500 rounded-full transition-all duration-300" :style="{ width: uploadProgress + '%' }" />
+          <div class="h-2 bg-white/[0.06] rounded-full overflow-hidden">
+            <div class="h-full bg-gradient-to-r from-[#0ea5e9] to-[#10b981] rounded-full transition-all duration-300" :style="{ width: uploadProgress + '%' }" />
           </div>
         </div>
-        <span class="text-xs text-gray-500 shrink-0">{{ uploadProgress }}%</span>
+        <span class="text-xs text-[#64748b] shrink-0">{{ uploadProgress }}%</span>
       </div>
     </div>
 
-    <div v-if="uploadSuccess" class="card mb-4 bg-green-50 border-green-200 flex items-center gap-2">
-      <CheckCircle :size="16" class="text-green-600 shrink-0" />
-      <span class="text-sm text-green-700">{{ uploadSuccess }}</span>
-      <button class="ml-auto text-green-500 text-xs hover:text-green-700" @click="uploadSuccess = ''">关闭</button>
+    <!-- 成功提示 -->
+    <div v-if="uploadSuccess" class="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 mb-4 flex items-center gap-2">
+      <CheckCircle :size="16" class="text-emerald-400 shrink-0" />
+      <span class="text-sm text-emerald-300">{{ uploadSuccess }}</span>
+      <button class="ml-auto text-emerald-400 text-xs hover:text-emerald-300" @click="uploadSuccess = ''">×</button>
     </div>
 
-    <div v-if="uploadError" class="card mb-4 bg-red-50 border-red-200 flex items-center gap-2">
-      <AlertCircle :size="16" class="text-red-600 shrink-0" />
-      <span class="text-sm text-red-700">{{ uploadError }}</span>
-      <button class="ml-auto text-red-500 text-xs hover:text-red-700" @click="uploadError = ''">关闭</button>
+    <!-- 错误提示 -->
+    <div v-if="uploadError" class="bg-red-500/10 border border-red-500/20 rounded-xl p-3 mb-4 flex items-center gap-2">
+      <AlertCircle :size="16" class="text-red-400 shrink-0" />
+      <span class="text-sm text-red-300">{{ uploadError }}</span>
+      <button class="ml-auto text-red-400 text-xs hover:text-red-300" @click="uploadError = ''">×</button>
     </div>
 
+    <!-- 加载状态 -->
     <div v-if="loading" class="flex items-center justify-center py-12">
-      <div class="pulse-dot" /><span class="ml-3 text-gray-400 text-sm">加载中...</span>
+      <div class="pulse-dot bg-[#0ea5e9]" /><span class="ml-3 text-[#64748b] text-sm">加载中...</span>
     </div>
 
+    <!-- 错误状态 -->
     <div v-else-if="error" class="text-center py-12">
-      <AlertCircle :size="40" class="mx-auto mb-3 text-red-300" />
-      <p class="text-sm text-red-500">{{ error }}</p>
-      <button class="btn btn-outline text-xs mt-4" @click="load">重试</button>
+      <AlertCircle :size="40" class="mx-auto mb-3 text-red-400/50" />
+      <p class="text-sm text-red-400">{{ error }}</p>
+      <button class="px-3 py-1.5 mt-4 text-xs border border-[#1e293b] rounded-lg text-[#64748b] hover:text-[#cbd5e1] hover:border-[#475569] transition-colors" @click="load">重试</button>
     </div>
 
-    <div v-else-if="docs.length === 0" class="text-center py-12 text-gray-400">
-      <BookOpen :size="40" class="mx-auto mb-3 text-gray-300" />
-      <p class="text-sm">知识库为空</p>
-      <p class="text-xs mt-1">上传文档/PPT/视频后，AI 将自动解析并索引，用于学习问答</p>
+    <!-- 空状态 -->
+    <div v-else-if="docs.length === 0" class="text-center py-12">
+      <BookOpen :size="40" class="mx-auto mb-3 text-[#1e293b]" />
+      <p class="text-sm text-[#475569]">知识库为空</p>
+      <p class="text-xs mt-1 text-[#334155]">上传文档/PPT/视频后，AI 将自动解析并索引，用于学习问答</p>
     </div>
 
+    <!-- 文档卡片网格：玻璃态暗色风格 -->
     <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div v-for="doc in docs" :key="doc.id" class="card hover:shadow-md transition-shadow">
+      <div v-for="doc in docs" :key="doc.id" class="bg-[#131926]/70 backdrop-blur-md border border-white/[0.06] rounded-xl p-4 hover:border-white/[0.12] hover:shadow-lg hover:shadow-black/20 transition-all duration-300 group">
         <div class="flex items-start gap-3">
           <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" :class="fileColor(doc.file_type)">
             <component :is="fileIcon(doc.file_type)" :size="20" />
           </div>
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-1.5">
-              <h3 class="text-sm font-medium text-gray-800 truncate">{{ doc.filename }}</h3>
-              <span v-if="isMultimodal(doc)" class="badge bg-gradient-to-r from-purple-500 to-pink-500 text-white text-[9px] px-1.5 py-0 shrink-0">多模态</span>
+              <h3 class="text-sm font-medium text-[#f3f4f6] truncate">{{ doc.filename }}</h3>
+              <span v-if="isMultimodal(doc)" class="inline-flex items-center gap-0.5 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-[9px] px-1.5 py-0 rounded-full shrink-0">多模态</span>
             </div>
             <div class="flex flex-wrap items-center gap-2 mt-1.5">
-              <span class="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">{{ (doc.file_type || '').toUpperCase() }}</span>
-              <span class="text-[10px] text-gray-400">{{ formatSize(doc.file_size) }}</span>
-              <span class="text-[10px] text-gray-400">{{ doc.chunk_count }} 块</span>
-              <span v-if="doc.multimodal_metadata?.slide_count" class="text-[10px] text-gray-400">{{ doc.multimodal_metadata.slide_count }} 页</span>
-              <span v-if="doc.multimodal_metadata?.video_duration" class="text-[10px] text-gray-400">{{ Math.round(doc.multimodal_metadata.video_duration) }}s</span>
-              <span v-if="doc.created_at" class="text-[10px] text-gray-400 flex items-center gap-1"><Clock :size="10" /> {{ ago(doc.created_at) }}</span>
+              <span class="text-[10px] text-[#64748b] bg-white/[0.04] px-1.5 py-0.5 rounded">{{ (doc.file_type || '').toUpperCase() }}</span>
+              <span class="text-[10px] text-[#475569]">{{ formatSize(doc.file_size) }}</span>
+              <span class="text-[10px] text-[#475569]">{{ doc.chunk_count }} 块</span>
+              <span v-if="doc.multimodal_metadata?.slide_count" class="text-[10px] text-[#475569]">{{ doc.multimodal_metadata.slide_count }} 页</span>
+              <span v-if="doc.multimodal_metadata?.video_duration" class="text-[10px] text-[#475569]">{{ Math.round(doc.multimodal_metadata.video_duration) }}s</span>
+              <span v-if="doc.created_at" class="text-[10px] text-[#475569] flex items-center gap-1"><Clock :size="10" /> {{ ago(doc.created_at) }}</span>
             </div>
-            <p v-if="doc.content_preview" class="text-[11px] text-gray-500 mt-2 line-clamp-2">{{ doc.content_preview }}</p>
+            <p v-if="doc.content_preview" class="text-[11px] text-[#94a3b8] mt-2 line-clamp-2">{{ doc.content_preview }}</p>
             <div v-if="doc.tags && doc.tags.length > 0" class="flex flex-wrap gap-1 mt-2">
-              <span v-for="tag in doc.tags.slice(0, 4)" :key="tag" class="badge bg-blue-50 text-blue-700 text-[10px]"><Tag :size="8" /> {{ tag }}</span>
-              <span v-if="doc.tags.length > 4" class="text-[10px] text-gray-400">+{{ doc.tags.length - 4 }}</span>
+              <span v-for="tag in doc.tags.slice(0, 4)" :key="tag" class="inline-flex items-center gap-0.5 bg-[#0ea5e9]/10 text-[#0ea5e9] text-[10px] px-1.5 py-0 rounded-full"><Tag :size="8" /> {{ tag }}</span>
+              <span v-if="doc.tags.length > 4" class="text-[10px] text-[#475569]">+{{ doc.tags.length - 4 }}</span>
             </div>
           </div>
-          <button class="btn btn-outline p-1.5 shrink-0 text-red-400 hover:text-red-600 hover:border-red-200" @click="remove(doc.id, doc.filename)">
+          <button class="p-1.5 shrink-0 text-[#475569] hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100" @click="remove(doc.id, doc.filename)">
             <Trash2 :size="14" />
           </button>
         </div>
       </div>
     </div>
 
-    <!-- 任务 8.6: 知识图谱探索器 -->
+    <!-- 成员 3: 跨模态搜索 -->
+    <div class="mt-8 bg-[#131926]/70 backdrop-blur-md border border-white/[0.06] rounded-xl p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <Sparkles :size="16" class="text-[#0ea5e9]" />
+        <h2 class="text-sm font-semibold text-[#f3f4f6]">跨模态搜索</h2>
+        <span class="text-[10px] text-[#475569]">用文字搜公式 · 用公式搜图片</span>
+      </div>
+      <div class="flex gap-2">
+        <div class="flex-1 relative">
+          <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-[#475569]" />
+          <input v-model="crossModalQuery" @keyup.enter="doCrossModalSearch"
+            placeholder="输入描述，搜索相关公式或图像..."
+            class="w-full pl-9 pr-3 py-2 bg-[#0b0f19] border border-[#1e293b] rounded-lg text-sm text-[#f3f4f6] placeholder-[#475569] focus:border-[#0ea5e9]/40 focus:outline-none transition-colors" />
+        </div>
+        <select v-model="crossModalMode" class="bg-[#0b0f19] border border-[#1e293b] rounded-lg px-2 py-2 text-xs text-[#cbd5e1] focus:outline-none">
+          <option value="text">用文字搜公式/图片</option>
+          <option value="formula">用公式搜文字/图片</option>
+          <option value="image">用图片搜文字/公式</option>
+        </select>
+        <button @click="doCrossModalSearch" :disabled="crossModalLoading"
+          class="flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg bg-gradient-to-r from-[#0ea5e9] to-[#10b981] text-white hover:shadow-lg hover:shadow-[#0ea5e9]/20 transition-all disabled:opacity-50">
+          <Zap :size="12" /> 搜索
+        </button>
+      </div>
+      <!-- 跨模态搜索结果 -->
+      <div v-if="crossModalLoading" class="mt-4 text-center text-xs text-[#64748b]">搜索中...</div>
+      <div v-else-if="crossModalError" class="mt-4 text-xs text-red-400">{{ crossModalError }}</div>
+      <div v-else-if="crossModalResults.length > 0" class="mt-4 space-y-2">
+        <div v-for="(r, i) in crossModalResults" :key="i"
+          class="bg-[#0b0f19]/60 border border-white/[0.04] rounded-lg p-3 hover:border-white/[0.1] transition-colors">
+          <div class="flex items-start justify-between gap-2">
+            <p class="text-sm text-[#f3f4f6]">{{ r.pair?.concept || r.pair?.text?.slice(0, 80) || '无标题' }}</p>
+            <span class="text-[10px] px-1.5 py-0 rounded text-[#10b981] bg-[#10b981]/10 shrink-0">{{ (r.score * 100).toFixed(0) }}%</span>
+          </div>
+          <p class="text-[11px] text-[#94a3b8] mt-1 line-clamp-2">{{ r.pair?.formula || r.pair?.image_desc || '' }}</p>
+          <div class="flex items-center gap-2 mt-2">
+            <span class="text-[9px] text-[#475569]">匹配模态:</span>
+            <span class="text-[9px] px-1.5 py-0 rounded-full bg-[#0ea5e9]/10 text-[#0ea5e9]">{{ r.matched_modality }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 知识图谱探索器 -->
     <div class="mt-8">
       <div class="flex items-center gap-2 mb-4">
-        <GitBranch :size="16" class="text-purple-500" />
-        <h2 class="text-sm font-semibold text-gray-800">知识图谱 ({{ graphNodes.length }} 节点 / {{ graphEdges.length }} 边)</h2>
+        <GitBranch :size="16" class="text-[#8b5cf6]" />
+        <h2 class="text-sm font-semibold text-[#f3f4f6]">知识图谱 ({{ graphNodes.length }} 节点 / {{ graphEdges.length }} 边)</h2>
       </div>
       <KnowledgeGraphExplorer
         :nodes="graphNodes"

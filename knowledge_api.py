@@ -8,8 +8,9 @@ from typing import Any
 from fastapi import APIRouter, File, HTTPException, UploadFile, Request
 
 from app.database import DBKnowledgeDocument, run_db_op
-from document_parser import chunk_document, parse_uploaded_file, parse_pptx_slides
+from document_parser import chunk_document, parse_uploaded_file, parse_pptx_slides, parse_pdf_visually
 from rag_engine import hybrid_rag
+from ingestion import build_graph_after_upload, _get_graph_builder
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -68,6 +69,20 @@ async def upload_document(
     text_content = parse_uploaded_file(type("buf", (), {"read": lambda s: raw})(), filename)
     evidence_chunks = chunk_document(text_content, source=filename)
 
+    # ── 成员 3 任务 1: PDF 多模态视觉解析 ──
+    visual_evidence: list = []
+    if ext == ".pdf":
+        try:
+            visual_evidence = parse_pdf_visually(raw, filename)
+            if visual_evidence:
+                # 注册视觉证据到 VisRAG 索引
+                hybrid_rag.visual_index.index.upsert(tuple(visual_evidence))
+        except Exception as e:
+            print(f"  [knowledge_api] PDF 视觉解析失败（非致命）: {e}")
+
+    # ── 成员 3 任务 2: 增量图谱自生长（句级别 diff + 三元组提取）──
+    graph_report = build_graph_after_upload(evidence_chunks, source=filename, previous_text="")
+
     extra_metadata = {}
     if ext in (".pptx", ".ppt"):
         try:
@@ -118,6 +133,11 @@ async def upload_document(
         "is_multimodal": is_multimodal,
         "multimodal_metadata": extra_metadata,
         "content_preview": text_content[:300],
+        # 成员 3: 视觉解析 & 图谱自生长
+        "visual_pages_parsed": len(visual_evidence),
+        "graph_triplets_extracted": graph_report.raw_triplets if graph_report else 0,
+        "graph_edges_written": graph_report.written_edges if graph_report else 0,
+        "graph_backend": graph_report.backend if graph_report else "",
     }
 
 
@@ -203,3 +223,61 @@ async def delete_document(
     hybrid_rag.remove_user_documents(filename)
 
     return {"status": "deleted", "id": doc_id}
+
+
+# ── 成员 3 任务 2: 图谱统计端点 ──
+@router.get("/graph/stats")
+async def graph_stats() -> dict[str, Any]:
+    """返回当前知识图谱的统计信息（节点数、边数、后端类型）。"""
+    try:
+        builder = _get_graph_builder()
+        if builder is None:
+            return {"status": "unavailable", "nodes": 0, "edges": 0, "backend": "none"}
+        repo = builder.repository
+        backend = "neo4j" if hasattr(repo, "_driver") and repo._driver else "memory"
+        return {
+            "status": "ok",
+            "nodes": repo.count_nodes(),
+            "edges": repo.count_edges(),
+            "backend": backend,
+        }
+    except Exception as e:
+        return {"status": "error", "detail": str(e), "nodes": 0, "edges": 0, "backend": "error"}
+
+
+# ── 成员 3 任务 3: 跨模态特征对齐搜索端点 ──
+@router.get("/cross-search")
+async def cross_modal_search(
+    query: str = "",
+    mode: str = "text",
+    top_k: int = 5,
+) -> dict[str, Any]:
+    """跨模态搜索：用文字搜图片/公式，或用公式搜文字/图片。
+
+    Args:
+        query: 搜索词（文字描述或 LaTeX 公式）
+        mode: 搜索模式 — "text" 用文字搜图片， "formula" 用公式搜文字
+        top_k: 返回结果数量
+    """
+    if not query.strip():
+        return {"status": "error", "detail": "查询不能为空", "results": []}
+
+    try:
+        from multimodal_alignment import get_cross_modal_aligner
+        aligner = get_cross_modal_aligner()
+        results = aligner.search(query, mode=mode, top_k=top_k)
+        return {
+            "status": "ok",
+            "query": query,
+            "mode": mode,
+            "total": len(results),
+            "results": results,
+        }
+    except ImportError:
+        return {
+            "status": "not_initialized",
+            "detail": "跨模态对齐数据尚未构建。请先上传包含公式的教材文档以构建对齐索引。",
+            "results": [],
+        }
+    except Exception as e:
+        return {"status": "error", "detail": str(e), "results": []}

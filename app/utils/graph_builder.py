@@ -279,21 +279,54 @@ def _parse_llm_triplets(raw_response: str) -> tuple[Triplet, ...]:
 
 
 def _rule_based_triplets(chunk_text: str) -> tuple[Triplet, ...]:
-    """基于正则规则的三元组提取 (LLM 不可用时的降级方案)。"""
+    """基于正则规则的三元组提取 (LLM 不可用时的降级方案)。
+
+    覆盖 8 类常见中文教材句式：
+    1. A 是 B 的重要组成部分 → A 是 B 的前置
+    2. 学习 A 之前必须先掌握 B → B 是 A 的前置
+    3. A 依赖于 B → B 是 A 的前置
+    4. A 基于 B → B 是 A 的前置
+    5. A 包括/分为 B、C → B/C 是 A 的后置（不作处理）
+    6. 在 A 之后通常(使用/接) B → A 是 B 的前置
+    7. A 通过 B (实现/完成) → B 是 A 的前置
+    8. 必须先(掌握/理解) A 才能 B → A 是 B 的前置
+    """
     triplets: list[Triplet] = []
-    patterns = [
-        (r"(\S+)\s*是\s*(\S+)\s*的前置", "PREREQUISITE_OF"),
-        (r"(\S+)\s*是\s*(\S+)\s*的基础", "PREREQUISITE_OF"),
-        (r"学习\s*(\S+)\s*之前.*先.*掌握\s*(\S+)", "PREREQUISITE_OF"),
-        (r"(\S+)\s*依赖于?\s*(\S+)", "PREREQUISITE_OF"),
-        (r"(\S+)\s*需要\s*(\S+)\s*作为前提", "PREREQUISITE_OF"),
+    seen: set[tuple[str, str]] = set()
+
+    patterns: list[tuple[str, str, int, int]] = [
+        # (regex, relation, source_group, target_group)
+        # 句式 1: A 是 B 的前置/基础/前提
+        (r"(?:学习\s*)?([一-鿿\w]{1,20}?)\s*是\s*([一-鿿\w]{1,20}?)\s*的(?:前置|基础|前提条件|先决条件)", "PREREQUISITE_OF", 2, 1),
+        # 句式 2: 学习 A 之前必须先掌握 B  → B 是 A 的前置
+        (r"学习\s*([一-鿿\w]{1,20}?)\s*(?:之前|以前|前).*?(?:先|必须|需要).*?(?:掌握|理解|学会|学完)\s*([一-鿿\w]{1,20}?)", "PREREQUISITE_OF", 2, 1),
+        # 句式 3: A 依赖于 B
+        (r"([一-鿿\w]{1,20}?)\s*依赖(?:于)?\s*([一-鿿\w]{1,20}?)\s*(?:的)?(?:计算|实现|支持)", "PREREQUISITE_OF", 2, 1),
+        # 句式 4: A 基于 B
+        (r"([一-鿿\w]{1,20}?)\s*基于\s*([一-鿿\w]{1,20}?)\s*(?:的)?(?:原理|思想|方法|算法)", "PREREQUISITE_OF", 2, 1),
+        # 句式 6: 在 A 之后通常(使用/接/接上) B
+        (r"在\s*([一-鿿\w]{1,20}?)\s*(?:之后|后面|之后通常)\s*(?:使用|接|连接|拼接)\s*([一-鿿\w]{1,20}?)", "PREREQUISITE_OF", 1, 2),
+        # 句式 7: A 通过 B (实现/完成/解决)
+        (r"([一-鿿\w]{1,20}?)\s*通过\s*([一-鿿\w]{1,20}?)\s*(?:实现|完成|计算|解决|得到)", "PREREQUISITE_OF", 2, 1),
+        # 句式 8: 必须先(掌握/理解) A 才能(学习/理解) B
+        (r"必须先\s*(?:掌握|理解|学会)\s*([一-鿿\w]{1,20}?)\s*才能\s*(?:学习|理解|掌握|开始)\s*([一-鿿\w]{1,20}?)", "PREREQUISITE_OF", 1, 2),
+        # 兜底: A 是 B 的重要组成部分 → "是...的" 后置模式（非 exact 匹配）
+        (r"([一-鿿\w]{1,20}?)\s*是\s*([一-鿿\w]{1,20}?)\s*(?:中|里|内部|体系)?的(?:重要|核心|关键|基础|根本)(?:组成)?部分", "PREREQUISITE_OF", 2, 1),
     ]
-    for pattern, relation in patterns:
+
+    for pattern, relation, src_grp, tgt_grp in patterns:
         for match in re.finditer(pattern, chunk_text):
-            source = match.group(2).strip() if "之前" in pattern else match.group(1).strip()
-            target = match.group(1).strip() if "之前" in pattern else match.group(2).strip()
-            if source and target and source != target:
-                triplets.append(Triplet(source=source, target=target, relation=relation, confidence=0.65))
+            source = match.group(src_grp).strip()
+            target = match.group(tgt_grp).strip()
+            # 过滤：非空、不相等、不是无意义的单字、不与已有重复
+            if (source and target and source != target
+                    and len(source) >= 2 and len(target) >= 2
+                    and (source, target) not in seen):
+                seen.add((source, target))
+                triplets.append(Triplet(
+                    source=source, target=target, relation=relation, confidence=0.65
+                ))
+
     return tuple(triplets)
 
 

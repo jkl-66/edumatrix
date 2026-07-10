@@ -185,6 +185,20 @@ async def get_profile(
 
     display_name = await run_db_op(load_display_name, student_id)
 
+    # 构造 embeddings 并且使用 asyncio.to_thread 异步非阻塞地计算庞加莱 2D 坐标以回显给前端 Manifold 视图
+    import asyncio
+    from bkt_engine import poincare_to_2d_coordinates
+    from embedding_models import EMBEDDINGS
+    
+    concepts = list((getattr(profile, "concept_mastery", {}) or {}).keys())
+    embeddings = {}
+    for c in concepts:
+        vec = EMBEDDINGS.embed(c)
+        if vec:
+            embeddings[c] = vec
+            
+    coordinate_map = await asyncio.to_thread(poincare_to_2d_coordinates, embeddings)
+
     return {
         "student_id": student_id,
         "display_name": display_name,
@@ -197,6 +211,7 @@ async def get_profile(
         "concept_mastery": {
             k: round(v, 2) for k, v in (getattr(profile, "concept_mastery", {}) or {}).items()
         },
+        "coordinate_map": coordinate_map,
         "concept_p_err": {
             k: round(v.get("p_err", 0.1), 3) if isinstance(v, dict) else 0.1
             for k, v in (getattr(profile, "bkt_states", {}) or {}).items()

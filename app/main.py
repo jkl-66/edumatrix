@@ -134,11 +134,17 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
 
 @app.post("/api/auth/register")
 async def register_user(request: Request):
-    """学生注册接口"""
+    """学生注册接口，整合冷启动问卷背景进行协同过滤先验校准"""
     payload = await request.json()
     username = str(payload.get("username", "")).strip()
     password = str(payload.get("password", "")).strip()
     display_name = str(payload.get("display_name", username)).strip()
+    
+    # 接收冷启动背景问卷数据
+    major = str(payload.get("major", "计算机科学")).strip()
+    cognitive_style = str(payload.get("cognitive_style", "visual")).strip()
+    motivation_type = str(payload.get("motivation_type", "未诊断")).strip()
+    
     if not username or not password:
         raise HTTPException(status_code=400, detail="用户名和密码不能为空")
     if len(password) < 4:
@@ -151,6 +157,32 @@ async def register_user(request: Request):
         hashed = get_password_hash(password)
         user = DBUser(username=username, hashed_password=hashed, role="student", display_name=display_name)
         session.add(user)
+        
+        # 预先创建学生画像并注入问卷的冷启动初始参数，触发先验协同过滤
+        db_profile = DBStudentProfile(
+            student_id=username,
+            major=major,
+            cognitive_style=cognitive_style,
+            motivation_type=motivation_type,
+            concept_mastery={},
+            bkt_states={}
+        )
+        
+        from app.crud import calibrate_student_prior_collaborative
+        from models import StudentProfile
+        temp_prof = StudentProfile(student_id=username)
+        temp_prof.major = major
+        temp_prof.cognitive_style = cognitive_style
+        temp_prof.motivation_type = motivation_type
+        
+        try:
+            calibrate_student_prior_collaborative(session, temp_prof)
+            db_profile.concept_mastery = temp_prof.concept_mastery
+            db_profile.bkt_states = temp_prof.bkt_states
+        except Exception:
+            pass
+            
+        session.add(db_profile)
         session.commit()
         session.refresh(user)
         return user

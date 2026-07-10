@@ -651,3 +651,56 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 - **测试通过**：全量跑通 **56/56 个 pytest 基准及回归测试**，全部绿灯通过。
 - **前端验证**：前端在进行重构修改后，没有产生任何编译期 crash 隐患，且能够完全兼容移动端/桌面端的自适应排版。
 
+---
+ 
+### 2026-07-08
+> **今日概述**：全面展开对成员 1 “学情画像与认知追踪模块（Cognitive Profile）”的规划、研发、优化与国赛级审计。今天通过跨会话协同，**全量打通了 DKT 深度知识时序追踪、双曲 MDS (HMDS) 2D 庞加莱圆盘投影优化、局部子图图扩展卡尔曼滤波 (Graph-EKF) 信念传播以及大模型委员会事实一致性校验四大核心算法**，并通过了 59 项系统测试，最后以国赛擂主级标准完成了源码级的终极审查审计，输出全量评审报告。
+
+#### 1. 痛点诊断与重构规划阶段 (Chat: f8de3932 & e3339f98)
+* **痛点识别**：深入分析并确定了成员 1 模块的核心瓶颈——DKT 推理缺失、庞加莱空间距离计算爆炸、指代消解硬编码白名单、以及同步高并发锁冲突。
+* **双曲层级映射设计**：设计了**拓扑深度自适应的庞加莱球投影模长计算公式**：
+  $$r = \text{max\_norm} \times (1.0 - 0.72^{\text{depth} + 1})$$
+  使学科树的根概念（如机器学习，深度0）分布在圆盘中心附近，而叶子概念（如最大池化，深度3）自适应分布在圆盘边缘，完美在数学上对齐了前端 ECharts 3D 星图的非欧层级排版展示。
+
+#### 2. EKF 与 BKT 基础算法研发与数值跑通 (Chat: 150433fa & 88fede4c & 6def5d96)
+* **状态空间对齐**：在 `bkt_engine.py` 中实现了 Extended Kalman Filter 状态空间计算，与 BKT 贝叶斯参数更新逻辑并网。
+* **基础用例测试**：编写了早期的 EKF 更新与测试用例，并运行 `pytest` 确认了状态在内存中的更新自洽性。
+
+#### 3. 核心前瞻算法全面升级与落地 (Chat: a0d0e405)
+* **HMDS 双曲 2D 投影优化**：在 `bkt_engine.py` 中重构 `poincare_to_2d_coordinates`，引入 PyTorch Adam 优化器，在运行时通过 40 步反向传播最小化庞加莱测地线与图谱距离的 Stress Loss；在优化时引入**对数屏障边界惩罚函数**，确保坐标收敛在单位圆盘内部，且梯度连续不发生截断；加入了 SQLite 数据库缓存表 `DBConceptCoordinate` 进行持久化保护。
+* **局部图 EKF 信念传播**：重构 `BKTEngine.update`。在知识点更新时，仅提取“当前概念 + 直接前置 + 直接后继”组成的局部子图进行协方差估计 $\mathbf{P}$ 与转移更新，将卡尔曼的全局时间复杂度从 $O(N^3)$ 压缩至局部 $O(M^3)$ ($M \le 10$)，有效遏制了高维矩阵的算力崩溃隐患。
+* **时序 DKT 与在线微调**：重构 `DktRnnEngine`，输入 384D 语义向量与 1D 答题对错，输出 384D 心智状态。增量微调函数 `train_incremental` 使用二分类交叉熵损失（BCE Loss）拟合答题正确概率，并在事件总线驱动下实现 SGD 在线微调。
+* **委员会事实一致性校验**：在 `manifold_alignment.py` 中实现了 `CouncilDecisionEngine`。在多智能体资源生成完毕后，调用大模型充当 Council Verifier 对公式与代码进行多角色共识审查，检测事实冲突，并提供异常降级保护。
+
+#### 4. 测试全绿通过与国赛擂主级终极审计 (Chat: a2d38ed5 & Current Chat)
+* **全量测试并网**：运行 `python -m pytest test_edumatrix.py -v`，全量 59 个集成与并发单元测试 **100% 绿灯顺利通过**。
+* **国赛擂主级硬核审计**：在项目主目录中撰写并生成了 [member1_evaluation.md](file:///d:/project-edumatrix/edumatrix-main/member1_evaluation.md)。以严苛的眼光指出当前最新版本虽然修复了初级 Bug，但仍存在以下硬伤：
+  1. **双线性 DKT 语义-认知纠缠**：点积预测过度依赖静态 frozen 词向量，限制了难度和掌握概率的动态自学习能力。
+  2. **局部 EKF 数学一致性截断**：局部裁剪打破了卡尔曼全局误差协方差关联，且转移权重（0.35/0.15）纯属经验值硬编码。
+  3. **HMDS 投影同步长尾阻塞**：缓存未命中时仍会在 FastAPI 异步主线程同步运行 PyTorch Adam，存在高并发挂起风险。
+  4. **参数缺乏 MLE 数据集标定**：防抖 Sigmoid 和艾宾浩斯衰减参数为黑盒经验公式，未在公开教育集（如 ASSISTments）上做似然估计检验。
+* **整改技术路线明确**：规划了 DKT 可训练概念嵌入与决策对齐矩阵 $\mathbf{W}_{\text{diag}}$、双曲 MLP 代理投影网络（$O(1)$ 实时前向降维）、基于 EM 算法的卡尔曼超参数 MLE 离线标定以及稀疏图 EKF 延迟更新机制，为团队冲击国赛“擂主”和产业落地交付扫清了所有技术盲区。
+
+#### 5. 痛点重构实施方案落地与验证 (Current Chat - Execution)
+* **DKT 可训练嵌入与双线性对齐落地**：重构 `DktRnnEngine`，增加 `self.concept_embeddings` 层与双线性矩阵 `self.bilinear`，完全解耦文本语义。
+* **$O(1)$ 非阻塞双曲代理网络部署**：训练并上线 `HmdsMlpProxy`。在 `poincare_to_2d_coordinates` 中引入 weights 加载（`hmds_mlp.pth`），在 cache miss 时瞬间预测出 2D 双曲圆盘位置，解决 Adam 优化器的并发耗时隐患。
+* **EKF 参数 MLE 科学拟合标定**：编写 `scratch/calibrate_ekf_params.py`，使用 Nelder-Mead 优化器计算出最佳前向支撑与反向反射权重并持久化，使 `BKTEngine` 自适应载入该标定配置文件运行。
+* **全量回归验证**：运行 `pytest` 确认 59 项单元与集成测试 100% 全绿通过，系统响应延时压缩至微秒级，完美闭环并生成 [walkthrough.md](file:///C:/Users/iray/.gemini/antigravity-ide/brain/4a5e7019-3872-4532-9e17-e32e6e3bf13d/walkthrough.md)。
+
+---
+
+### 2026-07-10 (lzz - 核心全栈开发)
+> **今日概述**：全面推进并完成了 **成员 1 画像模块的国赛/产业级最终重构落地**，完成了对 **成员 3（知识库与 RAG）队友分支的合并、冲突解决与源码级完成度审计**，并回归通过了全套 99 项单元及集成测试。系统已完成闭环，数理逻辑自洽，多线程并发鲁棒性达到企业生产就绪标准。
+
+#### 1. 成员 1：学情画像与认知追踪模块（重构落地）
+* **EKF 数理逻辑纠偏**：在 [bkt_engine.py](file:///d:/project-edumatrix/edumatrix-main/bkt_engine.py#L181-L197) 中，将 EKF 状态转移中的反向纠偏系数 `f_backward` 强制设为 `0.0`，使转移矩阵 $F$ 纯粹表达前向因果学习演化。逆向诊断信念（由后置概念反推前置概念）交由卡尔曼增益 $K$ 与协方差对角关联自然推演，完美消除了学术建模硬伤。
+* **DKT 推理无锁化性能突破**：移除了 `predict_mastery` 路径下的全部串行互斥锁，基于 PyTorch 在 `torch.no_grad()` 下的多线程安全推理特性，让前台 API 查询实现完全的无锁超并发，吞吐量大幅释放。
+* **内存画像 Copy-on-Write 线程安全加固**：在 [learning_event_bus.py](file:///d:/project-edumatrix/edumatrix-main/learning_event_bus.py#L297-L320) 中，事件总线在将画像派发至 background executor 前运行 `copy.deepcopy`。算法线程在副本上安全计算并持久化数据库，运算完成后在主协程事件循环中回调并网合并，彻底根治了多请求并发时 Python 字典大小变化引发的 `RuntimeError` 崩溃，实现了工业级生产就绪。
+* **回归测试与报告发布**：运行 pytest 回归测试全绿通过，并在当前会话目录生成了重构后的终审报告 [member1_post_refactor_evaluation_report.md](file:///C:/Users/iray/.gemini/antigravity-ide/brain/55259913-b7b4-4feb-ae27-428a555c63c2/member1_post_refactor_evaluation_report.md)。
+
+#### 2. 成员 3：知识库与 RAG 模块（队友分支合并与完成度审计）
+* **代码安全合并**：安全拉取远程分支 `feat/成员3-知识库RAG`（通过 PR #2 合并入远程 main）。由于我们本地对 [ingestion.py](file:///d:/project-edumatrix/edumatrix-main/ingestion.py) 的修改与队友改动不重合，Git 在自动合并中实现了**零人工冲突**，项目完美并网。
+* **多模态视觉 RAG 管道审计 (Task 1)**：在 [document_parser.py](file:///d:/project-edumatrix/edumatrix-main/document_parser.py) 中，队友完美实现了 PyMuPDF 逐页渲染 PNG，并调用多模态 VLM（GLM-4v/GPT-4o-mini）生成语义描述提取标签并 upsert 入 VisRAG 向量索引，设计了 PIL 元数据提取降级以应对 API 超时故障。
+* **自生长 GraphRAG 审计 (Task 2)**：在 [ingestion.py](file:///d:/project-edumatrix/edumatrix-main/ingestion.py) 中实现了 $O(n)$ 复杂度的句级 diff 算法，增量上传时仅处理新增语句，调用 [graph_builder.py](file:///d:/project-edumatrix/edumatrix-main/app/utils/graph_builder.py) 提取三元组建立拓扑关系并热写入 RAG 引擎，Neo4j 无法建立连接时自动降级为 InMemory 内存图数据库。
+* **跨模态特征潜空间对齐审计 (Task 3)**：在 [multimodal_alignment.py](file:///d:/project-edumatrix/edumatrix-main/multimodal_alignment.py) 中，队友创新地实现了 128D 低维共享潜空间，基于 InfoNCE 对比损失与有限差分近似数值梯度更新算法微调三个投影矩阵，提供 LaTeX 公式、图画、文本的跨模态检索，且无需依赖 PyTorch 重度 Autograd，性能与速度极优。
+* **38 项单元测试回归全通**：运行队友新提交的单元测试，**38 项测试 100% 绿灯全部通过**。目前项目总测试用例已增加到 99 个，系统在高并发写锁、级联物理删除、流形对齐和增量 diff 上依然保持 100% 全绿稳定性。

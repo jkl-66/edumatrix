@@ -1,151 +1,495 @@
-# 🏆 成员 1 模块（画像与认知追踪）工业级去硬编码与算法重构方案
+# 🏆 成员 1 模块（画像与认知追踪）国赛擂主级与产业化落地整改实施方案
 
-本方案专为**成员 1 负责的三个核心任务**（DKT 认知追踪、卡尔曼滤波防抖、庞加莱双曲空间流形对齐）进行工业级重构设计，旨在彻底消除代码中的**“硬编码”与“余弦相似度假冒双曲几何”**等伪智能问题，接入学术级的非欧空间公式、自适应协方差滤波器和时序状态估计器，并设计前端对应的非线性几何展示方案，达到国赛特等奖/高水平学术论文水准。
-
----
-
-## 🚨 成员 2 与成员 1 核心痛点与重构目标
-
-1.  **流形对齐伪双曲计算**：废除在 `manifold_alignment.py` 中使用欧氏余弦相似度（`1 - cosine`）假冒庞加莱球对齐的投机做法，实现真正的**庞加莱球非欧空间测地线距离计算**，以及双曲仿射投影变换。
-2.  **卡尔曼滤波器缺失**：编写完整的卡尔曼滤波数学类，引入**自适应测量噪声校准**（基于答题耗时与负荷动态调整协方差 $R$ 和 $Q$），替代目前的静态数值 clamp 机制，实现画像信号的平滑抗噪。
-3.  **时序知识追踪（DKT）缺失**：实现一个基于隐马尔可夫链（HMM-BKT）或轻量级 PyTorch GRU 网络的**时序认知追踪引擎**，根据学生历史 50 次答题序列进行状态前瞻预测，取代目前的简单分数累加。
-4.  **指代消解白名单硬编码**：移除 `agent_swarm.py` 中写死的白名单和模糊指代映射，利用 LLM 进行**动态上下文实体链接**。
+> [!NOTE]
+> **📋 方案背景与实施宗旨**：
+> 本方案针对最新版本审计中发现的四大核心瓶颈（HMDS 同步计算阻塞、DKT 语义空间混淆与损失函数错误、Graph-EKF 复杂度爆炸、行为校验数值阶跃）提供彻底、严谨且具备工业级落地水准的重构设计方案。
+> 方案抛弃了简单的 Mock 和经验粗糙度，以**异步缓存/降维代理、双线性认知诊断投影、局部稀疏 EKF、连续自适应门控**为核心，打造学术自洽性与工业可用性双巅峰的自适应教育“数字大脑”。
 
 ---
 
-## ⚠️ 架构级防冲突与回归安全防线 (Critical Constraints)
+## 🗺️ 架构演进与重构路线图
 
-经深入全局扫描，成员 1 的重构需要特别防范与系统其他模块的耦合冲突，已确定以下核心防线：
+```mermaid
+graph TD
+    %% 痛点梳理
+    subgraph Current [现状：面临高并发与学术质询风险]
+        HMDS_Sync[HTTP 线程同步 Adam 降维] -->|CPU 负载爆炸| API_Block[FastAPI 事件循环阻塞]
+        DKT_MSE[DKT 预测词 Embedding & MSE 训练] -->|学术硬伤| Sem_Mismatch[语义相似度混淆掌握度]
+        EKF_Dense[全局高维稠密矩阵 EKF] -->|复杂度 O/N^3/| Scale_Crash[高维图谱计算超时]
+        Sanity_Cut[行为校验 0.5 硬限截断] -->|阶跃不连续| Path_Jitter[A* 路径频繁抖动]
+    end
 
-1.  **向前兼容测试用例**：重构 `verify_alignment` 后，必须通过单元测试。若检测到测试传入的是 Mock 向量，系统应具备防御降级逻辑，退回到欧氏距离，防止 test suites 因没有双曲特征输入而大面积崩溃。
-2.  **防止卡尔曼滤波初始协方差发散**：画像初始化时，卡尔曼状态误差 $P_0$ 必须设定为较大的初始值（如 1.0），代表初始状态完全不确定，系统噪声 $Q$ 和测量噪声 $R$ 必须经过精密调校（如 $Q=0.01, R=0.1$），防止由于增益计算过度敏感导致系统状态震荡。
-3.  **大模型发包频率限流**：指代消解使用大模型动态检索后，对于高频提问，必须在 `/api/profile` 中加入防抖缓存，避免每个提问字都重复调用 LLM 进行消解，引发 API 限频熔断。
+    %% 整改方案
+    subgraph Ultimate [重构后：国赛擂主与工业商用级]
+        MDS_Cache[HMDS 离线预计算 + Redis/SQLite 缓存] -->|毫秒级读取| API_Fast[API 零延迟秒开]
+        DKT_BCE[双线性认知映射层 + BCE 损失函数] -->|学术严谨| Corr_Pred[准确预测下一题正确率]
+        EKF_Sparse[局部主动子图 EKF 滤波] -->|复杂度降至 O/1/| Scalable_EKF[无限扩展知识点数]
+        Sanity_Gate[连续 Sigmoid 掌握度置信门控] -->|平滑连续| Stable_Path[路径推荐渐进平滑]
+    end
+```
 
 ---
 
-## 🛠️ 第一部分：后端算法重构与公式落地
+## 🛠️ 第一部分：双曲圆盘投影（HMDS）的“离线计算与坐标缓存化”重构
 
-### 1. 落地真正的非欧几何 Poincaré 双曲测地线算法（任务 3）
+为了彻底消除在 HTTP 请求中运行 PyTorch Adam 优化的性能灾难，必须将多维尺度降维（MDS）改造为**写时计算、读时缓存**的工业级架构。
 
-#### [MODIFY] [manifold_alignment.py](file:///d:/project-edumatrix/edumatrix-main/manifold_alignment.py)
-*   **高维 Embedding 双曲投影**：
-    *   移除所有的 `1.0 - cosine_similarity` 计算。
-    *   首先将 RAG 提取的 384 维文本/代码嵌入向量进行模长钳制（Clipping），确保向量模长 $\|x\| < 1.0 - \epsilon$，投影到双曲庞加莱球（Poincaré Ball）内部。
-*   **计算真正的双曲测地线距离 (Geodesic Distance)**：
-    *   使用如下庞加莱空间距离公式重置 `verify_alignment` 内部核对机制：
-        $$d(u,v) = \text{arcosh}\left(1 + 2\frac{\|u-v\|^2}{(1-\|u\|^2)(1-\|v\|^2)}\right)$$
-    *   对于跨模态资源（如讲义文本与沙箱代码）的一致性比对，以及资源对核心大纲概念的偏离度校验，完全在此双曲非欧空间内进行度量。
-*   **流形投影映射矩阵 (Manifold Alignment Projection)**：
-    *   引入一个流形转换映射层（线性投影矩阵 $W$），将专业领域的概念向量通过 $W$ 变换后投影到数学概念空间，寻找真实的交叉依赖，提升跨学科类比寻路的可解释性。
+### 1. 核心设计思想
+*   **触发机制**：高维双曲向量投影的重新计算仅在**新教材上传、知识库构建或 GraphRAG 关系变更**时触发，这些属于典型的低频写入操作。
+*   **数据流**：在 [ingestion.py](file:///d:/project-edumatrix/edumatrix-main/ingestion.py) 中，当提取出新概念的 384 维向量后，在后台线程中一次性运行 `poincare_to_2d_coordinates` 得到所有概念的 2D 庞加莱坐标，并将其序列化保存至本地数据库 `concept_coordinates` 表中。
+*   **API 零开销**：当学生加载 [StudentAnalysis.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/StudentAnalysis.vue) 时，接口仅需执行一条简单的 SQL 查询，直接读取预计算好的 2D 坐标返回给前端，响应时间由 **2-3秒** 骤降至 **1毫秒** 级。
 
-### 2. 编写自适应协方差卡尔曼滤波器（任务 2）
+### 2. 数据库表结构扩展
+在 [models.py](file:///d:/project-edumatrix/edumatrix-main/models.py) 中新增一个表模型：
 
+```python
+class ConceptCoordinate(Base):
+    """知识概念在 2D 庞加莱圆盘中的投影坐标缓存表"""
+    __tablename__ = "concept_coordinates"
+    
+    concept_name = Column(String, primaryKey=True, index=True)
+    x = Column(Float, nullable=False)
+    y = Column(Float, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+```
+
+### 3. 后端代码重构
 #### [MODIFY] [bkt_engine.py](file:///d:/project-edumatrix/edumatrix-main/bkt_engine.py)
-*   **实现数学级卡尔曼平滑类 (`KalmanFilter`)**：
-    *   定义状态转移方程：$x_k = x_{k-1} + w_k, \quad w_k \sim N(0, Q_k)$
-    *   定义观测方程：$z_k = x_k + v_k, \quad v_k \sim N(0, R_k)$
-    *   实现一维卡尔曼滤波的状态一步预测与增益修正。
-*   **自适应噪声协方差调整 (Adaptive Covariance)**：
-    *   **测量噪声 $R_k$ 动态校准**：如果学生某次答题耗时极短（例如低于 3 秒），系统判定存在猜测（Guess）或手滑（Slip）嫌疑，**动态上调 $R_k$**，使得滤波器减小本次观测值的权重。
-    *   **系统噪声 $Q_k$ 动态校准**：如果画像显示学生当前的认知负荷（`cognitive_load`）或挫败感（`frustration`）极高，**动态上调 $Q_k$**，代表其心智状态不稳定，系统掌握度状态的转移不确定性增加。
-*   **数据流整合**：在 `models.py` 的 `StudentProfile` 掌握度变动方法中，强制将 BKT 引擎更新后的概率作为测量值 $z_k$ 输入卡曼滤波器，输出平滑后的画像值，写入数据库。
+重写降维接口，引入缓存机制，保证高并发可用性：
 
-### 3. 时序滑窗认知追踪（DKT）与动态指代消解（任务 1）
+```python
+def poincare_to_2d_coordinates_cached(embeddings: dict[str, list[float]], db_session: Session) -> dict[str, list[float]]:
+    """读取数据库缓存的庞加莱坐标；若缺失，则自动触发轻量优化并写入缓存"""
+    concepts = list(embeddings.keys())
+    if not concepts:
+        return {}
 
-#### [MODIFY] [profile_api.py](file:///d:/project-edumatrix/edumatrix-main/profile_api.py)
-*   **轻量级时序 DKT 引擎设计**：
-    *   设计一个轻量级 PyTorch RNN/LSTM 网络，或使用隐马尔可夫链时序前向-后向算法。
-    *   从 `quiz_records` 数据库表中提取该学生最近 50 次的交互序列（格式为 `(concept_id, is_correct)` 的时间序列）。
-    *   每次触发诊断时，将此序列滑窗滑入模型，模型多步预测未来 3 个知识点上的答对概率，作为认知画像更新的输入，彻底摒弃“做对加分、做错减分”的硬编码算术题。
-*   **动态指代消解与实体链接 (Task 4)**：
-    *   彻底删除 `_COREFERENCE_KEYWORDS` 和 `_KNOWLEDGE_WHITELIST`。
-    *   修改 `ProfileProbeAgent` 的 Prompts。从 `DBKnowledgeDocument` 动态提取当前激活领域的全部知识点节点，作为指代消解的实体检索词库（Prompt Context），交给大模型进行**动态实体消解与映射**，使画像抽取在任何新上传的垂直行业领域上都可以无缝生效。
+    # 1. 尝试从数据库批量加载缓存
+    cached_records = db_session.query(ConceptCoordinate).filter(ConceptCoordinate.concept_name.in_(concepts)).all()
+    coord_map = {r.concept_name: [r.x, r.y] for r in cached_records}
+
+    missing_concepts = [c for c in concepts if c not in coord_map]
+    
+    # 2. 如果存在缺失坐标（冷启动或新增概念），则局部触发 Adam 降维
+    if missing_concepts:
+        import torch
+        import torch.optim as optim
+        print(f"[HMDS] Cache miss for {len(missing_concepts)} concepts, calculating online...")
+        
+        # 提取全部概念的高维向量进行全局相对距离计算
+        all_vecs = []
+        for c in concepts:
+            vec = embeddings[c] or [0.0] * 384
+            # 使用 tanh 拓扑自适应投影至庞加莱球内
+            norm_v = math.sqrt(sum(x * x for x in vec))
+            ball_vec = [x * 0.82 / max(norm_v, 1e-9) for x in vec] if norm_v > 0 else [0.0] * 384
+            all_vecs.append(ball_vec)
+            
+        Z = torch.tensor(all_vecs, dtype=torch.float32) # (M, 384)
+        M = len(concepts)
+        
+        # 计算高维距离
+        dot_z = torch.sum(Z * Z, dim=-1)
+        dist_matrix_tgt = torch.zeros((M, M))
+        for i in range(M):
+            for j in range(i+1, M):
+                diff = torch.sum((Z[i] - Z[j])**2)
+                denom = torch.clamp((1.0 - dot_z[i]) * (1.0 - dot_z[j]), min=1e-6)
+                delta = 1.0 + 2.0 * diff / denom
+                d = torch.log(delta + torch.sqrt(torch.clamp(delta**2 - 1.0, min=1e-6)))
+                dist_matrix_tgt[i, j] = d
+                dist_matrix_tgt[j, i] = d
+
+        # 初始化待优化的 2D 坐标 (仅对缺失的概念进行修改，其余概念锚定已有的缓存坐标)
+        # 用 small random 进行微扰初始化
+        X = torch.randn(M, 2) * 0.05
+        for i, c in enumerate(concepts):
+            if c in coord_map:
+                X.data[i] = torch.tensor(coord_map[c], dtype=torch.float32)
+        X.requires_grad = True
+        
+        # 边界软惩罚障碍函数 Barrier Function，取代硬截断 clamp，保护梯度平滑流动
+        optimizer = optim.Adam([X], lr=0.05)
+        for _ in range(40):
+            optimizer.zero_grad()
+            norms = torch.norm(X, p=2, dim=1, keepdim=True)
+            
+            # 计算应力损失
+            loss = 0.0
+            for i in range(M):
+                for j in range(i+1, M):
+                    # 2D双曲距离
+                    diff_2d = torch.sum((X[i] - X[j])**2)
+                    denom_2d = torch.clamp((1.0 - norms[i]**2) * (1.0 - norms[j]**2), min=1e-6)
+                    delta_2d = 1.0 + 2.0 * diff_2d / denom_2d
+                    d_2d = torch.log(delta_2d + torch.sqrt(torch.clamp(delta_2d**2 - 1.0, min=1e-6)))
+                    
+                    loss += (dist_matrix_tgt[i, j] - d_2d)**2
+            
+            # 引入边界软惩罚：对于模长接近 1.0 的坐标施加对数惩罚，防止飞出圆盘，保障导数连续性
+            barrier = -torch.sum(torch.log(1.0 - norms**2)) * 0.1
+            total_loss = loss + barrier
+            total_loss.backward()
+            optimizer.step()
+            
+        # 写回数据库缓存
+        with torch.no_grad():
+            norms = torch.norm(X, p=2, dim=1, keepdim=True)
+            final_X = X / torch.clamp(norms, min=1.0) * torch.clamp(norms, max=0.95)
+            coords_np = final_X.numpy()
+            
+            for i, c in enumerate(concepts):
+                if c in missing_concepts:
+                    x_val, y_val = float(coords_np[i, 0]), float(coords_np[i, 1])
+                    coord_map[c] = [x_val, y_val]
+                    # 写入数据库
+                    db_session.merge(ConceptCoordinate(concept_name=c, x=x_val, y=y_val))
+            db_session.commit()
+            
+    return {c: coord_map[c] for c in concepts}
+```
 
 ---
 
-## 🎨 第二部分：前端高感知展示方案（以视觉张力表现算法深度）
+## 🛠️ 第二部分：重构 DKT 模型为“双线性认知诊断投影与 BCE 损失函数”
 
-评委无法直接看后台的 PyTorch 代码，因此前端必须做到“所见即所得”，用数学的美感震撼评委。
+必须修正“将文本语义 Embedding 当作掌握度度量指标”的根本性学术偏误，重构为预测**“学生下一时间步答题正确概率”**的标准时序认知追踪架构。
 
-### 1. 庞加莱圆盘 Canvas 非线性测地线动画 (针对任务 3)
-*   **页面**：`Chat.vue` 右侧面板 / `ProfileDashboard.vue`
-*   **实现效果**：
-    *   在双曲圆盘中，标准大纲概念呈树状分布。
-    *   当进行流形校验时，学生画像节点与大纲概念之间的连接线**不再是直板的直线，而是计算渲染出真实的双曲测地线（Hyperbolic Geodesics，呈优美的弧线拓扑关系）**。
-    *   连接线以光标粒子的形式在双曲弧线上流动，并在侧边显示实时计算的双曲距离（如：`Poincare Distance: 0.231`），展示跨模态一致性校验的物理过程。
+### 1. 数学模型与认知解释
+设学生最近的答题序列为 $\mathcal{S} = \{(c_1, a_1), (c_2, a_2), \dots, (c_t, a_t)\}$。
+*   **输入向量构建**：第 $\tau$ 步的输入 $\mathbf{v}_\tau = [\mathbf{e}_{c_\tau}; a_\tau] \in \mathbb{R}^{385}$，由概念词的 384 维 Embedding $\mathbf{e}_{c_\tau}$ 与其答题正确性 $a_\tau \in \{0, 1\}$ 拼接而成。
+*   **状态隐藏层演进**：通过 GRU 学习学生的学习时序状态：
+    $$\mathbf{h}_\tau = \text{GRU}(\mathbf{h}_{\tau-1}, \mathbf{v}_\tau) \in \mathbb{R}^{d_{\text{hidden}}}$$
+*   **双线性认知映射 (Bilinear Cognitive Projection)**：我们不直接输出大维度分类器，而是利用映射矩阵将隐藏状态 $\mathbf{h}_\tau$ 映射为高维语义空间中的**学生心智认知信念向量 (Cognitive Belief State Vector)** $\mathbf{s}_\tau \in \mathbb{R}^{384}$：
+    $$\mathbf{s}_\tau = \tanh(\mathbf{W}_{\text{proj}} \mathbf{h}_\tau + \mathbf{b})$$
+*   **后延正确率预测**：学生对任意下一个概念 $c_{t+1}$ 的预测答对概率，是由其心智状态向量 $\mathbf{s}_t$ 与目标概念的语义向量 $\mathbf{e}_{c_{t+1}}$ 的内积通过 Sigmoid 激活决定的：
+    $$P(\text{correct}_{t+1} = 1 | c_{t+1}) = \sigma( \gamma \cdot \mathbf{s}_t^T \mathbf{e}_{c_{t+1}} )$$
+    其中 $\gamma$ 为可训练的缩放标量因子。这在学术上具有极高自洽性：**学生的抽象认知信念与知识点概念表征越契合，答对概率就越高**。
 
-### 2. 卡尔曼滤波“去噪防抖”对比折线图 (针对任务 2)
-*   **页面**：`StudentAnalysis.vue` (学情深度分析页)
-*   **实现效果**：
-    *   在学情趋势折线图中，同时绘制两条曲线：**原始观测线（灰白虚线）** 与 **卡尔曼平滑估计线（流动发光实线）**。
-    *   当学生因为粗心答错导致观测线出现断崖式下跌时，评委可以清晰地看到卡尔曼平滑线并没有剧烈震荡，而是保持平缓，展示系统识别出“手滑粗心”的抗噪过程。
-    *   面板侧边实时跳动显示卡尔曼增益：`Kalman Gain K_t: 0.18`、`测量协方差 R_t: 0.85 (检测到异常快速答题，置信度降低)`。
+### 2. 核心代码改造（后端）
+#### [MODIFY] [bkt_engine.py](file:///d:/project-edumatrix/edumatrix-main/bkt_engine.py)
+彻底重构 `DktRnnEngine` 的结构设计与 `DktService` 训练损失：
 
-### 3. 基于 DKT 掌握度区间预测的“认知置信带”雷达图 (针对任务 1)
-*   **页面**：`MasteryRadar.vue` (技能雷达组件)
-*   **实现效果**：
-    *   技能雷达图不仅显示一个单薄的掌握度闭合多边形，而且在多边形外圈和内圈绘制一层**半透明的发光环带（置信区间带，Confidence Band）**。
-    *   该环带的宽度由卡尔曼误差协方差 $P_k$ 动态决定。如果该知识点测试数据少，环带就宽，代表“测不准，置信度低”；随着做题增多，环带收窄贴合掌握度实线，代表“测得准，置信度极高”。
+```python
+class DynamicDktRnnEngine(nn.Module):
+    """基于双线性认知诊断投影的动态 DKT 网络"""
+    def __init__(self, hidden_dim: int = 64):
+        super().__init__()
+        self.input_dim = 385  # 384D Embedding + 1D Response Accuracy
+        self.hidden_dim = hidden_dim
+        
+        self.rnn = nn.GRU(self.input_dim, hidden_dim, batch_first=True)
+        # 将隐藏状态映射到与词向量同维的 384D 心智状态空间
+        self.cognitive_projection = nn.Linear(hidden_dim, 384)
+        # 缩放标量因子
+        self.scale_factor = nn.Parameter(torch.tensor(5.0))
+        
+        # 确定性初始化
+        torch.manual_seed(42)
+        nn.init.xavier_normal_(self.cognitive_projection.weight)
+        nn.init.constant_(self.cognitive_projection.bias, 0.0)
+
+    def forward(self, seq_embeddings: torch.Tensor) -> torch.Tensor:
+        """
+        seq_embeddings: (batch_size, seq_len, 385)
+        Returns: (batch_size, 384) -> 预测心智认知状态向量 s_t
+        """
+        out, _ = self.rnn(seq_embeddings)
+        final_hidden = out[:, -1, :] # 提取序列末尾隐特征
+        s_t = torch.tanh(self.cognitive_projection(final_hidden))
+        return s_t
+
+
+class DynamicDktService:
+    """标准 DKT 推理与增量在线对比微调服务"""
+    def __init__(self):
+        self.model = DynamicDktRnnEngine()
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        # 替换为二分类交叉熵损失，拟合答题正确概率
+        self.loss_fn = nn.BCEWithLogitsLoss() 
+        
+    def predict_mastery(self, history_records: list[tuple[str, bool]]) -> dict[str, float]:
+        """在线推理：计算在当前心智认知状态下，学生对所有概念的预测正确率（作为掌握度）"""
+        from embedding_models import EMBEDDINGS
+        seq_len = len(history_records)
+        if seq_len == 0:
+            return {c: 0.3 for c in CONCEPT_TO_INDEX.keys()}
+            
+        # 构建 385 维时序矩阵
+        input_matrix = np.zeros((1, seq_len, 385), dtype=np.float32)
+        for t, (concept, correct) in enumerate(history_records):
+            vec = EMBEDDINGS.embed(concept) or [0.0] * 384
+            input_matrix[0, t, :384] = vec
+            input_matrix[0, t, 384] = 1.0 if correct else 0.0
+            
+        self.model.eval()
+        with torch.no_grad():
+            tensor_in = torch.from_numpy(input_matrix)
+            s_t = self.model(tensor_in).squeeze(0) # (384,)
+            
+        preds = {}
+        for concept in CONCEPT_TO_INDEX.keys():
+            c_vec = torch.tensor(EMBEDDINGS.embed(concept) or [0.0] * 384, dtype=torch.float32)
+            # 计算内积结合 Sigmoid 获得答对概率
+            logit = torch.dot(s_t, c_vec) * self.model.scale_factor
+            preds[concept] = float(torch.sigmoid(logit))
+            
+        return preds
+
+    def train_incremental(self, history_records: list[tuple[str, bool]]):
+        """利用真实答题正误作为标签，进行在线 BCE 损失增量拟合"""
+        from embedding_models import EMBEDDINGS
+        seq_len = len(history_records)
+        if seq_len < 2:
+            return
+            
+        self.model.train()
+        self.optimizer.zero_grad()
+        
+        # 构造输入序列 X (1, seq_len-1, 385)
+        # 预测第 seq_len 步的答题结果
+        input_matrix = np.zeros((1, seq_len - 1, 385), dtype=np.float32)
+        for t in range(seq_len - 1):
+            concept, correct = history_records[t]
+            vec = EMBEDDINGS.embed(concept) or [0.0] * 384
+            input_matrix[0, t, :384] = vec
+            input_matrix[0, t, 384] = 1.0 if correct else 0.0
+            
+        last_concept, last_correct = history_records[-1]
+        last_vec = torch.tensor(EMBEDDINGS.embed(last_concept) or [0.0] * 384, dtype=torch.float32)
+        target_label = torch.tensor([1.0 if last_correct else 0.0], dtype=torch.float32)
+        
+        tensor_in = torch.from_numpy(input_matrix)
+        s_t = self.model(tensor_in).squeeze(0) # (384,)
+        
+        # 计算预测 logit
+        logit = torch.dot(s_t, last_vec) * self.model.scale_factor
+        
+        # 计算二分类损失
+        loss = self.loss_fn(logit.unsqueeze(0), target_label)
+        loss.backward()
+        self.optimizer.step()
+        self.model.eval()
+```
 
 ---
 
-## 🚀 第三部分：追求极致的“下一阶段（Phase 2）”前瞻优化方案
+## 🛠️ 第三部分：联合图谱 EKF 的“局部主动子图”计算剪枝重构
 
-在实现上述基础智能化后，如果我们想在国赛终审中展示出**无可挑剔的学术创新性与产业落地性**，还可以在以下四个深度领域继续优化：
+为了防止知识节点增多时矩阵运算耗时暴增（$O(N^3)$ 复杂度导致 API 挂起），需要重构为**基于局部子图过滤的稀疏更新算法**。
 
-### 1. 多层级认知维度分解 (Multi-Layer Cognitive Dimension Profiling)
-*   **当前痛点**：目前对概念的追踪（如“逻辑回归”）仅输出 1 个一维的 mastery 分数，无法细分技能类型。
-*   **升格优化**：
-    *   将学生的掌握状态拆分为四个独立的流形轴：**事实记忆（Factual Recalling）**、**公式推导（Mathematical Derivation）**、**代码实现（Code Implementation）** 与 **跨学科迁移（Analogy Transfer）**。
-    *   卡尔曼滤波器和 DKT 网络同时在这四个维度上对交互行为进行拆解评估。这不仅能极大地丰富画像雷达图的信息量，还能帮助 Planner Agent 进行超细粒度的精准推荐。
+### 1. 局部主动子图 EKF 算法设计
+当更新具体知识点 $c_t$ 的掌握度时，系统不再载入全局的所有概念。而是通过以下三步建立“局部主动子图”：
+1.  **节点定位**：锁定被观测节点 $c_t$。
+2.  **邻域提取**：从依赖图 `KNOWLEDGE_DAG` 中提取 $c_t$ 的直接前置依赖集合 $\mathcal{P}_{c_t}$ 和直接后继依赖集合 $\mathcal{S}_{c_t}$。
+3.  **主动状态空间限制**：仅让局部活跃节点集 $\mathcal{X}_{active} = \{c_t\} \cup \mathcal{P}_{c_t} \cup \mathcal{S}_{c_t}$ 参与扩展卡尔曼滤波（EKF）。节点数量限制在常数级 $M_{active} = |\mathcal{X}_{active}| \le 10$，计算耗时恒定，时间复杂度降为极致的 **$O(1)$**，具备无限规模图谱的泛化扩展能力。
 
-### 2. 协同画像先验校准 (Collaborative Peer-Based Prior Profiling)
-*   **当前痛点**：新注册用户处于完全冷启动状态，初始概率（0.3）只是一个静态的经验常数。
-*   **升格优化**：
-    *   在 `profile_api.py` 中引入**协同特征融合机制**。
-    *   当新学生注册并完成向导（学历、风格）后，系统在大数据库中寻找特征最相似的 Top-N 学生群体（Peer Group），将其收敛后的卡尔曼协方差和 BKT 参数作为新学生的先验分布（Prior Distribution），使画像收敛速度提升 300% 以上。
+### 2. 核心代码改造（后端）
+#### [MODIFY] [bkt_engine.py](file:///d:/project-edumatrix/edumatrix-main/bkt_engine.py)
+在 `BKTEngine.update` 中重写状态更新逻辑：
 
-### 3. 主动探索与不确定性消除 (Uncertainty-Aware Active Learning)
-*   **当前痛点**：现有的出题/推送机制是根据掌握度薄弱项被动推送，没有考虑算法本身对数值的“确信程度”。
-*   **升格优化**：
-    *   利用卡尔曼误差协方差 $P_k$ 衡量算法的“测不准度”。
-    *   在出题时，如果发现某个概念的 $P_k$ 极宽（即算法对其掌握度极度不确定），触发**主动探针测试（Active Probing）**，优先向学生推送该概念的测验，从而以最快的速度降低学生认知地图的信息熵。
+```python
+    def update_graph_ekf_localized(
+        self,
+        target_concept: str,
+        observed_mastery: float,
+        profile_bkt_states: dict[str, Any],
+        cognitive_load: float,
+        frustration: float,
+        duration_seconds: float | None = None
+    ) -> float:
+        """基于局部主动子图过滤的扩展卡尔曼信念更新 (O(1) 复杂度)"""
+        try:
+            from profile_api import KNOWLEDGE_DAG
+        except Exception:
+            from agent_swarm import DEFAULT_KNOWLEDGE_DAG as KNOWLEDGE_DAG
+            
+        # 1. 提取局部活跃节点集 (当前概念 + 直接前置 + 直接后继)
+        prereqs = KNOWLEDGE_DAG.get(target_concept, [])
+        successors = [c for c, p_list in KNOWLEDGE_DAG.items() if target_concept in p_list]
+        
+        active_concepts = list(set([target_concept] + prereqs + successors))
+        M = len(active_concepts)
+        c_to_idx = {c: i for i, c in enumerate(active_concepts)}
+        t_idx = c_to_idx[target_concept]
+        
+        # 2. 读取并构造局部状态向量 x_local (M, 1) 与协方差 P_local (M, M)
+        x_local = np.zeros((M, 1), dtype=np.float32)
+        P_local = np.zeros((M, M), dtype=np.float32)
+        
+        p_diag = np.zeros(M, dtype=np.float32)
+        for i, c in enumerate(active_concepts):
+            if profile_bkt_states and c in profile_bkt_states:
+                x_local[i, 0] = profile_bkt_states[c].get("smoothed_mastery", BKT_DEFAULTS["p_init"])
+                p_diag[i] = profile_bkt_states[c].get("p_err", 0.1)
+            else:
+                c_state = self.get_or_create(c, profile_bkt_states)
+                x_local[i, 0] = getattr(c_state, "smoothed_mastery", c_state.p_mastered)
+                p_diag[i] = getattr(c_state, "p_err", 0.1)
+                
+        # 保存旧的局部掌握度用于差分
+        old_mastery = x_local[t_idx, 0]
+        
+        # 初始化协方差对角阵
+        for i in range(M):
+            P_local[i, i] = p_diag[i]
+            
+        # 3. 动态配置非对称转移矩阵 F_local (M, M)
+        F_local = np.eye(M, dtype=np.float32)
+        for i, c in enumerate(active_concepts):
+            idx_i = c_to_idx[c]
+            c_prereqs = KNOWLEDGE_DAG.get(c, [])
+            for p in c_prereqs:
+                if p in c_to_idx:
+                    idx_j = c_to_idx[p]
+                    # 前置知识更新后续知识（正向传播，系数 0.35）
+                    F_local[idx_i, idx_j] = 0.35
+                    # 后续知识向下修正前置认知缺陷（反向纠偏，系数 0.15）
+                    F_local[idx_j, idx_i] = 0.15
+                    
+        # 行归一化防数值漂移
+        for i in range(M):
+            r_sum = np.sum(F_local[i])
+            if r_sum > 1e-5:
+                F_local[i] = F_local[i] / r_sum
 
-### 4. 跨模态校验的“多智能体冲突溯源与自我进化” (Causal Conflict Attribution)
-*   **当前痛点**：目前 `manifold_alignment.py` 判定跨模态语义冲突后（例如讲义写 MaxPool，代码写 AvgPool），只是暴露出冲突并重生成，不知道到底是谁出了问题。
-*   **升格优化**：
-    *   引入**溯源决策机制**。一旦触发不对齐警报，调用 `CouncilDecisionEngine` 进行冲突归因分析（由大模型对 Coder, Visualizer 等专家的输出进行因果链比对，找出“罪魁祸首”）。
-    *   对出错的智能体（如 Coder Agent）进行定向 Prompt 惩罚（Penalty Injection），注入特定的改正规则，促使智能体自愈重生成，实现 Swarm 集群的在线反思进化。
+        # 4. 执行卡尔曼观测更新
+        q_base = 0.01
+        q_penalty = max(0.0, cognitive_load - 0.5) * 0.05 + max(0.0, frustration - 0.3) * 0.03
+        Q_local = np.eye(M, dtype=np.float32) * (q_base + q_penalty)
+        
+        # 预测 (Prediction)
+        x_pred = np.dot(F_local, x_local)
+        x_pred = np.clip(x_pred, 0.0, 1.0)
+        P_pred = np.dot(np.dot(F_local, P_local), F_local.T) + Q_local
+        
+        # 观测 (Measurement)
+        H_local = np.zeros((1, M), dtype=np.float32)
+        H_local[0, t_idx] = 1.0
+        
+        r_base = 0.1
+        r_penalty = max(0.0, frustration - 0.5) * 0.08
+        if duration_seconds is not None:
+            if duration_seconds < 3.0:
+                r_penalty += (3.0 - duration_seconds) * 0.15 + 0.2
+            elif duration_seconds > 300.0:
+                r_penalty += 0.15
+        R_scalar = r_base + r_penalty
+        
+        z = np.array([[observed_mastery]], dtype=np.float32)
+        R = np.array([[R_scalar]], dtype=np.float32)
+        
+        # 更新步骤
+        S = np.dot(np.dot(H_local, P_pred), H_local.T) + R
+        K_gain = P_pred[:, t_idx:t_idx+1] / max(S[0, 0], 1e-6) # (M, 1)
+        
+        residual = z - np.dot(H_local, x_pred)
+        x_new = x_pred + K_gain * residual
+        x_new = np.clip(x_new, 0.0, 1.0)
+        
+        P_new = np.dot(np.eye(M) - np.dot(K_gain, H_local), P_pred)
+        P_new = 0.5 * (P_new + P_new.T)
+        
+        # 5. 回写状态至 Profile 内存与缓存快照
+        for i, c in enumerate(active_concepts):
+            m_val = float(x_new[i, 0])
+            p_val = max(0.01, min(1.0, float(P_new[i, i])))
+            
+            # 更新内存 BKT 实例
+            c_state = self.get_or_create(c, profile_bkt_states)
+            c_state.smoothed_mastery = m_val
+            c_state.p_mastered = m_val
+            c_state.p_err = p_val
+            
+            # 更新写入数据库的快照
+            if profile_bkt_states and c in profile_bkt_states:
+                profile_bkt_states[c]["smoothed_mastery"] = round(m_val, 4)
+                profile_bkt_states[c]["p_mastered"] = round(m_val, 4)
+                profile_bkt_states[c]["p_err"] = round(p_val, 4)
+                
+        return float(x_new[t_idx, 0])
+```
 
 ---
 
-## 💎 第四部分：无人区封顶（Phase 3）工业级/学术级巅峰方案
+## 🛠️ 第四部分：防抖校验的“连续 Sigmoid 置信门控”重构
 
-如果您希望这套系统的算法复杂度和技术壁垒达到**“连 AI 都要编写、微调数天，且一般本科生团队绝对无法复现”**的巅峰水准，我们设计了以下四个彻底颠覆传统自适应教育的技术方案：
+用连续可微的 **Bayesian 门控函数** 替代生硬的 0.5 阶段式强制限高，保证下游寻路算法的稳定收敛。
 
-### 1. 基于图神经网络的时序知识图谱追踪 (GKT: Graph-Based Knowledge Tracing)
-*   **理论深度**：传统的 DKT（LSTM/RNN）忽略了知识点之间的有向无环图（DAG）前置拓扑结构。
-*   **技术重构**：
-    *   在 `profile_api.py` 中引入 **PyTorch Geometric (PyG)** 库，构建一个 **GKT (Graph Knowledge Tracing) 引擎**。
-    *   将动态图谱中的概念视为 Node，将前置依赖视为 Edge，将学生最近的交互序列编码为节点上的动态特征流。
-    *   利用 **GCN / GAT (图注意力网络) 卷积核** 进行状态消息传递（Message Passing）：当学生在一个节点上答错时，状态负向影响会沿着 DAG 的入度（Prerequisite）和出度（Downstream）以衰减系数进行拓扑级神经网络传播，实现最先进的拓扑时序追踪。
+### 1. 核心数学设计
+不再采用 `if mean_acc < 0.6: mastery = min(mastery, 0.5)` 这种硬截断，而是通过**最近答题精度置信缩放因子 (Accuracy Confidence Gate Factor)** $G_{acc}$ 来连续化调整掌握度表现：
+$$G_{acc} = \sigma\left( \kappa \cdot (\bar{a}_{recent} - \theta_{\text{acc}}) \right)$$
+其中 $\bar{a}_{recent}$ 为近 3 次答题正确率均值，$\theta_{\text{acc}} = 0.55$ 为锚定中值，$\kappa = 8.0$ 为陡峭度缩放系数。
+我们将真正的画像掌握度映射调整为：
+$$M_{\text{gate}} = M_{\text{raw}} \cdot (0.4 + 0.6 \cdot G_{acc})$$
+这使得：
+*   当正确率降至 0 时，$G_{acc} \approx 0.012$，掌握度缩减为原始值的 $40\%$，实现对误概念偏误的渐进合理制裁。
+*   当正确率升至 100% 时，$G_{acc} \approx 0.973$，掌握度几乎不被折减，且在 $0.4 \sim 0.7$ 之间过度极其平滑连续，**彻底杜绝了 A* 寻路代价突增引起的路径抖动问题**。
 
-### 2. Riemannian Geometry Poincaré Embedding 动态在线学习
-*   **理论深度**：目前所有的 Embedding （SentenceTransformer / OpenAI）都生成在欧几里得平坦空间，强行投影到庞加莱球会产生扭曲度（Distortion）。
-*   **技术重构**：
-    *   引入非欧流形优化库 `geoopt`。
-    *   当上传新的垂直领域文档并由 GraphRAG 抽取出概念关系网络后，系统在后台开启一个**黎曼几何随机梯度下降 (Riemannian SGD) 线程**。
-    *   在庞加莱球上直接以非欧梯度传播的形式，**动态训练学习**这套领域概念的 Poincaré 嵌入向量，使得概念间的树状层级拓扑关系在双曲空间中得到 100% 的几何保真度，生成真正学术级、具备高可解释性的双曲流形分布。
+### 2. 核心代码改造（后端）
+#### [MODIFY] [bkt_engine.py](file:///d:/project-edumatrix/edumatrix-main/bkt_engine.py)
+重构 `behavior_sanity_check` 函数：
 
-### 3. 基于 PPO 强化学习的智能体“反思性自适应反馈流” (Online RLAF Loop)
-*   **理论深度**：目前智能体的 prompt 注入和策略生成缺乏一个实时的闭环性能反馈。
-*   **技术重构**：
-    *   建立一个 **RLAF (Reinforcement Learning from Agent Feedback)** 协同优化回路。
-    *   将 `Assessor Agent` 对每次生成资源的质量评分作为**环境奖励值 (Reward)**。
-    *   在后台运行一个轻量级的策略网络或近端策略优化（PPO）对冲循环，根据学生后续的实际打卡正确率和停留时长，在线微调 `Director Agent` 在分诊路由时的参数概率分布，实现教学路由策略的自发性在线强化进化。
+```python
+def behavior_sanity_check_smooth(
+    profile: "StudentProfile",
+    quiz_accuracy: dict[str, list[float]] | None = None,
+    midpoint: float = 0.55,
+    steepness: float = 8.0,
+) -> dict[str, Any]:
+    """使用连续 Sigmoid 门控平滑代替硬性截断的行为校验"""
+    data = quiz_accuracy if quiz_accuracy is not None else profile.recent_quiz_accuracy
+    if not data:
+        return {
+            "sanitized": False,
+            "capped_concepts": [],
+            "report": "无答题记录，跳过平滑校验。"
+        }
+        
+    gated_concepts = []
+    for concept, accuracies in data.items():
+        if not accuracies:
+            continue
+        recent = accuracies[-3:]
+        mean_acc = sum(recent) / len(recent)
+        
+        # 计算 Sigmoid 置信度门控因子
+        gate = 1.0 / (1.0 + math.exp(-steepness * (mean_acc - midpoint)))
+        raw_mastery = profile.concept_mastery.get(concept, 0.3)
+        
+        # 连续平滑修正：若门控较低，进行平滑缩减
+        gated_mastery = raw_mastery * (0.4 + 0.6 * gate)
+        profile.concept_mastery[concept] = max(0.0, min(1.0, gated_mastery))
+        
+        if gate < 0.5:
+            gated_concepts.append(f"{concept}(门控折减值: {gate:.2f})")
+            
+    sanitized = len(gated_concepts) > 0
+    report = f"平滑校验已应用。折减偏离点: {', '.join(gated_concepts)}" if sanitized else "所有概念通过置信度平滑校验"
+    
+    return {
+        "sanitized": sanitized,
+        "capped_concepts": gated_concepts,
+        "report": report
+    }
+```
 
-### 4. 符号执行与程序流依赖图 (PDG) 的沙盒高级诊断系统
-*   **理论深度**：代码测评只看 print 输出是不严谨的，必须分析代码控制流的安全性。
-*   **技术重构**：
-    *   在沙箱评测中，除了运行代码，还使用编译器前端技术为提交的代码构建 **程序依赖图 (Program Dependency Graph, PDG)** 和控制流图 (CFG)。
-    *   利用轻量级**符号执行 (Symbolic Execution)**，以虚拟符号代替真实输入，探测学生代码在极端边界条件下的逻辑死锁和安全泄露风险，并反馈出带有逻辑路径树的精确诊断报告，达到工业编译器级别的教学分析深度。
+---
+
+## 🧪 验证与部署排程计划 (Verification & Deployment Calendar)
+
+### 1. 自动化单元测试回归
+重构完成后，在主工作区执行以下指令：
+```powershell
+python -m pytest test_edumatrix.py
+```
+必须保证旧版本的 59 项单元测试与新增的局部子图卡尔曼、连续 BCE DKT 的测试用例 100% 绿灯通过，保证核心系统路由功能正常。
+
+### 2. EKF 数值收敛与高并发仿真验证
+在 `scratch/` 路径下编写仿真脚本 `test_performance_profile.py`：
+*   **动作 1**：生成包含 1000 个概念的虚拟大图谱。
+*   **动作 2**：模拟 100 个学生的高频答题并发写入，测算局部子图 EKF 的接口平均响应时间，必须控制在 **5ms** 以内。
+*   **动作 3**：模拟 1000 轮答题更新，监控多维协方差矩阵对角线元素 $P_{ii}$ 是否会发散报错，验证正定保护逻辑。
+
+### 3. 前端测地线发光 Bloom 微调
+启动 Vite 调试前端，进入 **数字孪生画像面板**，在 [StudentAnalysis.vue](file:///d:/project-edumatrix/edumatrix-main/frontend/src/views/StudentAnalysis.vue) 中反复提交不同质量的答题，校验庞加莱 2D 投影大圆盘内的节点运动测地线连线是否过渡流畅平滑，无边界溢出与坐标粘滞。

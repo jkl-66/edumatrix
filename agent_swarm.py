@@ -138,6 +138,7 @@ class ProfileProbeAgent:
         self.llm = llm
         # 滑动上下文窗口：保存最近 3 轮的消息对 (user, assistant)
         self._context_window: list[tuple[str, str]] = []
+        self._extraction_cache: dict[str, dict] = {}
 
     def update(self, profile: StudentProfile, message: str) -> StudentProfile:
         profile.update_from_message(message)
@@ -164,18 +165,42 @@ class ProfileProbeAgent:
         # Step 1: 基础更新（触发情感推断、特征提取等）
         profile.update_from_message(message)
 
-        # Step 2: 获取已追踪的知识点列表
-        existing_concepts = list(profile.concept_mastery.keys())
+        # Step 2: 动态获取当前活跃的知识图谱节点列表（移除写死的白名单，实现跨领域泛化）
+        active_concepts = []
+        try:
+            from rag_engine import hybrid_rag
+            if hybrid_rag and getattr(hybrid_rag, "graph", None):
+                active_concepts = list(hybrid_rag.graph.nodes)
+        except Exception:
+            pass
+            
+        if not active_concepts:
+            active_concepts = list(profile.concept_mastery.keys())
+            
+        # 降级防御以确保完全兼容系统默认概念
+        if not active_concepts:
+            active_concepts = [
+                "机器学习", "监督学习", "无监督学习", "半监督学习", "强化学习",
+                "线性回归", "逻辑回归", "决策树", "支持向量机", "朴素贝叶斯",
+                "神经网络", "卷积神经网络", "循环神经网络", "Transformer",
+                "注意力机制", "自注意力", "多头注意力",
+                "反向传播", "梯度下降", "链式法则", "损失函数",
+                "激活函数", "Softmax", "ReLU", "Sigmoid", "Tanh",
+                "池化层", "最大池化", "平均池化", "卷积核", "卷积运算",
+                "特征图", "全连接层", "批归一化", "Dropout",
+                "过拟合", "欠拟合", "正则化", "L1正则化", "L2正则化",
+                "交叉验证", "模型评估", "混淆矩阵", "精确率", "召回率", "F1分数"
+            ]
 
         # Step 3: 构建 3 轮滑动上下文窗口
         sliding_context = self._get_sliding_context(profile, window_size=3)
 
-        # Step 4: ✅ 口语指代消解：将模糊代词归一化为已追踪的知识点
-        resolved_message = _resolve_coreference(message, existing_concepts, sliding_context)
+        # Step 4: ✅ 口语指代消解：将模糊代词归一化为动态活跃知识点
+        resolved_message = _resolve_coreference(message, active_concepts, sliding_context)
 
-        # Step 5: 用消解后的消息 + 滑动上下文 调用 LLM 抽取
+        # Step 5: 用消解后的消息 + 滑动上下文 调用 LLM 动态链接与抽取
         extracted = await self._async_extract_with_llm(
-            resolved_message, existing_concepts, sliding_context,
+            resolved_message, active_concepts, sliding_context,
         )
         profile.apply_llm_features(extracted, source_text=message)
         return profile
@@ -183,39 +208,45 @@ class ProfileProbeAgent:
     async def _async_extract_with_llm(
         self,
         message: str,
-        existing_concepts: list[str] | None = None,
+        active_concepts: list[str],
         history_context: str = "",
     ) -> dict:
         import re
         import json
 
-        # 将已有的知识点拼接成字符串
-        existing_keys_str = ", ".join(existing_concepts) if existing_concepts else "暂无"
+        # 1. 快速过滤与分词精确/子串匹配（快轨）：
+        # 如果消息极短，或者是单纯地提问某个概念，并且该概念直接存在于活跃列表中，则直接返回映射画像，绕过大模型
+        cleaned_msg = message.strip("?？.。!！ \t\n")
+        # 去除常见疑问前缀
+        for prefix in ("什么是", "解释一下", "什么是", "解释", "我想学", "学一学", "关于", "怎么理解"):
+            if cleaned_msg.startswith(prefix):
+                cleaned_msg = cleaned_msg[len(prefix):].strip()
+                
+        # 检查是否精准匹配了某个活跃概念
+        matched_concept = None
+        for concept in active_concepts:
+            if cleaned_msg.lower() == concept.lower():
+                matched_concept = concept
+                break
+                
+        if matched_concept:
+            return {
+                "weak_points": [matched_concept],
+                "mastery_updates": {matched_concept: 0.35},
+                "learning_state_causes": {
+                    "prerequisite_gap": {"percentage": 10.0, "confidence": 0.5},
+                    "cognitive_load": {"percentage": 20.0, "confidence": 0.6}
+                }
+            }
 
-        # === 任务 7.8.B: 知识点白名单 ===
-        # 只有白名单中的概念才能被画像提取器追踪
-        _KNOWLEDGE_WHITELIST: tuple[str, ...] = (
-            "机器学习", "监督学习", "无监督学习", "半监督学习", "强化学习",
-            "线性回归", "逻辑回归", "决策树", "支持向量机", "朴素贝叶斯",
-            "K近邻", "K-Means", "主成分分析", "奇异值分解",
-            "神经网络", "卷积神经网络", "循环神经网络", "Transformer",
-            "注意力机制", "自注意力", "多头注意力",
-            "反向传播", "梯度下降", "链式法则", "损失函数",
-            "激活函数", "Softmax", "ReLU", "Sigmoid", "Tanh",
-            "池化层", "最大池化", "平均池化", "卷积核", "卷积运算",
-            "特征图", "全连接层", "批归一化", "Dropout",
-            "过拟合", "欠拟合", "正则化", "L1正则化", "L2正则化",
-            "交叉验证", "模型评估", "混淆矩阵", "精确率", "召回率", "F1分数",
-            "ROC曲线", "AUC", "均方误差", "交叉熵",
-            "数据预处理", "特征工程", "特征选择", "标准化", "归一化",
-            "Python编程", "线性代数", "概率统计", "微积分",
-            "超参数调优", "网格搜索", "随机搜索",
-            "词嵌入", "Word2Vec", "GloVe", "BERT", "GPT",
-            "生成对抗网络", "变分自编码器",
-            "迁移学习", "微调", "元学习",
-            "图神经网络", "知识图谱",
-            "推荐系统", "协同过滤", "矩阵分解",
-        )
+        # 2. 内存缓存命中判断：
+        cache_key = f"{message}||{','.join(active_concepts[:30])}||{history_context}"
+        if getattr(self, "_extraction_cache", None) is not None:
+            if cache_key in self._extraction_cache:
+                return self._extraction_cache[cache_key]
+
+        # 将动态知识点拼接成字符串
+        concepts_context_str = ", ".join(active_concepts[:100])
 
         system_prompt = (
             "你是 EduMatrix 的画像抽取器，只能输出 JSON。\n"
@@ -225,22 +256,18 @@ class ProfileProbeAgent:
             "strategy_gap, metacognitive_mismatch, affective_barrier, interaction_mismatch。\n"
             "【核心任务】：深入分析学生的语义倾向和情绪，并在 mastery_updates 中打分。\n"
             "⚠️ 【指代已消解】：输入中的模糊指代已由前置处理器归一化为具体实体词。\n"
-            "⚠️ 【上下文对齐规则】：\n"
-            f"1. 当前系统已追踪的知识点字典为：[{existing_keys_str}]\n"
-            "2. weak_points 和 mastery_updates 中的实体必须从已追踪字典中选取，\n"
-            "   除非遇到完全全新的专业名词，否则禁止创建新实体。\n"
-            "3. 所有实体必须是最精简的核心名词。\n"
-            "⚠️ 【知识点白名单强制过滤】：\n"
-            f"可接受的知识点仅限于以下白名单：{', '.join(_KNOWLEDGE_WHITELIST)}\n"
-            "禁止创建白名单之外的新概念节点。若学生提到的内容不在白名单中，\n"
-            "请尝试映射到白名单中最接近的已有知识点。\n"
+            "⚠️ 【上下文对齐与实体约束规则】：\n"
+            f"1. 当前课程大纲的全部活跃知识点列表为：[{concepts_context_str}]\n"
+            "2. weak_points 和 mastery_updates 中的实体必须完全从上述活跃知识点列表中选取。\n"
+            "   如果学生提到了列表之外的名词，请尝试将其映射或链接到上述列表中最相关的父级或子级概念实体上，\n"
+            "   绝对禁止创建列表中不存在的新实体，所有实体必须是列表中已有的最精简核心名词。\n"
             "示例输出：{\"weak_points\": [\"逻辑回归\"], \"mastery_updates\": {\"逻辑回归\": 0.35}}"
         )
 
         context_str = f"【历史上下文(3轮滑动窗口)】：\n{history_context}\n" if history_context else ""
         user_prompt = (
             f"{context_str}"
-            f"固定课程为机器学习导论。\n"
+            f"固定课程为当前学习导论。\n"
             f"【已指代消解的学生输入】：{message}\n"
             "请从中抽取画像特征，仅输出 JSON。"
         )
@@ -253,7 +280,17 @@ class ProfileProbeAgent:
             data = json.loads(match.group(0))
         except Exception:
             return {}
-        return data if isinstance(data, dict) else {}
+            
+        data = data if isinstance(data, dict) else {}
+        
+        # 缓存写入：限制缓存项数在 200 以内防止泄漏
+        if data and getattr(self, "_extraction_cache", None) is not None:
+            if len(self._extraction_cache) > 200:
+                # 弹出一个最早项
+                self._extraction_cache.pop(next(iter(self._extraction_cache)))
+            self._extraction_cache[cache_key] = data
+            
+        return data
 
 
 # 全局 BKT 引擎单例（惰性初始化）

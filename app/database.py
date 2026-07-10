@@ -127,6 +127,7 @@ class DBStudentProfile(Base):
     mental_state_history = Column(JSON, default=list)
     concept_layers = Column(JSON, default=dict)
     bkt_states = Column(JSON, default=dict)
+    dkt_bias = Column(JSON, default=list)
 
     # 级联删除配置关系 (Task 6.2)
     alignment_logs = relationship("DBAlignmentLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
@@ -336,6 +337,17 @@ class DBArxivCache(Base):
     published_at = Column(DateTime)
     cached_at = Column(DateTime, default=_utcnow)
 
+
+class DBConceptCoordinate(Base):
+    """持久化物理表：存储概念在庞加莱圆盘中的2D投影坐标缓存 (MDS 投影缓存)"""
+    __tablename__ = "concept_coordinates"
+
+    concept_name = Column(String(128), primary_key=True, index=True)
+    x = Column(Float, nullable=False)
+    y = Column(Float, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
 # 物理并网：自动创建所有本地 SQLite 数据库表
 def init_db():
     Base.metadata.create_all(bind=engine)
@@ -388,6 +400,10 @@ def _migrate_schema():
     if "bkt_states" not in profile_columns:
         with engine.connect() as conn:
             conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN bkt_states TEXT DEFAULT '{}'"))
+            conn.commit()
+    if "dkt_bias" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN dkt_bias TEXT DEFAULT '[]'"))
             conn.commit()
 
 def get_db():

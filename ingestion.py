@@ -82,6 +82,35 @@ class DocumentIngestionPipeline:
         evidence = tuple(chunk.to_evidence() for chunk in chunks)
         self.index.upsert(evidence)
         persisted, persist_path = self._maybe_persist()
+        
+        # 提取当前文档所有知识点标签，异步触发庞加莱 2D 坐标的双曲 MDS 预计算并写入 DB 缓存
+        all_tags = set()
+        for chunk in chunks:
+            all_tags.update(chunk.tags)
+            
+        if all_tags:
+            try:
+                from embedding_models import EMBEDDINGS
+                from bkt_engine import poincare_to_2d_coordinates
+                import threading
+                
+                tag_embeddings = {}
+                for tag in all_tags:
+                    vec = EMBEDDINGS.embed(tag)
+                    if vec:
+                        tag_embeddings[tag] = vec
+                        
+                if tag_embeddings:
+                    # 在后台 Daemon 线程中异步运行 HMDS，完全不阻塞当前 Ingestion 管道
+                    t = threading.Thread(
+                        target=poincare_to_2d_coordinates,
+                        args=(tag_embeddings,),
+                        daemon=True
+                    )
+                    t.start()
+            except Exception as e:
+                print(f"[Ingestion HMDS Cache Trigger Error] {e}")
+
         return IngestionReport(
             source=source,
             chunks=len(chunks),

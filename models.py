@@ -889,7 +889,8 @@ class StudentProfile:
         self.last_update_timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         return decayed
 
-    def _refresh_dynamic_profile(self) -> None:
+    def _extract_cause_breakdowns(self) -> dict[str, CauseBreakdown]:
+        """[SRP Refactored] Extract dynamic learning cause breakdowns from evidences."""
         cause_scores = {cause.value: 0.0 for cause in LearningStateCause}
         cause_evidence: dict[str, list[str]] = {cause.value: [] for cause in LearningStateCause}
         cause_confidence: dict[str, list[float]] = {cause.value: [] for cause in LearningStateCause}
@@ -911,13 +912,13 @@ class StudentProfile:
             cause_scores[LearningStateCause.INTERACTION_MISMATCH.value] += 0.12
 
         active_total = sum(score for score in cause_scores.values() if score > 0.0)
-        self.learning_state_causes = {}
+        causes = {}
         if active_total > 0:
             for key, raw in cause_scores.items():
                 if raw <= 0:
                     continue
                 confidence_values = cause_confidence[key] or [0.55]
-                self.learning_state_causes[key] = CauseBreakdown(
+                causes[key] = CauseBreakdown(
                     key=key,
                     label=CAUSE_LABELS[key],
                     percentage=round(raw / active_total * 100, 1),
@@ -926,7 +927,10 @@ class StudentProfile:
                     evidence_fragments=cause_evidence[key][:4],
                     recommended_interventions=list(CAUSE_INTERVENTIONS[key]),
                 )
+        return causes
 
+    def _compute_dimension_states(self) -> dict[str, DimensionState]:
+        """[SRP Refactored] Compute 10-dimensional student cognitive states."""
         avg_mastery = sum(self.concept_mastery.values()) / len(self.concept_mastery) if self.concept_mastery else 0.50
         misconception_strength = sum(self.misconception_patterns.values())
         strategy_gap = self.learning_state_causes.get(LearningStateCause.STRATEGY_GAP.value)
@@ -1004,6 +1008,10 @@ class StudentProfile:
                 recommended_interventions=list(interventions),
                 last_updated=_utc_now(),
             )
+
+    def _refresh_dynamic_profile(self) -> None:
+        self.learning_state_causes = self._extract_cause_breakdowns()
+        self._compute_dimension_states()
 
         # === 互补调用：行为信号校验（硬拦截cap），链接 bkt_engine ===
         try:

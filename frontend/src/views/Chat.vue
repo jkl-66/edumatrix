@@ -1100,10 +1100,15 @@ const studentMastery = computed(() => {
     }
   }
   if (!profile || !profile.concept_mastery) return []
-  return Object.entries(profile.concept_mastery).map(([name, score]) => ({
-    name,
-    mastery: score,
-  }))
+  return Object.entries(profile.concept_mastery).map(([name, score]) => {
+    const coords = profile.coordinate_map?.[name] || [0.0, 0.0]
+    return {
+      name,
+      mastery: score,
+      x: coords[0],
+      y: coords[1]
+    }
+  })
 })
 
 const targetPoints = computed(() => {
@@ -1117,9 +1122,14 @@ const targetPoints = computed(() => {
     }
   }
   if (!profile || !profile.concept_mastery) return []
-  return Object.keys(profile.concept_mastery).map(name => ({
-    name
-  }))
+  return Object.keys(profile.concept_mastery).map(name => {
+    const coords = profile.coordinate_map?.[name] || [0.0, 0.0]
+    return {
+      name,
+      x: coords[0],
+      y: coords[1]
+    }
+  })
 })
 
 const lastAssistantMessage = computed(() => {

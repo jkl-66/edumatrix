@@ -11,7 +11,7 @@ export async function generateQuiz(studentId, targetConcept, difficulty = 'mediu
   return r.data
 }
 
-export async function evaluateQuizAnswer(quizId, studentId, answer, studentConfidence = 0.5, attemptNumber = 1, sourceQuizId = '') {
+export async function evaluateQuizAnswer(quizId, studentId, answer, studentConfidence = 0.5, attemptNumber = 1, sourceQuizId = '', durationSeconds = null) {
   const payload = {
     quiz_id: quizId,
     student_id: studentId,
@@ -21,6 +21,9 @@ export async function evaluateQuizAnswer(quizId, studentId, answer, studentConfi
   }
   if (sourceQuizId) {
     payload.source_quiz_id = sourceQuizId
+  }
+  if (durationSeconds !== null) {
+    payload.duration_seconds = durationSeconds
   }
   const r = await api.post('/quiz/evaluate', payload, { headers: buildHeaders() })
   return r.data

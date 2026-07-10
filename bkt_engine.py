@@ -10,6 +10,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from typing import Any
+import numpy as np
+import torch
+import torch.nn as nn
+import queue
+import threading
 
 
 # === BKT 参数默认值（来自经典文献） ===
@@ -63,6 +68,21 @@ class BKTState:
     kf: KalmanFilter = field(init=False, default=None)
 
     def __post_init__(self):
+        # 🟢 痛点 6 平替：根据概念类别分级设定不同的 Slip 和 Guess 参数，打破静态死锁
+        concept_lower = self.concept.lower()
+        if any(kw in concept_lower for kw in ("代码", "实现", "沙箱", "函数", "编程", "code", "eval", "sandbox")):
+            # 编程实操类：失误率高，猜测率极低
+            self.p_slip = 0.15
+            self.p_guess = 0.10
+        elif any(kw in concept_lower for kw in ("公式", "推导", "数学", "计算", "梯度", "回归", "向量", "math", "grad", "regression", "matrix", "entropy", "divergence")):
+            # 数学推导类：中等猜测，高失误率
+            self.p_slip = 0.12
+            self.p_guess = 0.15
+        else:
+            # 事实概念类：猜测率高，失误率低
+            self.p_slip = 0.08
+            self.p_guess = 0.25
+
         self.kf = KalmanFilter(x_init=self.smoothed_mastery, p_init=self.p_err)
         if not self.layers:
             self.layers = {
@@ -159,6 +179,21 @@ class BKTEngine:
 
     def __init__(self) -> None:
         self.states: dict[str, BKTState] = {}
+        
+        # Load EKF calibrated parameters
+        import os
+        import json
+        self.f_forward = 0.35
+        self.f_backward = 0.0
+        try:
+            config_path = os.path.join(os.path.dirname(__file__), "data", "ekf_calibrated_params.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f_cfg:
+                    cfg = json.load(f_cfg)
+                    self.f_forward = cfg.get("f_forward", 0.35)
+                    self.f_backward = cfg.get("f_backward", 0.0)
+        except Exception:
+            pass
 
     def get_or_create(self, concept: str, profile_bkt_states: dict[str, Any] | None = None) -> BKTState:
         if concept not in self.states:
@@ -188,9 +223,162 @@ class BKTEngine:
         cognitive_load: float = 0.45,
         frustration: float = 0.0,
         profile_bkt_states: dict[str, Any] | None = None,
-        dimension: str = "factual"
+        dimension: str = "factual",
+        duration_seconds: float | None = None
     ) -> float:
-        return self.get_or_create(concept, profile_bkt_states).update(correct, cognitive_load, frustration, dimension)
+        state = self.get_or_create(concept, profile_bkt_states)
+        old_mastery = getattr(state, "smoothed_mastery", state.p_mastered)
+        new_mastery = state.update(
+            correct, cognitive_load, frustration, dimension
+        )
+        
+        # 图拓扑卡尔曼信念传播 (Graph-Kalman Belief Propagation) - 升级为 O(1) 局部子图扩展卡尔曼滤波 (Localized Graph-EKF)
+        delta = new_mastery - old_mastery
+        if abs(delta) > 1e-4:
+            import numpy as np
+            try:
+                from profile_api import KNOWLEDGE_DAG
+            except Exception:
+                from agent_swarm import DEFAULT_KNOWLEDGE_DAG as KNOWLEDGE_DAG
+            
+            # 1. 提取局部活跃节点集 (当前概念 + 直接前置 + 直接后继)
+            prereqs = KNOWLEDGE_DAG.get(concept, [])
+            successors = [c for c, p_list in KNOWLEDGE_DAG.items() if concept in p_list]
+            
+            active_concepts = list(set([concept] + prereqs + successors))
+            M = len(active_concepts)
+            c_to_idx = {c: i for i, c in enumerate(active_concepts)}
+            t_idx = c_to_idx[concept]
+            
+            # 2. 构造局部状态向量 x_local (M, 1) 与协方差 P_local (M, M)
+            x_local = np.zeros((M, 1), dtype=np.float32)
+            P_local = np.zeros((M, M), dtype=np.float32)
+            
+            p_diag = np.zeros(M, dtype=np.float32)
+            for i, c in enumerate(active_concepts):
+                if profile_bkt_states and c in profile_bkt_states:
+                    x_local[i, 0] = profile_bkt_states[c].get("smoothed_mastery", BKT_DEFAULTS["p_init"])
+                    p_diag[i] = profile_bkt_states[c].get("p_err", 0.1)
+                else:
+                    c_state = self.get_or_create(c, profile_bkt_states)
+                    x_local[i, 0] = getattr(c_state, "smoothed_mastery", c_state.p_mastered)
+                    p_diag[i] = getattr(c_state, "p_err", 0.1)
+                    
+            # 保证目标概念的旧掌握度反映在局部状态向量中以计算差分
+            x_local[t_idx, 0] = old_mastery
+            
+            # 初始化协方差对角阵
+            for i in range(M):
+                P_local[i, i] = p_diag[i]
+                
+            # 根据依赖图局部构建物理一致的前向因果与反向纠偏转移矩阵 F_local (M, M)
+            F_local = np.eye(M, dtype=np.float32)
+            for i, c in enumerate(active_concepts):
+                idx_i = c_to_idx[c]
+                
+                # 1. 前向传播 (prerequisites -> target)
+                c_prereqs = KNOWLEDGE_DAG.get(c, [])
+                active_prereqs = [p for p in c_prereqs if p in c_to_idx]
+                total_prereqs = len(c_prereqs)
+                if total_prereqs > 0:
+                    F_local[idx_i, idx_i] -= self.f_forward
+                    for p in active_prereqs:
+                        idx_j = c_to_idx[p]
+                        F_local[idx_i, idx_j] = self.f_forward / total_prereqs
+                    
+                    missing_count = total_prereqs - len(active_prereqs)
+                    if missing_count > 0:
+                        F_local[idx_i, idx_i] += missing_count * (self.f_forward / total_prereqs)
+                
+                # 2. 反向纠偏 (successors -> target/prereqs)
+                # 找出在活跃子图中的直接后继
+                active_successors = [succ for succ, p_list in KNOWLEDGE_DAG.items() if c in p_list and succ in c_to_idx]
+                total_successors = len([succ for succ, p_list in KNOWLEDGE_DAG.items() if c in p_list])
+                if total_successors > 0:
+                    F_local[idx_i, idx_i] -= self.f_backward
+                    for succ in active_successors:
+                        idx_succ = c_to_idx[succ]
+                        F_local[idx_i, idx_succ] = self.f_backward / total_successors
+                    
+                    missing_succ_count = total_successors - len(active_successors)
+                    if missing_succ_count > 0:
+                        F_local[idx_i, idx_i] += missing_succ_count * (self.f_backward / total_successors)
+
+
+            # 4. 执行卡尔曼更新
+            q_base = 0.01
+            q_penalty = max(0.0, cognitive_load - 0.5) * 0.05 + max(0.0, frustration - 0.3) * 0.03
+            Q_local = np.eye(M, dtype=np.float32) * (q_base + q_penalty)
+            
+            # 预测阶段 (引入全局阻尼系数 eta=0.95 并限制协方差上限，保障数值稳定性)
+            eta = 0.95
+            x_pred = np.dot(F_local, x_local)
+            x_pred = np.clip(x_pred, 0.0, 1.0)
+            P_pred = eta * np.dot(np.dot(F_local, P_local), F_local.T) + Q_local
+            P_pred = np.clip(P_pred, 0.01, 10.0)
+            
+            # 观测更新阶段
+            H_local = np.zeros((1, M), dtype=np.float32)
+            H_local[0, t_idx] = 1.0
+            
+            r_base = 0.1
+            r_penalty = max(0.0, frustration - 0.5) * 0.08
+            if duration_seconds is not None:
+                if duration_seconds < 3.0:
+                    r_penalty += (3.0 - duration_seconds) * 0.15 + 0.2
+                elif duration_seconds > 300.0:
+                    r_penalty += 0.15
+            R_scalar = r_base + r_penalty
+            
+            z = np.array([[new_mastery]], dtype=np.float32)
+            R = np.array([[R_scalar]], dtype=np.float32)
+            
+            S = np.dot(np.dot(H_local, P_pred), H_local.T) + R
+            denom = max(S[0, 0], 1e-6)
+            K_gain = P_pred[:, t_idx:t_idx+1] / denom # (M, 1)
+            
+            residual = z - np.dot(H_local, x_pred)
+            x_new = x_pred + K_gain * residual
+            x_new = np.clip(x_new, 0.0, 1.0)
+            
+            P_new = np.dot(np.eye(M) - np.dot(K_gain, H_local), P_pred)
+            P_new = 0.5 * (P_new + P_new.T)
+            
+            # 回写局部更新后的状态
+            for i, c in enumerate(active_concepts):
+                m_val = float(x_new[i, 0])
+                p_val = max(0.01, min(10.0, float(P_new[i, i])))
+                
+                # 获取该概念在 BKTState 中的真实原始掌握度（防止 float 精度误差）
+                if profile_bkt_states and c in profile_bkt_states:
+                    orig_val = float(profile_bkt_states[c].get("smoothed_mastery", BKT_DEFAULTS["p_init"]))
+                else:
+                    c_state_tmp = self.get_or_create(c, profile_bkt_states)
+                    orig_val = float(getattr(c_state_tmp, "smoothed_mastery", c_state_tmp.p_mastered))
+                if abs(m_val - orig_val) < 1e-5:
+                    m_val = orig_val
+                
+                c_state = self.get_or_create(c, profile_bkt_states)
+                c_state.smoothed_mastery = m_val
+                c_state.p_mastered = m_val
+                c_state.p_err = p_val
+                
+                if profile_bkt_states and c in profile_bkt_states:
+                    profile_bkt_states[c]["smoothed_mastery"] = round(m_val, 4)
+                    profile_bkt_states[c]["p_mastered"] = round(m_val, 4)
+                    profile_bkt_states[c]["p_err"] = round(p_val, 4)
+            
+            # 重设 new_mastery 值为 EKF 更新后的目标概念掌握度
+            new_mastery = float(x_new[t_idx, 0])
+            if profile_bkt_states and concept in profile_bkt_states:
+                orig_target_val = float(profile_bkt_states[concept].get("smoothed_mastery", BKT_DEFAULTS["p_init"]))
+            else:
+                c_state_tmp = self.get_or_create(concept, profile_bkt_states)
+                orig_target_val = float(getattr(c_state_tmp, "smoothed_mastery", c_state_tmp.p_mastered))
+            if abs(new_mastery - orig_target_val) < 1e-5:
+                new_mastery = orig_target_val
+                
+        return new_mastery
 
     def get_mastery(self, concept: str, profile_bkt_states: dict[str, Any] | None = None) -> float:
         state = self.get_or_create(concept, profile_bkt_states)
@@ -298,25 +486,26 @@ def get_zpd_path_plan(
 
 def poincare_distance(u: list[float], v: list[float], eps: float = 1e-9) -> float:
     """计算单位球内两点 u, v 之间的 Poincaré 双曲距离。
-
-    公式: d(u,v) = arcosh(1 + 2|u-v|^2 / ((1-|u|^2)(1-|v|^2)))
+    使用高精度数值稳定性防护保护，确保 acosh 输入永远合法且分母不为零。
     """
+    eps_guard = 1e-5
+    norm_u = math.sqrt(sum(x * x for x in u))
+    norm_v = math.sqrt(sum(x * x for x in v))
+
+    if norm_u >= 1.0 - eps_guard:
+        u = [x / (norm_u + eps_guard) * (1.0 - eps_guard) for x in u]
+    if norm_v >= 1.0 - eps_guard:
+        v = [x / (norm_v + eps_guard) * (1.0 - eps_guard) for x in v]
+
     norm_u_sq = sum(x * x for x in u)
     norm_v_sq = sum(x * x for x in v)
 
-    if norm_u_sq >= 1.0 - eps:
-        # 投影到单位球内
-        norm_u = math.sqrt(norm_u_sq)
-        u = [x / (norm_u * (1.0 + eps)) for x in u]
-        norm_u_sq = sum(x * x for x in u)
-    if norm_v_sq >= 1.0 - eps:
-        norm_v = math.sqrt(norm_v_sq)
-        v = [x / (norm_v * (1.0 + eps)) for x in v]
-        norm_v_sq = sum(x * x for x in v)
-
     diff_sq = sum((a - b) ** 2 for a, b in zip(u, v))
-    delta = 1.0 + 2.0 * diff_sq / max((1.0 - norm_u_sq) * (1.0 - norm_v_sq), eps)
-    delta = max(1.0, delta)
+    denom = (1.0 - norm_u_sq) * (1.0 - norm_v_sq)
+    denom = max(denom, 1e-8)
+    
+    delta = 1.0 + 2.0 * diff_sq / denom
+    delta = max(1.0 + 1e-7, delta)
     return math.acosh(delta)
 
 
@@ -328,18 +517,237 @@ def project_to_ball(vec: list[float], eps: float = 1e-5) -> list[float]:
     return list(vec)
 
 
-def poincare_to_2d_coordinates(embeddings: dict[str, list[float]]) -> dict[str, list[float]]:
-    """将双曲嵌入映射到 2D 平面坐标（用于前端 ECharts 可视化）。
+class HmdsMlpProxy(nn.Module):
+    """轻量级高维双曲到 2D Poincaré 圆盘投影的 MLP 代理网络"""
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(384, 128),
+            nn.Tanh(),
+            nn.Linear(128, 64),
+            nn.Tanh(),
+            nn.Linear(64, 2)
+        )
 
-    使用：保留向量的前两维 + norm 作为半径，越接近原点掌握度越高。
-    """
-    coords = {}
-    for concept, vec in embeddings.items():
-        # 安全处理：取前 2 维，钳制在 [-0.99, 0.99]
-        x = max(-0.99, min(0.99, vec[0] if len(vec) > 0 else 0.0))
-        y = max(-0.99, min(0.99, vec[1] if len(vec) > 1 else 0.0))
-        coords[concept] = [x, y]
-    return coords
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        coords = self.net(x)
+        norms = torch.norm(coords, p=2, dim=-1, keepdim=True)
+        scaled_coords = coords / torch.clamp(norms, min=1.0) * torch.clamp(norms, max=0.95)
+        return scaled_coords
+
+
+import concurrent.futures
+
+_MDS_PROCESS_EXECUTOR = None
+_MDS_EXECUTOR_LOCK = threading.Lock()
+
+def _get_mds_process_executor() -> concurrent.futures.ProcessPoolExecutor:
+    global _MDS_PROCESS_EXECUTOR
+    if _MDS_PROCESS_EXECUTOR is None:
+        with _MDS_EXECUTOR_LOCK:
+            if _MDS_PROCESS_EXECUTOR is None:
+                # Windows 环境下限制最大进程数为 2，避免高并发生成过多空闲 Python 进程
+                _MDS_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=2)
+    return _MDS_PROCESS_EXECUTOR
+
+
+def _poincare_mds_live_optimization_worker(concepts: list[str], high_dim_vecs: list[list[float]], initial_coords: dict[str, list[float]]) -> list[list[float]]:
+    """MDS 双曲投影 Adam 优化的子进程 Worker，彻底释放主进程的 GIL 锁"""
+    import torch
+    import torch.optim as optim
+    import numpy as np
+    import math
+
+    M = len(concepts)
+    Z = torch.tensor(high_dim_vecs, dtype=torch.float32)  # (M, 384)
+    dot_z = torch.sum(Z * Z, dim=-1)
+
+    # 1. 计算高维成对双曲距离矩阵
+    D_target = torch.zeros((M, M))
+    for i in range(M):
+        for j in range(i + 1, M):
+            diff = torch.sum((Z[i] - Z[j]) ** 2, dim=-1)
+            denom = torch.clamp((1.0 - dot_z[i]) * (1.0 - dot_z[j]), min=1e-6)
+            delta = 1.0 + 2.0 * diff / denom
+            d = torch.log(delta + torch.sqrt(torch.clamp(delta**2 - 1.0, min=1e-6)))
+            D_target[i, j] = d
+            D_target[j, i] = d
+
+    # 2. 声明 2D 坐标 X，用已存在的缓存或微扰小随机数初始化
+    X_data = torch.randn(M, 2) * 0.05
+    for i, c in enumerate(concepts):
+        if c in initial_coords:
+            X_data[i] = torch.tensor(initial_coords[c], dtype=torch.float32)
+    X = torch.nn.Parameter(X_data)
+
+    optimizer = optim.Adam([X], lr=0.05)
+
+    # 3. 运行 40 轮 Adam，带边界对数障碍惩罚
+    for _ in range(40):
+        optimizer.zero_grad()
+        norms_sq = torch.sum(X * X, dim=-1)
+
+        loss = 0.0
+        for i in range(M):
+            for j in range(i + 1, M):
+                # 2D双曲距离
+                diff_2d = torch.sum((X[i] - X[j])**2)
+                denom_2d = torch.clamp((1.0 - norms_sq[i]) * (1.0 - norms_sq[j]), min=1e-6)
+                delta_2d = 1.0 + 2.0 * diff_2d / denom_2d
+                d_2d = torch.log(delta_2d + torch.sqrt(torch.clamp(delta_2d**2 - 1.0, min=1e-6)))
+
+                # 距离惩罚权重
+                weight = 1.0 / torch.clamp(D_target[i, j], min=0.1)
+                loss += weight * (D_target[i, j] - d_2d) ** 2
+
+        # 引入边界软惩罚：对数障碍函数
+        barrier = -torch.sum(torch.log(1.0 - torch.clamp(norms_sq, max=0.99))) * 0.1
+        total_loss = loss + barrier
+
+        total_loss.backward()
+        optimizer.step()
+
+    with torch.no_grad():
+        norms = torch.norm(X, p=2, dim=1, keepdim=True)
+        final_X = X / torch.clamp(norms, min=1.0) * torch.clamp(norms, max=0.95)
+        return final_X.numpy().tolist()
+
+
+def poincare_to_2d_coordinates(embeddings: dict[str, list[float]]) -> dict[str, list[float]]:
+    """使用双曲多维尺度变换 (Hyperbolic MDS) 并结合本地数据库缓存，将高维双曲向量动态投影至 2D 庞加莱圆盘"""
+    concepts = list(embeddings.keys())
+    M = len(concepts)
+    if M == 0:
+        return {}
+    if M == 1:
+        return {concepts[0]: [0.0, 0.0]}
+
+    try:
+        from app.database import SessionLocal, DBConceptCoordinate
+        db = SessionLocal()
+        try:
+            # 1. 尝试从数据库批量加载缓存
+            cached_records = db.query(DBConceptCoordinate).filter(DBConceptCoordinate.concept_name.in_(concepts)).all()
+            coord_map = {r.concept_name: [r.x, r.y] for r in cached_records}
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[HMDS DB Cache Read Error] {e}. Safe fallback to live calculation.")
+        coord_map = {}
+
+    missing_concepts = [c for c in concepts if c not in coord_map]
+    
+    # 2. 如果没有缺失的，直接返回缓存
+    if not missing_concepts:
+        return coord_map
+
+    # 3. 尝试使用 pre-trained MLP 代理网络进行 O(1) 前向推理投影
+    import os
+    proxy_weights_path = os.path.join(os.path.dirname(__file__), "data", "hmds_mlp.pth")
+    if os.path.exists(proxy_weights_path):
+        try:
+            proxy = HmdsMlpProxy()
+            state_dict = torch.load(proxy_weights_path, map_location="cpu", weights_only=True)
+            proxy.load_state_dict(state_dict)
+            proxy.eval()
+            
+            from manifold_alignment import get_dag_depth
+            input_vecs = []
+            for c in missing_concepts:
+                vec = embeddings[c]
+                if not vec:
+                    vec = [0.0] * 384
+                norm_v = math.sqrt(sum(x * x for x in vec))
+                if norm_v < 1e-9:
+                    ball_vec = [0.0] * 384
+                else:
+                    direction = [x / norm_v for x in vec]
+                    depth = get_dag_depth(c)
+                    hyperbolic_norm = 0.82 * (1.0 - 0.72 ** (depth + 1))
+                    ball_vec = [x * hyperbolic_norm for x in direction]
+                input_vecs.append(ball_vec)
+                
+            with torch.no_grad():
+                X_in = torch.tensor(input_vecs, dtype=torch.float32)
+                coords_out = proxy(X_in).numpy()
+                
+            try:
+                from app.database import SessionLocal, DBConceptCoordinate
+                db = SessionLocal()
+                try:
+                    for idx, c in enumerate(missing_concepts):
+                        x_val, y_val = float(coords_out[idx, 0]), float(coords_out[idx, 1])
+                        coord_map[c] = [x_val, y_val]
+                        db.merge(DBConceptCoordinate(concept_name=c, x=x_val, y=y_val))
+                    db.commit()
+                finally:
+                    db.close()
+            except Exception as e:
+                print(f"[HMDS DB Cache Write Error] {e}")
+                
+            return {c: coord_map[c] for c in concepts}
+        except Exception as e:
+            print(f"[HMDS MLP Proxy Error] {e}. Falling back to live Adam optimization.")
+
+    # 4. 如果没有代理网络权重，进行局部 LBFGS / Adam 优化，并应用边界障碍函数约束
+    try:
+        from manifold_alignment import get_dag_depth
+        
+        # 1. 准备高维 Poincaré 向量
+        high_dim_vecs = []
+        for c in concepts:
+            vec = embeddings[c]
+            if not vec:
+                vec = [0.0] * 384
+            # 确保在高维 Poincaré 单位球内
+            norm_v = math.sqrt(sum(x * x for x in vec))
+            if norm_v < 1e-9:
+                ball_vec = [0.0] * 384
+            else:
+                direction = [x / norm_v for x in vec]
+                depth = get_dag_depth(c)
+                hyperbolic_norm = 0.82 * (1.0 - 0.72 ** (depth + 1))
+                ball_vec = [x * hyperbolic_norm for x in direction]
+            high_dim_vecs.append(ball_vec)
+
+        # 2. 投递至多进程池执行，避免求导优化死锁 GIL
+        executor = _get_mds_process_executor()
+        future = executor.submit(_poincare_mds_live_optimization_worker, concepts, high_dim_vecs, coord_map)
+        coords_list = future.result(timeout=10.0)
+        
+        coords_np = np.array(coords_list, dtype=np.float32)
+
+        try:
+            from app.database import SessionLocal, DBConceptCoordinate
+            db = SessionLocal()
+            try:
+                for i, c in enumerate(concepts):
+                    x_val, y_val = float(coords_np[i, 0]), float(coords_np[i, 1])
+                    coord_map[c] = [x_val, y_val]
+                    if c in missing_concepts:
+                        db.merge(DBConceptCoordinate(concept_name=c, x=x_val, y=y_val))
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[HMDS DB Cache Write Error] {e}")
+
+        return {c: coord_map[c] for c in concepts}
+
+    except Exception as e:
+        # 降级兜底方案：使用确定性哈希角分布
+        print(f"[HMDS Fallback] Error in HMDS: {e}. Falling back to deterministic circle layout.")
+        coords = {}
+        for i, concept in enumerate(concepts):
+            vec = embeddings.get(concept)
+            hyperbolic_norm = 0.5
+            if vec:
+                hyperbolic_norm = min(0.95, math.sqrt(sum(v * v for v in vec)))
+            angle = (hash(concept) % 360) * math.pi / 180.0
+            x = hyperbolic_norm * math.cos(angle)
+            y = hyperbolic_norm * math.sin(angle)
+            coords[concept] = [x, y]
+        return coords
 
 
 def find_nearest_concept(
@@ -466,31 +874,7 @@ def behavior_sanity_check(
     metacognitive_boost: float = 0.30,
     mastery_cap: float = 0.5,
 ) -> dict[str, Any]:
-    """行为信号校验：聚合近3次答题正确率，检测"说会了但做不对"的元认知偏差。
-
-    核心逻辑（任务7.2要求）：
-    - 聚合近 3 次答题正确率
-    - 若均值 < 0.6:
-        - 强制将概念掌握上限锁死 mastery_cap (0.5)
-        - 上调 metacognitive_mismatch 30%
-    - 若均值 >= 0.6: 反向校准，降低 metacognitive_mismatch
-
-    Args:
-        profile: 学生画像
-        quiz_accuracy: 可选的外部 quiz 正确率数据 (concept -> [最近3次正确率])
-                        若为 None 则使用 profile.recent_quiz_accuracy
-        accuracy_threshold: 正确率阈值 (默认 0.6)
-        metacognitive_boost: 偏差上调比例 (默认 0.30)
-        mastery_cap: 掌握度上限 (默认 0.5)
-
-    Returns:
-        {
-            "sanitized": bool,          # 是否发生制裁
-            "capped_concepts": list,     # 被强制限高的知识点
-            "metacognitive_mismatch_new": float,
-            "report": str               # 诊断报告
-        }
-    """
+    """行为信号校验（平滑校准版）：聚合近3次答题正确率，使用 Sigmoid 连续门控调节掌握度，消除跃迁抖动。"""
     from models import StudentProfile
 
     data = quiz_accuracy if quiz_accuracy is not None else profile.recent_quiz_accuracy
@@ -509,34 +893,38 @@ def behavior_sanity_check(
     for concept, accuracies in data.items():
         if not accuracies:
             continue
-        # 取最近 3 次
         recent = accuracies[-3:]
         mean_acc = sum(recent) / len(recent)
         checked_count += 1
 
+        # 使用 Sigmoid 连续缩放代替硬上限截断：
+        # 当平均正确率低于阈值时，通过平滑的 Sigmoid 门控压制掌握度，同时避免了直接 hard-clamp 导致的零梯度和不连续性
         if mean_acc < accuracy_threshold:
-            # 强制锁死掌握上限
+            # 缩放因子：当 mean_acc 越低，缩放越狠；接近 threshold 时缩放因子接近 1
+            # sigmoid_gate = 1 / (1 + exp(-k * (mean_acc - c)))
+            # 这里 k=15, c=0.45 保证在 0.6 处平滑过渡
+            diff = mean_acc - (accuracy_threshold - 0.15)
+            sigmoid_scale = 1.0 / (1.0 + math.exp(-15.0 * diff))
+            
             if concept in profile.concept_mastery:
-                profile.concept_mastery[concept] = min(profile.concept_mastery[concept], mastery_cap)
+                old_mastery = profile.concept_mastery[concept]
+                # 连续平滑掌握度压制
+                profile.concept_mastery[concept] = round(old_mastery * (sigmoid_scale * 0.5 + 0.5), 4)
+            
             capped_concepts.append(concept)
             total_capped += 1
 
-    # 更新 metacognitive_mismatch
     if total_capped > 0:
-        # 需要上调：有概念被制裁
         capped_ratio = total_capped / max(checked_count, 1)
-        profile.metacognitive_mismatch = min(1.0, profile.metacognitive_mismatch +
-                                             metacognitive_boost * capped_ratio)
+        profile.metacognitive_mismatch = min(1.0, profile.metacognitive_mismatch + metacognitive_boost * capped_ratio)
         sanitized = True
     else:
-        # 一切正常，小幅下调
         profile.metacognitive_mismatch = max(0.0, profile.metacognitive_mismatch - 0.05)
         sanitized = False
 
     report_parts = []
     if capped_concepts:
-        report_parts.append(f"检测到 {len(capped_concepts)} 个概念近3次正确率 < {accuracy_threshold}，"
-                            f"掌握度上限锁死 {mastery_cap}")
+        report_parts.append(f"检测到 {len(capped_concepts)} 个概念近3次正确率偏低，已执行 Sigmoid 平滑校准限高")
         report_parts.append(f"认知偏差指标上调至 {profile.metacognitive_mismatch:.2f}")
     else:
         report_parts.append(f"全部 {checked_count} 个概念通过行为信号校验")
@@ -647,4 +1035,282 @@ class KnowledgeDiffusionEngine:
                     distances[neighbor] = curr_dist + 1
                     queue.append(neighbor)
         return distances
+
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+# 映射当前系统默认的 26 个核心概念
+CONCEPT_TO_INDEX = {
+    "池化层": 0,
+    "最大池化": 1,
+    "平均池化": 2,
+    "卷积核": 3,
+    "特征图": 4,
+    "反向传播": 5,
+    "链式法则": 6,
+    "梯度下降": 7,
+    "逻辑回归": 8,
+    "线性回归": 9,
+    "决策树": 10,
+    "支持向量机": 11,
+    "过拟合": 12,
+    "正则化": 13,
+    "交叉验证": 14,
+    "机器学习": 15,
+    "监督学习": 16,
+    "数据预处理": 17,
+    "特征工程": 18,
+    "模型评估": 19,
+    "混淆矩阵": 20,
+    "朴素贝叶斯": 21,
+    "Transformer": 22,
+    "注意力机制": 23,
+    "神经网络": 24,
+    "卷积神经网络": 25,
+}
+NUM_CONCEPTS = len(CONCEPT_TO_INDEX)
+
+
+class DktRnnEngine(nn.Module):
+    """基于双线性认知诊断投影的动态 DKT 网络"""
+    def __init__(self, hidden_dim: int = 64):
+        super().__init__()
+        self.input_dim = 385  # 384D Embedding + 1D Response Accuracy
+        self.hidden_dim = hidden_dim
+        
+        self.rnn = nn.GRU(self.input_dim, hidden_dim, batch_first=True)
+        # 将隐藏状态映射到与词向量同维 of 384D 心智状态空间
+        self.cognitive_projection = nn.Linear(hidden_dim, 384)
+        # 缩放标量因子
+        self.scale_factor = nn.Parameter(torch.tensor(5.0))
+        
+        # 确定性初始化，防止启动后推理结果不一致
+        torch.manual_seed(42)
+        for name, param in self.named_parameters():
+            if 'weight' in name:
+                nn.init.xavier_normal_(param.data)
+            elif 'bias' in name:
+                nn.init.constant_(param.data, 0.0)
+
+        # Trainable Concept Embeddings with warm-start semantic prior
+        from embedding_models import EMBEDDINGS
+        initial_weights = torch.zeros(NUM_CONCEPTS, 384)
+        for concept, idx in CONCEPT_TO_INDEX.items():
+            vec = EMBEDDINGS.embed(concept)
+            if vec:
+                initial_weights[idx] = torch.tensor(vec, dtype=torch.float32)
+            else:
+                initial_weights[idx] = torch.randn(384) * 0.02
+        self.concept_embeddings = nn.Embedding(NUM_CONCEPTS, 384)
+        self.concept_embeddings.weight.data.copy_(initial_weights)
+        
+        # Learnable bilinear mapping matrix W_diag
+        self.bilinear = nn.Linear(384, 384, bias=False)
+        self.bilinear.weight.data.copy_(torch.eye(384) + torch.randn(384, 384) * 0.01)
+
+    def forward(self, seq_embeddings: torch.Tensor, student_bias: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        seq_embeddings: (batch_size, seq_len, 385)
+        student_bias: (384,) or None -> 预测心智认知状态向量 s_t
+        """
+        out, _ = self.rnn(seq_embeddings)
+        final_hidden = out[:, -1, :] # 提取序列末尾隐特征
+        proj = self.cognitive_projection(final_hidden)
+        if student_bias is not None:
+            # Add batch dimension to student_bias if missing
+            if student_bias.dim() == 1:
+                student_bias = student_bias.unsqueeze(0)
+            proj = proj + student_bias
+        s_t = torch.tanh(proj)
+        return s_t
+
+
+class DktService:
+    """DKT 推理与增量学习服务单例包装 (二分类 BCE 正确率估计版本 - Option B 个性化偏置)"""
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance.model = DktRnnEngine()
+                cls._instance.optimizer = torch.optim.Adam(cls._instance.model.parameters(), lr=0.001)
+                cls._instance.loss_fn = nn.BCEWithLogitsLoss() # 使用 BCE 拟合答题正确率
+                cls._instance.model_loaded = True
+                
+                # 初始化线程安全更新队列与后台消费线程 (用于兼容旧测试)
+                cls._instance.update_queue = queue.Queue()
+                cls._instance.worker_thread = threading.Thread(target=cls._instance._worker_loop, daemon=True)
+                cls._instance.worker_thread.start()
+                
+                # Load pre-trained weights if they exist
+                import os
+                weights_path = os.path.join(os.path.dirname(__file__), "data", "dkt_weights.pth")
+                if os.path.exists(weights_path):
+                    try:
+                        # 使用 weights_only=True 安全加载模型，消除 FutureWarning 警告
+                        state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
+                        # 检查加载的权重结构是否匹配 (input_dim=385, cognitive_projection.weight shape=[384, 64])
+                        proj_key = "cognitive_projection.weight"
+                        if proj_key in state_dict and state_dict[proj_key].shape == (384, 64):
+                            cls._instance.model.load_state_dict(state_dict, strict=False)
+                            print(f"[DKT Service] Successfully loaded dynamic pre-trained weights from {weights_path}")
+                        else:
+                            print(f"[DKT Service] Shape mismatch in {weights_path}. Initialized a fresh dynamic model.")
+                    except Exception as e:
+                        print(f"[DKT Service] Failed to load pre-trained weights: {e}. Initialized a fresh dynamic model.")
+                else:
+                    print(f"[DKT Service] Warning: No pre-trained weights found at {weights_path}. Using initialized weights.")
+                    
+                cls._instance.model.eval()
+        return cls._instance
+
+    def predict_mastery(self, history_records: list[tuple[str, bool]], extra_concepts: list[str] | None = None, student_bias: list[float] | None = None) -> dict[str, float]:
+        """根据学生最近 50 次答题序列与学生专属偏置推理最新的概念掌握度，支持动态额外概念追踪"""
+        seq_len = min(50, len(history_records))
+        target_concepts = set(CONCEPT_TO_INDEX.keys())
+        if extra_concepts:
+            target_concepts.update(extra_concepts)
+        for c, _ in history_records[-seq_len:]:
+            target_concepts.add(c)
+            
+        if seq_len == 0:
+            return {c: 0.3 for c in target_concepts}
+            
+        from embedding_models import EMBEDDINGS
+        recent_records = history_records[-seq_len:]
+        input_matrix = np.zeros((1, seq_len, 385), dtype=np.float32)
+        
+        for t, (concept, correct) in enumerate(recent_records):
+            vec = EMBEDDINGS.embed(concept) or [0.0] * 384
+            input_matrix[0, t, :384] = vec
+            input_matrix[0, t, 384] = 1.0 if correct else 0.0
+        
+        # 封装专属偏置为 Tensor
+        if student_bias and len(student_bias) == 384:
+            bias_tensor = torch.tensor(student_bias, dtype=torch.float32)
+        else:
+            bias_tensor = torch.tensor([0.0] * 384, dtype=torch.float32)
+        
+        # 推理在 torch.no_grad() 下是天然线程安全的，不需要对主模型加互斥锁进行同步
+        with torch.no_grad():
+            tensor_in = torch.from_numpy(input_matrix)
+            s_t = self.model(tensor_in, bias_tensor).squeeze(0) # (384,)
+            
+        # 计算所有概念在当前信念下的答对概率 (mastery)
+        preds = {}
+        for concept in target_concepts:
+            concept_idx = CONCEPT_TO_INDEX.get(concept)
+            c_vec = EMBEDDINGS.embed(concept)
+            if concept_idx is not None:
+                # Embedding 查表与双线性投影矩阵计算在参数冻结下线程安全
+                c_tensor = self.model.concept_embeddings(torch.tensor(concept_idx))
+                logit = torch.dot(self.model.bilinear(s_t), c_tensor) * self.model.scale_factor
+                preds[concept] = float(torch.sigmoid(logit))
+            elif c_vec:
+                c_tensor = torch.tensor(c_vec, dtype=torch.float32)
+                logit = torch.dot(self.model.bilinear(s_t), c_tensor) * self.model.scale_factor
+                preds[concept] = float(torch.sigmoid(logit))
+            else:
+                preds[concept] = 0.3
+        return preds
+
+    def train_incremental(self, history_records: list[tuple[str, bool]], profile: Any = None):
+        """在线对比增量微调 (支持单例和个性化偏置双模模式)"""
+        if len(history_records) < 2:
+            return
+        if profile is not None:
+            # 方案 B：个性化偏置更新，在调用线程中同步执行 (通常在 asyncio 线程池中)
+            self._train_step(history_records, profile)
+        else:
+            # 兼容模式：推入后台队列
+            self.update_queue.put(history_records)
+
+    def _worker_loop(self):
+        """后台单线程工作循环"""
+        import time
+        while True:
+            try:
+                item = self.update_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], object) and not isinstance(item[1], list):
+                    records, profile = item
+                else:
+                    records, profile = item, None
+                self._train_step(records, profile)
+                self.update_queue.task_done()
+            except Exception as e:
+                print(f"[DKT Service Worker Loop Error] {e}")
+                time.sleep(1.0)
+
+    def _train_step(self, history_records: list[tuple[str, bool]], profile: Any = None):
+        """真正的个性化偏置梯度更新步骤，只对 student_bias 进行更新"""
+        try:
+            from embedding_models import EMBEDDINGS
+            seq_len = min(50, len(history_records))
+            recent_records = history_records[-seq_len:]
+            
+            # 构造输入序列 X (1, seq_len-1, 385)
+            input_matrix = np.zeros((1, seq_len - 1, 385), dtype=np.float32)
+            for t in range(seq_len - 1):
+                concept, correct = recent_records[t]
+                vec = EMBEDDINGS.embed(concept) or [0.0] * 384
+                input_matrix[0, t, :384] = vec
+                input_matrix[0, t, 384] = 1.0 if correct else 0.0
+                
+            last_concept, last_correct = recent_records[-1]
+            last_vec = torch.tensor(EMBEDDINGS.embed(last_concept) or [0.0] * 384, dtype=torch.float32)
+            target_label = torch.tensor([1.0 if last_correct else 0.0], dtype=torch.float32)
+            
+            # 读取当前学生专属偏置，若无则初始化为全零
+            bias_list = getattr(profile, "dkt_bias", None) if profile else None
+            if not bias_list or len(bias_list) != 384:
+                bias_list = [0.0] * 384
+            
+            student_bias = torch.tensor(bias_list, dtype=torch.float32, requires_grad=True)
+            
+            # 冻结全局模型参数，只对 student_bias 向量求偏导
+            with self._lock:
+                self.model.eval()
+                for param in self.model.parameters():
+                    param.requires_grad = False
+                
+                tensor_in = torch.from_numpy(input_matrix)
+                s_t = self.model(tensor_in, student_bias).squeeze(0) # (384,)
+                
+                # 计算最后一步的预测正确率 logit
+                concept_idx = CONCEPT_TO_INDEX.get(last_concept)
+                if concept_idx is not None:
+                    c_tensor = self.model.concept_embeddings(torch.tensor(concept_idx))
+                    logit = torch.dot(self.model.bilinear(s_t), c_tensor) * self.model.scale_factor
+                else:
+                    logit = torch.dot(self.model.bilinear(s_t), last_vec) * self.model.scale_factor
+                
+                # 使用二分类交叉熵损失进行时序反向传播
+                loss = self.loss_fn(logit.unsqueeze(0), target_label)
+                loss.backward()
+                
+                # 手动对 student_bias 执行 SGD 增量更新步骤 (学习率设为 0.05)
+                lr = 0.05
+                with torch.no_grad():
+                    if student_bias.grad is not None:
+                        updated_bias = student_bias - lr * student_bias.grad
+                        # 限制偏置在合理范围以内防止数值溢出/发散
+                        updated_bias = torch.clamp(updated_bias, -1.0, 1.0)
+                        new_bias_list = updated_bias.tolist()
+                    else:
+                        new_bias_list = bias_list
+                
+            # 将更新后的偏置写回 profile 内存，由调用者在外层事务中 commit 持久化
+            if profile:
+                profile.dkt_bias = new_bias_list
+        except Exception as e:
+            print(f"[DKT Service Incremental Training Step Error] {e}")
+
+
 

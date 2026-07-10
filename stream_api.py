@@ -733,12 +733,30 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 try:
                     p = swarm.profile_store.get(student_id)
                     if p and hasattr(p, "weak_points"):
+                        from bkt_engine import poincare_to_2d_coordinates
+                        from embedding_models import EMBEDDINGS
+                        concepts = list((getattr(p, "concept_mastery", {}) or {}).keys())
+                        embeddings = {}
+                        for c in concepts:
+                            vec = EMBEDDINGS.embed(c)
+                            if vec:
+                                embeddings[c] = vec
+                        # 在后台线程运行坐标映射，避免阻塞事件循环
+                        coordinate_map = await asyncio.to_thread(poincare_to_2d_coordinates, embeddings)
+                        
+                        profile_data = {
+                            "weak_points": getattr(p, "weak_points", [])[:5],
+                            "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
+                            "coordinate_map": coordinate_map,
+                        }
+                except Exception as e:
+                    print(f"  [StreamAPI] Failed to compute coordinate_map: {e}")
+                    # 兜底
+                    if p and hasattr(p, "weak_points"):
                         profile_data = {
                             "weak_points": getattr(p, "weak_points", [])[:5],
                             "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
                         }
-                except Exception:
-                    pass
 
                 resources = [
                     {"agent": "逻辑画师", "type": "slide_reference", "content": img}

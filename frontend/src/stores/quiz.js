@@ -11,6 +11,7 @@ export const useQuizStore = defineStore('quiz', {
     quizAttempt: 1,
     quizConcept: '',
     quizSessionId: '',
+    startTime: null,
   }),
   actions: {
     setConfidence(v) {
@@ -29,6 +30,7 @@ export const useQuizStore = defineStore('quiz', {
       this.quizConcept = ''
       this.quizSessionId = ''
       this.quizAttempt = 1
+      this.startTime = null
     },
     async startQuizAction(studentId, conceptName) {
       if (!conceptName || !conceptName.trim()) return
@@ -44,20 +46,25 @@ export const useQuizStore = defineStore('quiz', {
         const data = await generateQuiz(studentId, this.quizConcept, 'medium', this.quizSessionId)
         this.quizData = data
         this.quizState = 'answering'
+        this.startTime = Date.now()
       } catch (e) {
         console.error('Failed to generate quiz:', e)
         this.quizData = { question: `请解释 ${this.quizConcept} 的核心概念`, hints: ['想想基本定义'] }
         this.quizState = 'answering'
+        this.startTime = Date.now()
       }
     },
     async submitQuizAnswerAction(studentId) {
       if (!this.quizAnswer || !this.quizAnswer.trim() || !this.quizData) return
       this.quizState = 'evaluating'
 
+      const durationSeconds = this.startTime ? (Date.now() - this.startTime) / 1000 : null
+
       try {
         const result = await evaluateQuizAnswer(
           this.quizData.quiz_id, studentId,
-          this.quizAnswer.trim(), this.quizConfidence / 10, this.quizAttempt
+          this.quizAnswer.trim(), this.quizConfidence / 10, this.quizAttempt,
+          '', durationSeconds
         )
         this.quizResult = result
         this.quizState = 'adapting'
@@ -93,9 +100,11 @@ export const useQuizStore = defineStore('quiz', {
         this.quizConfidence = 5
         this.quizResult = null
         this.quizState = 'answering'
+        this.startTime = Date.now()
       } catch (e) {
         console.error('Failed to adapt quiz:', e)
         this.quizState = 'answering'
+        this.startTime = Date.now()
       }
     }
   }

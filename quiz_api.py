@@ -376,6 +376,9 @@ async def evaluate_answer(
     student_answer = str(payload.get("answer", "")).strip()
     student_confidence = float(payload.get("student_confidence", 0.5))
     attempt_number = int(payload.get("attempt_number", 1))
+    duration_seconds = payload.get("duration_seconds")
+    if duration_seconds is not None:
+        duration_seconds = float(duration_seconds)
 
     if not student_answer:
         raise HTTPException(status_code=400, detail="答案不能为空")
@@ -551,6 +554,7 @@ async def evaluate_answer(
             answer=student_answer[:200],
             session_id=payload.get("session_id", ""),
             quiz_id=quiz_id,
+            duration_seconds=duration_seconds,
         )
     except Exception:
         pass  # 事件总线失败不应影响主流程

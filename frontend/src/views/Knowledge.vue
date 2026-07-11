@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { listKnowledgeDocuments, uploadKnowledgeDocument, deleteKnowledgeDocument, getGraphStats, crossModalSearch } from '../api'
 import { BookOpen, Upload, Trash2, FileText, File, FileImage, FileVideo, Presentation, Tag, Clock, AlertCircle, CheckCircle, Image, Film, ArrowRight, GitBranch, Sparkles, Search, X, Zap } from '@lucide/vue'
 import KnowledgeGraphExplorer from '../components/KnowledgeGraphExplorer.vue'

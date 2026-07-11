@@ -15,23 +15,47 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 # 所有需要出题的知识点列表
 CONCEPTS = list(DEFAULT_KNOWLEDGE_DAG.keys())
-DIFFICULTIES = ["easy", "medium", "hard"]
 
-async def generate_single_quiz(concept: str, difficulty: str, semaphore: asyncio.Semaphore) -> dict | None:
+async def generate_single_quiz(
+    concept: str, 
+    difficulty: str, 
+    question_type: str, 
+    index: int, 
+    semaphore: asyncio.Semaphore
+) -> dict | None:
     async with semaphore:
-        system_prompt = (
-            "你是一个自适应评测题库生成专家。请针对给定的知识点和难度，生成一道高质量的多项选择题（四选一）。\n"
-            "你必须且只能以 JSON 格式输出，不要有任何 Markdown ```json 标记或多余的解释。JSON 格式如下：\n"
-            "{\n"
-            '  "question": "题目文本",\n'
-            '  "options": ["A. 选项A内容", "B. 选项B内容", "C. 选项C内容", "D. 选项D内容"],\n'
-            '  "correct_answer": "正确选项(A/B/C/D之一)",\n'
-            '  "explanation": "详细的原理解释"\n'
-            "}"
+        if question_type == "mcq":
+            system_prompt = (
+                "你是一个自适应评测题库生成专家。请针对给定的知识点和低/中等难度，生成一代高质量的多项选择题（客观单选题，四选一）。\n"
+                "你必须且只能以 JSON 格式输出，不要有任何 Markdown 标记。JSON 格式如下：\n"
+                "{\n"
+                '  "question": "题目文本",\n'
+                '  "options": ["A. 选项A", "B. 选项B", "C. 选项C", "D. 选项D"],\n'
+                '  "correct_answer": "正确选项的字母(A/B/C/D之一)",\n'
+                '  "explanation": "详细的原理解释"\n'
+                "}"
+            )
+        else:
+            system_prompt = (
+                "你是一个自适应评测题库生成专家。请针对给定的知识点和高难度，生成一道高质量的主观简答题（考察深度概念辨析、公式推导或机器学习场景设计）。\n"
+                "你必须且只能以 JSON 格式输出，不要有任何 Markdown 标记。JSON 中的 options 字段必须为空列表 []。JSON 格式如下：\n"
+                "{\n"
+                '  "question": "简答题题目文本",\n'
+                '  "options": [],\n'
+                '  "correct_answer": "参考解答要点与核心公式（150-350字左右）",\n'
+                '  "explanation": "答题关键得分点与解析思路"\n'
+                "}"
+            )
+            
+        user_prompt = (
+            f"知识点：{concept}\n"
+            f"难度：{difficulty} (对应 easy/medium/hard)\n"
+            f"题型：{'客观选择题' if question_type == 'mcq' else '主观简答题'}\n"
+            f"第 {index+1} 题生成序号。"
         )
-        user_prompt = f"知识点：{concept}\n难度：{difficulty} (对应 easy/medium/hard)"
         
-        print(f"正在为知识点 [{concept}] 生成 [{difficulty}] 难度题目...")
+        print(f"正在为知识点 [{concept}] 生成第 {index+1} 道 [{difficulty}] ({question_type}) 题目...")
+        
         for attempt in range(3):  # 失败重试 3 次
             try:
                 response = await DEFAULT_ASYNC_LLM.generate(
@@ -39,6 +63,7 @@ async def generate_single_quiz(concept: str, difficulty: str, semaphore: asyncio
                     user_prompt=user_prompt,
                     role="题库生成智能体"
                 )
+                
                 # 清洗 JSON 标记
                 raw_json = response.strip()
                 if raw_json.startswith("```"):
@@ -52,28 +77,35 @@ async def generate_single_quiz(concept: str, difficulty: str, semaphore: asyncio
                 if "question" in data and "options" in data and "correct_answer" in data:
                     data["concept"] = concept
                     data["difficulty"] = difficulty
+                    data["question_type"] = question_type
                     # 分配标准 3PL IRT 参数
-                    data["irt_alpha"] = 1.0 + (0.2 if difficulty == "hard" else -0.1 if difficulty == "easy" else 0.0)
+                    data["irt_alpha"] = 1.0 + (0.25 if difficulty == "hard" else -0.15 if difficulty == "easy" else 0.0)
                     data["irt_beta"] = -1.0 if difficulty == "easy" else 1.0 if difficulty == "hard" else 0.0
-                    data["irt_gamma"] = 0.25
+                    data["irt_gamma"] = 0.25 if question_type == "mcq" else 0.0 # 主观题猜测度为 0.0
                     return data
             except Exception as e:
-                print(f"  [警告] 生成 [{concept}] ({difficulty}) 失败 (第 {attempt+1} 次): {e}")
+                print(f"  [警告] 生成 [{concept}] ({difficulty}-{question_type}) 失败 (第 {attempt+1} 次): {e}")
                 await asyncio.sleep(1.0)
         return None
 
 async def main():
-    print(f"=== EduMatrix 全量题库自动冷启动生成器 ===")
+    print(f"=== EduMatrix 全量混合自适应题库冷启动生成器 ===")
     print(f"发现知识大纲概念共 {len(CONCEPTS)} 个。")
-    print(f"每个概念将生成 3 道题（Easy, Medium, Hard），共计 {len(CONCEPTS) * 3} 道题目。")
+    print(f"每个概念将生成 30 道题：")
+    print(f"  - 10 道 Easy 客观选择题 (MCQ)")
+    print(f"  - 10 道 Medium 客观选择题 (MCQ)")
+    print(f"  - 10 道 Hard 主观简答题 (Subjective)")
+    print(f"共计计划生成 {len(CONCEPTS) * 30} 道题目。")
     
     # 限制并发请求量为 5，防止 API Rate Limit 报错
     semaphore = asyncio.Semaphore(5)
     
     tasks = []
     for concept in CONCEPTS:
-        for diff in DIFFICULTIES:
-            tasks.append(generate_single_quiz(concept, diff, semaphore))
+        for i in range(10):
+            tasks.append(generate_single_quiz(concept, "easy", "mcq", i, semaphore))
+            tasks.append(generate_single_quiz(concept, "medium", "mcq", i, semaphore))
+            tasks.append(generate_single_quiz(concept, "hard", "subjective", i, semaphore))
             
     results = await asyncio.gather(*tasks)
     valid_quizzes = [r for r in results if r is not None]
@@ -105,7 +137,9 @@ async def main():
     # 写入数据
     inserted = 0
     for i, q in enumerate(valid_quizzes):
-        item_id = f"item_gen_{concept_to_slug(q['concept'])}_{q['difficulty']}_{i}"
+        # 使用 concept、difficulty、index 生成唯一的 item ID
+        concept_slug = concept_to_slug(q['concept'])
+        item_id = f"item_gen_{concept_slug}_{q['difficulty']}_{q['question_type']}_{i}"
         options_json = json.dumps(q["options"], ensure_ascii=False)
         try:
             cursor.execute("""
@@ -122,10 +156,9 @@ async def main():
             
     conn.commit()
     conn.close()
-    print(f"=== 写入数据库完毕：共写入/更新 {inserted} 道题目到预置题库！ ===")
+    print(f"=== 写入数据库完毕：共写入/更新 {inserted} 道题目到预置混合题库！ ===")
 
 def concept_to_slug(concept: str) -> str:
-    # 简单拼音或英文转换，此处为了生成 ID 可靠，直接采用哈希或编码
     return str(abs(hash(concept)) % 100000)
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ export const useChatStore = defineStore('chat', {
     streamingStatus: '',
     streamingAgents: {},
     streamingMode: 'chat',  // 当前流式传输模式 (chat / matrix)
+    streamingContent: '',  // 任务 1: 增量流式内容缓存
     _cleanupStream: null,  // 任务 8.2: AbortController 清理函数
   }),
   actions: {
@@ -118,6 +119,7 @@ export const useChatStore = defineStore('chat', {
                 lastMsg.content += data.content || ''
                 this.saveMessages()
               }
+              this.streamingContent += data.content || ''
             } else if (event === 'agent_done') {
               this.streamingProgress = data.progress || this.streamingProgress
               this.streamingAgents[data.agent] = {
@@ -126,6 +128,10 @@ export const useChatStore = defineStore('chat', {
                 done: true,
               }
               this.streamingStatus = `[${data.agent}] 生成完成`
+            } else if (event === 'content') {
+              // 任务 1: 流式 token 追加（逐 token 累加）
+              this.streamingContent += data.content || ''
+              this.streamingProgress = data.progress || this.streamingProgress
             } else if (event === 'complete') {
               this.streamingProgress = 100
               this.streamingStatus = '生成完成！'
@@ -166,10 +172,12 @@ export const useChatStore = defineStore('chat', {
               }
               this.saveMessages()
               this.sending = false
+              this.streamingContent = ''
               this._cleanupStream = null
               resolve(data)
             } else if (event === 'error') {
               this.sending = false
+              this.streamingContent = ''
               this._cleanupStream = null
               const lastIdx = this.messages.length - 1
               if (lastIdx >= 0 && this.messages[lastIdx].role === 'assistant') {

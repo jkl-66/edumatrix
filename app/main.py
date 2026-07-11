@@ -45,6 +45,7 @@ from flashcard_api import router as flashcard_router
 from behavior_api import router as behavior_router
 from report_api import router as report_router
 from note_engine import LearningProgressAnalyzer, ReviewScheduler
+from export_pdf import generate_note_pdf
 from observability import TELEMETRY
 from swarm_factory import build_swarm_from_headers
 
@@ -933,6 +934,45 @@ async def remove_note(note_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="note not found")
     return {"deleted": True}
+
+
+@app.post("/api/export-notes-pdf")
+async def export_note_pdf(request: Request):
+    """任务 2: 将笔记导出为 PDF 文件。"""
+    from fastapi.responses import StreamingResponse
+    from io import BytesIO
+    import asyncio
+    
+    payload = await request.json()
+    title = str(payload.get("title", "学习笔记")).strip()
+    content = str(payload.get("content", "")).strip()
+    subtitle = str(payload.get("subtitle", "")).strip()
+    tags = str(payload.get("tags", "")).strip()
+    source = str(payload.get("source", "学习笔记")).strip()
+    concepts = payload.get("concepts")
+    
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    
+    try:
+        loop = asyncio.get_event_loop()
+        pdf_bytes = await loop.run_in_executor(
+            None, generate_note_pdf,
+            title, content, subtitle, tags, source, concepts, None,
+        )
+        
+        filename = f"edumatrix-{title[:30]}.pdf".replace('/', '_').replace('\\', '_').replace(' ', '_')
+        
+        return StreamingResponse(
+            BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(pdf_bytes)),
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF 生成失败: {str(e)[:200]}")
 
 
 @app.get("/api/progress/{student_id}")

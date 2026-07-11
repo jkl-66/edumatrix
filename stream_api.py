@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from swarm_factory import build_swarm_from_headers
 from content_safety import CONTENT_SAFETY
+from models import AgentOutput
 
 router = APIRouter(prefix="/api/stream", tags=["streaming"])
 
@@ -909,42 +910,89 @@ async def stream_chat(request: Request) -> StreamingResponse:
 
             streamed_parts = []
             completed = 0
+            # 流式队列：智能体的 token 通过队列推送到 SSE
+            token_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
-            async def _gen_one(role: str, rtype: str) -> list:
-                chunks = []
+            async def _stream_one(role: str, rtype: str, primary: bool = False):
+                """流式生成单个智能体的内容。primary=True 时逐 token 推送到队列。"""
                 nonlocal completed
+                accumulated = ""
                 try:
-                    coro = swarm.async_generator.generate(
+                    print(f"  [StreamAPI] _stream_one({role}): building plan...", flush=True)
+                    plan = swarm.async_generator._build_plan(
                         role=role, resource_type=rtype,
                         query=message, graph_context=retrieval.graph_context,
                         evidence=debate_result.clean_evidence,
                         profile=swarm.profile_store.get(student_id),
+                        correction='',
                         conversation_memory=style_prefix,
                     )
-                    task = asyncio.create_task(coro)
-                    running_tasks.append(task)
-                    try:
-                        result = await task
-                    finally:
-                        if task in running_tasks:
-                            running_tasks.remove(task)
-                    
+                    print(f"  [StreamAPI] Plan built for {role}, primary={primary}", flush=True)
+                    if primary:
+                        print(f"  [StreamAPI] Streaming start for {role}", flush=True)
+                        # 主要智能体（理论教授）逐 token 流式推送
+                        async for token in swarm.async_generator.llm.generate_stream(
+                            plan.system_prompt, plan.user_prompt, role=role
+                        ):
+                            accumulated += token
+                            await token_queue.put(token)
+                        result = AgentOutput(
+                            agent=role, resource_type=rtype,
+                            content=accumulated.strip(),
+                            citations=tuple(item.id for item in debate_result.clean_evidence),
+                        )
+                    else:
+                        # 其余智能体后台完整生成
+                        result = await swarm.async_generator.generate(
+                            role=role, resource_type=rtype,
+                            query=message, graph_context=retrieval.graph_context,
+                            evidence=debate_result.clean_evidence,
+                            profile=swarm.profile_store.get(student_id),
+                            conversation_memory=style_prefix,
+                        )
                     streamed_parts.append(result)
                     completed += 1
-                    chunks.append(_sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10}))
-                except asyncio.CancelledError:
-                    raise
+                    await token_queue.put(None)  # 标记该 agent 完成
+                    return _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10})
                 except Exception as e:
+                    print(f"  [StreamAPI] ERROR in _stream_one({role}): {e}", flush=True)
                     completed += 1
-                    chunks.append(_sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10, "error": str(e)[:80]}))
-                return chunks
+                    await token_queue.put(None)
+                    return _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10, "error": str(e)[:80]})
 
-            tasks = [_gen_one(role, rt) for role, rt in agent_jobs]
-            for coro in asyncio.as_completed(tasks):
-                await check_disconnection()
-                for chunk in await coro:
+            # 启动智能体：第一个（理论教授）流式，其余后台
+            tasks = []
+            for i, (role, rt) in enumerate(agent_jobs):
+                is_primary = (i == 0)
+                print(f"  [StreamAPI] Creating task #{i}: {role} primary={is_primary}", flush=True)
+                t = asyncio.create_task(_stream_one(role, rt, primary=is_primary))
+                tasks.append(t)
+                running_tasks.append(t)
+
+            # 从队列消费 token 并作为 SSE content 推送
+            finish_count = 0
+            while finish_count < len(agent_jobs):
+                token = await token_queue.get()
+                if token is None:
+                    finish_count += 1
+                    print(f"  [StreamAPI] Agent finished ({finish_count}/{len(agent_jobs)})", flush=True)
+                else:
+                    if finish_count == 0 and len(token) > 0:
+                        print(f"  [StreamAPI] First token received: len={len(token)}", flush=True)
                     await check_disconnection()
-                    yield chunk
+                    yield _sse("content", {"content": token, "progress": 50 + (completed * 10)})
+
+            # 收集所有 agent_done 事件
+            for t in tasks:
+                try:
+                    result = t.result()
+                    if result:
+                        yield result
+                except Exception:
+                    pass
+                finally:
+                    if t in running_tasks:
+                        running_tasks.remove(t)
 
             await check_disconnection()
             yield _sse("progress", {"step": "alignment", "message": "正在校验多模态一致性...", "progress": 85})
@@ -1310,11 +1358,8 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
 
 
 @router.post("/explain")
-async def socratic_explain(request: Request) -> dict[str, Any]:
-    """任务 8.1: 行级/公式苏格拉底即时答疑。
-
-    接收被点击的代码行/公式文本及上下文，返回苏格拉底式分步推导。
-    """
+async def socratic_explain(request: Request) -> StreamingResponse:
+    """任务 8.1: 行级/公式苏格拉底即时答疑（流式 SSE 版本）。"""
     payload = await request.json()
     target_text = str(payload.get("target_text", "")).strip()
     context_before = str(payload.get("context_before", ""))
@@ -1407,23 +1452,40 @@ async def socratic_explain(request: Request) -> dict[str, Any]:
         f"学生追问: {follow_up if follow_up else '（首次点击）'}"
     )
 
-    try:
-        content = await swarm.async_generator.llm.generate(teacher_system, teacher_user, role="苏格拉底辩手")
-        return {
-            "status": "success",
-            "content": content,
-            "target_text": target_text,
-            "agent_trace": {
-                "consultant_move": move,
-                "focus_concept": concept
-            }
-        }
-    except Exception as e:
-        return {
-            "status": "fallback",
-            "content": _socratic_fallback(target_text, is_formula, is_code),
-            "target_text": target_text,
-        }
+    async def _socratic_stream():
+        """流式生成苏格拉底讲解内容。"""
+        accumulated = ""
+        try:
+            async for token in swarm.async_generator.llm.generate_stream(
+                teacher_system, teacher_user, role="苏格拉底辩手"
+            ):
+                accumulated += token
+                yield _sse("content", {"content": token})
+            yield _sse("complete", {
+                "content": accumulated,
+                "target_text": target_text,
+                "agent_trace": {
+                    "consultant_move": move,
+                    "focus_concept": concept,
+                }
+            })
+        except Exception as e:
+            fallback = _socratic_fallback(target_text, is_formula, is_code)
+            yield _sse("content", {"content": fallback})
+            yield _sse("complete", {
+                "content": fallback,
+                "target_text": target_text,
+            })
+    
+    return StreamingResponse(
+        _socratic_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _socratic_fallback(text: str, is_formula: bool, is_code: bool) -> str:

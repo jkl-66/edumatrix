@@ -162,7 +162,11 @@ export function socraticExplainStream(opts, onContent, onComplete, onError) {
 
   fetch('/api/stream/explain', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+      ...headers 
+    },
     body: JSON.stringify({
       target_text: opts.target_text,
       context_before: opts.context_before || '',

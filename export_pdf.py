@@ -257,7 +257,7 @@ def md_to_flowables(md_text: str, styles: dict) -> list:
 # ============================================================
 
 # 封面页眉装饰
-_COVER_LOGO = "EduMatrix \u667a\u6559\u77e9\u9635"
+_COVER_LOGO = "EduMatrix 智教矩阵"
 
 
 def _build_cover(title: str, subtitle: str, tags: str, styles: dict) -> list:
@@ -276,8 +276,8 @@ def _build_cover(title: str, subtitle: str, tags: str, styles: dict) -> list:
         cover.append(Paragraph(_escape_pdf(subtitle), styles['cover_subtitle']))
     cover.append(Spacer(1, 20))
     cover.append(Paragraph(
-        f'\u751f\u6210\u65f6\u95f4\uff1a{datetime.now().strftime("%Y\u5e74%m\u6708%d\u65e5 %H:%M")}<br/>'
-        f'\u6807\u7b7e\uff1a{_escape_pdf(tags)}',
+        f'生成时间：{datetime.now().strftime("%Y年%m月%d日 %H:%M")}<br/>'
+        f'标签：{_escape_pdf(tags)}',
         styles['cover_meta']
     ))
     cover.append(Spacer(1, 40*mm))
@@ -289,7 +289,7 @@ def generate_note_pdf(
     content: str,
     subtitle: str = "",
     tags: str = "",
-    source: str = "\u5b66\u4e60\u7b14\u8bb0",
+    source: str = "学习笔记",
     concepts: Optional[list[str]] = None,
     output_path: Optional[Path] = None,
 ) -> bytes:
@@ -309,7 +309,7 @@ def generate_note_pdf(
         PDF 文件字节数据
     """
     styles = _make_styles()
-    tag_text = tags if tags else (", ".join(concepts) if concepts else "\u672a\u5206\u7c7b")
+    tag_text = tags if tags else (", ".join(concepts) if concepts else "未分类")
     
     # 构建所有 flowable
     story = []
@@ -325,7 +325,7 @@ def generate_note_pdf(
         spaceAfter=12,
     )
     story.append(Paragraph(
-        f'<font color="#4a6cf7">\u25c6</font> {_escape_pdf(title)}',
+        f'<font color="#4a6cf7">◆</font> {_escape_pdf(title)}',
         header_style
     ))
     story.append(HRFlowable(width="100%", thickness=0.3,
@@ -340,7 +340,7 @@ def generate_note_pdf(
     story.append(HRFlowable(width="100%", thickness=0.3,
                              color=HexColor('#e0e0e0'), spaceAfter=8))
     story.append(Paragraph(
-        f'\u7531 EduMatrix \u667a\u6559\u77e9\u9635 \u00b7 AI \u81ea\u9002\u5e94\u6559\u5b66\u7cfb\u7edf\u81ea\u52a8\u751f\u6210',
+        '由 EduMatrix 智教矩阵 · AI 自适应教学系统自动生成',
         styles['footer']
     ))
     

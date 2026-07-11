@@ -1380,9 +1380,9 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"重算失败: {str(e)}")
 
 
-@router.post("/explain")
-async def socratic_explain(request: Request) -> StreamingResponse:
-    """任务 8.1: 行级/公式苏格拉底即时答疑（流式 SSE 版本）。"""
+@router.post("/explain", response_model=None)
+async def socratic_explain(request: Request) -> StreamingResponse | dict[str, Any]:
+    """任务 8.1: 行级/公式苏格拉底即时答疑（支持流式 SSE 和常规 JSON 双轨模式）。"""
     payload = await request.json()
     target_text = str(payload.get("target_text", "")).strip()
     context_before = str(payload.get("context_before", ""))
@@ -1475,40 +1475,64 @@ async def socratic_explain(request: Request) -> StreamingResponse:
         f"学生追问: {follow_up if follow_up else '（首次点击）'}"
     )
 
-    async def _socratic_stream():
-        """流式生成苏格拉底讲解内容。"""
-        accumulated = ""
+    # 根据 Accept 请求头实现双轨输出：支持前端 SSE 流式与 API JSON 同步
+    accept_header = request.headers.get("accept", "")
+    if "text/event-stream" in accept_header:
+        async def _socratic_stream():
+            """流式生成苏格拉底讲解内容。"""
+            accumulated = ""
+            try:
+                async for token in swarm.async_generator.llm.generate_stream(
+                    teacher_system, teacher_user, role="苏格拉底辩手"
+                ):
+                    accumulated += token
+                    yield _sse("content", {"content": token})
+                yield _sse("complete", {
+                    "content": accumulated,
+                    "target_text": target_text,
+                    "agent_trace": {
+                        "consultant_move": move,
+                        "focus_concept": concept,
+                    }
+                })
+            except Exception as e:
+                fallback = _socratic_fallback(target_text, is_formula, is_code)
+                yield _sse("content", {"content": fallback})
+                yield _sse("complete", {
+                    "content": fallback,
+                    "target_text": target_text,
+                })
+        
+        return StreamingResponse(
+            _socratic_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    else:
+        # JSON 响应模式（用于单元测试和传统的 HTTP 拦截获取）
         try:
-            async for token in swarm.async_generator.llm.generate_stream(
+            content = await swarm.async_generator.llm.generate(
                 teacher_system, teacher_user, role="苏格拉底辩手"
-            ):
-                accumulated += token
-                yield _sse("content", {"content": token})
-            yield _sse("complete", {
-                "content": accumulated,
+            )
+            return {
+                "status": "success",
+                "content": content,
                 "target_text": target_text,
                 "agent_trace": {
                     "consultant_move": move,
                     "focus_concept": concept,
                 }
-            })
+            }
         except Exception as e:
-            fallback = _socratic_fallback(target_text, is_formula, is_code)
-            yield _sse("content", {"content": fallback})
-            yield _sse("complete", {
-                "content": fallback,
+            return {
+                "status": "fallback",
+                "content": _socratic_fallback(target_text, is_formula, is_code),
                 "target_text": target_text,
-            })
-    
-    return StreamingResponse(
-        _socratic_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+            }
 
 
 def _socratic_fallback(text: str, is_formula: bool, is_code: bool) -> str:

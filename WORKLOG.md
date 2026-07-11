@@ -949,3 +949,66 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 - **闪卡 API 纯无状态化并网**：废除了 [flashcard_api.py](file:///d:/project-edumatrix/edumatrix-main/flashcard_api.py) 所有 HTTP 路由中对内存单例 `_SM2_ENGINE` 的读取与写入，改为使用 SQLAlchemy 与 SQLite 数据库直接进行卡片状态生命周期同步，清除冗余计算，完美防御 Uvicorn 多工作进程（multi-workers）部署下的状态丢失冲突。
 - **路径规划图缓存优化**：在 [learning_strategy.py](file:///d:/project-edumatrix/edumatrix-main/learning_strategy.py) 中实现线程安全的全局 `_GRAPH_CACHE` 缓存机制与 `invalidate_graph_cache` 失效钩子，并在 [knowledge_api.py](file:///d:/project-edumatrix/edumatrix-main/knowledge_api.py) 的文档上传与删除端点中接入 invalidation 触发器。实现了除冷启动及文档变更外，寻路路由 inputs 查询 0ms 瞬间命中，免除重复 Embedding 和 NetworkX 环路检测的 CPU 瓶颈。
 - **兼容性保障与 64 项测试 OK**：将 A* 的响应 strategy 字符串还原为 `"A* 候选草案 + Planner Agent 资源感知审核"` 以对齐原生单元测试，本地 `python -m unittest test_edumatrix.py` 全部 64 项集成测试 100% 绿灯（OK）跑通。
+
+---
+
+### 2026-07-11 (lzz - 核心全栈开发 & Antigravity - 成员 6 重构)
+> **今日概述**：全面推进并完成了 **成员 6（自适应评测与沙箱运行）模块的国赛/产业级终极重构落地**。完成了数据库 Schema 画像物理迁移，修复了 IRT 自适应难度逆向估计公式，构建了自适应混合测验选题（CAT）引擎，加固了 Subprocess 沙箱执行环境（防范 RCE 逃逸），并自动生成了本地种子题库，确保了演示响应速度与测试确定性。通过了 64 项系统测试及 3 项专项重构单元测试。
+
+#### 1. 数据库物理 Schema 升级与自动迁移
+- **文件**：`app/database.py`
+- **改进**：
+  - 新增了 `DBQuizItem` SQLAlchemy 实体模型以持久化本地预置种子题库。
+  - 为 `DBQuizRecord` 表动态扩展了 `irt_alpha`、`irt_beta`、`irt_gamma` 三个浮点参数列，用于记录答题时题目的精确 IRT 参数数值。
+  - 升级 `_migrate_schema` 自动数据库迁移机制，无需手动删表重建即可无损在线升级。
+
+#### 2. IRT 能力估计与难度公式纠偏
+- **文件**：`mirt_engine.py`
+- **改进**：
+  - 彻底修正了 `estimate_irt_params_from_profile` 中的参数估计逻辑，由原先自我矛盾的“掌握度越高、估计难度越低”纠正为“掌握度越高、估计难度 $\beta$ 越高”的正向对齐逻辑。
+  - 并在文档和代码中正名为科学稳定的单维 3PL IRT 评估模型，明确其应用场景。
+
+#### 3. 隔离沙箱安全加固（防御 RCE 逃逸）
+- **文件**：`code_exec_api.py`
+- **改进**：
+  - 针对 Windows 环境下可能降级使用的 Subprocess 运行器，自定义实现了带有白名单模块拦截的 `safe_import()` 封装器。
+  - 替换了 restricted globals 中原生的 `__import__` 方法，彻底阻断了学生通过 `__import__('os').system()` 等恶意脚本还原/破坏宿主机资源的 RCE 漏洞。
+  - 安全白名单中保留并支持 `numpy`、`pandas`、`matplotlib`、`sklearn`、`torch` 以及 `time` 等常规科学计算模块运行。
+
+#### 4. 自适应混合测验选题（CAT）与参数同步
+- **文件**：`quiz_api.py`
+- **改进**：
+  - **自适应混合选题**：重构 `/api/quiz/generate`，优先检索本地 `DBQuizItem` 中该学生未做过的同知识点候选题目，并利用 `AdaptiveTestEstimator` 执行 Fisher 最大信息选题。本地题目不足 3 道时，系统才自动降级调用大模型动态现场生成，极大提升了答辩高可用性和响应时效。
+  - **真实参数物理同步**：在答题记录生成时，将题目对应的精确 IRT 参数（`irt_alpha/beta/gamma`）写入记录快照；在 [/evaluate](file:///d:/project-edumatrix/edumatrix-main/quiz_api.py#L404) 评分端点更新 theta 能力时，优先从记录快照直接读取固定参数，完全消除了基于动态 mastery 逆向推算造成的数学不一致。
+
+#### 5. 自动 Seeder 与并发全量出题器
+- **文件**：`scripts/bootstrap_item_bank.py` [NEW]、`scripts/generate_all_concepts_bank.py` [NEW]
+- **改进**：
+  - 编写并运行 `bootstrap_item_bank.py` 静态注入了 12 道高质量核心种子多选题（涵盖最大池化、平均池化、Sigmoid 函数、梯度下降），实现零网络依赖的自适应选题演示。
+  - 编写了异步全量生成脚本 `generate_all_concepts_bank.py`，支持通过 asyncio 信号量限流（并发 5）自动调用 LLM 为全量 25 个大纲概念批量生成并校准 75 道题目，用于全量题库的一键冷启动扩充。
+
+#### 6. 重构单元测试与系统回归验证
+- **文件**：`tests/test_member6_refactoring.py` [NEW]、`test_edumatrix.py`
+- **改进**：
+  - 编写了 `tests/test_member6_refactoring.py` 用例，全面覆盖了沙箱危险模块拦截检测、正向自适应参数区间估计断言、以及本地种子题库完整性测试。
+  - 运行 `python -m unittest tests/test_member6_refactoring.py` ➡️ 3 passed (OK)。
+  - 运行 `python -m unittest test_edumatrix.py` ➡️ 64 passed (OK) (100% 成功，无任何倒退)。
+
+---
+
+### 2026-07-11 (jkl - 成员 3 & lzz - 并网合并与双轨流式适配)
+> **今日概述**：成功合并了成员 3（jkl 分支）的更新（并网合并），解决并消除了 ReportLab 库依赖缺失与 Python 3.11 在 f-string 下 unicode 转义引发的 SyntaxError 阻断性问题。重构实现了 Socratic 答疑接口的自适应双轨响应（Dual-mode Adapter），在完美通过 64 项单元测试的同时，确保了前端 SSE 逐 token 推流交互的稳定运行。
+
+#### 1. 并网合并与依赖消解
+- **jkl 分支合并**：成功将 `origin/jkl` 分支（流式输出 + 增量渲染 + PDF 导出）无缝并网到主分支。
+- **环境依赖补充**：针对新引入的 ReportLab 导出 PDF 库，在 `requirements.txt` 中追加了 `reportlab>=4.1.0` 依赖，并完成了本地环境部署。
+- **f-string 语法兼容修复**：针对 `export_pdf.py` 中因 f-string 包含 `\u` 反斜杠 unicode 转义在 Python 3.11 下导致 SyntaxError 崩溃的问题，进行了全量字面量 UTF-8 编码重构。
+
+#### 2. Socratic 答疑端点双轨自适应（Dual-mode Adapter）
+- **文件**：`stream_api.py`、`frontend/src/api/stream.js`
+- **改进**：
+  - 重构了 `/api/stream/explain` 路由端点。当客户端请求头包含 `Accept: text/event-stream` 时，后端返回 `StreamingResponse` 逐字流式打字渲染；如果常规 Axios 或 TestClient 调用时，后端自动降级为 JSON 同步响应。
+  - 在前端 `socraticExplainStream` 抓取器中显式指定 `'Accept': 'text/event-stream'`，实现了测试兼容性（Test compatibility）与流式体验（Streaming UX）的完美统一，解决类型注解 `StreamingResponse | dict[str, Any]` 引发的 FastAPI 路由启动校验失败问题。
+
+#### 3. 全量测试通过
+- **验证**：执行 `python -m unittest test_edumatrix.py`，全量 64 项集成测试全部通过（Ran 64 tests -> OK），证明系统完全兼容。

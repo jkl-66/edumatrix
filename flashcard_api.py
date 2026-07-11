@@ -3,8 +3,8 @@
 Endpoints:
 - POST /api/flashcard/generate: create a flashcard from a wrong quiz or weak point.
 - POST /api/flashcard/review: record review quality and persist SM-2 scheduling.
-- GET  /api/flashcard/due: list in-memory cards due for review.
-- GET  /api/flashcard/all: list all in-memory cards.
+- GET  /api/flashcard/due: list cards due for review directly from DB.
+- GET  /api/flashcard/all: list all cards directly from DB.
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from anki_engine import get_sm2_engine
 from app.crud import (
     apply_review_feedback,
     build_review_adaptation_payload,
@@ -58,7 +57,13 @@ async def generate_flashcard(request: Request, db: Session = Depends(get_db)) ->
         ).first()
         if record:
             concept = record.target_concept or "General Concept"
-            front = f"Explain the core idea and key principle of {concept}."
+            accuracy = record.accuracy_score or 0.0
+            if accuracy < 0.3:
+                front = f"【深度剖析】请详细拆解并阐释「{concept}」的底层计算步骤与核心原理，并指出它的一个常见误区。"
+            elif accuracy < 0.6:
+                front = f"【对比辨析】请说明「{concept}」与其最邻近前置概念的区别，并用一个实际例子说明它的应用。"
+            else:
+                front = f"【应用实践】如何在真实的机器学习系统中设计并调用「{concept}」？请写出核心步骤与关键公式。"
             back = (
                 f"Reference answer: {record.correct_answer or 'N/A'}\n"
                 f"Your answer: {record.student_answer or 'N/A'}\n"
@@ -68,53 +73,79 @@ async def generate_flashcard(request: Request, db: Session = Depends(get_db)) ->
         profile = load_student_profile(db, student_id)
         if profile.weak_points:
             concept = profile.weak_points[0]
-            front = f"Explain the core idea of {concept}."
+            front = f"【概念重建】请简要叙述「{concept}」的核心直觉、定义以及它所解决的关键问题。"
             back = f"Key points and principle explanation for {concept}."
 
     if not concept:
         raise HTTPException(status_code=400, detail="No available concept for flashcard generation")
 
-    engine = get_sm2_engine()
-    card = engine.get_or_create(
-        concept=concept,
-        front=front,
-        back=back,
-        student_id=student_id,
-        source_quiz_id=quiz_id,
-    )
-
     existing = db.query(DBReviewPlan).filter(
         DBReviewPlan.student_id == student_id,
         DBReviewPlan.concept == concept,
     ).first()
+
     if existing:
-        existing.easiness_factor = existing.easiness_factor or card.easiness
-        existing.interval_days = existing.interval_days or card.interval_days
-        existing.last_quality = existing.last_quality or card.last_quality
-        existing.review_count = existing.review_count or card.review_count
+        existing.easiness_factor = existing.easiness_factor or 2.5
+        existing.interval_days = existing.interval_days or 1
+        existing.last_quality = existing.last_quality or 0
+        existing.review_count = existing.review_count or 0
         existing.mastery = max(existing.mastery or 0.0, 0.3)
         existing.priority = existing.priority if existing.priority is not None else 1.0
+        
+        easiness = existing.easiness_factor
+        interval_days = existing.interval_days
+        last_quality = existing.last_quality
+        review_count = existing.review_count
+        next_review_at = _iso_utc(existing.next_review_at)
     else:
+        easiness = 2.5
+        interval_days = 1
+        last_quality = 0
+        review_count = 0
+        
+        # Calculate BKT-based default easiness if BKT state exists
+        profile = load_student_profile(db, student_id)
+        if profile and getattr(profile, "bkt_states", None) and concept in profile.bkt_states:
+            bkt_state = profile.bkt_states[concept]
+            p_err = bkt_state.get("p_err", 0.5) if isinstance(bkt_state, dict) else getattr(bkt_state, "p_err", 0.5)
+            if p_err > 0.4:
+                easiness = max(1.8, 2.5 - (p_err - 0.4) * 1.5)
+
         plan = DBReviewPlan(
             student_id=student_id,
             concept=concept,
-            interval_days=card.interval_days,
+            interval_days=interval_days,
             next_review_at=_utcnow_naive(),
             mastery=0.3,
             review_count=0,
-            easiness_factor=card.easiness,
+            easiness_factor=easiness,
             last_quality=0,
             priority=1.0,
         )
         db.add(plan)
-    db.commit()
+        db.commit()
+        next_review_at = _iso_utc(plan.next_review_at)
 
-    return {"flashcard": card.to_dict(), "concept": concept, "front": front, "back": back}
+    card_dict = {
+        "concept": concept,
+        "front": front,
+        "back": back,
+        "source_quiz_id": quiz_id,
+        "student_id": student_id,
+        "easiness": round(easiness, 2),
+        "interval_days": interval_days,
+        "review_count": review_count,
+        "last_quality": last_quality,
+        "next_review_at": next_review_at,
+        "tags": ["错题整理", "反思"] if last_quality == 2 else []
+    }
+
+    return {"flashcard": card_dict, "concept": concept, "front": front, "back": back}
 
 
 @router.post("/review")
 async def review_flashcard(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Record review quality and persist the SM-2 schedule."""
+    """Record review quality and persist the SM-2 schedule in database."""
     payload = await request.json()
     student_id = str(payload.get("student_id", "default"))
     concept = str(payload.get("concept", "")).strip()
@@ -125,6 +156,7 @@ async def review_flashcard(request: Request, db: Session = Depends(get_db)) -> d
 
     if quality not in (2, 4, 5):
         raise HTTPException(status_code=400, detail="quality must be one of 2, 4, 5")
+
     if not concept:
         raise HTTPException(status_code=400, detail="concept is required")
 
@@ -133,23 +165,30 @@ async def review_flashcard(request: Request, db: Session = Depends(get_db)) -> d
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # SQLite is the source of truth; the in-memory card is only a fast mirror.
-    engine = get_sm2_engine()
-    card = engine.get_or_create(concept=concept, student_id=student_id)
-    card.easiness = plan.easiness_factor or card.easiness
-    card.interval_days = plan.interval_days or card.interval_days
-    card.last_quality = plan.last_quality or quality
-    card.review_count = plan.review_count or 0
-    card.next_review_at = _iso_utc(plan.next_review_at)
-    adaptation = build_review_adaptation_payload(concept, quality, plan.mastery)
-    if adaptation.get("triggered"):
-        card.back = adaptation.get("card_back", card.back)
+    adaptation = await build_review_adaptation_payload(concept, quality, plan.mastery)
+    
+    front = f"【概念重建】请简要叙述「{concept}」的核心直觉、定义以及它所解决的关键问题。"
+    back = adaptation.get("card_back") if adaptation.get("triggered") else f"Key points and principle explanation for {concept}."
+
+    card_dict = {
+        "concept": concept,
+        "front": front,
+        "back": back,
+        "source_quiz_id": "",
+        "student_id": student_id,
+        "easiness": round(plan.easiness_factor or 2.5, 2),
+        "interval_days": plan.interval_days,
+        "review_count": plan.review_count or 0,
+        "last_quality": plan.last_quality or 0,
+        "next_review_at": _iso_utc(plan.next_review_at),
+        "tags": ["错题整理", "反思"] if quality == 2 else []
+    }
 
     return {
-        "flashcard": card.to_dict(),
+        "flashcard": card_dict,
         "review_plan": review_plan_to_dict(plan),
         "adaptive_review": adaptation,
-        "easiness_new": round(plan.easiness_factor or card.easiness, 2),
+        "easiness_new": round(plan.easiness_factor or 2.5, 2),
         "interval_new": plan.interval_days,
         "next_review_at": _iso_utc(plan.next_review_at),
         "message": f"Review recorded. Next review interval: {plan.interval_days} days.",
@@ -161,13 +200,44 @@ async def get_due_cards(
     request: Request,
     student_id: str = "default",
     max_count: int = 20,
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Return due in-memory cards."""
-    engine = get_sm2_engine()
-    due = engine.get_due_cards(student_id, max_count)
+    """Return due cards directly from DB."""
+    now = _utcnow_naive()
+    plans = (
+        db.query(DBReviewPlan)
+        .filter(
+            DBReviewPlan.student_id == student_id,
+            (DBReviewPlan.next_review_at == None) | (DBReviewPlan.next_review_at <= now)
+        )
+        .order_by(DBReviewPlan.next_review_at.asc())
+        .limit(max_count)
+        .all()
+    )
+    
+    due_cards = []
+    for plan in plans:
+        front = f"【概念重建】请简要叙述「{plan.concept}」的核心直觉、定义以及它所解决的关键问题。"
+        back = f"Key points and principle explanation for {plan.concept}."
+        
+        card_dict = {
+            "concept": plan.concept,
+            "front": front,
+            "back": back,
+            "source_quiz_id": "",
+            "student_id": student_id,
+            "easiness": round(plan.easiness_factor or 2.5, 2),
+            "interval_days": plan.interval_days or 1,
+            "review_count": plan.review_count or 0,
+            "last_quality": plan.last_quality or 0,
+            "next_review_at": _iso_utc(plan.next_review_at),
+            "tags": ["错题整理", "反思"] if plan.last_quality == 2 else []
+        }
+        due_cards.append(card_dict)
+
     return {
-        "due_count": len(due),
-        "cards": [card.to_dict() for card in due],
+        "due_count": len(due_cards),
+        "cards": due_cards,
     }
 
 
@@ -175,11 +245,32 @@ async def get_due_cards(
 async def get_all_cards(
     request: Request,
     student_id: str = "default",
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Return all in-memory cards for a student."""
-    engine = get_sm2_engine()
-    cards = engine.get_all_cards(student_id)
+    """Return all cards directly from DB."""
+    plans = db.query(DBReviewPlan).filter(DBReviewPlan.student_id == student_id).all()
+    
+    cards = []
+    for plan in plans:
+        front = f"【概念重建】请简要叙述「{plan.concept}」的核心直觉、定义以及它所解决的关键问题。"
+        back = f"Key points and principle explanation for {plan.concept}."
+        
+        card_dict = {
+            "concept": plan.concept,
+            "front": front,
+            "back": back,
+            "source_quiz_id": "",
+            "student_id": student_id,
+            "easiness": round(plan.easiness_factor or 2.5, 2),
+            "interval_days": plan.interval_days or 1,
+            "review_count": plan.review_count or 0,
+            "last_quality": plan.last_quality or 0,
+            "next_review_at": _iso_utc(plan.next_review_at),
+            "tags": ["错题整理", "反思"] if plan.last_quality == 2 else []
+        }
+        cards.append(card_dict)
+        
     return {
         "total": len(cards),
-        "cards": [card.to_dict() for card in cards],
+        "cards": cards,
     }

@@ -561,6 +561,33 @@ def build_llm(config: EduMatrixConfig = CONFIG) -> LLMBackend:
     return DeterministicEducationLLM()
 
 
+class FallbackAsyncLLMWrapper:
+    """Wrapper that catches any exception from a primary AsyncLLMBackend and falls back to a secondary backend."""
+    def __init__(self, primary: AsyncLLMBackend, fallback: AsyncLLMBackend) -> None:
+        self.primary = primary
+        self.fallback = fallback
+
+    @property
+    def has_vision(self) -> bool:
+        return getattr(self.primary, "has_vision", False) or getattr(self.fallback, "has_vision", False)
+
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        try:
+            return await self.primary.generate(system_prompt, user_prompt, role=role)
+        except Exception as e:
+            print(f"  [EduMatrix Fallback] Primary LLM generate failed: {e}. Falling back to secondary.")
+            return await self.fallback.generate(system_prompt, user_prompt, role=role)
+
+    async def generate_stream(self, system_prompt: str, user_prompt: str, *, role: str, images: list[str] = []) -> AsyncGenerator[str, None]:
+        try:
+            async for chunk in self.primary.generate_stream(system_prompt, user_prompt, role=role, images=images):
+                yield chunk
+        except Exception as e:
+            print(f"  [EduMatrix Fallback] Primary LLM generate_stream failed: {e}. Falling back to secondary.")
+            async for chunk in self.fallback.generate_stream(system_prompt, user_prompt, role=role, images=images):
+                yield chunk
+
+
 def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBackend:
     # 支持动态覆盖配置（用于 swarm_factory）
     provider = overrides.get("provider", config.llm_provider).lower().strip()
@@ -568,8 +595,10 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
     endpoint = overrides.get("endpoint", config.llm_endpoint)
     model = overrides.get("model", config.llm_model)
     
+    primary: AsyncLLMBackend | None = None
+    
     if provider == "spark" or (config.spark_app_id and config.spark_api_key):
-        return AsyncSparkClient(
+        primary = AsyncSparkClient(
             app_id=config.spark_app_id,
             api_key=config.spark_api_key,
             api_secret=config.spark_api_secret,
@@ -578,9 +607,8 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
             temperature=overrides.get("temperature", config.llm_temperature),
             max_tokens=overrides.get("max_tokens", config.llm_max_tokens),
         )
-        
-    if (provider == "openai" or provider == "vllm") and api_key:
-        return AsyncOpenAIChatLLM(
+    elif (provider == "openai" or provider == "vllm") and api_key:
+        primary = AsyncOpenAIChatLLM(
             endpoint=endpoint,
             api_key=api_key,
             model=model,
@@ -592,6 +620,9 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
             multimodal_model=overrides.get("multimodal_model", config.multimodal_llm_model),
             is_multimodal_fallback=overrides.get("is_multimodal_fallback", False),
         )
+        
+    if primary is not None:
+        return FallbackAsyncLLMWrapper(primary, AsyncDeterministicEducationLLM())
     return AsyncDeterministicEducationLLM()
 
 

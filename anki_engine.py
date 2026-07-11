@@ -22,58 +22,94 @@ SM2_I1 = 6              # 首次及格间隔 (天)
 # 2 = 困难 (记错了), 4 = 一般 (想了一会儿), 5 = 简单 (立即反应)
 
 
-def sm2_update_easiness(e: float, q: int) -> float:
+def sm2_update_easiness(e: float, q: float) -> float:
     """SM-2 易度因子更新公式。
 
     E' = max(1.3, E + (0.1 - (5-q)) * (0.08 + (5-q) * 0.02))
 
     Args:
         e: 当前易度因子
-        q: 质量评分 {2, 4, 5}
+        q: 质量评分 [0.0, 5.0]
 
     Returns:
         更新后的易度因子 (>= 1.3)
     """
-    delta = (0.1 - (5 - q)) * (0.08 + (5 - q) * 0.02)
+    delta = 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)
     return max(SM2_E_MIN, e + delta)
 
 
-def sm2_next_interval(interval: int, q: int, e: float) -> int:
-    """SM-2 复习间隔迭代。
+def calculate_act_r_decay(cognitive_load: float, frustration: float) -> float:
+    """根据 ACT-R 理论计算动态记忆衰减率 d (通常范围在 0.3 到 0.7 之间，默认值为 0.5)"""
+    # 结合认知负荷与情感状态，利用 Sigmoid 映射到 [0.3, 0.7] 区间
+    # 负荷和挫败感越高，大脑的瞬时记忆半衰期越短，表现为衰减率 d 升高
+    x = (cognitive_load + frustration) - 0.5
+    sigmoid_val = 1.0 / (1.0 + math.exp(-6.0 * x))
+    d = 0.3 + 0.4 * sigmoid_val
+    return max(0.3, min(0.7, d))
 
-    - q >= 4 (及格): I' = round(I * E)
-    - q < 4 (不及格): I' = 1 (重置到 1 天)
 
-    Args:
-        interval: 当前间隔 (天)
-        q: 质量评分 {2, 4, 5}
-        e: 易度因子
+def sm2_next_interval(
+    interval: int,
+    q: float,
+    e: float,
+    cognitive_load: float = 0.45,
+    frustration: float = 0.0,
+) -> int:
+    """自适应复习间隔：底层切换为 FSRS (DSR) 核心记忆状态方程，并通过 ACT-R 情感状态自适应调节。
 
-    Returns:
-        下次复习间隔 (天)
+    - q < 4.0: 记错/困难，重置为 1 天。
+    - q >= 4.0: 正常/简单，利用 FSRS 核心稳定性公式演进并结合心智状态缩放。
     """
-    if q < 4:
-        return 1  # 不及格重置
-    return max(1, round(interval * e))
+    if q < 4.0:
+        return 1  # 重置
+
+    # 1. 易度因子 e 映射为 FSRS 难度 D (e越大代表难度越低，映射到 1.0~10.0 空间)
+    D = max(1.0, min(10.0, 11.0 - 2.0 * e))
+
+    # 2. 当前复习间隔作为当前稳定性 S
+    S = max(0.1, float(interval))
+
+    # 3. 映射评分 q 为 FSRS rating r (Again=1, Good=3, Easy=4)
+    #    q = 4.0 -> r = 3 (Good); q = 5.0 -> r = 4 (Easy)
+    r = 4 if q >= 4.5 else 3
+
+    # 4. 计算 Retrievability R = 0.9 ** (t / S)
+    #    设在到期日复习，故 t = S, R = 0.9
+    R = 0.9
+
+    # 5. 考虑情绪状态（挫败感）对难度的动态惩罚
+    D_adj = max(1.0, min(10.0, D + frustration * 2.0))
+    
+    # 6. 计算 FSRS 稳定性 S' (FSRS 核心公式：Good/Easy 稳定性增长，Difficulty 越大增长越慢)
+    S_new = S * (1.0 + math.exp(2.0 - 0.2 * D_adj) * (S ** -0.2) * (0.9 - R + 1.0))
+
+    # 7. 结合 ACT-R 记忆衰减模型计算最终间隔缩放
+    d = calculate_act_r_decay(cognitive_load, frustration)
+    multiplier = (0.5 / d) ** 1.5
+    multiplier = max(0.5, min(2.0, multiplier))
+
+    return max(1, round(S_new * multiplier))
 
 
 def sm2_schedule(
     e: float,
     interval: int,
-    q: int,
+    q: float,
+    cognitive_load: float = 0.45,
+    frustration: float = 0.0,
 ) -> tuple[float, int]:
-    """完整 SM-2 调度：同时计算新易度因子和新间隔。
-
-    Args:
-        e: 当前易度因子
-        interval: 当前间隔 (天)
-        q: 质量评分 {2, 4, 5}
-
-    Returns:
-        (new_easiness, new_interval_days)
-    """
+    """完整自适应 SM-2 调度：同时考虑作答质量与认知负荷、挫败感。"""
     new_e = sm2_update_easiness(e, q)
-    new_interval = sm2_next_interval(interval, q, new_e)
+
+    # 情感自适应调节：当挫败感过高时，平滑地对易度因子进行负向减调以防双重惩罚
+    if frustration > 0.4:
+        new_e = max(SM2_E_MIN, new_e - (frustration - 0.4) * 0.15)
+
+    new_interval = sm2_next_interval(
+        interval, q, new_e,
+        cognitive_load=cognitive_load,
+        frustration=frustration,
+    )
     return (new_e, new_interval)
 
 
@@ -92,19 +128,26 @@ class FlashCard:
     next_review_at: str = ""           # ISO 格式的下次复习时间
     tags: list[str] = field(default_factory=list)
 
-    def schedule(self, quality: int) -> None:
-        """根据质量评分更新间隔参数。
-
-        Args:
-            quality: {2=困难, 4=一般, 5=简单}
-        """
-        if quality not in (2, 4, 5):
-            raise ValueError(f"质量评分必须为 2, 4, 5, 收到 {quality}")
+    def schedule(
+        self,
+        quality: float,
+        cognitive_load: float = 0.45,
+        frustration: float = 0.0,
+    ) -> None:
+        """根据质量评分与学生画像状态（认知负荷、挫败感）动态更新复习参数。"""
+        try:
+            q = max(0.0, min(5.0, float(quality)))
+        except (TypeError, ValueError):
+            q = 4.0
 
         self.easiness, self.interval_days = sm2_schedule(
-            self.easiness, self.interval_days, quality,
+            self.easiness,
+            self.interval_days,
+            q,
+            cognitive_load=cognitive_load,
+            frustration=frustration,
         )
-        self.last_quality = quality
+        self.last_quality = int(round(q))
         self.review_count += 1
 
         # 计算下次复习时间
@@ -132,7 +175,18 @@ class SM2Engine:
     """SM-2 间隔重复引擎，管理全局闪卡库。"""
 
     def __init__(self) -> None:
-        self._cards: dict[str, FlashCard] = {}  # concept -> FlashCard
+        from collections import OrderedDict
+        class BoundedDict(OrderedDict):
+            def __init__(self, max_size=500, *args, **kwargs):
+                self.max_size = max_size
+                super().__init__(*args, **kwargs)
+
+            def __setitem__(self, key, value):
+                super().__setitem__(key, value)
+                if len(self) > self.max_size:
+                    self.popitem(last=False)
+
+        self._cards = BoundedDict(max_size=500)  # concept -> FlashCard
 
     def get_or_create(
         self,

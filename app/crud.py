@@ -271,6 +271,8 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
 
 def record_alignment_log(db: Session, student_id: str, report: AlignmentReport, target_concept: str) -> None:
     """记录每一次流形对齐校验的测地线距离与冲突建议"""
+    # 确保学生画像已创建，防止外键约束失败 (FOREIGN KEY constraint failed)
+    load_student_profile(db, student_id)
     log_entry = DBAlignmentLog(
         student_id=student_id,
         target_concept=target_concept,
@@ -481,7 +483,7 @@ def get_review_plan(db: Session, student_id: str) -> list[DBReviewPlan]:
 
 def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: float, interval_days: int) -> DBReviewPlan:
     # 确保学生画像已创建并保存，以防外键约束失败 (FOREIGN KEY constraint failed)
-    load_student_profile(db, student_id)
+    db_profile = load_student_profile(db, student_id)
     existing = (
         db.query(DBReviewPlan)
         .filter(DBReviewPlan.student_id == student_id, DBReviewPlan.concept == concept)
@@ -496,6 +498,13 @@ def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: floa
         existing.last_quality = existing.last_quality or 0
         existing.priority = existing.priority if existing.priority is not None else 1.0
     else:
+        init_easiness = 2.5
+        if db_profile and getattr(db_profile, "bkt_states", None) and concept in db_profile.bkt_states:
+            bkt_state = db_profile.bkt_states[concept]
+            p_err = bkt_state.get("p_err", 0.5) if isinstance(bkt_state, dict) else getattr(bkt_state, "p_err", 0.5)
+            if p_err > 0.4:
+                init_easiness = max(1.8, 2.5 - (p_err - 0.4) * 1.5)
+
         existing = DBReviewPlan(
             student_id=student_id,
             concept=concept,
@@ -503,7 +512,7 @@ def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: floa
             next_review_at=_utcnow_naive() + timedelta(days=interval_days),
             mastery=mastery,
             review_count=0,
-            easiness_factor=2.5,
+            easiness_factor=init_easiness,
             last_quality=0,
             priority=1.0,
         )
@@ -513,7 +522,7 @@ def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: floa
     return existing
 
 
-def apply_review_feedback(db: Session, student_id: str, concept: str, quality: int) -> DBReviewPlan:
+def apply_review_feedback(db: Session, student_id: str, concept: str, quality: float) -> DBReviewPlan:
     if quality not in (2, 4, 5):
         raise ValueError("quality must be one of 2, 4, 5")
     if not concept:
@@ -521,13 +530,26 @@ def apply_review_feedback(db: Session, student_id: str, concept: str, quality: i
 
     from anki_engine import sm2_schedule
 
-    load_student_profile(db, student_id)
+    db_profile = db.query(DBStudentProfile).filter(DBStudentProfile.student_id == student_id).first()
+    cognitive_load = 0.45
+    frustration = 0.0
+    if db_profile:
+        cognitive_load = getattr(db_profile, "cognitive_load", 0.45) or 0.45
+        frustration = getattr(db_profile, "frustration_index", 0.0) or 0.0
+
     plan = (
         db.query(DBReviewPlan)
         .filter(DBReviewPlan.student_id == student_id, DBReviewPlan.concept == concept)
         .first()
     )
     if plan is None:
+        init_easiness = 2.5
+        if db_profile and getattr(db_profile, "bkt_states", None) and concept in db_profile.bkt_states:
+            bkt_state = db_profile.bkt_states[concept]
+            p_err = bkt_state.get("p_err", 0.5) if isinstance(bkt_state, dict) else getattr(bkt_state, "p_err", 0.5)
+            if p_err > 0.4:
+                init_easiness = max(1.8, 2.5 - (p_err - 0.4) * 1.5)
+
         plan = DBReviewPlan(
             student_id=student_id,
             concept=concept,
@@ -535,44 +557,57 @@ def apply_review_feedback(db: Session, student_id: str, concept: str, quality: i
             next_review_at=_utcnow_naive(),
             mastery=0.3,
             review_count=0,
-            easiness_factor=2.5,
+            easiness_factor=init_easiness,
             last_quality=0,
             priority=1.0,
         )
         db.add(plan)
         db.flush()
 
+    try:
+        q_val = float(quality)
+    except (TypeError, ValueError):
+        q_val = 4.0
+    q_clamped = max(0.0, min(5.0, q_val))
+
     current_easiness = plan.easiness_factor or 2.5
     current_interval = plan.interval_days or 1
-    new_easiness, new_interval = sm2_schedule(current_easiness, current_interval, quality)
+    new_easiness, new_interval = sm2_schedule(
+        current_easiness,
+        current_interval,
+        q_clamped,
+        cognitive_load=cognitive_load,
+        frustration=frustration,
+    )
 
     mastery = plan.mastery if plan.mastery is not None else 0.3
-    if quality == 5:
+    if q_clamped >= 4.5:
         mastery = min(1.0, mastery + 0.08)
-    elif quality == 4:
+    elif q_clamped >= 3.5:
         mastery = min(1.0, mastery + 0.04)
     else:
         mastery = max(0.0, mastery - 0.10)
 
     plan.easiness_factor = new_easiness
     plan.interval_days = new_interval
-    plan.last_quality = quality
+    plan.last_quality = int(round(q_clamped))
     plan.review_count = (plan.review_count or 0) + 1
     plan.mastery = mastery
     plan.next_review_at = _utcnow_naive() + timedelta(days=new_interval)
-    plan.priority = 0.35 if quality < 4 else (0.7 if new_interval <= 1 else 1.0)
+    plan.priority = 0.35 if q_clamped < 3.5 else (0.7 if new_interval <= 1 else 1.0)
 
-    db_profile = db.query(DBStudentProfile).filter(DBStudentProfile.student_id == student_id).first()
     if db_profile:
         concept_mastery = dict(db_profile.concept_mastery or {})
         concept_mastery[concept] = round(mastery, 2)
         db_profile.concept_mastery = concept_mastery
 
         weak_points = list(db_profile.weak_points or [])
-        if quality == 2 and concept not in weak_points:
-            weak_points.insert(0, concept)
-        elif quality in (4, 5) and mastery >= 0.7 and concept in weak_points:
-            weak_points = [item for item in weak_points if item != concept]
+        if q_clamped < 3.5:
+            if concept not in weak_points:
+                weak_points.insert(0, concept)
+        else:
+            if mastery >= 0.7 and concept in weak_points:
+                weak_points = [item for item in weak_points if item != concept]
         db_profile.weak_points = weak_points[:20]
 
     db.commit()
@@ -580,7 +615,7 @@ def apply_review_feedback(db: Session, student_id: str, concept: str, quality: i
     return plan
 
 
-def build_review_adaptation_payload(concept: str, quality: int, mastery: float | None = None) -> dict:
+async def build_review_adaptation_payload(concept: str, quality: int, mastery: float | None = None) -> dict:
     """Create a deterministic card-morphing payload for difficult reviews."""
     mastery_score = max(0.0, min(1.0, float(mastery if mastery is not None else 0.3)))
     if quality != 2:
@@ -606,9 +641,11 @@ def build_review_adaptation_payload(concept: str, quality: int, mastery: float |
     simplified = fallback_simplified
     try:
         from llm_client import DEFAULT_LLM
+        import asyncio
 
         llm_backend = getattr(DEFAULT_LLM, "__class__", type(DEFAULT_LLM)).__name__
-        generated = DEFAULT_LLM.generate(
+        generated = await asyncio.to_thread(
+            DEFAULT_LLM.generate,
             "你是 EduMatrix 的 Visualizer Agent 和 Director Agent。学生复习反馈为困难，请把概念降维成生活化解释。",
             (
                 f"概念: {concept}\n"

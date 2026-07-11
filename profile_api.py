@@ -191,12 +191,16 @@ async def get_profile(
     from embedding_models import EMBEDDINGS
     
     concepts = list((getattr(profile, "concept_mastery", {}) or {}).keys())
-    embeddings = {}
-    for c in concepts:
-        vec = EMBEDDINGS.embed(c)
-        if vec:
-            embeddings[c] = vec
-            
+    
+    def _bulk_embed(concepts_list):
+        res = {}
+        for c in concepts_list:
+            vec = EMBEDDINGS.embed(c)
+            if vec:
+                res[c] = vec
+        return res
+
+    embeddings = await asyncio.to_thread(_bulk_embed, concepts)
     coordinate_map = await asyncio.to_thread(poincare_to_2d_coordinates, embeddings)
 
     return {
@@ -659,6 +663,10 @@ async def get_learning_path(
 
     # 按层级分组
     tiers: dict[int, list[dict]] = {}
+    max_tier = max(concept_tier.values()) if concept_tier else 1
+    if max_tier == 0:
+        max_tier = 1
+
     for c, t in concept_tier.items():
         if t not in tiers:
             tiers[t] = []
@@ -667,7 +675,16 @@ async def get_learning_path(
         prereqs_ready = all(mastery.get(p, 0) >= 1 if p == "无" else mastery.get(p, 0) >= 0.4 for p in prereqs)
         mastered = score >= 0.7
 
-        bloom = "记忆" if score < 0.20 else "理解" if score < 0.40 else "应用" if score < 0.60 else "分析" if score < 0.75 else "评价" if score < 0.90 else "创造"
+        # Bloom cognitive level dynamically weighted by concept tier and mastery score
+        weighted_score = score * 0.7 + (t / max_tier) * 0.3
+        bloom = (
+            "记忆" if weighted_score < 0.15
+            else "理解" if weighted_score < 0.35
+            else "应用" if weighted_score < 0.55
+            else "分析" if weighted_score < 0.70
+            else "评价" if weighted_score < 0.85
+            else "创造"
+        )
 
         tiers[t].append({
             "concept": c,
@@ -793,19 +810,23 @@ async def get_learning_path(
 
     cognitive_load = getattr(profile, "cognitive_load", 0.45) or 0.45
     frustration = getattr(profile, "frustration_index", 0.0) or 0.0
-    micro_concept_graph = PATH_PLANNER.build_micro_graph(
+    import asyncio
+    micro_concept_graph = await asyncio.to_thread(
+        PATH_PLANNER.build_micro_graph,
         mastery,
         concept_tier=concept_tier,
         cognitive_load=cognitive_load,
         frustration=frustration,
     )
-    cross_domain_micro_graph = PATH_PLANNER.build_cross_disciplinary_graph(
+    cross_domain_micro_graph = await asyncio.to_thread(
+        PATH_PLANNER.build_cross_disciplinary_graph,
         mastery,
         concept_tier=concept_tier,
         cognitive_load=cognitive_load,
         frustration=frustration,
     )
-    adaptive_route = PATH_PLANNER.plan(
+    adaptive_route = await asyncio.to_thread(
+        PATH_PLANNER.plan,
         mastery,
         learning_goals=getattr(profile, "learning_goals", []) or [],
         weak_points=getattr(profile, "weak_points", []) or [],

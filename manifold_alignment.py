@@ -192,7 +192,7 @@ def verify_alignment(
         )
 
     # 检测是否为 mock 的 HashEmbeddingBackend
-    is_hash_embedding = (getattr(EMBEDDINGS, "name", "") == "hash-embedding")
+    is_hash_embedding = "hash-embedding" in getattr(EMBEDDINGS, "name", "")
 
     # 1. 预先提取并计算所有资源的嵌入向量，并应用流形投影与双曲转换
     embedded_resources = []

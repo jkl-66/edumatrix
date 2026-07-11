@@ -122,6 +122,12 @@ async def upload_document(
 
     hybrid_rag.ingest_user_documents(evidence_chunks)
 
+    try:
+        from learning_strategy import invalidate_graph_cache
+        invalidate_graph_cache()
+    except Exception:
+        pass
+
     return {
         "id": doc_id,
         "filename": filename,
@@ -221,6 +227,12 @@ async def delete_document(
         doc_file.unlink()
 
     hybrid_rag.remove_user_documents(filename)
+
+    try:
+        from learning_strategy import invalidate_graph_cache
+        invalidate_graph_cache()
+    except Exception:
+        pass
 
     return {"status": "deleted", "id": doc_id}
 

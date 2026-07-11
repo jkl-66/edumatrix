@@ -409,6 +409,24 @@ def _migrate_schema():
             conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN dkt_bias TEXT DEFAULT '[]'"))
             conn.commit()
 
+    # 迁移 quiz_records 和 wrong_questions
+    quiz_columns = [c["name"] for c in inspector.get_columns("quiz_records")]
+    if "options" not in quiz_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE quiz_records ADD COLUMN options TEXT DEFAULT '[]'"))
+            conn.commit()
+
+    wrong_columns = [c["name"] for c in inspector.get_columns("wrong_questions")]
+    if "pinned" not in wrong_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE wrong_questions ADD COLUMN pinned BOOLEAN DEFAULT 0"))
+            conn.commit()
+    if "notes" not in wrong_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE wrong_questions ADD COLUMN notes TEXT DEFAULT ''"))
+            conn.commit()
+
+
 def get_db():
     db = SessionLocal()
     try:

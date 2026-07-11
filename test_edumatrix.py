@@ -269,10 +269,87 @@ class EduMatrixPipelineTests(unittest.TestCase):
         engine = SM2Engine()
         card = engine.get_or_create(concept='逻辑回归', front='概念', back='解析', student_id='s-test')
         self.assertIsNotNone(card)
+        self.assertEqual(card.easiness, 2.5)
+        
+        # Test mathematical correctness: q=5 should add 0.1 to easiness (new = 2.6)
         engine.review('逻辑回归', 's-test', quality=5)
+        self.assertAlmostEqual(card.easiness, 2.6)
+        
+        # Test mathematical correctness: q=4 should keep easiness unchanged (remain = 2.6)
         engine.review('逻辑回归', 's-test', quality=4)
+        self.assertAlmostEqual(card.easiness, 2.6)
+        
         due = engine.get_due_cards('s-test')
         self.assertIsInstance(due, list)
+
+    def test_flashcard_bootstrapping_and_due_endpoint(self):
+        from app.database import SessionLocal, DBReviewPlan, DBStudentProfile
+        from flashcard_api import get_due_cards, get_all_cards
+        from anki_engine import get_sm2_engine
+        import uuid
+        from datetime import datetime
+        from unittest.mock import MagicMock
+        
+        student_id = f"test-bootstrap-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            # Create a student profile first to satisfy foreign key constraint
+            profile = DBStudentProfile(student_id=student_id)
+            session.add(profile)
+            session.commit()
+
+            # Create a review plan directly in DB
+            plan = DBReviewPlan(
+                student_id=student_id,
+                concept="激活函数",
+                interval_days=4,
+                next_review_at=datetime.utcnow(),
+                mastery=0.45,
+                easiness_factor=2.7,
+                last_quality=5
+            )
+            session.add(plan)
+            session.commit()
+            
+            # Ensure the in-memory engine doesn't have it (cache is cold)
+            engine = get_sm2_engine()
+            self.assertEqual(len(engine.get_all_cards(student_id)), 0)
+            
+            # Now call `/due` endpoint
+            import asyncio
+            mock_request = MagicMock()
+            
+            # Run get_due_cards synchronously
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+            async def run_call():
+                return await get_due_cards(mock_request, student_id=student_id, db=session)
+                
+            if loop.is_running():
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    res = executor.submit(asyncio.run, run_call()).result()
+            else:
+                res = loop.run_until_complete(run_call())
+                
+            self.assertEqual(res["due_count"], 1)
+            self.assertEqual(res["cards"][0]["concept"], "激活函数")
+            self.assertAlmostEqual(res["cards"][0]["easiness"], 2.7)
+            self.assertEqual(res["cards"][0]["interval_days"], 4)
+            
+            # Clean up DB
+            session.delete(profile)
+            session.commit()
+            # Clear memory cache
+            key = f"{student_id}::激活函数"
+            if key in engine._cards:
+                del engine._cards[key]
+        finally:
+            session.close()
 
     def test_learning_event_bus_subscribe_publish(self):
         from learning_event_bus import LearningEventBus

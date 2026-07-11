@@ -114,6 +114,71 @@ def _tokens(text: str) -> tuple[str, ...]:
     return tuple(token for token in tokens if token.strip())
 
 
+class CachingEmbeddingBackend:
+    def __init__(self, backend: EmbeddingBackend):
+        self._backend = backend
+        self._cache: dict[str, tuple[float, ...]] = {}
+        self.name = f"cached-{backend.name}"
+        
+        # Initialize SQLite DB in workspace root
+        import os
+        import sqlite3
+        self._db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embeddings_cache.db")
+        try:
+            conn = sqlite3.connect(self._db_path, timeout=10.0)
+            with conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS embedding_cache (text TEXT PRIMARY KEY, vector_json TEXT)"
+                )
+            conn.close()
+        except Exception:
+            pass
+
+    def embed(self, text: str) -> tuple[float, ...]:
+        if text in self._cache:
+            return self._cache[text]
+            
+        import sqlite3
+        import json
+        
+        # Try retrieving from SQLite
+        try:
+            conn = sqlite3.connect(self._db_path, timeout=10.0)
+            cursor = conn.cursor()
+            cursor.execute("SELECT vector_json FROM embedding_cache WHERE text = ?", (text,))
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                vec = tuple(float(x) for x in json.loads(row[0]))
+                self._cache[text] = vec
+                return vec
+        except Exception:
+            pass
+            
+        # Fallback to computing embedding
+        vec = self._backend.embed(text)
+        self._cache[text] = vec
+        
+        # Persist to SQLite
+        try:
+            conn = sqlite3.connect(self._db_path, timeout=10.0)
+            with conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO embedding_cache (text, vector_json) VALUES (?, ?)",
+                    (text, json.dumps(vec)),
+                )
+            conn.close()
+        except Exception:
+            pass
+            
+        return vec
+
+    def score(self, query: str, document: str) -> float:
+        q_vec = self.embed(query)
+        d_vec = self.embed(document)
+        return cosine_similarity(q_vec, d_vec)
+
+
 def build_embedding_backend() -> EmbeddingBackend:
     provider = CONFIG.embedding_provider.lower().strip()
     if provider == "sentence_transformer":
@@ -131,4 +196,4 @@ def build_embedding_backend() -> EmbeddingBackend:
     return HashEmbeddingBackend(dim=CONFIG.embedding_dim)
 
 
-EMBEDDINGS = build_embedding_backend()
+EMBEDDINGS = CachingEmbeddingBackend(build_embedding_backend())

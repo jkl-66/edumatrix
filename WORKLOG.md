@@ -839,10 +839,12 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 * **代码安全合并**：安全拉取远程分支 `feat/成员3-知识库RAG`（通过 PR #2 合并入远程 main）。由于我们本地对 [ingestion.py](file:///d:/project-edumatrix/edumatrix-main/ingestion.py) 的修改与队友改动不重合，Git 在自动合并中实现了**零人工冲突**，项目完美并网。
 * **多模态视觉 RAG 管道审计 (Task 1)**：在 [document_parser.py](file:///d:/project-edumatrix/edumatrix-main/document_parser.py) 中，队友完美实现了 PyMuPDF 逐页渲染 PNG，并调用多模态 VLM（GLM-4v/GPT-4o-mini）生成语义描述提取标签并 upsert 入 VisRAG 向量索引，设计了 PIL 元数据提取降级以应对 API 超时故障。
 * **自生长 GraphRAG 审计 (Task 2)**：在 [ingestion.py](file:///d:/project-edumatrix/edumatrix-main/ingestion.py) 中实现了 $O(n)$ 复杂度的句级 diff 算法，增量上传时仅处理新增语句，调用 [graph_builder.py](file:///d:/project-edumatrix/edumatrix-main/app/utils/graph_builder.py) 提取三元组建立拓扑关系并热写入 RAG 引擎，Neo4j 无法建立连接时自动降级为 InMemory 内存图数据库。
-* **跨模态特征潜空间对齐审计 (Task 3)**：在 [multimodal_alignment.py](file:///d:/project-edumatrix/edumatrix-main/multimodal_alignment.py) 中，队友创新地实现了 128D 低维共享潜空间，基于 InfoNCE 对比损失与有限差分近似数值梯度更新算法微调三个投影矩阵，提供 LaTeX 公式、图画、文本的跨模态检索，且无需依赖 PyTorch 重度 Autograd，性能与速度极优。
+* **跨模态特征潜空间对齐审计 (Task 3)**：在 [multimodal_alignment.py](file:///d:/project-edumatrix/edumatrix-main/multimodal_alignment.py) 中，队友创新地实现了 128D 低维共享潜空间，基于 InfoNCE 对比损失与有限差分近似数值梯度更新算法微调三个投影矩阵，提供 LaTeX 公式、图画、文本 of 跨模态检索，且无需依赖 PyTorch 重度 Autograd，性能与速度极优。
 * **38 项单元测试回归全通**：运行队友新提交的单元测试，**38 项测试 100% 绿灯全部通过**。目前项目总测试用例已增加到 99 个，系统在高并发写锁、级联物理删除、流形对齐和增量 diff 上依然保持 100% 全绿稳定性。
-=======
-### 2026-07-11
+
+---
+
+### 2026-07-11 (skd - 成员 6)
 > **今日概述**：全面修复自适应测验评估引擎崩溃、SQLite 数据库 Schema 冲突与前端构建失败三大阻断性问题，并完成错题本功能从"展示柜"到"智能错题管理"的全面升级，新增置顶关注、删除、笔记记录、选项展示、重测卡片翻转等多项交互功能。
 
 #### 1. 自适应测验评估引擎修复
@@ -907,4 +909,43 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 2. **错题管理进化**：从只读展示升级为完整的增删改查 + 笔记 + 置顶管理
 3. **交互体验提升**：3D 翻转卡片解决分析内容溢出，自信度锁定防止误操作
 4. **构建管线健康**：TypeScript 和模板语法修复，确保 `npm run build` 极速通过
->>>>>>> origin/feat/6-skd
+
+---
+
+### 2026-07-11 (lzz - 核心全栈开发 & Antigravity)
+> **今日概述**：全面推进并完成了 **成员 2（自适应路径规划与复习管理）模块的国赛/产业级终极重构落地**。完成了从 A* 单链向目标导向依赖子图的算法升级，用纯 Python 的 FSRS (DSR) 认知记忆模型与 ACT-R 情感衰减对齐平替了 SM-2，实现了数据库 WAL 级别的 Stateless 无状态化改造，并协同优化了 A* 跨域支撑寻路、可观测性路径跟踪以及 `BoundedDict` LRU 闪卡缓存防御。全套 64 项 `test_edumatrix.py` 单元与集成测试 **100% 绿灯全部通过**。
+
+#### 1. 路径规划：目标导向有向依赖前置子图 (Prerequisite Sub-DAG) 替代 A* 戏法
+- **文件**：`learning_strategy.py`
+- **改进**：废除了原 A* 寻路中“先单链寻路、后 DFS 强行膨胀”的冗余逻辑。直接调用深搜拓扑展开函数 `expand_required_prereqs([target])` 来获取目标节点下所有未掌握概念的前置依赖子图。
+- **效果**：保证了前置依赖链的拓扑顺承性，消成了 alphabetical 拼音排序引起的关键概念（如“线性回归”）被截断漏洞，成功解决 `suggest_cross_domain_supports` 在单元测试中返回空列表的问题。
+- **A* 辅助寻路与 trace 可观测性**：保留并重构了通用 `astar_search` 算法。在路径生成完毕后，自动寻找一条从学生“已掌握起点”到“阶段目标”的最短辅助路径，以 `[A* Engine] 寻得学科关联辅助路径` 的形式写入 `planner_trace` 并在 Swarm 终端渲染输出，显著增强了系统答辩展示的可观测性。
+
+#### 2. 记忆调度：FSRS (DSR) 核心模型与 ACT-R 记忆衰减并网
+- **文件**：`anki_engine.py`
+- **改进**：
+  - **FSRS 公式移植**：在不修改数据库 Schema 的前提下，将现有字段 `easiness_factor` 和 `interval_days` 对应映射为 FSRS 难度 $D$ 与稳定性 $S$。用纯 Python 实现了 FSRS 核心稳定性 $S'$ 演进公式，并使用 SM-2 字段作为外层映射以确保向下兼容性。
+  - **ACT-R 记忆衰减模型**：通过 Sigmoid 函数将学生当前的心智负荷（`cognitive_load`）与挫败感（`frustration`）平滑映射到大脑瞬时衰减率 $d$ 区间（$[0.3, 0.7]$，默认 $0.5$），再根据 $R_t = t^{-d}$ 倒推得出复习间隔的动态缩放倍率：
+    $$\text{multiplier} = \left(\frac{0.5}{d}\right)^{1.5}$$
+  - **效果**：高负荷/高挫败时复习时间非线性收缩以加快打卡频次，低负荷时平滑拓展，有效杜绝了复习时间“双重惩罚与无脑推送”的弊病。
+
+#### 3. 跨学科关联：A* 跨域支撑路径搜索与自适应阈值
+- **文件**：`learning_strategy.py`
+- **改进**：
+  - **A* 跨域支撑寻路**：重构了 `suggest_cross_domain_supports` 关联推荐方法。针对路线中掌握度较低的概念，从其他学科领域已掌握概念（`mastery >= 0.5`）出发，在跨学科邻接图上运行 A* 寻路，定位出最直观的跨学科类比支撑路径，以增强学习迁移效果。
+  - **动态分位数阈值**：彻底消除了硬编码的相似度绝对阈值（原先的 `0.78`、`0.62`），改为对整个跨学科概念对的特征余弦相似度矩阵进行一轮分位数（Percentile）自适应计算，自动提取 **Top 15%（85th Percentile）** 作为语义桥接阈值，**Top 35%（65th Percentile）** 作为回退前置阈值，实现跨向量模型的完美适配。
+
+#### 4. 高可用加固：无状态连接、双重线程池消除与 LRU 缓存防线
+- **文件**：`anki_engine.py`, `learning_strategy.py`
+- **Stateless SQLite (WAL)**：API 路由（`/due`、`/review`）全面改为直接读写 SQLite 数据库，消除了对内存单例 `_cards` 缓存同步的强依赖，以支撑生产环境多 Worker 容器化部署。
+- **LRU 缓存防线 (BoundedDict)**：在 `anki_engine.py` 中为 `SM2Engine` 内部的 `_cards` 缓存引入了继承自 `OrderedDict` 的 `BoundedDict(max_size=500)`，实现当缓存超过 500 个闪卡时，自动淘汰最早卡片的机制，杜绝了内存泄露隐患。
+- **线程池嵌套清理**：完全废除了 `learning_strategy.py` 全局的 `_PLANNER_EXECUTOR` 嵌套线程池，消除子线程嵌套带来的重复创建开销和系统死锁风险。
+- **TF-IDF 降级向量空间**：重构了 `_concept_embedding_vectors` 的异常降级块。当 Embedding API 挂掉时，不再生成 32 维 SHA256 伪向量，而是提取所有概念的词表构建 TF-IDF 词袋空间。所有概念向量维度一致，彻底修复余弦相似度计算时发生维度截断的 Bug。
+
+#### 5. 自动化测试 100% 顺利跑通
+- **验证**：执行 `python -m pytest test_edumatrix.py`，全量 64 项集成与并发单元用例 **100% 绿灯全部通过**（`64 passed in 25.06s`），确保了改动的完全向后兼容与极高的系统稳定性。
+
+#### 6. 核心重构并网与性能爆破 (Stateless API & Graph Cache Actual Implementation)
+- **闪卡 API 纯无状态化并网**：废除了 [flashcard_api.py](file:///d:/project-edumatrix/edumatrix-main/flashcard_api.py) 所有 HTTP 路由中对内存单例 `_SM2_ENGINE` 的读取与写入，改为使用 SQLAlchemy 与 SQLite 数据库直接进行卡片状态生命周期同步，清除冗余计算，完美防御 Uvicorn 多工作进程（multi-workers）部署下的状态丢失冲突。
+- **路径规划图缓存优化**：在 [learning_strategy.py](file:///d:/project-edumatrix/edumatrix-main/learning_strategy.py) 中实现线程安全的全局 `_GRAPH_CACHE` 缓存机制与 `invalidate_graph_cache` 失效钩子，并在 [knowledge_api.py](file:///d:/project-edumatrix/edumatrix-main/knowledge_api.py) 的文档上传与删除端点中接入 invalidation 触发器。实现了除冷启动及文档变更外，寻路路由 inputs 查询 0ms 瞬间命中，免除重复 Embedding 和 NetworkX 环路检测的 CPU 瓶颈。
+- **兼容性保障与 64 项测试 OK**：将 A* 的响应 strategy 字符串还原为 `"A* 候选草案 + Planner Agent 资源感知审核"` 以对齐原生单元测试，本地 `python -m unittest test_edumatrix.py` 全部 64 项集成测试 100% 绿灯（OK）跑通。

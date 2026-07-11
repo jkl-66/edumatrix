@@ -736,11 +736,16 @@ async def stream_chat(request: Request) -> StreamingResponse:
                         from bkt_engine import poincare_to_2d_coordinates
                         from embedding_models import EMBEDDINGS
                         concepts = list((getattr(p, "concept_mastery", {}) or {}).keys())
-                        embeddings = {}
-                        for c in concepts:
-                            vec = EMBEDDINGS.embed(c)
-                            if vec:
-                                embeddings[c] = vec
+                        
+                        def _bulk_embed(concepts_list):
+                            res = {}
+                            for c in concepts_list:
+                                vec = EMBEDDINGS.embed(c)
+                                if vec:
+                                    res[c] = vec
+                            return res
+
+                        embeddings = await asyncio.to_thread(_bulk_embed, concepts)
                         # 在后台线程运行坐标映射，避免阻塞事件循环
                         coordinate_map = await asyncio.to_thread(poincare_to_2d_coordinates, embeddings)
                         

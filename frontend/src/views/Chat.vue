@@ -29,6 +29,7 @@ import MasteryRadar from '../components/MasteryRadar.vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 import LocalVideoPlayer from '../components/LocalVideoPlayer.vue'
 import ManifoldVisualizer from '../components/ManifoldVisualizer.vue'
+import IncrementalMarkdownRenderer from '../components/IncrementalMarkdownRenderer.vue'
 
 const props = defineProps({ studentId: String })
 const chatStore = useChatStore()
@@ -40,6 +41,7 @@ const route = useRoute()
 // --- Chat State ---
 const messages = computed(() => chatStore.messages)
 const sending = computed(() => chatStore.sending)
+const streamingContent = computed(() => chatStore.streamingContent || '')
 
 const capturedInitialProfile = ref(null)
 const latestProfile = ref(null)
@@ -1866,7 +1868,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
                       </button>
                       <span class="text-[9px] text-gray-300">💡 点击代码块/公式可即时答疑</span>
                     </div>
-                    <div class="prose prose-sm max-w-none text-sm" v-html="renderMarkdown(msg.content)"></div>
+                    <!-- 增量渲染：流式消息用 IncrementalMarkdownRenderer，完成消息用 renderMarkdown -->
+                    <IncrementalMarkdownRenderer v-if="idx === messages.length - 1 && chatStore.sending && streamingContent" :text="streamingContent" />
+                    <div v-else class="prose prose-sm max-w-none text-sm" v-html="renderMarkdown(msg.content)"></div>
                     <!-- 打字光标 -->
                     <span v-if="idx === messages.length - 1 && chatStore.sending && chatStore.streamingMode !== 'matrix'"
                       class="inline-block w-[2px] h-4 bg-blue-500 animate-pulse ml-0.5 align-text-bottom" />

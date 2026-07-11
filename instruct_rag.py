@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import AsyncGenerator
 
 from llm_client import AsyncLLMBackend, DEFAULT_ASYNC_LLM, LLMBackend
 from models import AgentOutput, Evidence, GraphContext, StudentProfile
@@ -278,6 +279,34 @@ class AsyncInstructRAGGenerator:
             citations=tuple(item.id for item in evidence),
             private_rationale=plan.private_rationale,
         )
+
+    async def generate_stream(
+        self,
+        *,
+        role: str,
+        resource_type: str,
+        query: str,
+        graph_context: GraphContext,
+        evidence: tuple[Evidence, ...],
+        profile: StudentProfile,
+        correction: str = "",
+        conversation_memory: str = "",
+        forced_instruction: str = "",
+    ) -> AsyncGenerator[str, None]:
+        """流式版本：逐 token yield，同时累积完整内容供后续使用。"""
+        plan = self._build_plan(
+            role=role,
+            resource_type=resource_type,
+            query=query,
+            graph_context=graph_context,
+            evidence=evidence,
+            profile=profile,
+            correction=correction,
+            conversation_memory=conversation_memory,
+            forced_instruction=forced_instruction,
+        )
+        async for token in self.llm.generate_stream(plan.system_prompt, plan.user_prompt, role=role):
+            yield token
 
     def _build_plan(
         self,

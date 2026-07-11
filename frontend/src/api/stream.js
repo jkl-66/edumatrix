@@ -152,3 +152,66 @@ export async function socraticExplain(opts) {
   }, { headers: buildHeaders() })
   return r.data
 }
+
+/**
+ * 流式版本：逐 token 回调 content，完成后回调 complete(content, trace)
+ */
+export function socraticExplainStream(opts, onContent, onComplete, onError) {
+  const controller = new AbortController()
+  const headers = buildHeaders()
+
+  fetch('/api/stream/explain', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({
+      target_text: opts.target_text,
+      context_before: opts.context_before || '',
+      context_after: opts.context_after || '',
+      student_id: opts.student_id || 'default',
+      follow_up: opts.follow_up || '',
+      history: opts.history || '',
+    }),
+    signal: controller.signal,
+  }).then(response => {
+    if (!response.ok) {
+      onError?.(new Error(`HTTP ${response.status}`))
+      return
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    function read() {
+      reader.read().then(({ done, value }) => {
+        if (done) return
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        let currentEvent = ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (trimmed.startsWith('event: ')) {
+            currentEvent = trimmed.slice(7).trim()
+          } else if (trimmed.startsWith('data: ') && currentEvent) {
+            try {
+              const data = JSON.parse(trimmed.slice(6))
+              if (currentEvent === 'content') {
+                onContent?.(data.content || '')
+              } else if (currentEvent === 'complete') {
+                onComplete?.(data.content || '', data)
+              }
+            } catch {}
+          }
+        }
+        read()
+      }).catch(err => {
+        if (err.name !== 'AbortError') onError?.(err)
+      })
+    }
+    read()
+  }).catch(err => {
+    if (err.name !== 'AbortError') onError?.(err)
+  })
+
+  return controller
+}

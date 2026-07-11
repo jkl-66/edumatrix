@@ -4,7 +4,7 @@
  * 背景点击→最小化到浮动图标，X按钮→关闭
  */
 import { ref, onMounted, nextTick, watch } from 'vue'
-import { socraticExplain } from '../api'
+import { socraticExplainStream } from '../api'
 
 const emit = defineEmits(['close'])
 
@@ -46,38 +46,64 @@ watch(() => props.targetText, async (newVal) => {
   }
 })
 
+let streamController = null
+
 async function fetchExplanation(followUpText = '') {
   loading.value = true
   error.value = ''
-  try {
-    const result = await socraticExplain({
-      target_text: props.targetText,
-      context_before: props.contextBefore,
-      context_after: props.contextAfter,
-      student_id: props.studentId,
-      follow_up: followUpText,
-      history: conversationHistory.value,
-    })
-    if (result.status === 'success' || result.status === 'fallback') {
-      const content = result.content || ''
-      const newSteps = content.split('\n').filter(line => line.trim())
+  
+  // 先添加用户追问到步骤列表
+  if (followUpText) {
+    steps.value.push('', `🙋 你: ${followUpText}`, '')
+  }
+  
+  let accumulatedContent = ''
+  const firstIndex = steps.value.length
+  
+  streamController = socraticExplainStream({
+    target_text: props.targetText,
+    context_before: props.contextBefore,
+    context_after: props.contextAfter,
+    student_id: props.studentId,
+    follow_up: followUpText,
+    history: conversationHistory.value,
+  },
+  // onContent: 每收到一个 token 追加到最后一行
+  (token) => {
+    accumulatedContent += token
+    // 持续更新最后一行
+    const lines = accumulatedContent.split('\n').filter(l => l.trim())
+    if (firstIndex === 0 && !followUpText) {
+      steps.value = lines
+    } else {
+      // 保留前面的内容，只更新最后的流式行
+      const baseSteps = steps.value.slice(0, firstIndex)
       if (followUpText) {
-        steps.value.push('', `🙋 你: ${followUpText}`, '')
-        steps.value.push(...newSteps)
+        // 第一次追问后：保留 "🙋 你: xxx" 那行
+        const beforeSteps = steps.value.slice(0, firstIndex)
+        steps.value = [...beforeSteps, ...lines]
       } else {
-        steps.value = newSteps
-      }
-      if (followUpText) {
-        conversationHistory.value += `\n学生: ${followUpText}\n导师: ${content}`
-      } else {
-        conversationHistory.value = `导师: ${content}`
+        steps.value = [...baseSteps, ...lines]
       }
     }
-  } catch (e) {
-    error.value = e.message || '请求失败'
+  },
+  // onComplete: 流式结束
+  (fullContent, data) => {
+    if (followUpText) {
+      conversationHistory.value += `\n学生: ${followUpText}\n导师: ${fullContent}`
+    } else {
+      conversationHistory.value = `导师: ${fullContent}`
+    }
+    loading.value = false
+    streamController = null
+  },
+  // onError
+  (err) => {
+    error.value = err.message || '请求失败'
     if (!followUpText) steps.value = generateFallback(props.targetText)
-  }
-  loading.value = false
+    loading.value = false
+    streamController = null
+  })
 }
 
 function generateFallback(text) {

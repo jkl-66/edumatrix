@@ -259,6 +259,7 @@ class DBQuizRecord(Base):
     next_action = Column(String(64), default="review")  # review / practice / advance
     attempt_number = Column(Integer, default=1)
     session_id = Column(String(64), default="")
+    options = Column(JSON, default=list)
     created_at = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="quiz_records")
@@ -303,6 +304,8 @@ class DBWrongQuestion(Base):
     quiz_record_id = Column(String(64), ForeignKey("quiz_records.id", ondelete="CASCADE"), nullable=True)
     concept_name = Column(String(128), index=True)
     wrong_reason_category = Column(String(128), nullable=True)
+    pinned = Column(Boolean, default=False, index=True)
+    notes = Column(Text, default="")
     created_at = Column(DateTime, default=_utcnow)
 
     student_profile = relationship("DBStudentProfile", back_populates="wrong_questions")

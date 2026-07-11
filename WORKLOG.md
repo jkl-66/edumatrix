@@ -594,7 +594,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
     - 完成 `review_plans` 持久化 SM-2 闭环：手动创建复习计划、提交困难/一般/简单反馈、更新 E-Factor/间隔/下次复习时间并在 `Review.vue` 展示。
     - 在 `learning_strategy.py` 实现 `PathPlanner`、微概念图谱、跨学科混合图谱、确定性图嵌入与 A* 多约束动态路径生成。
     - 在 `profile_api.py` 复用既有 `getLearningPath` 接口扩展 `adaptive_route`、`micro_concept_graph`、`cross_domain_micro_graph` 字段，保持原有字段兼容。
-    - 在 `LearningPathGraph.vue` 展示 A* 5-8 步推荐路线、路径代价、置信度、图谱约束和跨学科补强建议。
+    - 在 `LearningPathGraph.vue` 展示 A* 5-8 步推荐路线、预计学习时间、置信度、推荐依据和跨学科补强建议。
     - 在 `App.vue` 增加窄屏自动折叠侧边栏，减少成员 2 页面在移动端被固定导航挤压的问题。
     - 复核 `RevisionCalendar.vue` 现有复习打卡、连续天数、搜索选择知识点、历史曲线和日志能力，确认成员 2 前端页面均有对应实现。
   * **验证**:

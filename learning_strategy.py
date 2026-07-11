@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import heapq
+import hashlib
 import math
+import re
 from typing import Any
 
+from animation_resources import find_animation_dir, load_animation_resource_index
+from embedding_models import EMBEDDINGS, cosine_similarity as embedding_cosine_similarity
 from models import (
     LearningStateCause,
     LearningStrategyPlan,
@@ -68,6 +72,305 @@ def _concepts_from_dag(dag: dict[str, list[str]], mastery: dict[str, float] | No
     return concepts
 
 
+def _safe_unique(values: list[str] | tuple[str, ...] | set[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        item = str(value).strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _has_forward_path(dag: dict[str, list[str]], source: str, target: str) -> bool:
+    """Return True if source can already reach target in concept -> prereqs DAG."""
+    if source == target:
+        return True
+    forward: dict[str, set[str]] = {}
+    for concept, prereqs in dag.items():
+        for prereq in prereqs or []:
+            forward.setdefault(prereq, set()).add(concept)
+    stack = [source]
+    visited: set[str] = set()
+    while stack:
+        node = stack.pop()
+        if node == target:
+            return True
+        if node in visited:
+            continue
+        visited.add(node)
+        stack.extend(sorted(forward.get(node, set()) - visited))
+    return False
+
+
+def _merge_prerequisite(
+    dag: dict[str, list[str]],
+    concept: str,
+    prereq: str,
+    *,
+    source: str,
+    edge_sources: dict[tuple[str, str], str],
+) -> bool:
+    concept = str(concept).strip()
+    prereq = str(prereq).strip()
+    if not concept or not prereq or concept == prereq:
+        return False
+    dag.setdefault(concept, [])
+    dag.setdefault(prereq, dag.get(prereq, []))
+    if prereq in dag[concept]:
+        edge_sources.setdefault((prereq, concept), source)
+        return False
+    if _has_forward_path(dag, concept, prereq):
+        return False
+    dag[concept].append(prereq)
+    dag[concept] = _safe_unique(dag[concept])
+    edge_sources[(prereq, concept)] = source
+    return True
+
+
+def _animation_index() -> dict[str, dict[str, Any]]:
+    base_dir = find_animation_dir()
+    if base_dir is None:
+        return {}
+    return load_animation_resource_index(str(base_dir))
+
+
+def _resource_signal(
+    concept: str,
+    resource_index: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    resource_index = resource_index or {}
+    item = resource_index.get(concept) or {}
+    local_count = int(item.get("local_available_count") or 0)
+    video_count = int(item.get("video_count") or item.get("downloaded") or 0)
+    image_count = int(item.get("image_count") or 0)
+    total_count = int(item.get("count") or local_count or video_count or 0)
+    first_video = next(
+        (file for file in item.get("local_files", []) if file.get("media_type") == "video"),
+        {},
+    )
+    return {
+        "has_animation": video_count > 0,
+        "animation_count": max(total_count, local_count, video_count),
+        "local_media_count": local_count,
+        "video_count": video_count,
+        "image_count": image_count,
+        "platforms": list(item.get("platforms") or []),
+        "media_types": list(item.get("media_types") or []),
+        "preview_title": item.get("preview_title", ""),
+        "sample_titles": list(item.get("titles") or [])[:3],
+        "first_video_url": first_video.get("url", ""),
+        "first_video_name": first_video.get("filename", ""),
+    }
+
+
+def _resource_text(concept: str, resource_index: dict[str, dict[str, Any]] | None = None) -> str:
+    resource = (resource_index or {}).get(concept) or {}
+    parts = [
+        concept,
+        resource.get("category", ""),
+        " ".join(resource.get("categories") or []),
+        " ".join(str(title) for title in (resource.get("titles") or [])[:5]),
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _concept_tags(concept: str, resource_index: dict[str, dict[str, Any]] | None = None) -> set[str]:
+    """Extract lightweight semantic tags from concept/resource text instead of static concept maps."""
+    text = _resource_text(concept, resource_index)
+    tags = set(re.findall(r"[a-zA-Z0-9_+\-.]+|[\u4e00-\u9fff]{2,}", text.lower()))
+    tags.update((resource_index or {}).get(concept, {}).get("categories") or [])
+
+    signal_keywords = (
+        "优化", "梯度", "导数", "微积分", "矩阵", "向量", "概率", "统计", "贝叶斯",
+        "回归", "分类", "监督", "评估", "验证", "卷积", "池化", "图像", "滤波",
+        "神经网络", "传播", "激活", "注意力", "Transformer", "特征", "序列",
+    )
+    for keyword in signal_keywords:
+        if keyword.lower() in text.lower():
+            tags.add(keyword)
+    return {tag for tag in tags if tag and len(tag) <= 18}
+
+
+def _concept_domain(concept: str, resource_index: dict[str, dict[str, Any]] | None = None) -> str:
+    """Infer a display domain from resource metadata and generic lexical signals.
+
+    This intentionally avoids the old concept-by-concept static domain table so
+    uploaded GraphRAG entities and animation folders can form new domains.
+    """
+    resource = (resource_index or {}).get(concept) or {}
+    category = str(resource.get("category") or "").strip()
+    if category:
+        return f"resource:{category}"
+
+    text = _resource_text(concept, resource_index)
+    lowered = text.lower()
+    if any(key in text for key in ("导数", "微积分", "矩阵", "向量", "线性代数", "概率", "统计", "贝叶斯")):
+        return "inferred:数学/统计基础"
+    if any(key in text for key in ("卷积", "池化", "图像", "滤波", "特征图")):
+        return "inferred:视觉/信号处理"
+    if any(key in lowered for key in ("transformer", "attention")) or any(key in text for key in ("神经网络", "传播", "激活", "注意力")):
+        return "inferred:深度学习"
+    if any(key in text for key in ("回归", "分类", "监督", "决策树", "支持向量", "交叉验证", "模型评估")):
+        return "inferred:机器学习方法"
+    return "course:课程图谱"
+
+
+def _domain_label(domain: str) -> str:
+    if ":" in domain:
+        return domain.split(":", 1)[1]
+    return domain or "课程图谱"
+
+
+def _infer_resource_prerequisite_edges(
+    active_dag: dict[str, list[str]],
+    resource_index: dict[str, dict[str, Any]],
+    edge_sources: dict[tuple[str, str], str],
+    *,
+    protected_concepts: set[str] | None = None,
+) -> int:
+    """Infer missing resource prerequisites from metadata/embedding similarity.
+
+    Resource edges are only added for concepts that do not already have known
+    prerequisites, so local videos can enrich cold-start topics without
+    overriding GraphRAG or course topology.
+    """
+    if not resource_index:
+        return 0
+
+    protected_concepts = protected_concepts or set()
+    concepts = _concepts_from_dag(active_dag) | set(resource_index)
+    tiers = compute_concept_tiers(active_dag, concepts)
+    embeddings, _, _ = _concept_embedding_vectors(concepts, resource_index)
+    added = 0
+
+    for concept in sorted(resource_index):
+        active_dag.setdefault(concept, [])
+        if concept in protected_concepts:
+            continue
+        if active_dag.get(concept):
+            continue
+
+        concept_tags = _concept_tags(concept, resource_index)
+        concept_text = _resource_text(concept, resource_index)
+        candidates: list[tuple[float, str]] = []
+        for prereq in sorted(concepts):
+            if prereq == concept or prereq not in active_dag:
+                continue
+            if _has_forward_path(active_dag, concept, prereq):
+                continue
+            if tiers.get(prereq, 0) > tiers.get(concept, 99):
+                continue
+
+            overlap = len(concept_tags & _concept_tags(prereq, resource_index))
+            similarity = embedding_cosine_similarity(embeddings[concept], embeddings[prereq])
+            if prereq in concept_text:
+                similarity = max(similarity, 0.9)
+            if overlap:
+                similarity = max(similarity, 0.68 + min(0.22, overlap * 0.04))
+            if similarity >= 0.82:
+                candidates.append((similarity, prereq))
+
+        for _similarity, prereq in sorted(candidates, key=lambda item: (-item[0], tiers.get(item[1], 99), item[1]))[:1]:
+            if _merge_prerequisite(active_dag, concept, prereq, source="animation_resource_inferred", edge_sources=edge_sources):
+                added += 1
+
+    return added
+
+
+def build_resource_aware_dag(
+    base_dag: dict[str, list[str]],
+    *,
+    resource_index: dict[str, dict[str, Any]] | None = None,
+    include_rag: bool = True,
+) -> tuple[dict[str, list[str]], dict[str, Any]]:
+    """Fuse static seed, GraphRAG edges and local animation concepts into one DAG."""
+    resource_index = resource_index if resource_index is not None else _animation_index()
+    active_dag = {str(concept): _safe_unique(tuple(prereqs or ())) for concept, prereqs in base_dag.items()}
+    edge_sources: dict[tuple[str, str], str] = {}
+    for concept, prereqs in active_dag.items():
+        for prereq in prereqs:
+            edge_sources[(prereq, concept)] = "seed_dag"
+
+    rag_edges_added = 0
+    if include_rag:
+        try:
+            from rag_engine import graph_rag
+
+            reverse = getattr(graph_rag, "reverse", {}) or {}
+            for target, prereqs in reverse.items():
+                for prereq in prereqs or []:
+                    if _merge_prerequisite(active_dag, str(target), str(prereq), source="graph_rag", edge_sources=edge_sources):
+                        rag_edges_added += 1
+        except Exception:
+            rag_edges_added = 0
+
+    animation_edges_added = 0
+    protected_concepts = _concepts_from_dag(active_dag)
+    for concept in sorted(resource_index):
+        active_dag.setdefault(concept, [])
+    animation_edges_added = _infer_resource_prerequisite_edges(
+        active_dag,
+        resource_index,
+        edge_sources,
+        protected_concepts=protected_concepts,
+    )
+
+    for concept in active_dag:
+        active_dag[concept] = sorted(_safe_unique(tuple(active_dag[concept])))
+
+    metadata = {
+        "base_node_count": len(_concepts_from_dag(base_dag)),
+        "active_node_count": len(_concepts_from_dag(active_dag)),
+        "base_edge_count": sum(len(prereqs or []) for prereqs in base_dag.values()),
+        "active_edge_count": sum(len(prereqs or []) for prereqs in active_dag.values()),
+        "base_concepts": sorted(_concepts_from_dag(base_dag)),
+        "active_concepts": sorted(_concepts_from_dag(active_dag)),
+        "rag_edges_added": rag_edges_added,
+        "animation_edges_added": animation_edges_added,
+        "resource_edges_inferred": animation_edges_added,
+        "animation_concepts": sorted(resource_index),
+        "animation_concept_count": len(resource_index),
+        "animation_dataset_dir": next((item.get("base_dir", "") for item in resource_index.values() if item.get("base_dir")), ""),
+        "edge_sources": {f"{source}->{target}": origin for (source, target), origin in edge_sources.items()},
+    }
+    return active_dag, metadata
+
+
+def _concept_embedding_text(concept: str, resource_index: dict[str, dict[str, Any]]) -> str:
+    resource = resource_index.get(concept) or {}
+    parts = [
+        concept,
+        resource.get("category", ""),
+        " ".join(resource.get("categories") or []),
+        " ".join(_concept_tags(concept, resource_index)),
+        " ".join(str(title) for title in (resource.get("titles") or [])[:3]),
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _concept_embedding_vectors(
+    concepts: set[str],
+    resource_index: dict[str, dict[str, Any]],
+) -> tuple[dict[str, tuple[float, ...]], str, str]:
+    vectors: dict[str, tuple[float, ...]] = {}
+    error = ""
+    for concept in sorted(concepts):
+        text = _concept_embedding_text(concept, resource_index)
+        try:
+            vectors[concept] = tuple(float(value) for value in EMBEDDINGS.embed(text))
+        except Exception as exc:
+            error = str(exc)
+            fallback = [0.0] * 32
+            for token in sorted(_concept_tags(concept, resource_index) | {concept}):
+                digest = hashlib.sha256(token.encode("utf-8")).digest()
+                fallback[int.from_bytes(digest[:2], "big") % len(fallback)] += 1.0
+            vectors[concept] = tuple(_normalize_vector(fallback))
+    return vectors, getattr(EMBEDDINGS, "name", "unknown"), error
+
+
 def compute_concept_tiers(
     dag: dict[str, list[str]],
     concepts: set[str] | None = None,
@@ -95,114 +398,11 @@ def compute_concept_tiers(
     return concept_tier
 
 
-CROSS_DISCIPLINARY_MICRO_CONCEPTS: dict[str, dict[str, Any]] = {
-    "偏导数": {
-        "domain": "mathematics",
-        "tags": ("梯度", "优化", "微积分"),
-        "supports": ("梯度下降", "反向传播"),
-    },
-    "矩阵乘法": {
-        "domain": "mathematics",
-        "tags": ("线性代数", "向量", "参数"),
-        "supports": ("线性回归", "神经网络"),
-    },
-    "向量空间": {
-        "domain": "mathematics",
-        "tags": ("几何", "间隔", "特征"),
-        "supports": ("支持向量机", "特征工程"),
-    },
-    "信息熵": {
-        "domain": "statistics",
-        "tags": ("不确定性", "划分", "概率"),
-        "supports": ("决策树", "模型评估"),
-    },
-    "贝叶斯定理": {
-        "domain": "statistics",
-        "tags": ("概率", "先验", "后验"),
-        "supports": ("朴素贝叶斯",),
-    },
-    "概率分布": {
-        "domain": "statistics",
-        "tags": ("概率", "数据", "评估"),
-        "supports": ("交叉验证", "模型评估", "朴素贝叶斯"),
-    },
-    "滤波器": {
-        "domain": "signal_processing",
-        "tags": ("卷积", "局部感受野", "图像"),
-        "supports": ("卷积核", "卷积神经网络"),
-    },
-    "图像降采样": {
-        "domain": "signal_processing",
-        "tags": ("图像", "压缩", "池化"),
-        "supports": ("池化层", "最大池化", "平均池化"),
-    },
-    "电磁场叠加": {
-        "domain": "physics",
-        "tags": ("叠加", "加权求和", "注意力"),
-        "supports": ("注意力机制", "Transformer"),
-    },
-}
-
-CONCEPT_DOMAIN_HINTS = {
-    "链式法则": "mathematics",
-    "梯度下降": "mathematics",
-    "线性回归": "statistics",
-    "逻辑回归": "statistics",
-    "朴素贝叶斯": "statistics",
-    "交叉验证": "statistics",
-    "混淆矩阵": "statistics",
-    "模型评估": "statistics",
-    "卷积核": "signal_processing",
-    "池化层": "signal_processing",
-    "最大池化": "signal_processing",
-    "平均池化": "signal_processing",
-    "特征图": "signal_processing",
-}
-
-DOMAIN_ORDER = ("machine_learning", "mathematics", "statistics", "signal_processing", "physics")
-DOMAIN_LABELS = {
-    "machine_learning": "机器学习",
-    "mathematics": "数学",
-    "statistics": "统计学",
-    "signal_processing": "信号处理",
-    "physics": "物理",
-}
-
-
-def _concept_domain(concept: str) -> str:
-    if concept in CROSS_DISCIPLINARY_MICRO_CONCEPTS:
-        return str(CROSS_DISCIPLINARY_MICRO_CONCEPTS[concept]["domain"])
-    return CONCEPT_DOMAIN_HINTS.get(concept, "machine_learning")
-
-
-def _concept_tags(concept: str) -> set[str]:
-    if concept in CROSS_DISCIPLINARY_MICRO_CONCEPTS:
-        return set(CROSS_DISCIPLINARY_MICRO_CONCEPTS[concept].get("tags", ()))
-    tags = set()
-    if "回归" in concept:
-        tags.update(("参数", "预测", "优化"))
-    if "梯度" in concept or "反向传播" in concept:
-        tags.update(("梯度", "优化", "微积分"))
-    if "贝叶斯" in concept or "评估" in concept or "矩阵" in concept:
-        tags.update(("概率", "统计", "评估"))
-    if "卷积" in concept or "池化" in concept or "特征图" in concept:
-        tags.update(("图像", "卷积", "局部感受野"))
-    if "注意力" in concept or "Transformer" in concept:
-        tags.update(("注意力", "加权求和", "序列"))
-    return tags
-
-
 def _normalize_vector(values: list[float]) -> list[float]:
     norm = math.sqrt(sum(v * v for v in values))
     if norm <= 1e-9:
         return [0.0 for _ in values]
     return [v / norm for v in values]
-
-
-def _cosine(left: list[float], right: list[float]) -> float:
-    if not left or not right or len(left) != len(right):
-        return 0.0
-    return sum(a * b for a, b in zip(left, right))
 
 
 def build_cross_disciplinary_micro_graph(
@@ -213,50 +413,38 @@ def build_cross_disciplinary_micro_graph(
     cognitive_load: float = 0.45,
     frustration: float = 0.0,
     similarity_threshold: float = 0.78,
+    resource_index: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build a mixed-domain micro-concept graph with lightweight graph embeddings."""
+    """Build a mixed-domain micro-concept graph with real embedding similarity.
+
+    The graph is derived from the active DAG, GraphRAG/resource concepts and
+    embeddings. It no longer injects a static cross-disciplinary micro-concept
+    dictionary; prerequisite-like bridges are inferred from domain differences,
+    topology order and semantic closeness.
+    """
     mastery = mastery or {}
+    resource_index = resource_index if resource_index is not None else _animation_index()
     course_concepts = _concepts_from_dag(dag, mastery)
-    concepts = set(course_concepts) | set(CROSS_DISCIPLINARY_MICRO_CONCEPTS.keys())
-    tiers = concept_tier or compute_concept_tiers(dag, course_concepts)
+    concepts = set(course_concepts) | set(resource_index.keys())
+    tiers = concept_tier or compute_concept_tiers(dag, concepts)
     load = _clamp_score(cognitive_load, 0.45)
     affect = _clamp_score(frustration, 0.0)
-
-    cross_edges = []
-    for source, meta in CROSS_DISCIPLINARY_MICRO_CONCEPTS.items():
-        supported = [target for target in meta.get("supports", ()) if target in concepts]
-        target_tiers = [tiers.get(target, 1) for target in supported]
-        tiers[source] = max(0, min(target_tiers, default=1) - 1)
-        for target in supported:
-            target_score = _clamp_score(mastery.get(target, 0.0))
-            source_score = _clamp_score(mastery.get(source, 0.0))
-            weight = 0.95 + max(0.0, 0.7 - target_score) * 1.05 + max(0.0, 0.4 - source_score) * 0.7
-            weight += load * 0.25 + affect * 0.15
-            cross_edges.append(
-                {
-                    "from": source,
-                    "to": target,
-                    "type": "cross_domain_prerequisite",
-                    "weight": round(weight, 3),
-                    "source_domain": meta["domain"],
-                    "target_domain": _concept_domain(target),
-                    "reason": f"「{target}」卡住时，先回补{DOMAIN_LABELS.get(meta['domain'], meta['domain'])}微概念「{source}」",
-                }
-            )
 
     prerequisite_edges = []
     for target, prereqs in dag.items():
         for source in prereqs or []:
             if source not in concepts or target not in concepts:
                 continue
+            source_domain = _concept_domain(source, resource_index)
+            target_domain = _concept_domain(target, resource_index)
             prerequisite_edges.append(
                 {
                     "from": source,
                     "to": target,
                     "type": "course_prerequisite",
                     "weight": 1.0,
-                    "source_domain": _concept_domain(source),
-                    "target_domain": _concept_domain(target),
+                    "source_domain": source_domain,
+                    "target_domain": target_domain,
                     "reason": f"课程前置依赖：{source} -> {target}",
                 }
             )
@@ -267,8 +455,8 @@ def build_cross_disciplinary_micro_graph(
 
         nx_graph = nx.DiGraph()
         for concept in concepts:
-            nx_graph.add_node(concept, domain=_concept_domain(concept), tier=tiers.get(concept, 0))
-        for edge in prerequisite_edges + cross_edges:
+            nx_graph.add_node(concept, domain=_concept_domain(concept, resource_index), tier=tiers.get(concept, 0))
+        for edge in prerequisite_edges:
             nx_graph.add_edge(edge["from"], edge["to"], **edge)
         undirected_neighbors = {node: set(nx_graph.predecessors(node)) | set(nx_graph.successors(node)) for node in nx_graph.nodes}
         degree_lookup = dict(nx_graph.degree())
@@ -276,73 +464,71 @@ def build_cross_disciplinary_micro_graph(
     except Exception:
         undirected_neighbors: dict[str, set[str]] = {concept: set() for concept in concepts}
         degree_lookup = {concept: 0 for concept in concepts}
-        for edge in prerequisite_edges + cross_edges:
+        for edge in prerequisite_edges:
             undirected_neighbors.setdefault(edge["from"], set()).add(edge["to"])
             undirected_neighbors.setdefault(edge["to"], set()).add(edge["from"])
             degree_lookup[edge["from"]] = degree_lookup.get(edge["from"], 0) + 1
             degree_lookup[edge["to"]] = degree_lookup.get(edge["to"], 0) + 1
 
-    max_tier = max(tiers.values(), default=1) or 1
-    max_degree = max(degree_lookup.values(), default=1) or 1
-    embeddings: dict[str, list[float]] = {}
-    for concept in sorted(concepts):
-        domain = _concept_domain(concept)
-        domain_features = [1.0 if domain == item else 0.0 for item in DOMAIN_ORDER]
-        char_seed = sum((idx + 1) * ord(ch) for idx, ch in enumerate(concept))
-        hashed = [
-            math.sin(char_seed % 97) * 0.15,
-            math.cos(char_seed % 89) * 0.15,
-        ]
-        tags = _concept_tags(concept)
-        tag_features = [
-            1.0 if "优化" in tags or "梯度" in tags else 0.0,
-            1.0 if "概率" in tags or "统计" in tags else 0.0,
-            1.0 if "图像" in tags or "卷积" in tags else 0.0,
-            1.0 if "注意力" in tags or "加权求和" in tags else 0.0,
-        ]
-        base = [
-            *domain_features,
-            _clamp_score(mastery.get(concept, 0.0)),
-            tiers.get(concept, 0) / max_tier,
-            degree_lookup.get(concept, 0) / max_degree,
-            *tag_features,
-            *hashed,
-        ]
-        embeddings[concept] = _normalize_vector(base)
+    embeddings, embedding_backend, embedding_error = _concept_embedding_vectors(concepts, resource_index)
 
-    # A deterministic Node2Vec-style propagation pass: mix each node with its graph neighborhood.
-    for _ in range(4):
-        updated: dict[str, list[float]] = {}
-        for concept, vector in embeddings.items():
-            neighbors = sorted(undirected_neighbors.get(concept, ()))
-            if not neighbors:
-                updated[concept] = vector
-                continue
-            neighbor_vector = [
-                sum(embeddings[n][idx] for n in neighbors) / len(neighbors)
-                for idx in range(len(vector))
-            ]
-            updated[concept] = _normalize_vector([
-                vector[idx] * 0.62 + neighbor_vector[idx] * 0.38
-                for idx in range(len(vector))
-            ])
-        embeddings = updated
-
-    existing_pairs = {(edge["from"], edge["to"]) for edge in prerequisite_edges + cross_edges}
+    existing_pairs = {(edge["from"], edge["to"]) for edge in prerequisite_edges}
+    cross_edges = []
     semantic_edges = []
+    similarity_log = []
     ordered_concepts = sorted(concepts, key=lambda item: (tiers.get(item, 99), item))
     for idx, left in enumerate(ordered_concepts):
         for right in ordered_concepts[idx + 1:]:
-            if (left, right) in existing_pairs or (right, left) in existing_pairs:
-                continue
-            left_domain = _concept_domain(left)
-            right_domain = _concept_domain(right)
+            left_domain = _concept_domain(left, resource_index)
+            right_domain = _concept_domain(right, resource_index)
             if left_domain == right_domain:
                 continue
-            tag_overlap = len(_concept_tags(left) & _concept_tags(right))
-            similarity = _cosine(embeddings[left], embeddings[right])
+            tag_overlap = len(_concept_tags(left, resource_index) & _concept_tags(right, resource_index))
+            similarity = embedding_cosine_similarity(embeddings[left], embeddings[right])
             if tag_overlap:
                 similarity = max(similarity, 0.72 + min(0.2, tag_overlap * 0.06))
+
+            source, target = (left, right) if tiers.get(left, 99) <= tiers.get(right, 99) else (right, left)
+            source_domain = _concept_domain(source, resource_index)
+            target_domain = _concept_domain(target, resource_index)
+            target_score = _clamp_score(mastery.get(target, 0.0))
+            source_score = _clamp_score(mastery.get(source, 0.0))
+            source_degree = degree_lookup.get(source, 0)
+
+            if similarity >= 0.66 or tag_overlap:
+                similarity_log.append(
+                    {
+                        "source": source,
+                        "target": target,
+                        "similarity": round(similarity, 3),
+                        "source_domain_label": _domain_label(source_domain),
+                        "target_domain_label": _domain_label(target_domain),
+                        "evidence": "embedding" if not tag_overlap else f"embedding+{tag_overlap} shared tags",
+                    }
+                )
+
+            topology_support = (source, target) in existing_pairs or source in _ancestors_for_target(dag, target)
+            if target in course_concepts and topology_support and (similarity >= 0.62 or tag_overlap):
+                weight = 0.95 + max(0.0, 0.7 - target_score) * 0.95 + max(0.0, 0.4 - source_score) * 0.45
+                weight += load * 0.18 + affect * 0.12 + min(0.25, source_degree * 0.03)
+                cross_edges.append(
+                    {
+                        "from": source,
+                        "to": target,
+                        "type": "cross_domain_prerequisite",
+                        "weight": round(weight, 3),
+                        "similarity": round(similarity, 3),
+                        "source_domain": source_domain,
+                        "target_domain": target_domain,
+                        "reason": (
+                            f"「{target}」卡住时，先回补{_domain_label(source_domain)}节点「{source}」；"
+                            f"语义相似度 {similarity:.2f}"
+                        ),
+                    }
+                )
+
+            if (left, right) in existing_pairs or (right, left) in existing_pairs:
+                continue
             if similarity >= similarity_threshold:
                 semantic_edges.append(
                     {
@@ -353,24 +539,49 @@ def build_cross_disciplinary_micro_graph(
                         "similarity": round(similarity, 3),
                         "source_domain": left_domain,
                         "target_domain": right_domain,
-                        "reason": f"图嵌入相似度 {similarity:.2f}，可作为跨学科类比补充",
+                        "reason": f"{embedding_backend} 语义相似度 {similarity:.2f}，可作为跨学科类比补充",
                     }
                 )
+
+    if not cross_edges:
+        for edge in prerequisite_edges:
+            if edge["source_domain"] == edge["target_domain"]:
+                continue
+            target_score = _clamp_score(mastery.get(edge["to"], 0.0))
+            cross_edges.append(
+                {
+                    "from": edge["from"],
+                    "to": edge["to"],
+                    "type": "cross_domain_prerequisite",
+                    "weight": round(1.0 + max(0.0, 0.7 - target_score) + load * 0.12, 3),
+                    "similarity": None,
+                    "source_domain": edge["source_domain"],
+                    "target_domain": edge["target_domain"],
+                    "reason": (
+                        f"图谱显示「{edge['from']}」是「{edge['to']}」的跨域前置，"
+                        f"优先补齐{_domain_label(edge['source_domain'])}基础"
+                    ),
+                }
+            )
+
     semantic_edges = sorted(semantic_edges, key=lambda edge: (-edge["similarity"], edge["from"], edge["to"]))[:24]
+    cross_edges = sorted(cross_edges, key=lambda edge: (edge["weight"], edge["from"], edge["to"]))[:24]
+    similarity_log = sorted(similarity_log, key=lambda item: (-item["similarity"], item["source"], item["target"]))[:12]
 
     nodes = []
     for concept in ordered_concepts:
-        domain = _concept_domain(concept)
+        domain = _concept_domain(concept, resource_index)
         nodes.append(
             {
                 "id": concept,
                 "concept": concept,
                 "domain": domain,
-                "domain_label": DOMAIN_LABELS.get(domain, domain),
+                "domain_label": _domain_label(domain),
                 "tier": tiers.get(concept, 0),
                 "mastery": round(_clamp_score(mastery.get(concept, 0.0)), 2),
-                "tags": sorted(_concept_tags(concept)),
+                "tags": sorted(_concept_tags(concept, resource_index))[:10],
                 "embedding": [round(value, 4) for value in embeddings[concept][:8]],
+                "resource": _resource_signal(concept, resource_index),
             }
         )
 
@@ -386,7 +597,11 @@ def build_cross_disciplinary_micro_graph(
             "semantic_edge_count": len(semantic_edges),
             "domains": domains,
             "graph_backend": graph_backend,
-            "embedding_algorithm": "deterministic random-walk graph embedding",
+            "embedding_backend": embedding_backend,
+            "embedding_algorithm": "semantic cosine similarity via EMBEDDINGS.embed",
+            "embedding_error": embedding_error,
+            "similarity_log": similarity_log,
+            "resource_concept_count": len(resource_index),
             "cognitive_load": round(load, 2),
             "frustration": round(affect, 2),
         },
@@ -430,9 +645,12 @@ def build_micro_concept_graph(
     concept_tier: dict[str, int] | None = None,
     cognitive_load: float = 0.45,
     frustration: float = 0.0,
+    resource_index: dict[str, dict[str, Any]] | None = None,
+    graph_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build weighted prerequisite edges for adaptive path planning."""
     mastery = mastery or {}
+    resource_index = resource_index if resource_index is not None else {}
     concepts = _concepts_from_dag(dag, mastery)
     tiers = concept_tier or compute_concept_tiers(dag, concepts)
     load = _clamp_score(cognitive_load, 0.45)
@@ -454,6 +672,7 @@ def build_micro_concept_graph(
         prereqs = [p for p in dag.get(concept, []) if p in concepts]
         prereqs_ready = all(_clamp_score(mastery.get(p, 0.0)) >= 0.4 for p in prereqs)
         mastered = score >= 0.7
+        resource = _resource_signal(concept, resource_index)
         nodes.append(
             {
                 "id": concept,
@@ -467,6 +686,7 @@ def build_micro_concept_graph(
                 "out_degree": out_degree.get(concept, 0),
                 "in_degree": in_degree.get(concept, 0),
                 "weak": score < 0.4,
+                "resource": resource,
             }
         )
 
@@ -479,6 +699,11 @@ def build_micro_concept_graph(
             prereq_score = _clamp_score(mastery.get(prereq, 0.0))
             prereq_gap = max(0.0, 0.4 - prereq_score)
             weight = 1.0 + target_gap * 1.15 + prereq_gap * 1.4 + load * 0.35 + affect * 0.25 + complexity * 0.3
+            resource = _resource_signal(concept, resource_index)
+            if resource["has_animation"]:
+                weight -= min(0.25, resource["video_count"] * 0.035)
+            weight = max(0.65, weight)
+            edge_source = (graph_metadata or {}).get("edge_sources", {}).get(f"{prereq}->{concept}", "seed_dag")
             edges.append(
                 {
                     "from": prereq,
@@ -487,7 +712,12 @@ def build_micro_concept_graph(
                     "weight": round(weight, 3),
                     "prerequisite_mastery": round(prereq_score, 2),
                     "target_mastery": round(target_score, 2),
-                    "reason": f"先稳固「{prereq}」，再进入「{concept}」",
+                    "source": edge_source,
+                    "resource": resource,
+                    "reason": (
+                        f"先稳固「{prereq}」，再进入「{concept}」"
+                        + ("；本地动画资源可辅助可视化理解" if resource["has_animation"] else "")
+                    ),
                 }
             )
 
@@ -499,6 +729,8 @@ def build_micro_concept_graph(
             "edge_count": len(edges),
             "cognitive_load": round(load, 2),
             "frustration": round(affect, 2),
+            "resource_concept_count": len(resource_index),
+            "graph_fusion": graph_metadata or {},
         },
     }
 
@@ -527,9 +759,13 @@ def build_adaptive_astar_route(
     frustration: float = 0.0,
     mastery_threshold: float = 0.7,
     max_steps: int = 8,
+    resource_index: dict[str, dict[str, Any]] | None = None,
+    graph_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Plan a deterministic multi-constraint A* route over prerequisite edges."""
     mastery = mastery or {}
+    resource_index = resource_index if resource_index is not None else {}
+    graph_metadata = graph_metadata or {}
     concepts = _concepts_from_dag(dag, mastery)
     tiers = concept_tier or compute_concept_tiers(dag, concepts)
     graph = build_micro_concept_graph(
@@ -538,6 +774,8 @@ def build_adaptive_astar_route(
         concept_tier=tiers,
         cognitive_load=cognitive_load,
         frustration=frustration,
+        resource_index=resource_index,
+        graph_metadata=graph_metadata,
     )
     threshold = _clamp_score(mastery_threshold, 0.7)
     max_steps = max(3, int(max_steps or 8))
@@ -545,6 +783,16 @@ def build_adaptive_astar_route(
     affect = _clamp_score(frustration, 0.0)
     goal_set = {g for g in (learning_goals or []) if g}
     weak_set = {w for w in (weak_points or []) if w}
+    primary_goal = sorted(goal_set)[0] if goal_set else ""
+    goal_related = set(goal_set)
+    for goal in goal_set:
+        goal_related.update(_ancestors_for_target(dag, goal))
+    for weak in weak_set:
+        goal_related.update(_ancestors_for_target(dag, weak))
+
+    base_concepts = set(graph_metadata.get("base_concepts") or concepts)
+    explicit_concepts = set(mastery.keys()) | goal_set | weak_set
+    allowed_targets = base_concepts | explicit_concepts | goal_related
 
     adjacency: dict[str, list[tuple[str, float]]] = {concept: [] for concept in concepts}
     edge_map: dict[tuple[str, str], dict[str, Any]] = {}
@@ -558,14 +806,19 @@ def build_adaptive_astar_route(
         score = _clamp_score(mastery.get(concept, 0.0))
         tier = tiers.get(concept, 0)
         priority = (1.0 - score) * 1.8 + tier * 0.22
-        if concept in goal_set:
-            priority += 1.2
         if concept in weak_set:
-            priority += 1.0
+            priority += 5.0
+        elif concept in goal_set:
+            priority += 3.5
+        elif concept in goal_related:
+            priority += 0.8
         if score < 0.3:
             priority += 0.25
         if len(dag.get(concept, []) or []) >= 2:
             priority += 0.15
+        resource = _resource_signal(concept, resource_index)
+        if resource["has_animation"] and (concept in goal_related or concept in explicit_concepts):
+            priority += min(0.45, 0.08 * resource["video_count"])
         return priority
 
     def astar(start: str, target: str) -> tuple[list[str], float] | None:
@@ -617,7 +870,11 @@ def build_adaptive_astar_route(
             cost += float(edge["weight"]) if edge else 1.5
         return cost
 
-    candidates = [concept for concept in concepts if _clamp_score(mastery.get(concept, 0.0)) < threshold]
+    candidates = [
+        concept
+        for concept in concepts
+        if concept in allowed_targets and _clamp_score(mastery.get(concept, 0.0)) < threshold
+    ]
     ranked_targets = sorted(candidates, key=lambda concept: (-target_priority(concept), -tiers.get(concept, 0), concept))
 
     route_options: list[dict[str, Any]] = []
@@ -651,16 +908,27 @@ def build_adaptive_astar_route(
 
         if not best_path:
             continue
-        option_bucket = overflow_options if len(best_path) > max_steps else route_options
+        display_path = list(best_path)
+        staged_from = ""
+        if len(display_path) > max_steps:
+            display_path = display_path[:max_steps]
+            staged_from = target
+        option_bucket = route_options
         length_bonus = 0.75 if 5 <= len(best_path) <= max_steps else 0.2
         overflow_penalty = max(0, len(best_path) - max_steps) * 0.6
-        option_score = target_priority(target) + length_bonus - abs(len(best_path) - 6) * 0.05 - overflow_penalty
+        if staged_from and target in goal_set:
+            overflow_penalty *= 0.35
+        option_score = target_priority(target) + length_bonus - abs(len(display_path) - 6) * 0.05 - overflow_penalty
         option_bucket.append(
             {
-                "target": target,
-                "path": best_path,
-                "search_cost": best_cost,
+                "target": display_path[-1] if staged_from else target,
+                "final_goal": primary_goal or target,
+                "full_path": best_path,
+                "path": display_path,
+                "search_cost": route_cost(display_path),
                 "option_score": option_score,
+                "resource_hits": sum(1 for concept in display_path if _resource_signal(concept, resource_index)["has_animation"]),
+                "staged_from": staged_from,
             }
         )
 
@@ -668,14 +936,47 @@ def build_adaptive_astar_route(
         route_options = overflow_options
 
     if not route_options:
+        final_goal = primary_goal
         return {
             "target_concept": "",
+            "stage_target_concept": "",
+            "final_goal_concept": final_goal,
+            "is_staged_route": False,
             "start_concept": "",
             "total_cost": 0.0,
             "estimated_minutes": 0,
             "confidence": 0.0,
+            "strategy": "A* 候选草案 + Planner Agent 资源感知审核",
+            "candidate_draft": {
+                "target": "",
+                "final_goal": final_goal,
+                "path": [],
+                "draft_steps": 0,
+                "generated_by": "A* Engine",
+            },
             "nodes": [],
             "edges": [],
+            "topology_audit": {"passed": True, "checked_edges": 0, "violations": []},
+            "planner_trace": [],
+            "planner_review": {
+                "agent": "Planner Agent",
+                "decision": "no_route",
+                "personalized_guidance": "当前图谱中没有足够前置边生成可执行路线。",
+                "action_dispatch": [],
+                "llm_backend": "not-called",
+            },
+            "session_plan": {"today_concepts": [], "today_minutes": 0, "stage_total_minutes": 0},
+            "resource_summary": {
+                "matched_route_nodes": 0,
+                "animation_dataset_dir": graph_metadata.get("animation_dataset_dir", ""),
+                "animation_concept_count": graph_metadata.get("animation_concept_count", len(resource_index)),
+            },
+            "graph_fusion": {
+                "base_node_count": graph_metadata.get("base_node_count", len(concepts)),
+                "active_node_count": graph_metadata.get("active_node_count", len(concepts)),
+                "rag_edges_added": graph_metadata.get("rag_edges_added", 0),
+                "animation_edges_added": graph_metadata.get("animation_edges_added", 0),
+            },
             "reasons": ["当前图谱中没有可生成的前置路线"],
             "constraints": {
                 "mastery_threshold": threshold,
@@ -687,9 +988,12 @@ def build_adaptive_astar_route(
 
     selected = sorted(
         route_options,
-        key=lambda item: (-item["option_score"], item["search_cost"], item["target"]),
+        key=lambda item: (-item["option_score"], -item["resource_hits"], item["search_cost"], item["target"]),
     )[0]
-    route = selected["path"]
+    candidate_path = list(selected["path"])
+    route = list(candidate_path)
+    final_goal = selected.get("final_goal") or (sorted(goal_set)[0] if goal_set else selected["target"])
+    is_staged = bool(final_goal and final_goal != selected["target"])
 
     route_nodes: list[dict[str, Any]] = []
     route_edges: list[dict[str, Any]] = []
@@ -697,6 +1001,7 @@ def build_adaptive_astar_route(
     for idx, concept in enumerate(route):
         score = _clamp_score(mastery.get(concept, 0.0))
         tier = tiers.get(concept, 0)
+        resource = _resource_signal(concept, resource_index)
         step_cost = 0.0
         if idx > 0:
             edge = edge_map.get((route[idx - 1], concept))
@@ -708,6 +1013,8 @@ def build_adaptive_astar_route(
                         "from": edge["from"],
                         "to": edge["to"],
                         "weight": edge["weight"],
+                        "source": edge.get("source", "seed_dag"),
+                        "resource": edge.get("resource", {}),
                         "reason": edge["reason"],
                     }
                 )
@@ -715,7 +1022,9 @@ def build_adaptive_astar_route(
         if score >= threshold:
             action = "快速复核"
         elif score < 0.35:
-            action = "基础重建"
+            action = "降维重建"
+        elif resource["has_animation"]:
+            action = "动画助学"
         elif tier >= 4:
             action = "进阶攻克"
         else:
@@ -732,9 +1041,14 @@ def build_adaptive_astar_route(
                 "cost_from_previous": round(step_cost, 2),
                 "cumulative_cost": round(cumulative, 2),
                 "estimated_minutes": int(min(95, max(30, 30 + tier * 5 + (threshold - score) * 35 + load * 10))),
+                "resource": resource,
+                "planner_mode": (
+                    "Simplified Model" if score < 0.35 else ("Visual Micro-lesson" if resource["has_animation"] else "Guided Practice")
+                ),
                 "reason": (
                     f"当前掌握度 {round(score * 100)}%，"
                     f"{'先补齐前置理解' if score < 0.4 else '适合继续提升迁移能力'}"
+                    + (f"；已匹配 {resource['video_count']} 个本地动画资源" if resource["has_animation"] else "")
                 ),
             }
         )
@@ -742,20 +1056,74 @@ def build_adaptive_astar_route(
     avg_mastery = sum(node["mastery"] for node in route_nodes) / len(route_nodes)
     confidence = max(0.55, min(0.95, 0.9 - load * 0.16 - affect * 0.1 + avg_mastery * 0.08))
     total_minutes = sum(node["estimated_minutes"] for node in route_nodes)
+    audit = _audit_route_topology(dag, route)
+    resource_count = sum(1 for node in route_nodes if node.get("resource", {}).get("has_animation"))
+    session_plan = _build_session_plan(route_nodes, total_minutes)
+    planner_review = _review_candidate_route_with_planner(
+        candidate_path=candidate_path,
+        route_nodes=route_nodes,
+        target=selected["target"],
+        final_goal=final_goal,
+        cognitive_load=load,
+        frustration=affect,
+        audit=audit,
+        session_plan=session_plan,
+    )
+    planner_trace = _build_planner_trace(
+        candidate_path,
+        route,
+        selected["target"],
+        resource_count,
+        audit,
+        graph_metadata,
+        planner_review,
+    )
 
     return {
-        "target_concept": selected["target"],
+        "target_concept": final_goal,
+        "stage_target_concept": selected["target"],
+        "final_goal_concept": final_goal,
+        "is_staged_route": is_staged,
         "start_concept": route[0],
         "total_cost": round(cumulative, 2),
         "estimated_minutes": total_minutes,
         "confidence": round(confidence, 2),
-        "strategy": "A* 多约束动态路径生成",
+        "strategy": "A* 候选草案 + Planner Agent 资源感知审核",
+        "candidate_draft": {
+            "target": selected["target"],
+            "final_goal": final_goal,
+            "path": candidate_path,
+            "full_path": selected.get("full_path", candidate_path),
+            "remaining_path": [
+                concept
+                for concept in selected.get("full_path", candidate_path)
+                if concept not in candidate_path
+            ],
+            "draft_steps": len(candidate_path),
+            "generated_by": "A* Engine",
+        },
         "nodes": route_nodes,
         "edges": route_edges,
+        "topology_audit": audit,
+        "planner_trace": planner_trace,
+        "planner_review": planner_review,
+        "session_plan": session_plan,
+        "resource_summary": {
+            "matched_route_nodes": resource_count,
+            "animation_dataset_dir": graph_metadata.get("animation_dataset_dir", ""),
+            "animation_concept_count": graph_metadata.get("animation_concept_count", len(resource_index)),
+        },
+        "graph_fusion": {
+            "base_node_count": graph_metadata.get("base_node_count", len(concepts)),
+            "active_node_count": graph_metadata.get("active_node_count", len(concepts)),
+            "rag_edges_added": graph_metadata.get("rag_edges_added", 0),
+            "animation_edges_added": graph_metadata.get("animation_edges_added", 0),
+        },
         "reasons": [
             "按前置依赖边展开搜索，避免跳过必要基础概念",
-            "边权同时考虑目标掌握缺口、前置薄弱度、认知负荷与情绪阻力",
-            "优先选择 5-8 步的可执行微路线，便于一周内分段推进",
+            "A* 只输出候选草案，Planner Agent 会按学生画像二次审核学习动作",
+            "本地动画资源会参与路线加权，但不会覆盖前置依赖和拓扑顺序",
+            f"最终目标「{final_goal}」被拆为当前阶段目标「{selected['target']}」" if is_staged else "当前路线可直接推进到目标概念",
         ],
         "constraints": {
             "mastery_threshold": threshold,
@@ -766,11 +1134,134 @@ def build_adaptive_astar_route(
     }
 
 
+def _build_session_plan(route_nodes: list[dict[str, Any]], total_minutes: int) -> dict[str, Any]:
+    today_concepts = []
+    today_minutes = 0
+    for node in route_nodes:
+        node_minutes = int(node.get("estimated_minutes") or 0)
+        if today_concepts and today_minutes + node_minutes > 90:
+            break
+        today_concepts.append(node["concept"])
+        today_minutes += node_minutes
+        if today_minutes >= 60:
+            break
+    if not today_concepts and route_nodes:
+        today_concepts = [route_nodes[0]["concept"]]
+        today_minutes = int(route_nodes[0].get("estimated_minutes") or 30)
+
+    return {
+        "today_concepts": today_concepts,
+        "today_minutes": today_minutes,
+        "stage_total_minutes": total_minutes,
+        "rhythm": "今日先完成 1-2 个低掌握节点，后续阶段继续承接最终目标",
+        "max_daily_minutes": 90,
+    }
+
+
+def _review_candidate_route_with_planner(
+    *,
+    candidate_path: list[str],
+    route_nodes: list[dict[str, Any]],
+    target: str,
+    final_goal: str,
+    cognitive_load: float,
+    frustration: float,
+    audit: dict[str, Any],
+    session_plan: dict[str, Any],
+) -> dict[str, Any]:
+    action_dispatch = [
+        {
+            "concept": node["concept"],
+            "action": node["action"],
+            "mode": node.get("planner_mode", "Guided Practice"),
+            "reason": node.get("reason", ""),
+        }
+        for node in route_nodes
+    ]
+    fallback_guidance = (
+        f"先把当前阶段目标「{target}」拆成 {len(route_nodes)} 个可执行节点；"
+        f"今天建议只完成 {'、'.join(session_plan.get('today_concepts') or [])}，"
+        f"再根据复习反馈决定是否继续推进到「{final_goal}」。"
+    )
+    llm_backend = "deterministic-fallback"
+    guidance = fallback_guidance
+    try:
+        from llm_client import DEFAULT_LLM
+
+        llm_backend = getattr(DEFAULT_LLM, "__class__", type(DEFAULT_LLM)).__name__
+        prompt = (
+            f"候选路线: {' -> '.join(candidate_path)}\n"
+            f"当前阶段目标: {target}\n最终目标: {final_goal}\n"
+            f"认知负荷: {cognitive_load:.2f}; 挫败感: {frustration:.2f}\n"
+            f"今日切片: {session_plan.get('today_concepts', [])}\n"
+            "请用一句话审核路线，并说明今天的执行建议。"
+        )
+        guidance = DEFAULT_LLM.generate(
+            "你是 EduMatrix 的路径规划师，负责审核 A* 候选路线，不改变拓扑顺序。",
+            prompt,
+            role="路径规划师",
+        )
+    except Exception:
+        guidance = fallback_guidance
+
+    return {
+        "agent": "Planner Agent",
+        "decision": "accepted" if audit.get("passed") else "needs_topology_repair",
+        "llm_backend": llm_backend,
+        "personalized_guidance": guidance,
+        "action_dispatch": action_dispatch,
+        "today_slice": session_plan,
+    }
+
+
+def _audit_route_topology(dag: dict[str, list[str]], route: list[str]) -> dict[str, Any]:
+    positions = {concept: idx for idx, concept in enumerate(route)}
+    violations: list[dict[str, str]] = []
+    checked = 0
+    for concept in route:
+        for prereq in dag.get(concept, []) or []:
+            if prereq not in positions:
+                continue
+            checked += 1
+            if positions[prereq] > positions[concept]:
+                violations.append({"prerequisite": prereq, "concept": concept})
+    return {
+        "passed": not violations,
+        "checked_edges": checked,
+        "violations": violations,
+    }
+
+
+def _build_planner_trace(
+    candidate_path: list[str],
+    route: list[str],
+    target: str,
+    resource_count: int,
+    audit: dict[str, Any],
+    graph_metadata: dict[str, Any],
+    planner_review: dict[str, Any] | None = None,
+) -> list[str]:
+    backend = (planner_review or {}).get("llm_backend", "deterministic-fallback")
+    decision = (planner_review or {}).get("decision", "accepted")
+    return [
+        f"[A* Engine] 生成候选路线草案：{' -> '.join(candidate_path)}",
+        f"[Graph Fusion] 已融合 RAG 边 {graph_metadata.get('rag_edges_added', 0)} 条、动画资源边 {graph_metadata.get('animation_edges_added', 0)} 条",
+        f"[Resource Router] 路线中 {resource_count} 个节点匹配到本地动画资源",
+        f"[Topology Checker] 拓扑审计{'通过' if audit.get('passed') else '需修正'}，检查边 {audit.get('checked_edges', 0)} 条",
+        f"[Planner Agent] {backend} 审核结果 {decision}：确认目标「{target}」，将草案润色为 {len(route)} 步可执行学习动作",
+    ]
+
+
 class PathPlanner:
     """Facade for member 2 micro-graph construction and A* path planning."""
 
     def __init__(self, dag: dict[str, list[str]]):
         self.dag = dag
+
+    def _active_inputs(self) -> tuple[dict[str, list[str]], dict[str, dict[str, Any]], dict[str, Any], dict[str, int]]:
+        resource_index = _animation_index()
+        active_dag, graph_metadata = build_resource_aware_dag(self.dag, resource_index=resource_index)
+        return active_dag, resource_index, graph_metadata, compute_concept_tiers(active_dag)
 
     def build_micro_graph(
         self,
@@ -780,12 +1271,15 @@ class PathPlanner:
         cognitive_load: float = 0.45,
         frustration: float = 0.0,
     ) -> dict[str, Any]:
+        active_dag, resource_index, graph_metadata, active_tiers = self._active_inputs()
         return build_micro_concept_graph(
-            self.dag,
+            active_dag,
             mastery,
-            concept_tier=concept_tier,
+            concept_tier=active_tiers,
             cognitive_load=cognitive_load,
             frustration=frustration,
+            resource_index=resource_index,
+            graph_metadata=graph_metadata,
         )
 
     def build_cross_disciplinary_graph(
@@ -797,13 +1291,15 @@ class PathPlanner:
         frustration: float = 0.0,
         similarity_threshold: float = 0.78,
     ) -> dict[str, Any]:
+        active_dag, resource_index, graph_metadata, active_tiers = self._active_inputs()
         return build_cross_disciplinary_micro_graph(
-            self.dag,
+            active_dag,
             mastery,
-            concept_tier=concept_tier,
+            concept_tier=active_tiers,
             cognitive_load=cognitive_load,
             frustration=frustration,
             similarity_threshold=similarity_threshold,
+            resource_index=resource_index,
         )
 
     def plan(
@@ -818,16 +1314,19 @@ class PathPlanner:
         mastery_threshold: float = 0.7,
         max_steps: int = 8,
     ) -> dict[str, Any]:
+        active_dag, resource_index, graph_metadata, active_tiers = self._active_inputs()
         return build_adaptive_astar_route(
-            self.dag,
+            active_dag,
             mastery,
             learning_goals=learning_goals,
             weak_points=weak_points,
-            concept_tier=concept_tier,
+            concept_tier=active_tiers,
             cognitive_load=cognitive_load,
             frustration=frustration,
             mastery_threshold=mastery_threshold,
             max_steps=max_steps,
+            resource_index=resource_index,
+            graph_metadata=graph_metadata,
         )
 
 

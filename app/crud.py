@@ -562,9 +562,94 @@ def apply_review_feedback(db: Session, student_id: str, concept: str, quality: i
     plan.next_review_at = _utcnow_naive() + timedelta(days=new_interval)
     plan.priority = 0.35 if quality < 4 else (0.7 if new_interval <= 1 else 1.0)
 
+    db_profile = db.query(DBStudentProfile).filter(DBStudentProfile.student_id == student_id).first()
+    if db_profile:
+        concept_mastery = dict(db_profile.concept_mastery or {})
+        concept_mastery[concept] = round(mastery, 2)
+        db_profile.concept_mastery = concept_mastery
+
+        weak_points = list(db_profile.weak_points or [])
+        if quality == 2 and concept not in weak_points:
+            weak_points.insert(0, concept)
+        elif quality in (4, 5) and mastery >= 0.7 and concept in weak_points:
+            weak_points = [item for item in weak_points if item != concept]
+        db_profile.weak_points = weak_points[:20]
+
     db.commit()
     db.refresh(plan)
     return plan
+
+
+def build_review_adaptation_payload(concept: str, quality: int, mastery: float | None = None) -> dict:
+    """Create a deterministic card-morphing payload for difficult reviews."""
+    mastery_score = max(0.0, min(1.0, float(mastery if mastery is not None else 0.3)))
+    if quality != 2:
+        return {
+            "triggered": False,
+            "concept": concept,
+            "quality": quality,
+            "mastery": round(mastery_score, 2),
+            "agent_trace": [
+                "Director Agent: 复习反馈已记录，保持原卡片结构。",
+                "SM-2 Engine: 已根据评分更新下次复习间隔。",
+            ],
+            "stream_chunks": [],
+        }
+
+    fallback_simplified = (
+        f"检测到「{concept}」仍然吃力，先把它拆成三步："
+        f"第一步只确认它要解决什么问题；第二步看输入怎样一步步变成输出；"
+        f"第三步再回到公式或代码细节。当前掌握度约 {round(mastery_score * 100)}%，"
+        "建议先看一遍可视化例子，再做一道最小变式题。"
+    )
+    llm_backend = "deterministic-fallback"
+    simplified = fallback_simplified
+    try:
+        from llm_client import DEFAULT_LLM
+
+        llm_backend = getattr(DEFAULT_LLM, "__class__", type(DEFAULT_LLM)).__name__
+        generated = DEFAULT_LLM.generate(
+            "你是 EduMatrix 的 Visualizer Agent 和 Director Agent。学生复习反馈为困难，请把概念降维成生活化解释。",
+            (
+                f"概念: {concept}\n"
+                f"当前掌握度: {mastery_score:.2f}\n"
+                "请输出一段不超过 120 字的中文解释，先讲直觉，再给最小行动建议。"
+            ),
+            role="概念可视化导师",
+        )
+        if generated and len(generated.strip()) >= 12 and "已基于检索证据处理主题" not in generated:
+            simplified = generated.strip()
+    except Exception:
+        simplified = fallback_simplified
+
+    mermaid = (
+        "flowchart LR\n"
+        f"    A[直觉问题: {concept}] --> B[生活化类比]\n"
+        "    B --> C[关键变量]\n"
+        "    C --> D[最小例题]\n"
+        "    D --> E[重新复述]\n"
+    )
+    card_back = simplified + "\n\n" + mermaid
+    stream_chunks = [card_back[i : i + 28] for i in range(0, len(card_back), 28)]
+    return {
+        "triggered": True,
+        "concept": concept,
+        "quality": quality,
+        "mastery": round(mastery_score, 2),
+        "mode": "generative_morphing",
+        "llm_backend": llm_backend,
+        "title": f"「{concept}」降维解释已生成",
+        "simplified_explanation": simplified,
+        "mermaid": mermaid,
+        "card_back": card_back,
+        "stream_chunks": stream_chunks,
+        "agent_trace": [
+            "Director Agent: 检测到困难反馈，切换为降维解释模式。",
+            f"Visualizer Agent: 已通过 {llm_backend} 生成降维解释与 Mermaid 思维对比图。",
+            "Profile Agent: 已下调该概念掌握度，并写入薄弱点列表。",
+            "Planner Agent: 下一次学习路径会重新考虑该薄弱点。",
+        ],
+    }
 
 
 def record_conversation(

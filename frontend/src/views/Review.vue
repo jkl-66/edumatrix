@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { getReviewPlans, createReviewPlan, reviewFlashcard } from '../api'
 import { Calendar, Plus, CheckCircle2, Clock, Brain } from '@lucide/vue'
 
@@ -11,6 +11,11 @@ const showForm = ref(false)
 const form = ref({ concept: '', mastery: 0.5, interval_days: 3 })
 const actionFeedback = ref('')
 const reviewingKey = ref('')
+const adaptiveReview = ref(null)
+const morphText = ref('')
+const morphTrace = ref([])
+const morphing = ref(false)
+let morphTimers = []
 
 const qualityActions = [
   { quality: 2, label: '困难', tone: 'border-red-200 text-red-600 hover:bg-red-50' },
@@ -21,6 +26,35 @@ const qualityActions = [
 function setAction(fb) {
   actionFeedback.value = fb
   setTimeout(() => actionFeedback.value = '', 3000)
+}
+
+function clearMorphTimers() {
+  morphTimers.forEach(timer => clearTimeout(timer))
+  morphTimers = []
+}
+
+function playAdaptiveReview(payload) {
+  clearMorphTimers()
+  adaptiveReview.value = payload
+  morphText.value = ''
+  morphTrace.value = []
+  morphing.value = true
+  const chunks = payload?.stream_chunks?.length
+    ? payload.stream_chunks
+    : [payload?.simplified_explanation || '', payload?.mermaid || ''].filter(Boolean)
+  chunks.forEach((chunk, index) => {
+    const timer = setTimeout(() => {
+      morphText.value += chunk
+      if (index === chunks.length - 1) morphing.value = false
+    }, index * 90)
+    morphTimers.push(timer)
+  })
+  ;(payload?.agent_trace || []).forEach((line, index) => {
+    const timer = setTimeout(() => {
+      morphTrace.value.push(line)
+    }, 220 + chunks.length * 90 + index * 130)
+    morphTimers.push(timer)
+  })
 }
 
 async function load() {
@@ -59,6 +93,13 @@ async function submitReview(plan, quality) {
   try {
     const result = await reviewFlashcard(props.studentId, plan.concept, quality)
     const interval = result?.review_plan?.interval_days || result?.interval_new || '-'
+    if (result?.adaptive_review?.triggered) {
+      playAdaptiveReview(result.adaptive_review)
+    } else {
+      adaptiveReview.value = null
+      morphText.value = ''
+      morphTrace.value = []
+    }
     setAction(`复习反馈已记录，下次间隔 ${interval} 天`)
     await load()
   } catch (e) {
@@ -96,6 +137,7 @@ function easinessText(plan) {
 }
 
 onMounted(load)
+onUnmounted(clearMorphTimers)
 </script>
 
 <template>
@@ -113,6 +155,33 @@ onMounted(load)
 
     <div v-if="actionFeedback" class="mb-4 text-sm text-emerald-600 bg-emerald-50 px-3 py-2 rounded-lg">
       {{ actionFeedback }}
+    </div>
+
+    <div v-if="adaptiveReview" class="mb-4 review-morphing rounded-xl border border-amber-100 bg-amber-50/70 p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-sm font-semibold text-amber-900">{{ adaptiveReview.title }}</p>
+          <p class="text-xs text-amber-700 mt-1 whitespace-pre-line">{{ morphText || adaptiveReview.simplified_explanation }}</p>
+        </div>
+        <div class="shrink-0 flex flex-col items-end gap-1">
+          <span class="rounded-lg bg-white/80 border border-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700">
+            掌握 {{ Math.round((adaptiveReview.mastery || 0) * 100) }}%
+          </span>
+          <span class="rounded-lg bg-white/80 border border-amber-100 px-2 py-1 text-[9px] font-semibold text-amber-600">
+            {{ morphing ? '重组中' : adaptiveReview.llm_backend || 'Visualizer' }}
+          </span>
+        </div>
+      </div>
+      <pre class="mt-3 overflow-x-auto rounded-lg bg-white/80 border border-amber-100 p-3 text-[10px] leading-relaxed text-slate-700">{{ adaptiveReview.mermaid }}</pre>
+      <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+        <p
+          v-for="line in morphTrace"
+          :key="line"
+          class="morph-trace rounded-lg bg-white/70 border border-amber-100 px-3 py-2 text-[10px] text-amber-800"
+        >
+          {{ line }}
+        </p>
+      </div>
     </div>
 
     <!-- New plan form -->
@@ -201,3 +270,36 @@ onMounted(load)
     </div>
   </div>
 </template>
+
+<style scoped>
+.review-morphing {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  animation: morph-panel 420ms ease both;
+}
+
+.morph-trace {
+  animation: morph-line 300ms ease both;
+}
+
+@keyframes morph-panel {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes morph-line {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+</style>

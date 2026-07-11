@@ -73,3 +73,19 @@ export async function generateSimilarQuiz(studentId, sourceQuizId, concept = '')
   }, { headers: buildHeaders() })
   return r.data
 }
+
+// === 错题管理 API ===
+export async function deleteWrongQuestion(wrongId) {
+  const r = await api.delete(`/quiz/wrong-questions/${wrongId}`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function togglePinWrongQuestion(wrongId) {
+  const r = await api.patch(`/quiz/wrong-questions/${wrongId}/pin`, {}, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function updateWrongQuestionNotes(wrongId, notes) {
+  const r = await api.patch(`/quiz/wrong-questions/${wrongId}/notes`, { notes }, { headers: buildHeaders() })
+  return r.data
+}

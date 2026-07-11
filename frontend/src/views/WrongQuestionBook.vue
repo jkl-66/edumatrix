@@ -3,11 +3,13 @@ import { ref, onMounted, computed } from 'vue'
 import { 
   getWrongQuestions, getWrongConcepts, 
   generateFlashcard, generateSimilarQuiz, evaluateQuizAnswer,
-  appendWrongQuestionReflection
+  appendWrongQuestionReflection,
+  deleteWrongQuestion, togglePinWrongQuestion, updateWrongQuestionNotes
 } from '../api'
 import { 
   XCircle, AlertTriangle, Search, Filter, ChevronDown, ChevronUp, BookOpen,
-  Sparkles, BrainCircuit, Play, CheckCircle, Loader2 
+  Sparkles, BrainCircuit, Play, CheckCircle, Loader2, RotateCw,
+  Pin, PinOff, Trash2, Pencil, Save, X
 } from '@lucide/vue'
 import AnkiFlashcard from '../components/AnkiFlashcard.vue'
 
@@ -29,6 +31,13 @@ const similarAnswers = ref({})
 const similarConfidences = ref({})
 const similarResults = ref({})
 const similarSubmitting = ref({})
+const similarFlipped = ref({})
+
+// 置顶 / 删除 / 笔记 状态
+const pinLoading = ref({})
+const deleteLoading = ref({})
+const editingNotes = ref({})
+const notesText = ref({})
 
 const uniqueConcepts = computed(() => {
   return conceptStats.value.map(c => c.concept)
@@ -175,6 +184,71 @@ async function appendReflectionToNote(q) {
   }
 }
 
+// 置顶/取消置顶
+async function togglePin(q) {
+  const id = q.id
+  pinLoading.value[id] = true
+  try {
+    const res = await togglePinWrongQuestion(id)
+    // 刷新列表以按新排序展示
+    await loadData()
+  } catch (e) {
+    console.error('置顶操作失败:', e)
+  } finally {
+    pinLoading.value[id] = false
+  }
+}
+
+// 删除错题
+async function deleteQuestion(q) {
+  const id = q.id
+  if (!confirm(`确定删除「${q.concept_name}」的这条错题记录吗？`)) return
+  deleteLoading.value[id] = true
+  try {
+    await deleteWrongQuestion(id)
+    await loadData()
+  } catch (e) {
+    console.error('删除错题失败:', e)
+    alert('删除失败: ' + (e.response?.data?.detail || e.message || e))
+  } finally {
+    deleteLoading.value[id] = false
+  }
+}
+
+// 开始编辑笔记
+function startEditNotes(q) {
+  const id = q.id
+  editingNotes.value[id] = true
+  notesText.value[id] = q.notes || ''
+}
+
+// 取消编辑笔记
+function cancelEditNotes(q) {
+  const id = q.id
+  editingNotes.value[id] = false
+  notesText.value[id] = ''
+}
+
+// 保存笔记
+async function saveNotes(q) {
+  const id = q.id
+  try {
+    await updateWrongQuestionNotes(id, notesText.value[id] || '')
+    q.notes = notesText.value[id] || ''
+    editingNotes.value[id] = false
+  } catch (e) {
+    console.error('保存笔记失败:', e)
+    alert('保存笔记失败: ' + (e.response?.data?.detail || e.message || e))
+  }
+}
+
+function toggleSimilarCard(q) {
+  if (similarResults.value[q.id]) {
+    const s = !similarFlipped.value[q.id]
+    similarFlipped.value[q.id] = s
+  }
+}
+
 onMounted(loadData)
 </script>
 
@@ -223,7 +297,7 @@ onMounted(loadData)
 
     <!-- Loading -->
     <div v-if="loading" class="flex items-center justify-center py-12">
-      <div class="pulse-dot" />
+      <span class="pulse-dot" />
       <span class="ml-3 text-gray-400 text-sm">加载错题数据...</span>
     </div>
 
@@ -240,17 +314,34 @@ onMounted(loadData)
         v-for="q in filteredQuestions"
         :key="q.id"
         class="card overflow-hidden"
+        :class="{ 'border-amber-300 bg-amber-50/30': q.pinned }"
       >
-        <div
-          class="flex items-start justify-between cursor-pointer"
-          @click="toggleExpand(q)"
-        >
-          <div class="flex items-start gap-3 min-w-0 flex-1">
+        <div class="flex items-start justify-between">
+          <!-- 置顶按钮 -->
+          <button
+            @click.stop="togglePin(q)"
+            :disabled="pinLoading[q.id]"
+            class="shrink-0 mt-0.5 mr-2 p-1 rounded-md transition-colors"
+            :class="q.pinned ? 'text-amber-500 hover:text-amber-600' : 'text-gray-300 hover:text-amber-400'"
+            :title="q.pinned ? '取消置顶' : '置顶关注'"
+          >
+            <Loader2 v-if="pinLoading[q.id]" :size="16" class="animate-spin" />
+            <Pin v-else-if="q.pinned" :size="16" />
+            <PinOff v-else :size="16" />
+          </button>
+
+          <div
+            class="flex items-start gap-3 min-w-0 flex-1 cursor-pointer"
+            @click="toggleExpand(q)"
+          >
             <div class="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center shrink-0 mt-0.5">
               <XCircle :size="16" class="text-red-500" />
             </div>
             <div class="min-w-0 flex-1">
-              <p class="text-sm font-medium text-gray-800 truncate">{{ q.concept_name }}</p>
+              <div class="flex items-center gap-1.5">
+                <p class="text-sm font-medium text-gray-800 truncate">{{ q.concept_name }}</p>
+                <span v-if="q.pinned" class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold shrink-0">置顶</span>
+              </div>
               <div class="flex items-center gap-2 mt-1">
                 <span
                   class="text-[10px] px-2 py-0.5 rounded-full font-medium"
@@ -260,17 +351,53 @@ onMounted(loadData)
               </div>
             </div>
           </div>
-          <div class="text-gray-400 shrink-0 ml-2">
-            <ChevronDown v-if="!expandedItems.has(q.id)" :size="16" />
-            <ChevronUp v-else :size="16" />
+          <div class="flex items-center gap-1 shrink-0 ml-2">
+            <!-- 删除按钮 -->
+            <button
+              @click.stop="deleteQuestion(q)"
+              :disabled="deleteLoading[q.id]"
+              class="p-1.5 rounded-md text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+              title="删除错题"
+            >
+              <Loader2 v-if="deleteLoading[q.id]" :size="14" class="animate-spin" />
+              <Trash2 v-else :size="14" />
+            </button>
+            <div class="text-gray-400 cursor-pointer" @click="toggleExpand(q)">
+              <ChevronDown v-if="!expandedItems.has(q.id)" :size="16" />
+              <ChevronUp v-else :size="16" />
+            </div>
           </div>
         </div>
 
-        <!-- Expanded Detail -->
-        <div v-if="expandedItems.has(q.id) && q.quiz_detail" class="mt-3 pt-3 border-t border-gray-100 space-y-2">
+        <!-- Expanded Detail (3D 信封折叠) -->
+        <div
+          class="envelope-fold"
+          :class="{ 'envelope-open': expandedItems.has(q.id) }"
+        >
+          <div class="envelope-inner" v-if="expandedItems.has(q.id) && q.quiz_detail">
+            <div class="mt-3 pt-3 border-t border-gray-100 space-y-2">
           <div class="bg-gray-50 rounded-lg p-3">
             <p class="text-[11px] text-gray-500 font-medium mb-1">题目</p>
             <p class="text-sm text-gray-700">{{ q.quiz_detail.question }}</p>
+            <!-- 选择题选项 -->
+            <div v-if="q.quiz_detail.options && q.quiz_detail.options.length > 0" class="mt-2 space-y-1">
+              <p class="text-[10px] text-gray-400 font-medium mb-1">选项</p>
+              <div 
+                v-for="opt in q.quiz_detail.options" 
+                :key="opt"
+                class="text-xs px-2.5 py-1 rounded-md"
+                :class="opt.startsWith(q.quiz_detail.correct_answer) || opt[0] === q.quiz_detail.correct_answer
+                  ? 'bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200'
+                  : (opt.startsWith(q.quiz_detail.student_answer) || opt[0] === q.quiz_detail.student_answer)
+                    ? 'bg-red-50 text-red-700 border border-red-200'
+                    : 'bg-white text-gray-600 border border-gray-100'"
+              >
+                <span class="text-[10px] mr-1.5" :class="opt.startsWith(q.quiz_detail.correct_answer) || opt[0] === q.quiz_detail.correct_answer ? 'text-emerald-500' : 'text-gray-400'">
+                  {{ opt.startsWith(q.quiz_detail.correct_answer) || opt[0] === q.quiz_detail.correct_answer ? '✓' : '' }}
+                </span>
+                {{ opt }}
+              </div>
+            </div>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <div class="bg-red-50 rounded-lg p-3">
@@ -290,16 +417,61 @@ onMounted(loadData)
             <p class="text-[11px] text-amber-600 font-medium mb-1">📊 准确率</p>
             <div class="flex items-center gap-2">
               <div class="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                <div
-                  class="h-full rounded-full transition-all"
+                <span
+                  class="h-full rounded-full transition-all block"
                   :class="(q.quiz_detail.accuracy_score || 0) >= 0.6 ? 'bg-emerald-500' : 'bg-red-500'"
                   :style="{ width: ((q.quiz_detail.accuracy_score || 0) * 100) + '%' }"
-                />
+                ></span>
               </div>
               <span class="text-xs font-medium" :class="(q.quiz_detail.accuracy_score || 0) >= 0.6 ? 'text-emerald-600' : 'text-red-600'">
                 {{ ((q.quiz_detail.accuracy_score || 0) * 100).toFixed(0) }}%
               </span>
             </div>
+          </div>
+
+          <!-- 个人笔记 -->
+          <div class="bg-violet-50 rounded-lg p-3 border border-violet-100">
+            <div class="flex items-center justify-between mb-2">
+              <p class="text-[11px] text-violet-600 font-medium flex items-center gap-1">
+                <Pencil :size="12" />
+                <span>我的笔记</span>
+              </p>
+              <button
+                v-if="!editingNotes[q.id]"
+                @click="startEditNotes(q)"
+                class="text-[10px] text-violet-500 hover:text-violet-700 font-medium transition-colors"
+              >
+                {{ q.notes ? '编辑' : '添加笔记' }}
+              </button>
+            </div>
+            <!-- 编辑模式 -->
+            <div v-if="editingNotes[q.id]" class="space-y-2">
+              <textarea
+                v-model="notesText[q.id]"
+                rows="3"
+                placeholder="记录这道题的易错点、解题思路或心得..."
+                class="w-full text-xs rounded-lg border border-violet-200 p-2.5 resize-none focus:outline-none focus:ring-1 focus:ring-violet-400"
+              />
+              <div class="flex justify-end gap-2">
+                <button
+                  @click="cancelEditNotes(q)"
+                  class="py-1 px-3 text-[10px] font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors flex items-center gap-1"
+                >
+                  <X :size="10" />
+                  取消
+                </button>
+                <button
+                  @click="saveNotes(q)"
+                  class="py-1 px-3 text-[10px] font-semibold rounded-lg bg-violet-500 hover:bg-violet-600 text-white shadow-sm transition-all flex items-center gap-1"
+                >
+                  <Save :size="10" />
+                  保存
+                </button>
+              </div>
+            </div>
+            <!-- 查看模式 -->
+            <p v-else-if="q.notes" class="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap">{{ q.notes }}</p>
+            <p v-else class="text-[10px] text-gray-400 italic">暂无笔记，点击"添加笔记"记录你的思考</p>
           </div>
 
           <!-- 矩阵闭环学习流：记入笔记反思 -->
@@ -387,15 +559,20 @@ onMounted(loadData)
                 <span class="text-xs text-slate-400">大模型正在结合隔离沙箱出题中...</span>
               </div>
 
-              <!-- 答题区 -->
-              <div v-else class="flex flex-col justify-between h-[320px] rounded-2xl border border-amber-200 bg-amber-50/30 p-5 shadow-sm">
-                <!-- 题目内容 -->
-                <div class="overflow-y-auto max-h-[160px] pr-1 text-sm text-gray-800 leading-relaxed font-medium">
-                  {{ similarQuizzes[q.id].question }}
-                </div>
+              <!-- 答题区（翻转卡片） -->
+              <div v-else class="similar-perspective h-[320px]">
+                <div 
+                  class="similar-card-inner relative w-full h-full cursor-pointer select-none"
+                  :class="{ 'is-flipped': similarResults[q.id] && !similarFlipped[q.id] }"
+                  @click="toggleSimilarCard(q)"
+                >
+                  <!-- ========== 正面：题目 + 答题 ========== -->
+                  <div class="similar-card-face similar-card-front absolute inset-0 rounded-2xl border border-amber-200 bg-amber-50/30 p-5 shadow-sm flex flex-col">
+                    <div class="overflow-y-auto max-h-[140px] pr-1 text-sm text-gray-800 leading-relaxed font-medium mb-3">
+                      {{ similarQuizzes[q.id].question }}
+                    </div>
 
-                <!-- 答题交互 -->
-                <div class="space-y-3 pt-3 border-t border-amber-100">
+                    <div class="space-y-3 pt-3 border-t border-amber-100 mt-auto">
                   <!-- 选择题选项 -->
                   <div v-if="similarQuizzes[q.id].options && similarQuizzes[q.id].options.length > 0" class="grid grid-cols-2 gap-2">
                     <label 
@@ -403,6 +580,7 @@ onMounted(loadData)
                       :key="opt"
                       class="flex items-center gap-2 p-2 rounded-lg border bg-white cursor-pointer hover:border-amber-400 transition-colors text-xs text-gray-700"
                       :class="{ 'border-amber-500 bg-amber-50/50': similarAnswers[q.id] === opt[0] }"
+                      @click.stop
                     >
                       <input 
                         type="radio" 
@@ -422,54 +600,174 @@ onMounted(loadData)
                       placeholder="请输入你的解答步骤或最终答案..."
                       v-model="similarAnswers[q.id]"
                       class="input text-xs w-full py-2 px-3"
+                      @click.stop
                     />
                   </div>
 
                   <!-- 自信度滑动条 -->
-                  <div class="flex items-center justify-between text-[10px] text-gray-500">
-                    <span>自信度: {{ similarConfidences[q.id] }}0%</span>
-                    <input 
-                      type="range" 
-                      min="1" 
-                      max="10" 
-                      v-model="similarConfidences[q.id]" 
-                      class="w-32 accent-amber-500 cursor-pointer"
-                    />
-                  </div>
+                      <div v-if="!similarResults[q.id]" class="flex items-center justify-between text-[10px] text-gray-500">
+                        <span>自信度: {{ similarConfidences[q.id] }}0%</span>
+                        <input type="range" min="1" max="10" v-model="similarConfidences[q.id]" class="w-32 accent-amber-500 cursor-pointer" @click.stop />
+                      </div>
 
-                  <!-- 结果显示 -->
-                  <div v-if="similarResults[q.id]" class="text-xs p-2.5 rounded-lg border" :class="similarResults[q.id].accuracy_score >= 0.7 ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'">
-                    <div class="flex items-center gap-1.5 font-bold mb-1">
-                      <CheckCircle v-if="similarResults[q.id].accuracy_score >= 0.7" :size="14" />
-                      <XCircle v-else :size="14" />
-                      <span>正确率: {{ (similarResults[q.id].accuracy_score * 100).toFixed(0) }}% ({{ similarResults[q.id].accuracy_score >= 0.7 ? '挑战成功' : '挑战未通过' }})</span>
+                      <div v-if="!similarResults[q.id]" class="flex justify-end gap-2">
+                        <button @click.stop="startSimilarChallenge(q)" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors">重新生成</button>
+                        <button @click.stop="submitSimilarAnswer(q)" :disabled="!similarAnswers[q.id] || similarSubmitting[q.id]" class="px-4 py-1.5 text-xs font-semibold rounded-lg bg-amber-500 hover:bg-amber-600 text-white shadow-sm active:scale-95 disabled:opacity-50 transition-all flex items-center gap-1">
+                          <Loader2 v-if="similarSubmitting[q.id]" :size="12" class="animate-spin" />
+                          <span>提交评估</span>
+                        </button>
+                      </div>
+
+                      <div v-else class="flex items-center gap-1 text-[10px] text-amber-600 opacity-60">
+                        <RotateCw :size="10" />
+                        <span>点击卡片翻转查看详细分析</span>
+                      </div>
                     </div>
-                    <p class="text-[11px] leading-relaxed opacity-90">{{ similarResults[q.id].feedback }}</p>
                   </div>
 
-                  <!-- 操作按钮 -->
-                  <div v-else class="flex justify-end gap-2">
-                    <button 
-                      @click="startSimilarChallenge(q)"
-                      class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
-                    >
-                      重新生成
-                    </button>
-                    <button 
-                      @click="submitSimilarAnswer(q)"
-                      :disabled="!similarAnswers[q.id] || similarSubmitting[q.id]"
-                      class="px-4 py-1.5 text-xs font-semibold rounded-lg bg-amber-500 hover:bg-amber-600 text-white shadow-sm active:scale-95 disabled:opacity-50 transition-all flex items-center gap-1"
-                    >
-                      <Loader2 v-if="similarSubmitting[q.id]" :size="12" class="animate-spin" />
-                      <span>提交评估</span>
-                    </button>
+                  <!-- ========== 反面：分析结果 ========== -->
+                  <div class="similar-card-face similar-card-back absolute inset-0 rounded-2xl border shadow-sm flex flex-col bg-gradient-to-br from-slate-900 to-slate-800 border-slate-700 text-slate-200 p-5">
+                    <div class="flex items-center justify-between mb-3">
+                      <div class="flex items-center gap-2">
+                        <CheckCircle v-if="similarResults[q.id] && similarResults[q.id].accuracy_score >= 0.7" :size="18" class="text-emerald-400" />
+                        <XCircle v-else :size="18" class="text-amber-400" />
+                        <span class="font-bold text-sm">
+                          正确率: {{ similarResults[q.id] ? (similarResults[q.id].accuracy_score * 100).toFixed(0) : '--' }}%
+                        </span>
+                      </div>
+                      <span class="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full"
+                        :class="similarResults[q.id] && similarResults[q.id].accuracy_score >= 0.7 
+                          ? 'text-emerald-400 bg-emerald-950/50 border border-emerald-900/50' 
+                          : 'text-amber-400 bg-amber-950/50 border border-amber-900/50'"
+                      >
+                        {{ similarResults[q.id] && similarResults[q.id].accuracy_score >= 0.7 ? '优势分析' : '诊断分析' }}
+                      </span>
+                    </div>
+
+                    <p class="flex-1 overflow-y-auto text-[12px] leading-relaxed text-slate-300 whitespace-pre-line scrollbar-thin pr-1">
+                      {{ similarResults[q.id] ? similarResults[q.id].feedback : '' }}
+                    </p>
+
+                    <div class="pt-3 mt-2 border-t border-slate-700/50 flex items-center justify-between text-[10px] text-slate-500">
+                      <span v-if="similarResults[q.id]">AI 置信度: {{ (similarResults[q.id].ai_confidence * 100).toFixed(0) }}%</span>
+                      <span v-if="similarResults[q.id] && similarResults[q.id].metacognitive_gap">自评偏差: {{ similarResults[q.id].metacognitive_gap }}</span>
+                      <span class="flex items-center gap-1 text-slate-400 hover:text-indigo-400 transition-colors cursor-pointer">
+                        <RotateCw :size="10" />
+                        翻回看题
+                      </span>
+                    </div>
+
+                    <div class="flex justify-end gap-2 mt-3">
+                      <button @click.stop="startSimilarChallenge(q)" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors">重新生成</button>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
+            </div>
         </div>
       </div>
     </div>
   </div>
+</div>
 </template>
+
+<style scoped>
+.envelope-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-origin: top center;
+  perspective: 800px;
+}
+
+.envelope-fold.envelope-open {
+  grid-template-rows: 1fr;
+}
+
+.envelope-inner {
+  overflow: hidden;
+  animation: envelopeUnfold 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  transform-origin: top center;
+}
+
+@keyframes envelopeUnfold {
+  0% {
+    opacity: 0;
+    transform: rotateX(-90deg) translateY(-20px);
+  }
+  40% {
+    opacity: 0.6;
+    transform: rotateX(10deg) translateY(-5px);
+  }
+  70% {
+    transform: rotateX(-3deg) translateY(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: rotateX(0deg) translateY(0);
+  }
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  transition: all 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.card:hover {
+  border-color: #fca5a5;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.08);
+}
+
+.card.expanded {
+  border-color: #f87171;
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.12);
+}
+
+.chevron-icon {
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.chevron-icon.rotated {
+  transform: rotate(180deg);
+}
+
+/* 相似题整卡翻转 */
+.similar-perspective {
+  perspective: 800px;
+}
+
+.similar-card-inner {
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+}
+
+.similar-card-inner.is-flipped {
+  transform: rotateY(180deg);
+}
+
+.similar-card-face {
+  backface-visibility: hidden;
+}
+
+.similar-card-back {
+  transform: rotateY(180deg);
+}
+
+/* 反馈文本滚动条 */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 3px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 2px;
+}
+</style>

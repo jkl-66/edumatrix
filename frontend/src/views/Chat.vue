@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { ref, nextTick, computed, onMounted, onUnmounted, watch, createApp } from 'vue'
 import { useRoute } from 'vue-router'
 import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
@@ -403,6 +403,42 @@ const quizAttempt = computed(() => quizStore.quizAttempt)
 const quizConcept = computed({
   get: () => quizStore.quizConcept,
   set: (val) => { quizStore.quizConcept = val }
+})
+
+// 物理抖动 + 彩带粒子触发
+const shakeCard = ref(false)
+const showConfetti = ref(false)
+const confettiParticles = ref<Array<{ x: number; color: string; delay: number; size: number }>>([])
+
+const CONFETTI_COLORS = ['#f43f5e', '#f97316', '#fbbf24', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899']
+
+function spawnConfetti() {
+  const particles = []
+  for (let i = 0; i < 40; i++) {
+    particles.push({
+      x: 10 + Math.random() * 80,
+      color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+      delay: Math.random() * 0.5,
+      size: 4 + Math.random() * 8,
+    })
+  }
+  confettiParticles.value = particles
+  showConfetti.value = true
+  setTimeout(() => {
+    showConfetti.value = false
+    confettiParticles.value = []
+  }, 2000)
+}
+
+watch(quizResult, (val) => {
+  if (!val) return
+  const score = val.accuracy_score ?? 0
+  if (score >= 0.7) {
+    spawnConfetti()
+  } else {
+    shakeCard.value = true
+    setTimeout(() => { shakeCard.value = false }, 700)
+  }
 })
 const quizSessionId = computed(() => quizStore.quizSessionId)
 
@@ -2042,7 +2078,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
         <!-- Result -->
         <div v-if="quizState === 'adapting' && quizResult" class="flex-1 flex flex-col">
-          <div class="card mb-4 space-y-3">
+          <div class="card mb-4 space-y-3 relative" :class="{ 'shake-trigger': shakeCard }">
+            <!-- 彩带粒子层 -->
+            <div v-if="showConfetti" class="absolute inset-0 overflow-hidden pointer-events-none rounded-xl z-10">
+              <div
+                v-for="(p, i) in confettiParticles"
+                :key="i"
+                class="confetti-particle"
+                :style="{
+                  left: p.x + '%',
+                  backgroundColor: p.color,
+                  animationDelay: p.delay + 's',
+                  width: p.size + 'px',
+                  height: p.size + 'px',
+                }"
+              />
+            </div>
             <div class="flex items-center justify-between">
               <h4 class="text-sm font-semibold">评估结果</h4>
               <div class="flex items-center gap-2">
@@ -2654,5 +2705,52 @@ function renderMarkdown(text, type = '', conceptName = '') {
   .scroll-fab-container.has-right-panel {
     right: 380px;
   }
+}
+
+/* ===== 物理抖动动画（答错时触发）===== */
+@keyframes physicsShake {
+  0%, 100% { transform: translateX(0); }
+  10% { transform: translateX(-6px) rotate(-0.5deg); }
+  20% { transform: translateX(5px) rotate(0.4deg); }
+  30% { transform: translateX(-4px) rotate(-0.3deg); }
+  40% { transform: translateX(3px) rotate(0.2deg); }
+  50% { transform: translateX(-2px); }
+  60% { transform: translateX(1px); }
+  70% { transform: translateX(0); }
+}
+
+.shake-trigger {
+  animation: physicsShake 0.6s ease-out;
+}
+
+/* ===== 彩带粒子特效（答对时触发）===== */
+@keyframes confettiDrop {
+  0% {
+    transform: translateY(-10px) rotate(0deg) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(120px) rotate(720deg) scale(0);
+    opacity: 0;
+  }
+}
+
+.confetti-particle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  animation: confettiDrop 1.2s ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes scorePop {
+  0% { transform: scale(0.5); opacity: 0; }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.score-animate {
+  animation: scorePop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 </style>

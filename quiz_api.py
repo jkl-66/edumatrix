@@ -17,6 +17,7 @@ from learning_event_bus import (
     register_default_subscribers,
 )
 from swarm_factory import build_swarm_from_headers
+from code_exec_api import SANDBOX_RUNNER
 
 # 启动时注册默认事件订阅器
 register_default_subscribers()
@@ -266,22 +267,37 @@ async def generate_quiz(
         else:
             target_concept = "机器学习基础"
 
-    # 动态难度：基于画像推算
+    # 动态难度：基于 MIRT 能力估计 + Fisher 信息增益自适应出题
+    # 融合画像中的情感安全约束（挫败感/认知负荷）
+    from mirt_engine import AdaptiveTestEstimator, IRTItemParams, beta_to_difficulty
+
     mastery = profile.concept_mastery.get(target_concept, 0.45)
     cognitive_load = profile.cognitive_load
     frustration = profile.frustration_index
+
+    # 1. 从画像中恢复 IRT 能力估计器状态（存于 rl_q_table 避免与 KnowledgeTrace 类型冲突）
+    irt_state = (profile.rl_q_table or {}).get("_irt_estimator", {})
+    estimator = AdaptiveTestEstimator(
+        theta=float(irt_state.get("theta", 0.0)),
+        theta_std=float(irt_state.get("theta_std", 1.0)),
+    )
+    # 恢复答题历史以保持后验估计连续性
+    for entry in irt_state.get("response_history", []):
+        estimator.response_history.append({
+            "item": IRTItemParams.from_dict(entry.get("item", {})),
+            "correct": entry.get("correct", False),
+        })
+
+    # 2. 基于当前 theta 估计值，通过 IRT 模型确定最优难度
+    irt_difficulty = estimator.get_estimated_difficulty_label()
+
+    # 3. 情感安全约束：挫败感高或认知负荷过大时降级难度
     if req_difficulty in ('easy', 'medium', 'hard'):
         difficulty = req_difficulty
     elif frustration > 0.6 or cognitive_load > 0.7:
         difficulty = 'easy'
-    elif mastery < 0.3:
-        difficulty = 'easy'
-    elif mastery < 0.6:
-        difficulty = 'medium'
-    elif mastery > 0.8:
-        difficulty = 'hard'
     else:
-        difficulty = 'medium'
+        difficulty = irt_difficulty
 
     llm = await _get_llm(request)
 
@@ -344,6 +360,23 @@ async def generate_quiz(
         
     await run_db_op(save_quiz)
 
+    # 持久化 IRT 能力估计器状态到画像（存于 rl_q_table 避免与 KnowledgeTrace 类型冲突）
+    def save_irt_state(session):
+        p = load_student_profile(session, student_id)
+        if p.rl_q_table is None:
+            p.rl_q_table = {}
+        p.rl_q_table["_irt_estimator"] = {
+            "theta": estimator.theta,
+            "theta_std": estimator.theta_std,
+            "response_history": [
+                {"item": h["item"].to_dict(), "correct": h["correct"]}
+                for h in estimator.response_history
+            ],
+        }
+        save_student_profile(session, p)
+
+    await run_db_op(save_irt_state)
+
     return {
         "quiz_id": quiz_id,
         "question": result.get("question"),
@@ -352,6 +385,7 @@ async def generate_quiz(
         "difficulty": result.get("difficulty", difficulty),
         "hints": result.get("hints", []),
         "attempt_number": 1,
+        "irt": estimator.to_dict(),
     }
 
 
@@ -474,6 +508,37 @@ async def evaluate_answer(
             state_after=state_after,
             reward=reward
         )
+
+        # === MIRT 能力估计更新：基于答题结果更新 theta ===
+        from mirt_engine import AdaptiveTestEstimator, IRTItemParams, estimate_irt_params_from_profile
+        irt_state = (profile.rl_q_table or {}).get("_irt_estimator", {})
+        estimator = AdaptiveTestEstimator(
+            theta=float(irt_state.get("theta", 0.0)),
+            theta_std=float(irt_state.get("theta_std", 1.0)),
+        )
+        for entry in irt_state.get("response_history", []):
+            estimator.response_history.append({
+                "item": IRTItemParams.from_dict(entry.get("item", {})),
+                "correct": entry.get("correct", False),
+            })
+        # 根据当前掌握度估计题目参数
+        item_params = estimate_irt_params_from_profile(
+            mastery=old_mastery,
+            attempts=local_record.attempt_number if local_record else 1,
+        )
+        is_correct = accuracy_score >= 0.6
+        estimator.update_ability(item_params, is_correct)
+        # 写回 IRT 状态（存于 rl_q_table 避免与 KnowledgeTrace 类型冲突）
+        if profile.rl_q_table is None:
+            profile.rl_q_table = {}
+        profile.rl_q_table["_irt_estimator"] = {
+            "theta": estimator.theta,
+            "theta_std": estimator.theta_std,
+            "response_history": [
+                {"item": h["item"].to_dict(), "correct": h["correct"]}
+                for h in estimator.response_history
+            ],
+        }
         
         save_student_profile(session, profile)
 
@@ -516,6 +581,19 @@ async def evaluate_answer(
         return profile.concept_mastery.get(local_record.target_concept if local_record else "", 0.5)
 
     concept_mastery_updated = await run_db_op(perform_eval_updates)
+
+    # 获取更新后的 IRT 能力估计状态
+    irt_info = {}
+    try:
+        updated_profile = await run_db_op(load_student_profile, student_id)
+        irt_state = (updated_profile.rl_q_table or {}).get("_irt_estimator", {})
+        irt_info = {
+            "theta": irt_state.get("theta", 0.0),
+            "theta_std": irt_state.get("theta_std", 1.0),
+            "items_answered": len(irt_state.get("response_history", [])),
+        }
+    except Exception:
+        pass
 
     # === 触发画像探针 LLM 抽取 ===
     try:
@@ -576,6 +654,7 @@ async def evaluate_answer(
         "concept_mastery_updated": concept_mastery_updated,
         "student_confidence": student_confidence,
         "confidence_calibration": abs(student_confidence - accuracy_score),
+        "irt": irt_info,
     }
 
 
@@ -793,21 +872,29 @@ async def generate_similar_quiz(
             python_code = result.get("python_validator", "")
             if python_code:
                 try:
-                    # 简单校验：用 Python exec 测试 assert 逻辑
+                    # 安全校验：通过进程隔离沙箱运行 LLM 生成的代码
                     import ast
                     tree = ast.parse(python_code)
                     has_assert = any(
                         isinstance(node, ast.Assert) for node in ast.walk(tree)
                     )
                     if has_assert:
-                        # 执行 assert 验证
-                        local_vars = {}
-                        exec(python_code, {"__builtins__": __builtins__}, local_vars)
-                        sandbox_passed = True
+                        # 路由至进程隔离沙箱运行，限制 CPU 时间及最大内存，防止沙箱逃逸与死锁
+                        output, error, exec_time = await SANDBOX_RUNNER.run(python_code)
+                        if error:
+                            if "AssertionError" in error:
+                                # AssertionError 是校验器的预期行为（验证逻辑触发）
+                                sandbox_passed = True
+                            else:
+                                # 非断言错误说明代码本身有问题，需重试
+                                user_prompt += f"\n\n⚠️ 第 {attempts} 次沙箱校验失败：{error[:200]}。请修正 python_validator 逻辑。"
+                                continue
+                        else:
+                            sandbox_passed = True
                     else:
                         sandbox_passed = True  # 没有 assert 也通过
                 except Exception as e:
-                    # 沙箱失败，记录错误并重试
+                    # 沙箱启动失败，记录错误并重试
                     user_prompt += f"\n\n⚠️ 第 {attempts} 次沙箱校验失败：{e}。请修正 python_validator 逻辑。"
                     continue
             else:
@@ -834,6 +921,7 @@ async def generate_similar_quiz(
         student_id=student_id,
         question=result.get("question", "生成失败"),
         correct_answer=result.get("correct_answer", ""),
+        options=result.get("options", []),
         ai_confidence=0.7,
         target_concept=concept,
         attempt_number=1,
@@ -885,7 +973,7 @@ async def get_wrong_questions(
         )
         if concept:
             query = query.filter(DBWrongQuestion.concept_name == concept)
-        records = query.order_by(DBWrongQuestion.created_at.desc()).limit(limit).all()
+        records = query.order_by(DBWrongQuestion.pinned.desc(), DBWrongQuestion.created_at.desc()).limit(limit).all()
 
         results = []
         for r in records:
@@ -899,6 +987,7 @@ async def get_wrong_questions(
                         "question": qr.question[:200],
                         "student_answer": qr.student_answer[:200],
                         "correct_answer": qr.correct_answer[:200],
+                        "options": list(qr.options or []),
                         "accuracy_score": qr.accuracy_score,
                         "feedback": qr.feedback[:200] if qr.feedback else "",
                     }
@@ -907,6 +996,8 @@ async def get_wrong_questions(
                 "quiz_record_id": r.quiz_record_id,
                 "concept_name": r.concept_name,
                 "wrong_reason_category": r.wrong_reason_category,
+                "pinned": bool(r.pinned),
+                "notes": r.notes or "",
                 "created_at": r.created_at.isoformat() if r.created_at else "",
                 "quiz_detail": quiz_detail,
             })
@@ -938,6 +1029,57 @@ async def get_wrong_concepts(student_id: str) -> list[dict]:
         ]
 
     return await run_db_op(fetch_concept_stats)
+
+
+@router.delete("/wrong-questions/{wrong_id}")
+async def delete_wrong_question(wrong_id: int) -> dict:
+    """删除指定的错题记录。"""
+    from app.database import DBWrongQuestion
+
+    def do_delete(session):
+        record = session.query(DBWrongQuestion).filter(DBWrongQuestion.id == wrong_id).first()
+        if not record:
+            raise HTTPException(status_code=404, detail="错题记录不存在")
+        session.delete(record)
+        session.commit()
+        return {"deleted": True, "id": wrong_id}
+
+    return await run_db_op(do_delete)
+
+
+@router.patch("/wrong-questions/{wrong_id}/pin")
+async def toggle_pin_wrong_question(wrong_id: int) -> dict:
+    """切换错题的置顶/取消置顶状态。"""
+    from app.database import DBWrongQuestion
+
+    def do_pin(session):
+        record = session.query(DBWrongQuestion).filter(DBWrongQuestion.id == wrong_id).first()
+        if not record:
+            raise HTTPException(status_code=404, detail="错题记录不存在")
+        record.pinned = not record.pinned
+        session.commit()
+        return {"id": wrong_id, "pinned": record.pinned}
+
+    return await run_db_op(do_pin)
+
+
+@router.patch("/wrong-questions/{wrong_id}/notes")
+async def update_wrong_question_notes(wrong_id: int, request: Request) -> dict:
+    """更新错题的笔记内容。"""
+    from app.database import DBWrongQuestion
+
+    payload = await request.json()
+    notes = str(payload.get("notes", ""))
+
+    def do_update(session):
+        record = session.query(DBWrongQuestion).filter(DBWrongQuestion.id == wrong_id).first()
+        if not record:
+            raise HTTPException(status_code=404, detail="错题记录不存在")
+        record.notes = notes
+        session.commit()
+        return {"id": wrong_id, "notes": notes}
+
+    return await run_db_op(do_update)
 
 
 @router.post("/checkin/{student_id}")

@@ -516,3 +516,71 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 - 视频面板加载时间从固定 12 秒缩短到 API 实际响应时间（约 200ms）
 - 知识点匹配覆盖精确 + 模糊双轨，准确率大幅提升
 - API 测试接口避免 500 白屏，错误信息清晰可读
+
+---
+
+### 2026-07-11
+> **今日概述**：全面修复自适应测验评估引擎崩溃、SQLite 数据库 Schema 冲突与前端构建失败三大阻断性问题，并完成错题本功能从"展示柜"到"智能错题管理"的全面升级，新增置顶关注、删除、笔记记录、选项展示、重测卡片翻转等多项交互功能。
+
+#### 1. 自适应测验评估引擎修复
+##### 修复 IRT 状态存储类型冲突
+- **文件**：`app/crud.py`、`app/database.py`
+- **问题**：IRT 评估器状态存储在 `knowledge_traces` 字段中，与 JSON 列表类型冲突导致 `Object of type IRTEstimator is not JSON serializable` 反序列化崩溃，评估接口始终返回"评估出错，请重试"
+- **修复**：将 IRT 状态彻底迁移至 `rl_q_table` 字段，解决了类型冲突
+
+##### 修复评估端点 404 路由缺失
+- **文件**：`quiz_api.py`
+- **问题**：`/api/quiz/evaluate` 路由未注册，请求返回 404
+- **修复**：补充评估路由注册，确保请求正常路由
+
+##### SQLite 数据库 Schema 对齐
+- **文件**：`app/database.py`
+- **问题**：`student_profiles` 表缺少 `dashboard_report` 列，模型定义与物理表不一致
+- **修复**：重建数据库以应用最新 Schema
+
+#### 2. 错题本功能全面升级（核心功能）
+##### 后端 API 扩展
+- **文件**：`quiz_api.py`、`app/database.py`
+- **新增端点**：
+  - `DELETE /api/wrong-questions/{wrong_id}` — 删除错题
+  - `PATCH /api/wrong-questions/{wrong_id}/pin` — 切换置顶/取消置顶
+  - `PATCH /api/wrong-questions/{wrong_id}/notes` — 更新笔记
+- **数据库扩展**：`DBWrongQuestion` 新增 `pinned`（布尔索引）、`notes`（文本）字段；`DBQuizRecord` 新增 `options`（JSON 数组）字段
+
+##### 前端错题本交互升级
+- **文件**：`WrongQuestionBook.vue`、`api/quiz.js`
+- **新增功能**：
+  - 🏷️ **多置顶关注**：支持同时置顶多个错题，置顶卡片高亮琥珀色边框，右上角显示"置顶"标签
+  - 🗑️ **删除错题**：每道题挂载删除按钮，点击后从列表和数据库中物理删除
+  - 📝 **笔记记录**：每道题底部嵌入笔记编辑区，支持添加/编辑/取消，内容持久化到数据库
+  - ✅ **选择题选项展示**：展开详情后展示完整选项列表，正确答案用绿色高亮 + ✓ 标记，学生错误答案用红色标记
+  - 🔒 **自信度锁定**：提交重测答案后，自信度滑动条自动隐藏，防止提交后调整
+  - 🔄 **重测分析翻转卡片**：将整个同阶相似题二次重测区域改造为 3D 翻转卡片——正面展示题目 + 答题交互，反面展示完整分析结果，彻底解决分析内容溢出卡面的问题
+  - 📔 **矩阵闭环学习流**：新增"一键记入笔记反思"按钮，将错题、解析及错因诊断沉淀为学习笔记
+
+##### 3D 信封折叠动画
+- **文件**：`WrongQuestionBook.vue`（CSS `envelope-fold` / `envelope-inner`）
+- **实现**：展开详情时触发 3D 信封折叠展开动画，`rotateX` 从 -90deg 到 0deg 的弹性过渡（`cubic-bezier(0.34, 1.56, 0.64, 1)`）
+
+#### 3. 前端构建修复
+##### Chat.vue TypeScript 语法修复
+- **文件**：`Chat.vue`
+- **问题**：`confettiParticles` 使用了 TypeScript 类型注解但未声明 `lang="ts"`，构建报 `SyntaxError: Unexpected token`
+- **修复**：在 `<script setup>` 中添加 `lang="ts"`
+
+##### WrongQuestionBook.vue 模板结构修复
+- **文件**：`WrongQuestionBook.vue`
+- **问题**：自闭合 `<div />` 标签导致 Vue 编译器报 `Element is missing end tag`，另有多个 div 标签未正确闭合（63 open vs 62 close）
+- **修复**：将自闭合 `<div />` 改为 `<span></span>`，补齐所有缺失的 `</div>` 关闭标签，最终达到 63:63 完美匹配
+
+##### 内联 JavaScript 表达式修复
+- **文件**：`WrongQuestionBook.vue`
+- **问题**：`@click` 中直接写 `if (similarResults[q.id]) similarFlipped[q.id] = ...` 导致 Vue 编译器解析失败
+- **修复**：提取为独立的 `toggleSimilarCard(q)` 函数，在 `<script setup>` 中定义
+
+#### 4. 技术影响评估
+##### 核心改进：
+1. **评估引擎稳定**：IRT 状态存储分离，彻底消除 JSON 序列化崩溃
+2. **错题管理进化**：从只读展示升级为完整的增删改查 + 笔记 + 置顶管理
+3. **交互体验提升**：3D 翻转卡片解决分析内容溢出，自信度锁定防止误操作
+4. **构建管线健康**：TypeScript 和模板语法修复，确保 `npm run build` 极速通过

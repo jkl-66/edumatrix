@@ -204,14 +204,22 @@ def estimate_irt_params_from_profile(
     mastery: float,
     attempts: int = 1,
     accuracy_history: list[float] | None = None,
+    difficulty: str | None = None,
 ) -> IRTItemParams:
     alpha = 1.0 + 0.5 * math.log(max(attempts, 1) + 1)
-    beta = (0.5 - mastery) * 3.0
+    
+    # 修正：难度 beta 应该与题目难度直接正向对齐，而非反向估计
+    if difficulty:
+        beta = {"easy": -1.0, "medium": 0.0, "hard": 1.0}.get(difficulty.lower(), 0.0)
+    else:
+        # 如果没有指定 difficulty，则根据 mastery 正向预测难度范围
+        beta = (mastery - 0.5) * 3.0  # 正向：高掌握度对应高难度区间
+        
     gamma = max(0.05, 0.25 - 0.05 * attempts)
     if accuracy_history:
         avg_acc = sum(accuracy_history) / len(accuracy_history)
         alpha += 0.3 * avg_acc
-        beta += (0.5 - avg_acc) * 1.5
+        beta += (avg_acc - 0.5) * 1.5 # 正向调整
     return IRTItemParams(
         alpha=round(alpha, 4),
         beta=round(beta, 4),

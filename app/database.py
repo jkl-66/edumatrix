@@ -262,7 +262,28 @@ class DBQuizRecord(Base):
     options = Column(JSON, default=list)
     created_at = Column(DateTime, default=_utcnow)
 
+    # === 任务 6 核心扩展：存取答题时的 IRT 参数数值 ===
+    irt_alpha = Column(Float, default=1.0)
+    irt_beta = Column(Float, default=0.0)
+    irt_gamma = Column(Float, default=0.25)
+
     student_profile = relationship("DBStudentProfile", back_populates="quiz_records")
+
+class DBQuizItem(Base):
+    """持久化物理表：本地预置种子题库"""
+    __tablename__ = "quiz_items"
+
+    id = Column(String(64), primary_key=True)
+    concept = Column(String(128), index=True)
+    question = Column(Text, nullable=False)
+    options = Column(JSON, default=list)
+    correct_answer = Column(Text, default="")
+    explanation = Column(Text, default="")
+    difficulty = Column(String(32), default="medium")
+    irt_alpha = Column(Float, default=1.0)
+    irt_beta = Column(Float, default=0.0)
+    irt_gamma = Column(Float, default=0.25)
+    created_at = Column(DateTime, default=_utcnow)
 
 class DBWebSearchHistory(Base):
     """持久化物理表：存储联网搜索与文档加载记录"""
@@ -414,6 +435,18 @@ def _migrate_schema():
     if "options" not in quiz_columns:
         with engine.connect() as conn:
             conn.execute(sa.text("ALTER TABLE quiz_records ADD COLUMN options TEXT DEFAULT '[]'"))
+            conn.commit()
+    if "irt_alpha" not in quiz_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE quiz_records ADD COLUMN irt_alpha FLOAT DEFAULT 1.0"))
+            conn.commit()
+    if "irt_beta" not in quiz_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE quiz_records ADD COLUMN irt_beta FLOAT DEFAULT 0.0"))
+            conn.commit()
+    if "irt_gamma" not in quiz_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE quiz_records ADD COLUMN irt_gamma FLOAT DEFAULT 0.25"))
             conn.commit()
 
     wrong_columns = [c["name"] for c in inspector.get_columns("wrong_questions")]

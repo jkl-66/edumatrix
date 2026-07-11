@@ -310,43 +310,101 @@ async def generate_quiz(
     else:
         difficulty = irt_difficulty
 
-    llm = await _get_llm(request)
+    # 4. 尝试从本地种子题库选题 (Hybrid CAT Engine)
+    from app.database import DBQuizItem
+    
+    def select_from_item_bank(session):
+        # 查找该知识点的所有预置题
+        candidates = session.query(DBQuizItem).filter(
+            DBQuizItem.concept == target_concept
+        ).all()
+        # 查找已答题目的文本以去重
+        answered = session.query(DBQuizRecord.question).filter(
+            DBQuizRecord.student_id == student_id,
+            DBQuizRecord.student_answer != ""
+        ).all()
+        answered_texts = {a[0].strip() for a in answered if a[0]}
+        
+        available = [c for c in candidates if c.question.strip() not in answered_texts]
+        return available
 
-    system_prompt = (
-        "你是一个智能出题考官。根据给定的知识点、难度和学生画像，生成高度定制化的简答题。\n"
-        "请以JSON格式返回，包含以下字段：\n"
-        "{\n"
-        '  "question": "题目文本",\n'
-        '  "reference_answer": "分点列出参考答案（用分号分隔）",\n'
-        '  "concept": "考察的知识点",\n'
-        '  "difficulty": "easy/medium/hard",\n'
-        '  "hints": ["提示1（模糊引导）", "提示2（半具体）", "提示3（具体但非直接答案）"]\n'
-        "}\n"
-        "出题规则：\n"
-        "- 低掌握度（<0.4）：用最简单直白的语言，考察基本概念理解，提示要多且友好\n"
-        "- 中等掌握度（0.4~0.7）：考察概念应用和简单推理，提示逐步递进\n"
-        "- 高掌握度（>0.7）：考察综合分析和批判性思考，提示少而精\n"
-        "- 挫败感高（>0.5）时题目要带鼓励语气并设置可达成的子目标"
-    )
-    user_prompt = (
-        f"知识点：{target_concept}\n"
-        f"难度：{difficulty}\n"
-        f"掌握度：{mastery:.2f}\n"
-        f"认知负荷：{cognitive_load:.2f}\n"
-        f"挫败感：{frustration:.2f}\n"
-        f"学生画像全文：{profile.profile_prompt()}\n"
-        "请生成一道完全针对此学生定制的简答题，鼓励学生用自己的话回答。"
-    )
+    available_candidates = await run_db_op(select_from_item_bank)
+    
+    selected_item = None
+    if len(available_candidates) >= 3:
+        candidates_dict = [
+            {
+                "id": c.id,
+                "question": c.question,
+                "options": c.options or [],
+                "correct_answer": c.correct_answer,
+                "explanation": c.explanation,
+                "difficulty": c.difficulty,
+                "irt_params": {
+                    "alpha": c.irt_alpha,
+                    "beta": c.irt_beta,
+                    "gamma": c.irt_gamma
+                }
+            }
+            for c in available_candidates
+        ]
+        selected_item = estimator.select_next_item(candidates_dict)
 
-    try:
-        response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-        result = _parse_llm_json(response)
-        if not result:
-            raise ValueError("parse failed")
-        raw_hints = result.get("hints", [])
-        result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
-    except Exception:
-        result = _get_fallback_quiz(target_concept, difficulty)
+    if selected_item:
+        # 选中了预置题，直接使用
+        result = {
+            "question": selected_item["question"],
+            "reference_answer": selected_item["correct_answer"],
+            "concept": target_concept,
+            "difficulty": selected_item["difficulty"],
+            "hints": ["请仔细阅读题目", "根据已知条件推导", "给出你的详细解答步骤"],
+            "options": selected_item["options"],
+        }
+        irt_alpha = selected_item["irt_params"]["alpha"]
+        irt_beta = selected_item["irt_params"]["beta"]
+        irt_gamma = selected_item["irt_params"]["gamma"]
+    else:
+        # 本地题库不足，降级调用大模型生成
+        llm = await _get_llm(request)
+        system_prompt = (
+            "你是一个智能出题考官。根据给定的知识点、难度和学生画像，生成高度定制化的简答题。\n"
+            "请以JSON格式返回，包含以下字段：\n"
+            "{\n"
+            '  "question": "题目文本",\n'
+            '  "reference_answer": "分点列出参考答案（用分号分隔）",\n'
+            '  "concept": "考察的知识点",\n'
+            '  "difficulty": "easy/medium/hard",\n'
+            '  "hints": ["提示1（模糊引导）", "提示2（半具体）", "提示3（具体但非直接答案）"]\n'
+            "}\n"
+            "出题规则：\n"
+            "- 低掌握度（<0.4）：用最简单直白的语言，考察基本概念理解，提示要多且友好\n"
+            "- 中等掌握度（0.4~0.7）：考察概念应用和简单推理，提示逐步递进\n"
+            "- 高掌握度（>0.7）：考察综合分析和批判性思考，提示少而精\n"
+            "- 挫败感高（>0.5）时题目要带鼓励语气并设置可达成的子目标"
+        )
+        user_prompt = (
+            f"知识点：{target_concept}\n"
+            f"难度：{difficulty}\n"
+            f"掌握度：{mastery:.2f}\n"
+            f"认知负荷：{cognitive_load:.2f}\n"
+            f"挫败感：{frustration:.2f}\n"
+            f"学生画像全文：{profile.profile_prompt()}\n"
+            "请生成一道完全针对此学生定制的简答题，鼓励学生用自己的话回答。"
+        )
+        try:
+            response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
+            result = _parse_llm_json(response)
+            if not result:
+                raise ValueError("parse failed")
+            raw_hints = result.get("hints", [])
+            result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
+        except Exception:
+            result = _get_fallback_quiz(target_concept, difficulty)
+        
+        # 动态生成的题，计算初始 IRT 参数
+        irt_alpha = 1.0
+        irt_beta = {"easy": -1.0, "medium": 0.0, "hard": 1.0}.get(result.get("difficulty", difficulty).lower(), 0.0)
+        irt_gamma = 0.25
 
     quiz_id = _generate_quiz_id()
     
@@ -363,6 +421,10 @@ async def generate_quiz(
         target_concept=result.get("concept", target_concept),
         attempt_number=1,
         session_id=payload.get("session_id", ""),
+        options=result.get("options", []),
+        irt_alpha=irt_alpha,
+        irt_beta=irt_beta,
+        irt_gamma=irt_gamma,
     )
     
     def save_quiz(session):
@@ -535,11 +597,19 @@ async def evaluate_answer(
                 "item": IRTItemParams.from_dict(entry.get("item", {})),
                 "correct": entry.get("correct", False),
             })
-        # 根据当前掌握度估计题目参数
-        item_params = estimate_irt_params_from_profile(
-            mastery=old_mastery,
-            attempts=local_record.attempt_number if local_record else 1,
-        )
+        # 优先使用数据库中题目真实绑定的 IRT 参数进行能力估计更新
+        if local_record and local_record.irt_alpha is not None:
+            item_params = IRTItemParams(
+                alpha=float(local_record.irt_alpha),
+                beta=float(local_record.irt_beta),
+                gamma=float(local_record.irt_gamma)
+            )
+        else:
+            # 根据当前掌握度估计题目参数 (正向自适应参数)
+            item_params = estimate_irt_params_from_profile(
+                mastery=old_mastery,
+                attempts=local_record.attempt_number if local_record else 1,
+            )
         is_correct = accuracy_score >= 0.6
         estimator.update_ability(item_params, is_correct)
         # 写回 IRT 状态（存于 rl_q_table 避免与 KnowledgeTrace 类型冲突）
@@ -931,6 +1001,11 @@ async def generate_similar_quiz(
 
     # Step 4: 保存新题
     new_quiz_id = _generate_quiz_id()
+    diff_label = result.get("difficulty", "medium").lower()
+    irt_alpha = 1.0
+    irt_beta = {"easy": -1.0, "medium": 0.0, "hard": 1.0}.get(diff_label, 0.0)
+    irt_gamma = 0.25
+
     db_quiz = DBQuizRecord(
         id=new_quiz_id,
         student_id=student_id,
@@ -941,6 +1016,9 @@ async def generate_similar_quiz(
         target_concept=concept,
         attempt_number=1,
         session_id=payload.get("session_id", ""),
+        irt_alpha=irt_alpha,
+        irt_beta=irt_beta,
+        irt_gamma=irt_gamma,
     )
     db.add(db_quiz)
     db.commit()

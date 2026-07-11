@@ -257,6 +257,17 @@ code_to_run = sys.stdin.read()
 output_buffer = io.StringIO()
 error_buffer = io.StringIO()
 
+def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    allowed = {
+        "math", "json", "random", "statistics", "collections", "itertools",
+        "datetime", "re", "numpy", "pandas", "matplotlib", "sklearn",
+        "torch", "nn", "np", "pd", "plt", "time"
+    }
+    root_name = name.split('.')[0]
+    if root_name not in allowed:
+        raise ImportError(f"安全沙箱禁用了模块: {name}")
+    return builtins.__import__(name, globals, locals, fromlist, level)
+
 restricted_globals = {
     "__name__": "__main__",
     "__doc__": None,
@@ -281,7 +292,7 @@ restricted_globals = {
         "RuntimeError": RuntimeError, "AttributeError": AttributeError,
         "ImportError": ImportError, "ModuleNotFoundError": ModuleNotFoundError,
         "ZeroDivisionError": ZeroDivisionError,
-        "__import__": __import__,
+        "__import__": safe_import,
         "__build_class__": builtins.__build_class__,
         "super": builtins.super,
         "callable": builtins.callable,

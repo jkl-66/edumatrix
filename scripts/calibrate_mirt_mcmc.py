@@ -317,22 +317,28 @@ def write_calibrated_params_to_db(
     updated = 0
     for item_id, res in results.get("calibrated_items", {}).items():
         new_params = res["new_params"]
-        try:
-            cursor.execute(
-                """UPDATE quiz_records 
-                   SET irt_alpha = ?, irt_beta = ?, irt_gamma = ?
-                   WHERE id = ?""",
-                (new_params["alpha"], new_params["beta"], new_params["gamma"], item_id),
-            )
-            if cursor.rowcount > 0:
-                updated += 1
-        except sqlite3.OperationalError:
-            pass
+        # 1. 更新答题历史记录表 (quiz_records) 中的参数快照
+        cursor.execute(
+            """UPDATE quiz_records 
+               SET irt_alpha = ?, irt_beta = ?, irt_gamma = ?
+               WHERE id = ?""",
+            (new_params["alpha"], new_params["beta"], new_params["gamma"], item_id),
+        )
+        if cursor.rowcount > 0:
+            updated += 1
+
+        # 2. 更新预置种子题库表 (quiz_items) 中的参数
+        cursor.execute(
+            """UPDATE quiz_items 
+               SET irt_alpha = ?, irt_beta = ?, irt_gamma = ?
+               WHERE id = ?""",
+            (new_params["alpha"], new_params["beta"], new_params["gamma"], item_id),
+        )
 
     conn.commit()
     conn.close()
 
-    print(f"  已更新 {updated} 道题目的 IRT 参数到数据库")
+    print(f"  已更新 {updated} 条记录/题目的 IRT 参数到数据库")
     return updated
 
 

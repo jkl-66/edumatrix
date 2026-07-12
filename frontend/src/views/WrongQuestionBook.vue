@@ -249,6 +249,81 @@ function toggleSimilarCard(q) {
   }
 }
 
+// === 任务 10: 错题本错因诊断图谱与聚类大盘 ===
+const showDiagnosisDashboard = ref(false)
+
+const diagnosisClusters = computed(() => {
+  const clusters = {}
+  for (const q of wrongQuestions.value) {
+    const cat = q.wrong_reason_category || 'unknown'
+    if (!clusters[cat]) {
+      clusters[cat] = { label: getCategoryLabel(cat), count: 0, concepts: new Set(), total: 0 }
+    }
+    clusters[cat].count++
+    clusters[cat].concepts.add(q.concept_name)
+    clusters[cat].total += (q.quiz_detail?.accuracy_score || 0)
+  }
+  return Object.entries(clusters).map(([key, val]) => ({
+    key,
+    label: val.label,
+    count: val.count,
+    conceptCount: val.concepts.size,
+    totalAccuracy: val.total,
+    avgAccuracy: val.count > 0 ? val.total / val.count : 0,
+    concepts: [...val.concepts],
+  }))
+})
+
+const diagnosisTopConcepts = computed(() => {
+  const conceptMap = {}
+  for (const q of wrongQuestions.value) {
+    const concept = q.concept_name
+    if (!conceptMap[concept]) {
+      conceptMap[concept] = { count: 0, categories: {} }
+    }
+    conceptMap[concept].count++
+    const cat = q.wrong_reason_category || 'unknown'
+    conceptMap[concept].categories[cat] = (conceptMap[concept].categories[cat] || 0) + 1
+  }
+  return Object.entries(conceptMap)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 10)
+    .map(([concept, info]) => ({
+      concept,
+      count: info.count,
+      categories: info.categories,
+    }))
+})
+
+const diagnosisSummary = computed(() => {
+  const total = wrongQuestions.value.length
+  if (total === 0) return null
+  const reviewCount = wrongQuestions.value.filter(q => q.wrong_reason_category === 'review').length
+  const practiceCount = wrongQuestions.value.filter(q => q.wrong_reason_category === 'practice').length
+  const advanceCount = wrongQuestions.value.filter(q => q.wrong_reason_category === 'advance').length
+  const avgAccuracy = wrongQuestions.value.reduce((s, q) => s + (q.quiz_detail?.accuracy_score || 0), 0) / total
+  const avgConfidence = wrongQuestions.value.reduce((s, q) => {
+    const sim = similarResults.value[q.id]
+    return s + (sim?.student_confidence || 0.5)
+  }, 0) / total
+  return {
+    total,
+    reviewCount,
+    practiceCount,
+    advanceCount,
+    avgAccuracy,
+    avgConfidence,
+    conceptsCovered: new Set(wrongQuestions.value.map(q => q.concept_name)).size,
+  }
+})
+
+const clusterColors = {
+  review: { bg: 'bg-red-50', text: 'text-red-600', bar: 'bg-red-400', border: 'border-red-200' },
+  practice: { bg: 'bg-amber-50', text: 'text-amber-600', bar: 'bg-amber-400', border: 'border-amber-200' },
+  advance: { bg: 'bg-emerald-50', text: 'text-emerald-600', bar: 'bg-emerald-400', border: 'border-emerald-200' },
+  unknown: { bg: 'bg-gray-50', text: 'text-gray-500', bar: 'bg-gray-300', border: 'border-gray-200' },
+}
+
 onMounted(loadData)
 </script>
 
@@ -278,6 +353,88 @@ onMounted(loadData)
         <div class="min-w-0">
           <p class="text-sm font-medium text-gray-800 truncate">{{ stat.concept }}</p>
           <p class="text-xs text-gray-400">{{ stat.count }} 道错题</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- === 任务 10: 错题本错因诊断图谱与聚类大盘 === -->
+    <div v-if="wrongQuestions.length > 0" class="card overflow-hidden">
+      <div
+        class="flex items-center justify-between cursor-pointer"
+        @click="showDiagnosisDashboard = !showDiagnosisDashboard"
+      >
+        <div class="flex items-center gap-2">
+          <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-400 to-indigo-500 flex items-center justify-center">
+            <Sparkles :size="14" class="text-white" />
+          </div>
+          <span class="text-sm font-semibold text-gray-700">错因诊断图谱与聚类大盘</span>
+          <span v-if="diagnosisSummary" class="text-[10px] text-gray-400 ml-1">
+            {{ diagnosisSummary.total }} 题 · {{ diagnosisSummary.conceptsCovered }} 概念
+          </span>
+        </div>
+        <ChevronDown v-if="!showDiagnosisDashboard" :size="16" class="text-gray-400" />
+        <ChevronUp v-else :size="16" class="text-gray-400" />
+      </div>
+
+      <div v-if="showDiagnosisDashboard && diagnosisSummary" class="mt-4 space-y-4">
+        <!-- 总览卡片 -->
+        <div class="grid grid-cols-3 gap-3">
+          <div class="bg-red-50 rounded-xl p-3 text-center border border-red-100">
+            <p class="text-2xl font-bold text-red-600">{{ diagnosisSummary.reviewCount }}</p>
+            <p class="text-[10px] text-red-500 font-medium">需复习</p>
+          </div>
+          <div class="bg-amber-50 rounded-xl p-3 text-center border border-amber-100">
+            <p class="text-2xl font-bold text-amber-600">{{ diagnosisSummary.practiceCount }}</p>
+            <p class="text-[10px] text-amber-500 font-medium">需练习</p>
+          </div>
+          <div class="bg-emerald-50 rounded-xl p-3 text-center border border-emerald-100">
+            <p class="text-2xl font-bold text-emerald-600">{{ diagnosisSummary.advanceCount }}</p>
+            <p class="text-[10px] text-emerald-500 font-medium">可进阶</p>
+          </div>
+        </div>
+
+        <!-- 平均准确率 & 自信度 -->
+        <div class="flex items-center gap-4 text-xs text-gray-500">
+          <span>平均准确率: <b class="text-gray-700">{{ (diagnosisSummary.avgAccuracy * 100).toFixed(1) }}%</b></span>
+          <span>覆盖概念: <b class="text-gray-700">{{ diagnosisSummary.conceptsCovered }}</b></span>
+        </div>
+
+        <!-- 聚类条形图 -->
+        <div class="space-y-2">
+          <p class="text-[11px] font-semibold text-gray-600">错因聚类分布</p>
+          <div v-for="cluster in diagnosisClusters" :key="cluster.key" class="flex items-center gap-2">
+            <span class="text-[10px] w-12 text-right font-medium" :class="(clusterColors[cluster.key] || clusterColors.unknown).text">
+              {{ cluster.label }}
+            </span>
+            <div class="flex-1 h-5 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                class="h-full rounded-full transition-all duration-500"
+                :class="(clusterColors[cluster.key] || clusterColors.unknown).bar"
+                :style="{ width: Math.max((cluster.count / diagnosisSummary.total) * 100, 4) + '%' }"
+              ></div>
+            </div>
+            <span class="text-[10px] text-gray-500 w-8">{{ cluster.count }}</span>
+          </div>
+        </div>
+
+        <!-- Top 10 高频错题概念 -->
+        <div class="space-y-2">
+          <p class="text-[11px] font-semibold text-gray-600">高频错题概念 Top 10</p>
+          <div class="space-y-1.5">
+            <div v-for="(item, idx) in diagnosisTopConcepts" :key="item.concept"
+              class="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer"
+              @click="filterConcept = item.concept"
+            >
+              <span class="text-[10px] font-bold w-5 text-gray-400">#{{ idx + 1 }}</span>
+              <span class="text-xs text-gray-700 flex-1 truncate">{{ item.concept }}</span>
+              <span class="text-[10px] font-semibold text-gray-500">{{ item.count }} 题</span>
+              <div class="flex gap-0.5">
+                <span v-if="item.categories.review" class="w-2 h-2 rounded-full bg-red-400" title="需复习"></span>
+                <span v-if="item.categories.practice" class="w-2 h-2 rounded-full bg-amber-400" title="需练习"></span>
+                <span v-if="item.categories.advance" class="w-2 h-2 rounded-full bg-emerald-400" title="可进阶"></span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

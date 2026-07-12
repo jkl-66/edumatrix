@@ -75,6 +75,10 @@ class SandboxProcessRunner:
         )
 
     async def run(self, code: str) -> tuple[str, str, float]:
+        # === 任务 14: 代码沙箱大文件 DoS 攻击防御拦截 ===
+        MAX_CODE_SIZE = 500_000  # 500KB
+        if len(code) > MAX_CODE_SIZE:
+            return "", f"错误: 代码内容过大 ({len(code)} 字节), 超过沙箱限制 ({MAX_CODE_SIZE} 字节)", 0.0
         if self.docker_available:
             return await self._run_in_docker(code)
         else:
@@ -94,6 +98,35 @@ class SandboxProcessRunner:
                 except Exception as ce:
                     print(f"  [Sandbox] Failed to create container dynamically: {ce}. Falling back to subprocess.")
                     return await self._run_in_subprocess(code)
+
+        # === 任务 5 & 15: Docker 容器预热池故障自愈 + 超周期僵死防患 ===
+        async def check_and_heal_container():
+            nonlocal container
+            if container is None:
+                return False
+            try:
+                await loop.run_in_executor(self.executor, lambda: container.status)
+                inspect = await loop.run_in_executor(self.executor, container.attrs.__getitem__, "State")
+                state = inspect.get("Status", "")
+                if state in ("dead", "exited", "paused"):
+                    print(f"  [Sandbox] Container {container.short_id} is {state}, replacing...")
+                    try:
+                        await loop.run_in_executor(self.executor, container.remove)
+                    except Exception:
+                        pass
+                    container = await loop.run_in_executor(self.executor, self._create_container)
+                    return True
+                return True
+            except Exception:
+                try:
+                    container = await loop.run_in_executor(self.executor, self._create_container)
+                except Exception:
+                    pass
+                return container is not None
+
+        healthy = await check_and_heal_container()
+        if not healthy or container is None:
+            return await self._run_in_subprocess(code)
 
         wrapper_script = self._get_wrapper_script()
         encoded_wrapper = base64.b64encode(wrapper_script.encode('utf-8')).decode('utf-8')
@@ -121,6 +154,20 @@ class SandboxProcessRunner:
             else:
                 stdout, stderr = output_str, ""
 
+            # === 任务 15: 容器超周期使用计数，防止僵死 ===
+            usage_count = getattr(container, "_sandbox_usage_count", 0) + 1
+            container._sandbox_usage_count = usage_count
+            MAX_USAGE = 100
+            if usage_count >= MAX_USAGE:
+                print(f"  [Sandbox] Container {container.short_id} reached max usage ({MAX_USAGE}), recycling...")
+                try:
+                    await loop.run_in_executor(self.executor, container.kill)
+                    await loop.run_in_executor(self.executor, container.remove)
+                except Exception:
+                    pass
+                container = await loop.run_in_executor(self.executor, self._create_container)
+                container._sandbox_usage_count = 0
+
             async with self._lock:
                 self.containers.append(container)
 
@@ -136,6 +183,7 @@ class SandboxProcessRunner:
                 pass
 
             new_container = await loop.run_in_executor(self.executor, self._create_container)
+            new_container._sandbox_usage_count = 0
             async with self._lock:
                 self.containers.append(new_container)
 
@@ -201,21 +249,43 @@ class SandboxProcessRunner:
 
         except (NotImplementedError, AttributeError):
             # 如果事件循环不支持异步子进程（如 Windows 上的 SelectorEventLoop），
-            # 则退回到使用 ThreadPoolExecutor 运行同步 of subprocess.run
+            # 则退回到使用 ThreadPoolExecutor 运行 subprocess.Popen 并强制 kill 僵尸进程
             import subprocess
             loop = asyncio.get_running_loop()
 
             def run_sync_subprocess():
+                proc = None
                 try:
-                    res = subprocess.run(
+                    proc = subprocess.Popen(
                         [sys.executable, "-c", exec_command],
-                        capture_output=True,
-                        timeout=CONFIG.sandbox_timeout,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
                         env=env
                     )
-                    return res.returncode, res.stdout, res.stderr
-                except subprocess.TimeoutExpired:
-                    return -1, b"", b"timeout"
+                    try:
+                        stdout_bytes, stderr_bytes = proc.communicate(timeout=CONFIG.sandbox_timeout)
+                        return proc.returncode or 0, stdout_bytes, stderr_bytes
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        try:
+                            stdout_bytes, stderr_bytes = proc.communicate(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait()
+                            stdout_bytes, stderr_bytes = b"", b"timeout"
+                        return -1, b"", b"timeout"
+                except Exception:
+                    return -1, b"", b"subprocess error"
+                finally:
+                    if proc is not None:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        try:
+                            proc.wait(timeout=3)
+                        except Exception:
+                            pass
 
             try:
                 ret_code, stdout_bytes, stderr_bytes = await loop.run_in_executor(
@@ -370,6 +440,12 @@ try:
                 img_b64 = base64.b64encode(buf.read()).decode("utf-8")
                 plt_local.close("all")
                 output_buffer.write(f"\\n![可视化输出](data:image/png;base64,{img_b64})")
+            # === 任务 3: Matplotlib 画布内存泄露强杀 ===
+            import sys, gc
+            for mod_name in list(sys.modules.keys()):
+                if mod_name.startswith("matplotlib") or "agg" in mod_name.lower() or "backend" in mod_name.lower() and "matplotlib" in mod_name.lower():
+                    sys.modules.pop(mod_name, None)
+            gc.collect()
 except Exception as e:
     error_buffer.write(traceback.format_exc())
 

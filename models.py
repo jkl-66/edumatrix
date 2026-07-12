@@ -309,6 +309,7 @@ class StudentProfile:
     recent_quiz_accuracy: dict[str, list[float]] = field(default_factory=dict)  # concept -> [最近3次正确率]
     metacognitive_mismatch: float = 0.0  # 元认知偏差指标 0~1
     last_update_timestamp: str = field(default_factory=_utc_now)  # 画像最后更新时间（用于遗忘衰减）
+    cognitive_map: dict[str, float] = field(default_factory=dict)  # 元认知偏差/误差 EMA 追踪
     narrative_report: str = ""  # 📬 缓存的 StoryLensEdu 叙事学情成长信笺
     dashboard_report: str = ""  # 📊 缓存的仪表盘全局学情分析报告
     bkt_states: dict[str, dict] = field(default_factory=dict)  # BKT 状态快照: concept -> {p_mastered, history...}

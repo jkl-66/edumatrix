@@ -21,6 +21,125 @@ const explaining = ref(false)
 const explanation = ref('')
 const error = ref('')
 
+// === 任务 9: Monaco 沙箱编辑器轻量自动补全桩 ===
+const suggestVisible = ref(false)
+const suggestList = ref([])
+const suggestIndex = ref(0)
+const codeEditorRef = ref(null)
+
+const suggestionMap = {
+  'plt.': [
+    'figure(figsize=(8, 4))',
+    'plot(x, y, \'b-\', label=\'\', linewidth=2)',
+    'scatter(x, y, c=\'blue\', alpha=0.7)',
+    'bar(categories, values, color=colors)',
+    'hist(data, bins=20)',
+    'xlabel(\'\')',
+    'ylabel(\'\')',
+    'title(\'\')',
+    'legend()',
+    'grid(alpha=0.3)',
+    'tight_layout()',
+    'show()',
+    'savefig(\'output.png\')',
+    'subplot(1, 2, 1)',
+    'axis(\'equal\')',
+    'xlim(0, 10)',
+    'ylim(0, 100)',
+    'text(0, 0, \'\')',
+  ],
+  'np.': [
+    'linspace(0, 10, 100)',
+    'arange(0, 10, 0.1)',
+    'random.randn(100)',
+    'random.seed(42)',
+    'sin(x)',
+    'cos(x)',
+    'exp(x)',
+    'log(x)',
+    'sqrt(x)',
+    'array([1, 2, 3])',
+    'zeros((10, 10))',
+    'ones((5, 5))',
+    'meshgrid(x, y)',
+    'polyfit(x, y, 1)',
+    'mean(x)',
+    'std(x)',
+  ],
+  'plt': ['plt.figure()', 'plt.plot()', 'plt.show()', 'plt.xlabel()', 'plt.ylabel()'],
+  'np': ['np.linspace()', 'np.array()', 'np.random.randn()', 'np.sin()', 'np.cos()'],
+  'imp': ['import matplotlib.pyplot as plt', 'import numpy as np', 'import pandas as pd'],
+  'import ': ['import matplotlib.pyplot as plt', 'import numpy as np', 'import pandas as pd', 'import random', 'import math'],
+  'for ': ['for i in range(10):\n    ', 'for x in data:\n    '],
+  'def ': ['def function_name():\n    return'],
+}
+
+function onCodeInput(e) {
+  const textarea = e.target
+  const cursorPos = textarea.selectionStart
+  const textBefore = code.value.substring(0, cursorPos)
+  const lines = textBefore.split('\n')
+  const currentLine = lines[lines.length - 1] || ''
+
+  const match = currentLine.match(/([\w.]+)$/)
+  if (match) {
+    const prefix = match[1].toLowerCase()
+    let candidates = []
+    for (const [key, values] of Object.entries(suggestionMap)) {
+      if (key.toLowerCase().startsWith(prefix) || prefix.includes(key.toLowerCase().replace('.', ''))) {
+        candidates = candidates.concat(values)
+      }
+    }
+    if (prefix in suggestionMap) {
+      candidates = suggestionMap[prefix]
+    }
+    if (candidates.length > 0) {
+      suggestList.value = [...new Set(candidates)].slice(0, 10)
+      suggestVisible.value = true
+      suggestIndex.value = 0
+      return
+    }
+  }
+  suggestVisible.value = false
+}
+
+function applySuggestion(suggestion) {
+  const textarea = codeEditorRef.value
+  if (!textarea) return
+  const cursorPos = textarea.selectionStart
+  const textBefore = code.value.substring(0, cursorPos)
+  const lines = textBefore.split('\n')
+  const currentLine = lines[lines.length - 1]
+  const match = currentLine.match(/([\w.]+)$/)
+  if (match) {
+    const before = code.value.substring(0, cursorPos - match[1].length)
+    const after = code.value.substring(cursorPos)
+    code.value = before + suggestion + after
+    setTimeout(() => {
+      textarea.selectionStart = textarea.selectionEnd = before.length + suggestion.length
+      textarea.focus()
+    }, 0)
+  }
+  suggestVisible.value = false
+}
+
+function onCodeKeydown(e) {
+  if (suggestVisible.value && suggestList.value.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      suggestIndex.value = (suggestIndex.value + 1) % suggestList.value.length
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      suggestIndex.value = (suggestIndex.value - 1 + suggestList.value.length) % suggestList.value.length
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      applySuggestion(suggestList.value[suggestIndex.value])
+    } else if (e.key === 'Escape') {
+      suggestVisible.value = false
+    }
+  }
+}
+
 const chartTypes = [
   { id: 'line', label: '折线图', icon: '📈' },
   { id: 'bar', label: '柱状图', icon: '📊' },
@@ -237,7 +356,26 @@ selectChart('line')
             {{ running ? '⏳ 运行中...' : '▶ 运行' }}
           </button>
         </div>
-        <pre class="p-3 text-[10px] font-mono text-gray-300 overflow-x-auto leading-relaxed max-h-32">{{ code }}</pre>
+        <div class="relative">
+          <textarea
+            ref="codeEditorRef"
+            v-model="code"
+            @input="onCodeInput"
+            @keydown="onCodeKeydown"
+            class="w-full p-3 text-[10px] font-mono text-gray-300 bg-gray-900/50 leading-relaxed resize-y min-h-24 max-h-48 outline-none border-0"
+            spellcheck="false"
+          ></textarea>
+          <!-- 自动补全下拉 -->
+          <div v-if="suggestVisible && suggestList.length > 0"
+            class="absolute left-0 right-0 z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-32 overflow-y-auto">
+            <div v-for="(item, idx) in suggestList" :key="idx"
+              class="px-3 py-1.5 text-[10px] font-mono text-gray-300 hover:bg-teal-700/60 cursor-pointer"
+              :class="{ 'bg-teal-700/40': idx === suggestIndex }"
+              @mousedown.prevent="applySuggestion(item)">
+              {{ item }}
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Result: image or output -->

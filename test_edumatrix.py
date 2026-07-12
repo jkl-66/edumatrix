@@ -1555,6 +1555,10 @@ print("Val:", s.val)
                 json={"message": "请解释最大池化层", "student_id": student_id, "mode": "matrix"}
             )
             self.assertEqual(response.status_code, 200)
+            
+            # Consume stream to ensure the database record is written
+            for _ in response.iter_lines():
+                pass
 
             # 从数据库读取该学生的对话记录
             records = session.query(DBConversationHistory).filter_by(student_id=student_id).all()

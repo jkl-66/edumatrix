@@ -74,11 +74,71 @@ class SandboxProcessRunner:
             remove=False
         )
 
+    def _validate_code_ast(self, code: str) -> str | None:
+        """使用 AST 静态分析扫描学生代码，拦截反射逃逸、任意代码执行等不安全操作。
+        返回 None 表示验证通过，返回错误字符串表示拦截。"""
+        import ast
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as se:
+            return f"语法错误: {se}"
+
+        # 拦截：任何包含双下划线 '__' 的属性访问、拦截 globals()/locals()/vars()、eval()/exec()、getattr()/setattr()/delattr()
+        banned_calls = {"eval", "exec", "globals", "locals", "vars", "getattr", "setattr", "delattr", "open", "compile"}
+        high_risk_attrs = {
+            "__class__", "__bases__", "__base__", "__mro__", "__subclasses__", 
+            "__globals__", "__code__", "__builtins__", "__import__", "__dict__",
+            "__getattribute__", "__getattr__", "__setattr__", "__delattr__"
+        }
+        banned_system_attrs = {"os", "sys", "subprocess", "system", "popen", "spawn", "execute", "sh", "bash"}
+        
+        for node in ast.walk(tree):
+            # 检查属性访问，如 obj.__class__ or obj.os.system or np.os.system
+            if isinstance(node, ast.Attribute):
+                curr = node
+                while isinstance(curr, ast.Attribute):
+                    if curr.attr in high_risk_attrs or curr.attr in banned_system_attrs:
+                        return f"安全拦截: 禁止访问系统或高危属性/方法 '{curr.attr}'，防止沙箱逃逸。"
+                    curr = curr.value
+                if isinstance(curr, ast.Name):
+                    if curr.id in banned_calls or curr.id in banned_system_attrs:
+                        return f"安全拦截: 禁用了内置或高危函数/模块调用 '{curr.id}'。"
+            # 检查函数/变量直接调用，如 eval() or getattr() or os
+            elif isinstance(node, ast.Name):
+                if node.id in banned_calls or node.id in banned_system_attrs:
+                    return f"安全拦截: 禁用了内置或高危函数/模块调用 '{node.id}'，防止安全隐患。"
+                # 检查直接访问双下划线变量，如 __builtins__
+                if node.id in high_risk_attrs:
+                    return f"安全拦截: 禁止访问系统内部变量 '{node.id}'。"
+            # 检查直接通过下标（Subscript）键值对逃逸，如 vars(re)['__builtins__']
+            elif isinstance(node, ast.Subscript):
+                slice_node = node.slice
+                val = None
+                if isinstance(slice_node, ast.Constant):
+                    val = slice_node.value
+                elif hasattr(slice_node, 'value') and isinstance(slice_node.value, ast.Constant):
+                    # 兼容 Python 3.8 Index 包装
+                    val = slice_node.value.value
+                elif hasattr(slice_node, 'value') and isinstance(slice_node.value, str):
+                    val = slice_node.value
+                
+                if isinstance(val, str):
+                    if "__" in val or val in banned_calls or val in banned_system_attrs or val in high_risk_attrs:
+                        return f"安全拦截: 禁止通过下标方式访问高危系统属性或函数调用 '{val}'，防止沙箱逃逸。"
+        return None
+
     async def run(self, code: str) -> tuple[str, str, float]:
         # === 任务 14: 代码沙箱大文件 DoS 攻击防御拦截 ===
-        MAX_CODE_SIZE = 500_000  # 500KB
-        if len(code) > MAX_CODE_SIZE:
-            return "", f"错误: 代码内容过大 ({len(code)} 字节), 超过沙箱限制 ({MAX_CODE_SIZE} 字节)", 0.0
+        MAX_CODE_SIZE = 50000  # 50KB 限制
+        code_bytes_len = len(code.encode('utf-8'))
+        if code_bytes_len > MAX_CODE_SIZE:
+            return "", f"错误: 代码内容过大 ({code_bytes_len} 字节), 超过沙箱限制 ({MAX_CODE_SIZE} 字节)", 0.0
+
+        # AST 安全扫描校验
+        validation_error = self._validate_code_ast(code)
+        if validation_error:
+            return "", validation_error, 0.0
+
         if self.docker_available:
             return await self._run_in_docker(code)
         else:
@@ -485,6 +545,10 @@ async def run_code(
 
     if not code:
         raise HTTPException(status_code=400, detail="代码不能为空")
+
+    # === 任务 14: 代码沙箱大文件 DoS 攻击防御拦截 (FastAPI 前置拦截) ===
+    if len(code.encode('utf-8')) > 50000:
+        raise HTTPException(status_code=400, detail="恶意代码长度超限，沙箱拒绝运行 (Max 50KB)")
 
     # Syntax validation of code before execution
     if language == "python":

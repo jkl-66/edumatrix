@@ -229,7 +229,7 @@
 
 ### 任务 11：自适应跟进出题 (/api/quiz/adapt) 融合本地预设题库
 *   **痛点**：当学生点击“继续做题”调用 `/api/quiz/adapt` (L746) 时，代码无脑直接调用 LLM 生成题目，这把预置题库当成了摆设，产生了不必要的高延迟。
-*   **实施方案**：重构 `adapt_quiz` 函数。在出题前增加和 `/generate` 相同逻辑的本地预置题库检查。如果本地 `DBQuizItem` 中存在该概念题目，使用 **Fisher 信息量选题算法** 挑出下一道，直接秒级返回。
+*   **实施方案**：重构 `adapt_quiz` 函数。在出题前增加和 `/generate` 相同逻辑 of 本地预置题库检查。如果本地 `DBQuizItem` 中存在该概念题目，使用 **Fisher 信息量选题算法** 挑出下一道，直接秒级返回。
 
 ---
 
@@ -332,46 +332,46 @@
 # 📋 智教矩阵 (EduMatrix) — 评测与代码沙箱模块加固任务清单
 
 ## 🛠️ 底层代码重构加固 (17 大痛点整改)
-- [ ] **任务 1：选择题秒判通道并网**
-  - [ ] 针对 `quiz_record.options` 不为空的选择题，通过首字母进行 0ms 秒判判定。
-- [ ] **任务 2：Windows 僵尸子进程残留清理**
-  - [ ] 将 Windows 下同步 fallback 子进程的 `subprocess.run` 替换为 `subprocess.Popen`，超时物理调用 `.kill()`。
-- [ ] **任务 3：Matplotlib 画布内存防泄露加固**
-  - [ ] 在沙箱 wrapper 的 cleanup 逻辑中，直接从 `sys.modules` 中强制执行 `matplotlib.pyplot.close("all")`。
-- [ ] **任务 4：画像元认知偏差 EMA 实时追踪**
-  - [ ] 在答题结束评估后，将 Confidence 与 Accuracy 的差值进行 EMA 均值更新，保存于画像中。
-- [ ] **任务 5：Docker 预热池的坏死剔除与自愈补位**
-  - [ ] 在 `_run_in_docker()` 捕获到 Docker 致命通信异常时，强制 remove 故障容器并生成新容器补位。
-- [ ] **任务 6：主观题打分 JSON 结构自愈与正则兜底**
-  - [ ] 在 `evaluate_answer` 解析打分 JSON 时，添加格式自愈及正则表达式备用解析，防止因格式问题导致得分丢失。
-- [ ] **任务 7：题库参数的“在线自适应校准更新”**
-  - [ ] 在 `evaluate` 路由中，根据答题情况应用在线 SGD 公式微调更新 `DBQuizItem` 的真实难度参数 $\beta$。
-- [ ] **任务 8：元认知自评偏差的“路径路由消费”**
-  - [ ] 在 `quiz_api.py` 出题中读取 `metacognitive_bias`。若偏差过高（盲目自信）强制出 Hard 题；若过低（自卑）强制出 Easy 题并附加提示。
-- [ ] **任务 9：Monaco 沙箱编辑器“轻量自动补全桩”**
-  - [ ] 在 `SandboxVisualizer.vue` 编辑器初始化后，注册 CompletionItemProvider 增加 numpy/pandas/torch 补全。
-- [ ] **任务 10：错题本“错因诊断图谱与聚类大盘”**
-  - [ ] 在 `WrongQuestionBook.vue` 顶部挂载 ECharts 环形图，对错因（misconceptions）进行时序统计归类并可视化呈现。
-- [ ] **任务 11：自适应跟进出题 (/api/quiz/adapt) 融合本地预置题库**
-  - [ ] 重构 `adapt_quiz` 接口，在出题前增加对 `DBQuizItem` 题库的库存检查，若库存充足则使用 Fisher 选题算法秒级出题，避免调用 LLM。
-- [ ] **任务 12：错题本变更接口垂直越权漏洞修复 (BOLA)**
-  - [ ] 在删除错题、置顶、更新错题笔记的接口中，强制添加 `student_id` 入参并作为 SQL 查询过滤器，进行所有权合法性强校验。
-- [ ] **任务 13：相似题重测题型一致性失调修复**
-  - [ ] 改造 `/api/quiz/similar`，若源错题为主观题，强制大模型生成的相似题也输出空 `options` 主观答题模式，严禁强制转为选择题。
-- [ ] **任务 14：代码沙箱大文件 DoS 攻击防御拦截**
-  - [ ] 在 `/api/code/run` 路由入口处检测代码字符串长度，凡超过 50KB 的请求一律直接返回 400 异常，防止主线程内存溢出。
-- [ ] **任务 15：Docker 常驻容器挂起超时僵死自愈**
-  - [ ] 在使用预热容器前，检测其 status 是否为 `running`，若不是则强制重建新容器，解决运行超 10 小时容器自行关机问题。
-- [ ] **任务 16：打卡连击计算的时区偏移溢出修复**
-  - [ ] 修改 `_calc_streak`，引入学生本地时区偏置，将 checkin_date 转换为 local_date 再计算连击天数，防止 UTC 零点强制截断 bug。
-- [ ] **任务 17：测验冷启动跨概念先验继承**
-  - [ ] 优化 `AdaptiveTestEstimator` 的冷启动初始值 theta。根据整体能力偏置进行先验映射，替代硬编码 `0.0`，减少 50% 冗余测试步骤。
+- [x] **任务 1：选择题秒判通道并网**
+  - [x] 针对 `quiz_record.options` 不为空的选择题，通过首字母进行 0ms 秒判判定。
+- [x] **任务 2：Windows 僵尸子进程残留清理**
+  - [x] 将 Windows 下同步 fallback 子进程的 `subprocess.run` 替换为 `subprocess.Popen`，超时物理调用 `.kill()`。
+- [x] **任务 3：Matplotlib 画布内存防泄露加固**
+  - [x] 在沙箱 wrapper 的 cleanup 逻辑中，直接从 `sys.modules` 中强制执行 `matplotlib.pyplot.close("all")`。
+- [x] **任务 4：画像元认知偏差 EMA 实时追踪**
+  - [x] 在答题结束评估后，将 Confidence 与 Accuracy 的差值进行 EMA 均值更新，保存于画像中。
+- [x] **任务 5：Docker 预热池的坏死剔除与自愈补位**
+  - [x] 在 `_run_in_docker()` 捕获到 Docker 致命通信异常时，强制 remove 故障容器并生成新容器补位。
+- [x] **任务 6：主观题打分 JSON 结构自愈与正则兜底**
+  - [x] 在 `evaluate_answer` 解析打分 JSON 时，添加格式自愈及正则表达式备用解析，防止因格式问题导致得分丢失。
+- [x] **任务 7：题库参数的“在线自适应校准更新”**
+  - [x] 在 `evaluate` 路由中，根据答题情况应用在线 SGD 公式微调更新 `DBQuizItem` 的真实难度参数 $\beta$。
+- [x] **任务 8：元认知自评偏差的“路径路由消费”**
+  - [x] 在 `quiz_api.py` 出题中读取 `metacognitive_bias`。若偏差过高（盲目自信）强制出 Hard 题；若过低（自卑）强制出 Easy 题并附加提示。
+- [x] **任务 9：Monaco 沙箱编辑器“轻量自动补全桩”**
+  - [x] 在 `SandboxVisualizer.vue` 编辑器初始化后，注册 CompletionItemProvider 增加 numpy/pandas/torch 补全。
+- [x] **任务 10：错题本“错因诊断图谱与聚类大盘”**
+  - [x] 在 `WrongQuestionBook.vue` 顶部挂载 ECharts 环形图，对错因（misconceptions）进行时序统计归类并可视化呈现。
+- [x] **任务 11：自适应跟进出题 (/api/quiz/adapt) 融合本地预置题库**
+  - [x] 重构 `adapt_quiz` 接口，在出题前增加对 `DBQuizItem` 题库的库存检查，若库存充足则使用 Fisher 选题算法秒级出题，避免调用 LLM。
+- [x] **任务 12：错题本变更接口垂直越权漏洞修复 (BOLA)**
+  - [x] 在删除错题、置顶、更新错题笔记的接口中，强制添加 `student_id` 入参并作为 SQL 查询过滤器，进行所有权合法性强校验。
+- [x] **任务 13：相似题重测题型一致性失调修复**
+  - [x] 改造 `/api/quiz/similar`，若源错题为主观题，强制大模型生成的相似题也输出空 `options` 主观答题模式，严禁强制转为选择题。
+- [x] **任务 14：代码沙箱大文件 DoS 攻击防御拦截**
+  - [x] 在 `/api/code/run` 路由入口处检测代码字符串长度，凡超过 50KB 的请求一律直接返回 400 异常，防止主线程内存溢出。
+- [x] **任务 15：Docker 常驻容器挂起超时僵死自愈**
+  - [x] 在使用预热容器前，检测其 status 是否为 `running`，若不是则强制重建新容器，解决运行超 10 小时容器自行关机问题。
+- [x] **任务 16：打卡连击计算的时区偏移溢出修复**
+  - [x] 修改 `_calc_streak`，引入学生本地时区偏置，将 checkin_date 转换为 local_date 再计算连击天数，防止 UTC 零点触发 bug。
+- [x] **任务 17：测验冷启动跨概念先验继承**
+  - [x] 优化 `AdaptiveTestEstimator` 的冷启动初始值 theta。根据整体能力偏置进行先验映射，替代硬编码 `0.0`，减少 50% 移测试步骤。
 
 ## 📊 混合题库冷启动生成 (大纲概念全覆盖)
-- [ ] **任务 18：全大纲 25 概念 × 30 道主客观混合题库生成**
-  - [ ] 运行 `scripts/generate_all_concepts_bank.py` 自动生产 750 道题目同步写入 `quiz_items` 中。
+- [x] **任务 18：全大纲 25 概念 × 30 道主客观混合题库生成**
+  - [x] 运行 `scripts/generate_all_concepts_bank.py` 自动生产 750 道题目同步写入 `quiz_items` 中。
 
 ## 🧪 回归与专项测试校验
-- [ ] **任务 19：单元测试并网全绿通过**
-  - [ ] 运行 `python -m unittest tests/test_member6_refactoring.py` 及 `test_edumatrix.py` 确保 100% 通过。
+- [x] **任务 19：单元测试并网全绿通过**
+  - [x] 运行 `python -m unittest tests/test_member6_refactoring.py` 及 `test_edumatrix.py` 确保 100% 通过。
 ```

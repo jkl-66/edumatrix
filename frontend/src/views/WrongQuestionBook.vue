@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import * as echarts from 'echarts'
 import { 
   getWrongQuestions, getWrongConcepts, 
   generateFlashcard, generateSimilarQuiz, evaluateQuizAnswer,
@@ -324,7 +325,107 @@ const clusterColors = {
   unknown: { bg: 'bg-gray-50', text: 'text-gray-500', bar: 'bg-gray-300', border: 'border-gray-200' },
 }
 
-onMounted(loadData)
+// ECharts Chart Reference and Instance
+const chartRef = ref(null)
+let chartInstance = null
+
+function initOrUpdateChart() {
+  if (!showDiagnosisDashboard.value || !chartRef.value) return
+  
+  setTimeout(() => {
+    // 安全性双重检查
+    if (!showDiagnosisDashboard.value || !chartRef.value) return
+    try {
+      const isDark = document.documentElement.classList.contains('dark') || document.body.classList.contains('dark')
+      if (chartInstance) {
+        chartInstance.dispose()
+        chartInstance = null
+      }
+      chartInstance = echarts.init(chartRef.value, isDark ? 'dark' : null, { backgroundColor: 'transparent' })
+      
+      const reviewCount = diagnosisSummary.value?.reviewCount || 0
+      const practiceCount = diagnosisSummary.value?.practiceCount || 0
+      const advanceCount = diagnosisSummary.value?.advanceCount || 0
+      
+      const option = {
+        tooltip: {
+          trigger: 'item',
+          formatter: '{b}: {c} ({d}%)'
+        },
+        legend: {
+          bottom: '0%',
+          left: 'center',
+          textStyle: { color: isDark ? '#9ca3af' : '#6b7280', fontSize: 10 }
+        },
+        series: [
+          {
+            name: '错因归类',
+            type: 'pie',
+            radius: ['45%', '70%'],
+            avoidLabelOverlap: false,
+            itemStyle: {
+              borderRadius: 6,
+              borderColor: isDark ? 'transparent' : '#fff',
+              borderWidth: 2
+            },
+            label: {
+              show: false,
+              position: 'center'
+            },
+            emphasis: {
+              label: {
+                show: true,
+                fontSize: 11,
+                fontWeight: 'bold'
+              }
+            },
+            labelLine: {
+              show: false
+            },
+            data: [
+              { value: reviewCount, name: '需复习', itemStyle: { color: '#f87171' } },
+              { value: practiceCount, name: '需练习', itemStyle: { color: '#fbbf24' } },
+              { value: advanceCount, name: '可进阶', itemStyle: { color: '#34d399' } }
+            ]
+          }
+        ]
+      }
+      chartInstance.setOption(option)
+    } catch (err) {
+      console.error('ECharts init error:', err)
+    }
+  }, 50)
+}
+
+watch([showDiagnosisDashboard, wrongQuestions], () => {
+  if (showDiagnosisDashboard.value) {
+    initOrUpdateChart()
+  } else {
+    if (chartInstance) {
+      chartInstance.dispose()
+      chartInstance = null
+    }
+  }
+})
+
+const handleResize = () => {
+  if (chartInstance && typeof chartInstance.resize === 'function') {
+    chartInstance.resize()
+  }
+}
+
+onMounted(() => {
+  loadData()
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+  if (chartInstance) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
+})
 </script>
 
 <template>
@@ -377,26 +478,48 @@ onMounted(loadData)
       </div>
 
       <div v-if="showDiagnosisDashboard && diagnosisSummary" class="mt-4 space-y-4">
-        <!-- 总览卡片 -->
-        <div class="grid grid-cols-3 gap-3">
-          <div class="bg-red-50 rounded-xl p-3 text-center border border-red-100">
-            <p class="text-2xl font-bold text-red-600">{{ diagnosisSummary.reviewCount }}</p>
-            <p class="text-[10px] text-red-500 font-medium">需复习</p>
+        <!-- 总览与图表 (ECharts 环形图并网) -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-center bg-gray-50/30 p-4 rounded-xl border border-gray-100/80">
+          <!-- ECharts 环形图 -->
+          <div class="flex flex-col items-center justify-center p-2 bg-white rounded-xl border border-gray-100 shadow-sm">
+            <p class="text-[11px] font-semibold text-gray-500 mb-1">错因分类诊断图</p>
+            <div ref="chartRef" class="w-full h-40"></div>
           </div>
-          <div class="bg-amber-50 rounded-xl p-3 text-center border border-amber-100">
-            <p class="text-2xl font-bold text-amber-600">{{ diagnosisSummary.practiceCount }}</p>
-            <p class="text-[10px] text-amber-500 font-medium">需练习</p>
-          </div>
-          <div class="bg-emerald-50 rounded-xl p-3 text-center border border-emerald-100">
-            <p class="text-2xl font-bold text-emerald-600">{{ diagnosisSummary.advanceCount }}</p>
-            <p class="text-[10px] text-emerald-500 font-medium">可进阶</p>
-          </div>
-        </div>
 
-        <!-- 平均准确率 & 自信度 -->
-        <div class="flex items-center gap-4 text-xs text-gray-500">
-          <span>平均准确率: <b class="text-gray-700">{{ (diagnosisSummary.avgAccuracy * 100).toFixed(1) }}%</b></span>
-          <span>覆盖概念: <b class="text-gray-700">{{ diagnosisSummary.conceptsCovered }}</b></span>
+          <!-- 总览与指标 -->
+          <div class="space-y-3">
+            <div class="grid grid-cols-3 gap-2">
+              <div class="bg-red-50/60 rounded-xl p-2.5 text-center border border-red-100">
+                <p class="text-xl font-bold text-red-600">{{ diagnosisSummary.reviewCount }}</p>
+                <p class="text-[9px] text-red-500 font-medium">需复习</p>
+              </div>
+              <div class="bg-amber-50/60 rounded-xl p-2.5 text-center border border-amber-100">
+                <p class="text-xl font-bold text-amber-600">{{ diagnosisSummary.practiceCount }}</p>
+                <p class="text-[9px] text-amber-500 font-medium">需练习</p>
+              </div>
+              <div class="bg-emerald-50/60 rounded-xl p-2.5 text-center border border-emerald-100">
+                <p class="text-xl font-bold text-emerald-600">{{ diagnosisSummary.advanceCount }}</p>
+                <p class="text-[9px] text-emerald-500 font-medium">可进阶</p>
+              </div>
+            </div>
+            
+            <div class="bg-white p-3 rounded-xl border border-gray-100 space-y-1.5 text-xs text-gray-500 shadow-sm">
+              <div class="flex justify-between">
+                <span>平均答题准确率:</span>
+                <span class="font-semibold text-gray-700">{{ (diagnosisSummary.avgAccuracy * 100).toFixed(1) }}%</span>
+              </div>
+              <div class="flex justify-between">
+                <span>覆盖核心概念数:</span>
+                <span class="font-semibold text-gray-700">{{ diagnosisSummary.conceptsCovered }} 个</span>
+              </div>
+              <div class="flex justify-between">
+                <span>时序诊断偏置 (EMA):</span>
+                <span class="font-semibold text-gray-700">
+                  {{ (diagnosisSummary.avgConfidence - diagnosisSummary.avgAccuracy).toFixed(2) }}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 聚类条形图 -->
@@ -876,14 +999,104 @@ onMounted(loadData)
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
+:global(.dark) .card {
+  background: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(12px);
+  border-color: rgba(51, 65, 85, 0.5);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
 .card:hover {
   border-color: #fca5a5;
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.08);
 }
 
+:global(.dark) .card:hover {
+  border-color: rgba(248, 113, 113, 0.6);
+  box-shadow: 0 4px 16px rgba(248, 113, 113, 0.12);
+}
+
 .card.expanded {
   border-color: #f87171;
   box-shadow: 0 8px 24px rgba(239, 68, 68, 0.12);
+}
+
+:global(.dark) .card.expanded {
+  border-color: #f87171;
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.25);
+}
+
+/* Fluid Dark Mode Overrides for light-themed Tailwind components inside card */
+:global(.dark) h2, :global(.dark) h3, :global(.dark) .text-gray-800 {
+  color: #f1f5f9 !important;
+}
+
+:global(.dark) .text-gray-700 {
+  color: #cbd5e1 !important;
+}
+
+:global(.dark) .text-gray-600 {
+  color: #94a3b8 !important;
+}
+
+:global(.dark) .text-gray-500 {
+  color: #64748b !important;
+}
+
+:global(.dark) .text-gray-400 {
+  color: #94a3b8 !important;
+}
+
+:global(.dark) .bg-white {
+  background-color: rgba(15, 23, 42, 0.6) !important;
+  border-color: rgba(51, 65, 85, 0.5) !important;
+}
+
+:global(.dark) .border-gray-100 {
+  border-color: rgba(51, 65, 85, 0.4) !important;
+}
+
+:global(.dark) .bg-gray-50\/30 {
+  background-color: rgba(15, 23, 42, 0.3) !important;
+  border-color: rgba(51, 65, 85, 0.4) !important;
+}
+
+:global(.dark) .bg-gray-100 {
+  background-color: rgba(30, 41, 59, 0.8) !important;
+}
+
+:global(.dark) .hover\:bg-gray-50:hover {
+  background-color: rgba(30, 41, 59, 0.4) !important;
+}
+
+:global(.dark) .bg-red-50 {
+  background-color: rgba(239, 68, 68, 0.15) !important;
+}
+
+:global(.dark) .bg-red-50\/60 {
+  background-color: rgba(239, 68, 68, 0.15) !important;
+  border-color: rgba(239, 68, 68, 0.25) !important;
+}
+
+:global(.dark) .bg-amber-50\/60 {
+  background-color: rgba(245, 158, 11, 0.15) !important;
+  border-color: rgba(245, 158, 11, 0.25) !important;
+}
+
+:global(.dark) .bg-emerald-50\/60 {
+  background-color: rgba(16, 185, 129, 0.15) !important;
+  border-color: rgba(16, 185, 129, 0.25) !important;
+}
+
+:global(.dark) .border-amber-300.bg-amber-50\/30 {
+  border-color: rgba(245, 158, 11, 0.5) !important;
+  background-color: rgba(245, 158, 11, 0.08) !important;
+}
+
+:global(.dark) select.input {
+  background-color: rgba(15, 23, 42, 0.6) !important;
+  border-color: rgba(51, 65, 85, 0.5) !important;
+  color: #e2e8f0 !important;
 }
 
 .chevron-icon {

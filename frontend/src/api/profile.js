@@ -38,3 +38,13 @@ export async function getRecommendations(studentId, concept = null, pathway = nu
   const r = await api.get(`/profile/${studentId}/recommendations`, { params, headers: buildHeaders() })
   return r.data
 }
+
+// Task 5: 时空回滚接口 — 将指定对话快照还原为当前画像
+export async function rollbackProfile(studentId, conversationId) {
+  const r = await api.post(
+    `/profile/${studentId}/rollback`,
+    { conversation_id: conversationId },
+    { headers: buildHeaders() }
+  )
+  return r.data
+}

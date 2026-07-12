@@ -129,6 +129,9 @@ class DBStudentProfile(Base):
     bkt_states = Column(JSON, default=dict)
     dkt_bias = Column(JSON, default=list)
     cognitive_map = Column(JSON, default=dict)
+    fsm_mode = Column(String(64), default="normal")
+    fsm_accuracy_history = Column(JSON, default=dict)
+
 
     # 级联删除配置关系 (Task 6.2)
     alignment_logs = relationship("DBAlignmentLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
@@ -220,7 +223,9 @@ class DBConversationHistory(Base):
     target = Column(String(128))
     resources_count = Column(Integer, default=0)
     alignment_passed = Column(Boolean, default=True)
+    profile_snapshot = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
+
 
     student_profile = relationship("DBStudentProfile", back_populates="conversation_history")
 
@@ -267,6 +272,8 @@ class DBQuizRecord(Base):
     irt_alpha = Column(Float, default=1.0)
     irt_beta = Column(Float, default=0.0)
     irt_gamma = Column(Float, default=0.25)
+    irt_alpha_vec = Column(JSON, nullable=True)
+    irt_beta_vec = Column(JSON, nullable=True)
 
     student_profile = relationship("DBStudentProfile", back_populates="quiz_records")
 
@@ -284,6 +291,8 @@ class DBQuizItem(Base):
     irt_alpha = Column(Float, default=1.0)
     irt_beta = Column(Float, default=0.0)
     irt_gamma = Column(Float, default=0.25)
+    irt_alpha_vec = Column(JSON, nullable=True)
+    irt_beta_vec = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
 
 class DBWebSearchHistory(Base):
@@ -434,6 +443,21 @@ def _migrate_schema():
         with engine.connect() as conn:
             conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN cognitive_map TEXT DEFAULT '{}'"))
             conn.commit()
+    if "fsm_mode" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN fsm_mode VARCHAR(64) DEFAULT 'normal'"))
+            conn.commit()
+    if "fsm_accuracy_history" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN fsm_accuracy_history TEXT DEFAULT '{}'"))
+            conn.commit()
+
+    # 迁移 conversation_history
+    history_columns = [c["name"] for c in inspector.get_columns("conversation_history")]
+    if "profile_snapshot" not in history_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE conversation_history ADD COLUMN profile_snapshot TEXT"))
+            conn.commit()
 
     # 迁移 quiz_records 和 wrong_questions
     quiz_columns = [c["name"] for c in inspector.get_columns("quiz_records")]
@@ -462,6 +486,26 @@ def _migrate_schema():
     if "notes" not in wrong_columns:
         with engine.connect() as conn:
             conn.execute(sa.text("ALTER TABLE wrong_questions ADD COLUMN notes TEXT DEFAULT ''"))
+            conn.commit()
+
+    # 迁移 irt_alpha_vec 和 irt_beta_vec
+    if "irt_alpha_vec" not in quiz_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE quiz_records ADD COLUMN irt_alpha_vec TEXT"))
+            conn.commit()
+    if "irt_beta_vec" not in quiz_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE quiz_records ADD COLUMN irt_beta_vec TEXT"))
+            conn.commit()
+
+    item_columns = [c["name"] for c in inspector.get_columns("quiz_items")]
+    if "irt_alpha_vec" not in item_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE quiz_items ADD COLUMN irt_alpha_vec TEXT"))
+            conn.commit()
+    if "irt_beta_vec" not in item_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE quiz_items ADD COLUMN irt_beta_vec TEXT"))
             conn.commit()
 
 

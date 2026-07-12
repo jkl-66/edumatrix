@@ -294,6 +294,9 @@ class StudentProfile:
     knowledge_traces: dict[str, KnowledgeTrace] = field(default_factory=dict)
     favorites: list[dict] = field(default_factory=list)
     customized_fields: list[str] = field(default_factory=list)
+    fsm_mode: str = "normal"
+    fsm_accuracy_history: dict[str, list[float]] = field(default_factory=dict)
+
 
     # === P1-1 情感与动机维度 ===
     frustration_index: float = 0.0         # 挫败感指数 0~1

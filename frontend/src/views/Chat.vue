@@ -8,7 +8,7 @@ import {
   webSearch, loadUrl, searchArxiv,
   runCode, getStudentProfile, regenerateComponent,
   aiPolishNote, createNote, createReviewPlan,
-  getLocalAnimations,
+  getLocalAnimations, uploadBehaviorLogs,
 } from '../api'
 import {
   Send, Bot, User, Loader2, BookOpen, Code2, LayoutGrid, HelpCircle, Video,
@@ -198,8 +198,67 @@ watch(() => chatStore.sending, () => {
 })
 
 
+// --- 任务 7.3: 隐式反馈行为采集 (悬停时长与复制记录) ---
+const hoverTimers: Record<number, number> = {}
+
+function startHover(idx: number, concept?: string) {
+  if (!concept) return
+  hoverTimers[idx] = Date.now()
+}
+
+async function endHover(idx: number, concept?: string) {
+  const start = hoverTimers[idx]
+  if (!start) return
+  delete hoverTimers[idx]
+  const duration = (Date.now() - start) / 1000
+  
+  if (duration >= 2.0) {
+    try {
+      await uploadBehaviorLogs({
+        student_id: props.studentId || 'default',
+        actual_stay_seconds: duration,
+        concept: concept,
+        action: 'lecture'
+      })
+      console.log(`[Behavior Log] Uploaded hover: ${concept}, duration: ${duration.toFixed(2)}s`)
+    } catch (e) {
+      console.warn('Failed to upload hover logs:', e)
+    }
+  }
+}
+
+async function handleCopyEvent(e: ClipboardEvent) {
+  const selection = window.getSelection()?.toString()
+  if (!selection || selection.length < 5) return
+  
+  const card = (e.target as HTMLElement).closest('.chat-message')
+  if (!card) return
+  
+  const msgIndexStr = (card as HTMLElement).dataset?.msgIndex
+  if (!msgIndexStr) return
+  const msgIndex = parseInt(msgIndexStr)
+  if (isNaN(msgIndex) || msgIndex < 0) return
+  
+  const msg = messages.value[msgIndex]
+  if (msg && msg.target) {
+    try {
+      await uploadBehaviorLogs({
+        student_id: props.studentId || 'default',
+        actual_stay_seconds: 5.0,
+        concept: msg.target,
+        action: 'code',
+        page_accuracy: 0.8
+      })
+      console.log(`[Behavior Log] Uploaded copy action for concept: ${msg.target}`)
+    } catch (e) {
+      console.warn('Failed to upload copy logs:', e)
+    }
+  }
+}
+
 onMounted(() => {
   renderAllDiagrams()
+  document.addEventListener('copy', handleCopyEvent)
 })
 
 const nameToRole = {
@@ -244,6 +303,7 @@ watch(sending, async (newVal, oldVal) => {
 // 任务 8.2: 页面销毁时不释放流式连接，以支持路由切换导航时后台继续生成
 onUnmounted(() => {
   cleanupCustomMindmaps()
+  document.removeEventListener('copy', handleCopyEvent)
 })
 
 function clearChat() {
@@ -1837,7 +1897,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
             </div>
 
             <!-- 任务 8.1: data-msg-index 用于行级点击定位 -->
-            <div v-else-if="msg.content || (msg.resources && msg.resources.length > 0)" class="mb-4 chat-message" :data-msg-index="idx">
+            <div v-else-if="msg.content || (msg.resources && msg.resources.length > 0)"
+                 class="mb-4 chat-message"
+                 :data-msg-index="idx"
+                 @mouseenter="startHover(idx, msg.target)"
+                 @mouseleave="endHover(idx, msg.target)">
               <div class="flex items-start gap-3">
                 <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shrink-0">
                   <Bot :size="16" class="text-white" />

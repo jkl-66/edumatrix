@@ -3,7 +3,7 @@
  * SandboxVisualizer.vue — 浮动代码沙箱可视化窗
  * 选择图表类型→自动生成代码→运行→显示图像→生成讲解
  */
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 const emit = defineEmits(['close'])
 const props = defineProps({
@@ -21,124 +21,9 @@ const explaining = ref(false)
 const explanation = ref('')
 const error = ref('')
 
-// === 任务 9: Monaco 沙箱编辑器轻量自动补全桩 ===
-const suggestVisible = ref(false)
-const suggestList = ref([])
-const suggestIndex = ref(0)
-const codeEditorRef = ref(null)
-
-const suggestionMap = {
-  'plt.': [
-    'figure(figsize=(8, 4))',
-    'plot(x, y, \'b-\', label=\'\', linewidth=2)',
-    'scatter(x, y, c=\'blue\', alpha=0.7)',
-    'bar(categories, values, color=colors)',
-    'hist(data, bins=20)',
-    'xlabel(\'\')',
-    'ylabel(\'\')',
-    'title(\'\')',
-    'legend()',
-    'grid(alpha=0.3)',
-    'tight_layout()',
-    'show()',
-    'savefig(\'output.png\')',
-    'subplot(1, 2, 1)',
-    'axis(\'equal\')',
-    'xlim(0, 10)',
-    'ylim(0, 100)',
-    'text(0, 0, \'\')',
-  ],
-  'np.': [
-    'linspace(0, 10, 100)',
-    'arange(0, 10, 0.1)',
-    'random.randn(100)',
-    'random.seed(42)',
-    'sin(x)',
-    'cos(x)',
-    'exp(x)',
-    'log(x)',
-    'sqrt(x)',
-    'array([1, 2, 3])',
-    'zeros((10, 10))',
-    'ones((5, 5))',
-    'meshgrid(x, y)',
-    'polyfit(x, y, 1)',
-    'mean(x)',
-    'std(x)',
-  ],
-  'plt': ['plt.figure()', 'plt.plot()', 'plt.show()', 'plt.xlabel()', 'plt.ylabel()'],
-  'np': ['np.linspace()', 'np.array()', 'np.random.randn()', 'np.sin()', 'np.cos()'],
-  'imp': ['import matplotlib.pyplot as plt', 'import numpy as np', 'import pandas as pd'],
-  'import ': ['import matplotlib.pyplot as plt', 'import numpy as np', 'import pandas as pd', 'import random', 'import math'],
-  'for ': ['for i in range(10):\n    ', 'for x in data:\n    '],
-  'def ': ['def function_name():\n    return'],
-}
-
-function onCodeInput(e) {
-  const textarea = e.target
-  const cursorPos = textarea.selectionStart
-  const textBefore = code.value.substring(0, cursorPos)
-  const lines = textBefore.split('\n')
-  const currentLine = lines[lines.length - 1] || ''
-
-  const match = currentLine.match(/([\w.]+)$/)
-  if (match) {
-    const prefix = match[1].toLowerCase()
-    let candidates = []
-    for (const [key, values] of Object.entries(suggestionMap)) {
-      if (key.toLowerCase().startsWith(prefix) || prefix.includes(key.toLowerCase().replace('.', ''))) {
-        candidates = candidates.concat(values)
-      }
-    }
-    if (prefix in suggestionMap) {
-      candidates = suggestionMap[prefix]
-    }
-    if (candidates.length > 0) {
-      suggestList.value = [...new Set(candidates)].slice(0, 10)
-      suggestVisible.value = true
-      suggestIndex.value = 0
-      return
-    }
-  }
-  suggestVisible.value = false
-}
-
-function applySuggestion(suggestion) {
-  const textarea = codeEditorRef.value
-  if (!textarea) return
-  const cursorPos = textarea.selectionStart
-  const textBefore = code.value.substring(0, cursorPos)
-  const lines = textBefore.split('\n')
-  const currentLine = lines[lines.length - 1]
-  const match = currentLine.match(/([\w.]+)$/)
-  if (match) {
-    const before = code.value.substring(0, cursorPos - match[1].length)
-    const after = code.value.substring(cursorPos)
-    code.value = before + suggestion + after
-    setTimeout(() => {
-      textarea.selectionStart = textarea.selectionEnd = before.length + suggestion.length
-      textarea.focus()
-    }, 0)
-  }
-  suggestVisible.value = false
-}
-
-function onCodeKeydown(e) {
-  if (suggestVisible.value && suggestList.value.length > 0) {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      suggestIndex.value = (suggestIndex.value + 1) % suggestList.value.length
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      suggestIndex.value = (suggestIndex.value - 1 + suggestList.value.length) % suggestList.value.length
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault()
-      applySuggestion(suggestList.value[suggestIndex.value])
-    } else if (e.key === 'Escape') {
-      suggestVisible.value = false
-    }
-  }
-}
+// === 任务 9: Monaco 沙箱编辑器 ===
+const monacoContainerRef = ref(null)
+let editorInstance = null
 
 const chartTypes = [
   { id: 'line', label: '折线图', icon: '📈' },
@@ -250,9 +135,96 @@ plt.tight_layout()
 plt.show()`,
 }
 
+function initMonaco() {
+  if (!monacoContainerRef.value) return
+
+  // 注册 Python 自动补全
+  window.monaco.languages.registerCompletionItemProvider('python', {
+    provideCompletionItems: (model, position) => {
+      const word = model.getWordUntilPosition(position)
+      const range = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      }
+
+      const suggestions = [
+        {
+          label: 'numpy',
+          kind: window.monaco.languages.CompletionItemKind.Module,
+          insertText: 'import numpy as np\n',
+          detail: '数据分析核心库',
+          range: range,
+        },
+        {
+          label: 'pandas',
+          kind: window.monaco.languages.CompletionItemKind.Module,
+          insertText: 'import pandas as pd\n',
+          detail: '数据分析核心库',
+          range: range,
+        },
+        {
+          label: 'torch',
+          kind: window.monaco.languages.CompletionItemKind.Module,
+          insertText: 'import torch\nimport torch.nn as nn\n',
+          detail: 'PyTorch 深度学习库',
+          range: range,
+        },
+        {
+          label: 'plt.plot',
+          kind: window.monaco.languages.CompletionItemKind.Function,
+          insertText: 'plt.plot(${1:x}, ${2:y}, \'${3:b-}\', label=\'${4:label}\')',
+          insertTextRules: window.monaco.languages.CompletionItemInsertRule.InsertAsSnippet,
+          detail: 'Matplotlib 绘制折线图',
+          range: range,
+        },
+        {
+          label: 'np.linspace',
+          kind: window.monaco.languages.CompletionItemKind.Function,
+          insertText: 'np.linspace(${1:start}, ${2:stop}, ${3:50})',
+          insertTextRules: window.monaco.languages.CompletionItemInsertRule.InsertAsSnippet,
+          detail: '生成等差数列',
+          range: range,
+        },
+        {
+          label: 'plt.show',
+          kind: window.monaco.languages.CompletionItemKind.Function,
+          insertText: 'plt.show()',
+          detail: '显示图形',
+          range: range,
+        },
+      ]
+      return { suggestions }
+    },
+  })
+
+  editorInstance = window.monaco.editor.create(monacoContainerRef.value, {
+    value: code.value,
+    language: 'python',
+    theme: 'vs-dark',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    fontSize: 12,
+    lineNumbers: 'on',
+    scrollBeyondLastLine: false,
+    scrollbar: {
+      vertical: 'auto',
+      horizontal: 'auto',
+    },
+  })
+
+  editorInstance.onDidChangeModelContent(() => {
+    code.value = editorInstance.getValue()
+  })
+}
+
 function selectChart(id) {
   activeChart.value = id
   code.value = chartCode[id] || ''
+  if (editorInstance) {
+    editorInstance.setValue(code.value)
+  }
   output.value = ''
   imageUrl.value = ''
   error.value = ''
@@ -274,13 +246,17 @@ async function runCode() {
       student_id: props.studentId,
     }, { headers })
     const result = resp.data
-    if (result.status === 'success' || result.status === 'completed') {
-      output.value = result.stdout || ''
-      if (result.image_base64) {
-        imageUrl.value = `data:image/png;base64,${result.image_base64}`
-      }
+    // 兼容 status_code / error 返回结构
+    if (result.error) {
+      error.value = result.error
     } else {
-      error.value = result.stderr || '执行失败'
+      output.value = result.output || ''
+      // 如果后端在输出流中嵌入了图片 Markdown 语法
+      const imgMatch = output.value.match(/!\[可视化输出\]\(data:image\/png;base64,([A-Za-z0-9+/=]+)\)/)
+      if (imgMatch) {
+        imageUrl.value = `data:image/png;base64,${imgMatch[1]}`
+        output.value = output.value.replace(imgMatch[0], '').trim()
+      }
     }
   } catch (e) {
     error.value = e.response?.data?.detail || e.message || '请求失败'
@@ -308,6 +284,30 @@ function close() {
   visible.value = false
   emit('close')
 }
+
+onMounted(() => {
+  // 动态加载 Monaco AMD Loader 脚本
+  if (window.monaco) {
+    initMonaco()
+  } else {
+    const script = document.createElement('script')
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.39.0/min/vs/loader.min.js'
+    script.onload = () => {
+      window.require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.39.0/min/vs' } })
+      window.require(['vs/editor/editor.main'], () => {
+        initMonaco()
+      })
+    }
+    document.body.appendChild(script)
+  }
+})
+
+onUnmounted(() => {
+  if (editorInstance) {
+    editorInstance.dispose()
+    editorInstance = null
+  }
+})
 
 // 初始化默认代码
 selectChart('line')
@@ -356,25 +356,8 @@ selectChart('line')
             {{ running ? '⏳ 运行中...' : '▶ 运行' }}
           </button>
         </div>
-        <div class="relative">
-          <textarea
-            ref="codeEditorRef"
-            v-model="code"
-            @input="onCodeInput"
-            @keydown="onCodeKeydown"
-            class="w-full p-3 text-[10px] font-mono text-gray-300 bg-gray-900/50 leading-relaxed resize-y min-h-24 max-h-48 outline-none border-0"
-            spellcheck="false"
-          ></textarea>
-          <!-- 自动补全下拉 -->
-          <div v-if="suggestVisible && suggestList.length > 0"
-            class="absolute left-0 right-0 z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-32 overflow-y-auto">
-            <div v-for="(item, idx) in suggestList" :key="idx"
-              class="px-3 py-1.5 text-[10px] font-mono text-gray-300 hover:bg-teal-700/60 cursor-pointer"
-              :class="{ 'bg-teal-700/40': idx === suggestIndex }"
-              @mousedown.prevent="applySuggestion(item)">
-              {{ item }}
-            </div>
-          </div>
+        <div class="p-2 bg-gray-950">
+          <div ref="monacoContainerRef" class="w-full h-48 rounded-lg overflow-hidden text-left"></div>
         </div>
       </div>
 
@@ -395,18 +378,18 @@ selectChart('line')
       <!-- Text output -->
       <div v-if="output && !imageUrl" class="bg-gray-800/80 rounded-xl p-3 border border-gray-700/50">
         <p class="text-[9px] text-gray-500 mb-1">控制台输出</p>
-        <pre class="text-[10px] font-mono text-green-400 whitespace-pre-wrap">{{ output }}</pre>
+        <pre class="text-[10px] font-mono text-green-400 whitespace-pre-wrap text-left">{{ output }}</pre>
       </div>
 
       <!-- Error -->
       <div v-if="error" class="bg-red-900/30 rounded-xl p-3 border border-red-700/30">
-        <p class="text-[10px] text-red-400">{{ error }}</p>
+        <p class="text-[10px] text-red-400 text-left">{{ error }}</p>
       </div>
 
       <!-- Explanation -->
       <div v-if="explanation" class="bg-purple-900/20 rounded-xl p-3 border border-purple-700/30">
         <p class="text-[9px] text-purple-400 mb-1">💡 图表讲解</p>
-        <p class="text-[10px] text-gray-300 leading-relaxed">{{ explanation }}</p>
+        <p class="text-[10px] text-gray-300 leading-relaxed text-left">{{ explanation }}</p>
       </div>
 
     </div>

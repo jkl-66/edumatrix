@@ -944,3 +944,115 @@ async def get_recommendations(
     from app.utils.recommendation_engine import get_smart_recommendations
     
     return await run_db_op(get_smart_recommendations, student_id, concept=concept, pathway=pathway)
+
+
+# ============================================================
+# Task 5: 画像快照时空回滚端点
+# POST /api/profile/{student_id}/rollback
+# Body: { "conversation_id": <int> }
+# 将指定对话节点保存的 profile_snapshot 精确还原到当前画像
+# ============================================================
+
+class RollbackRequest(BaseModel):
+    conversation_id: int
+
+
+@router.post("/{student_id}/rollback")
+async def rollback_profile(
+    student_id: str,
+    body: RollbackRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """
+    时空回溯端点：从历史对话中读取 profile_snapshot 并
+    精确还原为当前学生画像状态（仅限安全字段，不会覆盖登录态）。
+
+    前端 History.vue「跳转到当时认知状态」按钮调用此接口。
+    """
+    from app.database import SessionLocal, DBConversationHistory
+
+    # ── 1. 从数据库取出目标 conversation 的 profile_snapshot ──
+    def _fetch_snapshot(db):
+        row = (
+            db.query(DBConversationHistory)
+            .filter(
+                DBConversationHistory.student_id == student_id,
+                DBConversationHistory.id == body.conversation_id,
+            )
+            .first()
+        )
+        if not row:
+            return None
+        import json
+        raw = row.profile_snapshot if hasattr(row, "profile_snapshot") else None
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except Exception:
+                return None
+        return raw  # 已经是 dict
+
+    snapshot: dict | None = await run_db_op(_fetch_snapshot)
+    if not snapshot:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Conversation {body.conversation_id} not found or has no snapshot.",
+        )
+
+    # ── 2. 加载当前画像（先从 Swarm 内存，再从 DB）──
+    swarm = build_swarm_from_headers(request.headers)
+    profile = swarm.profile_store.get(student_id)
+    if not profile:
+        profile = await run_db_op(load_student_profile, student_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Student profile not found.")
+        swarm.profile_store[student_id] = profile
+
+    # ── 3. 白名单字段外科手术式回滚（安全字段只读，不会覆盖认证信息）──
+    ROLLBACK_FIELDS = {
+        "fsm_mode": str,
+        "concept_mastery": dict,
+        "weak_points": list,
+        "cognitive_load": float,
+        "mastery_score": float,
+        "motivation_type": str,
+    }
+
+    applied: dict[str, Any] = {}
+    for field, expected_type in ROLLBACK_FIELDS.items():
+        if field not in snapshot:
+            continue
+        val = snapshot[field]
+        # 类型安全校验
+        if not isinstance(val, expected_type):
+            try:
+                val = expected_type(val)
+            except Exception:
+                continue
+        if hasattr(profile, field):
+            setattr(profile, field, val)
+            applied[field] = val
+
+    # ── 4. 持久化回滚后的画像 ──
+    await run_db_op(save_student_profile, profile)
+
+    # ── 5. 同步更新 Swarm 全局缓存中的所有副本 ──
+    from swarm_factory import _swarm_cache
+    for sw in _swarm_cache.values():
+        cached = sw.profile_store.get(student_id)
+        if cached and cached is not profile:
+            for field, val in applied.items():
+                if hasattr(cached, field):
+                    setattr(cached, field, val)
+
+    return {
+        "status": "success",
+        "student_id": student_id,
+        "conversation_id": body.conversation_id,
+        "applied_fields": list(applied.keys()),
+        "snapshot_preview": {
+            "fsm_mode": snapshot.get("fsm_mode", "normal"),
+            "mastery_score": snapshot.get("mastery_score", 0.0),
+            "weak_points_count": len(snapshot.get("weak_points", [])),
+        },
+    }

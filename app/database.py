@@ -128,6 +128,7 @@ class DBStudentProfile(Base):
     concept_layers = Column(JSON, default=dict)
     bkt_states = Column(JSON, default=dict)
     dkt_bias = Column(JSON, default=list)
+    cognitive_map = Column(JSON, default=dict)
 
     # 级联删除配置关系 (Task 6.2)
     alignment_logs = relationship("DBAlignmentLog", back_populates="student_profile", cascade="all, delete-orphan", passive_deletes=False)
@@ -428,6 +429,10 @@ def _migrate_schema():
     if "dkt_bias" not in profile_columns:
         with engine.connect() as conn:
             conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN dkt_bias TEXT DEFAULT '[]'"))
+            conn.commit()
+    if "cognitive_map" not in profile_columns:
+        with engine.connect() as conn:
+            conn.execute(sa.text("ALTER TABLE student_profiles ADD COLUMN cognitive_map TEXT DEFAULT '{}'"))
             conn.commit()
 
     # 迁移 quiz_records 和 wrong_questions

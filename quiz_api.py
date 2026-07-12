@@ -59,6 +59,109 @@ def _parse_llm_json(text: str) -> dict | None:
     return None
 
 
+# === 任务 6: 主观题大模型判卷输出的结构保障 (JSON Schema Validation) ===
+GRADING_SCHEMA = {
+    "type": "object",
+    "required": ["accuracy_score", "score_breakdown", "feedback", "next_action"],
+    "properties": {
+        "accuracy_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "ai_confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "score_breakdown": {
+            "type": "object",
+            "required": ["key_points_coverage", "semantic_correctness", "depth_and_detail", "clarity_and_logic"],
+            "properties": {
+                "key_points_coverage": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "semantic_correctness": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "depth_and_detail": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "clarity_and_logic": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            }
+        },
+        "feedback": {"type": "string"},
+        "misconceptions": {"type": "array", "items": {"type": "string"}},
+        "missing_points": {"type": "array", "items": {"type": "string"}},
+        "next_action": {"type": "string", "enum": ["review", "practice", "advance"]},
+        "metacognitive_gap": {"type": "string"},
+    }
+}
+
+GRADING_FALLBACK = {
+    "accuracy_score": 0.6,
+    "ai_confidence": 0.7,
+    "score_breakdown": {
+        "key_points_coverage": 0.5,
+        "semantic_correctness": 0.6,
+        "depth_and_detail": 0.5,
+        "clarity_and_logic": 0.6,
+    },
+    "feedback": "你的答案包含一些正确要点，但存在遗漏和误解。",
+    "misconceptions": [],
+    "missing_points": ["请对照参考答案检查遗漏"],
+    "next_action": "practice",
+    "metacognitive_gap": "",
+}
+
+
+def _validate_grading_result(result: dict) -> dict:
+    """校验 LLM 判卷输出是否符合 JSON Schema，缺失/异常字段用安全值回填。"""
+    if not isinstance(result, dict):
+        return GRADING_FALLBACK.copy()
+
+    validated = {}
+
+    # accuracy_score: 必须在 [0, 1] 区间
+    try:
+        acc = float(result.get("accuracy_score", 0.5))
+        validated["accuracy_score"] = max(0.0, min(1.0, acc))
+    except (ValueError, TypeError):
+        validated["accuracy_score"] = 0.5
+
+    # ai_confidence: 必须在 [0, 1] 区间
+    try:
+        conf = float(result.get("ai_confidence", 0.6))
+        validated["ai_confidence"] = max(0.0, min(1.0, conf))
+    except (ValueError, TypeError):
+        validated["ai_confidence"] = 0.6
+
+    # score_breakdown: 必须包含 4 个维度，每个在 [0, 1]
+    breakdown = result.get("score_breakdown", {})
+    if not isinstance(breakdown, dict):
+        breakdown = {}
+    validated["score_breakdown"] = {}
+    for key in ["key_points_coverage", "semantic_correctness", "depth_and_detail", "clarity_and_logic"]:
+        try:
+            val = float(breakdown.get(key, 0.5))
+            validated["score_breakdown"][key] = max(0.0, min(1.0, val))
+        except (ValueError, TypeError):
+            validated["score_breakdown"][key] = 0.5
+
+    # feedback: 必须是字符串
+    fb = result.get("feedback", "")
+    validated["feedback"] = str(fb) if fb else GRADING_FALLBACK["feedback"]
+
+    # misconceptions: 必须是字符串列表
+    mis = result.get("misconceptions", [])
+    if isinstance(mis, list):
+        validated["misconceptions"] = [str(m) for m in mis if m]
+    else:
+        validated["misconceptions"] = []
+
+    # missing_points: 必须是字符串列表
+    mp = result.get("missing_points", [])
+    if isinstance(mp, list):
+        validated["missing_points"] = [str(p) for p in mp if p]
+    else:
+        validated["missing_points"] = GRADING_FALLBACK["missing_points"][:]
+
+    # next_action: 必须是 review/practice/advance
+    na = str(result.get("next_action", "")).strip()
+    validated["next_action"] = na if na in ("review", "practice", "advance") else "practice"
+
+    # metacognitive_gap: 字符串
+    validated["metacognitive_gap"] = str(result.get("metacognitive_gap", ""))
+
+    return validated
+
+
 async def _get_llm(request: Request):
     swarm = build_swarm_from_headers(request.headers)
     return swarm.llm
@@ -288,8 +391,21 @@ async def generate_quiz(
 
     # 1. 从画像中恢复 IRT 能力估计器状态（存于 rl_q_table 避免与 KnowledgeTrace 类型冲突）
     irt_state = (profile.rl_q_table or {}).get("_irt_estimator", {})
+    irt_history = irt_state.get("response_history", [])
+
+    # === 任务 17: 测验冷启动跨概念先验继承 ===
+    if irt_history:
+        prior_theta = float(irt_state.get("theta", 0.0))
+    else:
+        overall_mastery = profile.mastery_score if hasattr(profile, "mastery_score") else 0.5
+        # 基于画像的整体掌握度计算初始 theta
+        from statistics import mean
+        if profile.concept_mastery:
+            overall_mastery = mean(profile.concept_mastery.values()) if profile.concept_mastery else 0.5
+        prior_theta = (overall_mastery - 0.5) * 3.0
+
     estimator = AdaptiveTestEstimator(
-        theta=float(irt_state.get("theta", 0.0)),
+        theta=prior_theta,
         theta_std=float(irt_state.get("theta_std", 1.0)),
     )
     # 恢复答题历史以保持后验估计连续性
@@ -309,6 +425,13 @@ async def generate_quiz(
         difficulty = 'easy'
     else:
         difficulty = irt_difficulty
+
+    # === 任务 8: 元认知自评偏差的路径路由消费 ===
+    meta_bias = profile.cognitive_map.get("metacognitive_bias", 0.0)
+    if meta_bias > 0.35:
+        difficulty = "hard"
+    elif meta_bias < -0.35 and difficulty != "hard":
+        difficulty = "easy"
 
     # 4. 尝试从本地种子题库选题 (Hybrid CAT Engine)
     from app.database import DBQuizItem
@@ -450,13 +573,18 @@ async def generate_quiz(
 
     await run_db_op(save_irt_state)
 
+    hints = result.get("hints", [])
+    if meta_bias < -0.35:
+        hints = list(hints) + ["考官提示：你的实力被低估了，放轻松！"]
+
     return {
         "quiz_id": quiz_id,
         "question": result.get("question"),
         "reference_answer": result.get("reference_answer", ""),
         "concept": result.get("concept", target_concept),
         "difficulty": result.get("difficulty", difficulty),
-        "hints": result.get("hints", []),
+        "hints": hints,
+        "options": result.get("options", []),
         "attempt_number": 1,
         "irt": estimator.to_dict(),
     }
@@ -491,53 +619,75 @@ async def evaluate_answer(
 
     llm = await _get_llm(request)
 
-    system_prompt = (
-        "你是一个严谨的评估者。请从多个维度严格评估学生的答案。\n"
-        "请以JSON格式返回，字段如下：\n"
-        "{\n"
-        '  "accuracy_score": 0.0~1.0,  // 整体准确度\n'
-        '  "ai_confidence": 0.0~1.0,\n'
-        '  "score_breakdown": {\n'
-        '    "key_points_coverage": 0.0~1.0,  // 覆盖了多少参考答案关键点\n'
-        '    "semantic_correctness": 0.0~1.0, // 语义是否正确\n'
-        '    "depth_and_detail": 0.0~1.0,     // 深度和细节\n'
-        '    "clarity_and_logic": 0.0~1.0     // 逻辑清晰度\n'
-        "  },\n"
-        '  "feedback": "详细的个性化反馈，先肯定正确部分，再指出遗漏和误解",\n'
-        '  "misconceptions": ["具体误解1", "误解2"],\n'
-        '  "missing_points": ["遗漏要点1", "遗漏要点2"],\n'
-        '  "next_action": "review"|"practice"|"advance",\n'
-        '  "metacognitive_gap": "学生自评与真实表现的差异分析"\n'
-        "}\n"
-        "评分标准：accuracy_score < 0.4=严重不足, 0.4~0.7=部分正确, >0.7=良好。"
-    )
-    user_prompt = (
-        f"问题：{quiz_record.question}\n"
-        f"参考答案要点：{quiz_record.correct_answer}\n"
-        f"学生答案：{student_answer}\n"
-        f"学生自评置信度：{student_confidence:.2f}\n"
-        "请严格评估并返回JSON。"
-    )
-
-    try:
-        response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-        result = _parse_llm_json(response)
-        if not result:
-            raise ValueError("parse failed")
-    except Exception:
+    # === 任务 1: 选择题秒判通道 (Deterministic MCQ Fast-Path Grading) ===
+    if quiz_record.options and len(quiz_record.options) > 0:
+        student_ans_clean = student_answer.strip().upper()
+        correct_ans_clean = quiz_record.correct_answer.strip().upper()
+        
+        is_correct = False
+        if student_ans_clean and correct_ans_clean:
+            is_correct = (student_ans_clean[0] == correct_ans_clean[0])
+            
+        accuracy_score = 1.0 if is_correct else 0.0
         result = {
-            "accuracy_score": 0.6,
-            "ai_confidence": 0.7,
-            "score_breakdown": {"key_points_coverage":0.5,"semantic_correctness":0.6,"depth_and_detail":0.5,"clarity_and_logic":0.6},
-            "feedback": f"你的答案包含一些正确要点。参考答案:{quiz_record.correct_answer[:100]}...",
-            "misconceptions": [],
-            "missing_points": ["请对照参考答案检查遗漏"],
-            "next_action": "practice",
-            "metacognitive_gap": "",
+            "accuracy_score": accuracy_score,
+            "ai_confidence": 1.0,
+            "score_breakdown": {
+                "key_points_coverage": accuracy_score,
+                "semantic_correctness": accuracy_score,
+                "depth_and_detail": accuracy_score,
+                "clarity_and_logic": accuracy_score
+            },
+            "feedback": "选择正确！" if is_correct else f"选择错误。正确答案是 {correct_ans_clean}。",
+            "misconceptions": [] if is_correct else ["概念混淆，选错干扰项"],
+            "missing_points": [] if is_correct else ["未选中正确项"],
+            "next_action": "advance" if is_correct else "review"
         }
+        # 绕过 LLM，直接进入 updater
+        ai_confidence = 1.0
+    else:
+        # === 主观题走 LLM 判卷 ===
+        system_prompt = (
+            "你是一个严谨的评估者。请从多个维度严格评估学生的答案。\n"
+            "请以JSON格式返回，字段如下：\n"
+            "{\n"
+            '  "accuracy_score": 0.0~1.0,  // 整体准确度\n'
+            '  "ai_confidence": 0.0~1.0,\n'
+            '  "score_breakdown": {\n'
+            '    "key_points_coverage": 0.0~1.0,  // 覆盖了多少参考答案关键点\n'
+            '    "semantic_correctness": 0.0~1.0, // 语义是否正确\n'
+            '    "depth_and_detail": 0.0~1.0,     // 深度和细节\n'
+            '    "clarity_and_logic": 0.0~1.0     // 逻辑清晰度\n'
+            "  },\n"
+            '  "feedback": "详细的个性化反馈，先肯定正确部分，再指出遗漏和误解",\n'
+            '  "misconceptions": ["具体误解1", "误解2"],\n'
+            '  "missing_points": ["遗漏要点1", "遗漏要点2"],\n'
+            '  "next_action": "review"|"practice"|"advance",\n'
+            '  "metacognitive_gap": "学生自评与真实表现的差异分析"\n'
+            "}\n"
+            "评分标准：accuracy_score < 0.4=严重不足, 0.4~0.7=部分正确, >0.7=良好。"
+        )
+        user_prompt = (
+            f"问题：{quiz_record.question}\n"
+            f"参考答案要点：{quiz_record.correct_answer}\n"
+            f"学生答案：{student_answer}\n"
+            f"学生自评置信度：{student_confidence:.2f}\n"
+            "请严格评估并返回JSON。"
+        )
 
-    accuracy_score = float(result.get("accuracy_score", 0.5))
-    ai_confidence = float(result.get("ai_confidence", 0.6))
+        try:
+            response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
+            result = _parse_llm_json(response)
+            if not result:
+                raise ValueError("parse failed")
+            # === 任务 6: JSON Schema 结构校验，防止 LLM 幻觉输出 ===
+            result = _validate_grading_result(result)
+        except Exception:
+            result = GRADING_FALLBACK.copy()
+            result["feedback"] = f"你的答案包含一些正确要点。参考答案:{quiz_record.correct_answer[:100]}..."
+
+        accuracy_score = float(result.get("accuracy_score", 0.5))
+        ai_confidence = float(result.get("ai_confidence", 0.6))
 
     # Perform updates in a single thread-safe db transaction
     def perform_eval_updates(session):
@@ -562,6 +712,14 @@ async def evaluate_answer(
             hint_count=0,
             concept=concept,
         )
+
+        # === 任务 4: 元认知偏差与自信度校准追踪 (Metacognitive Calibration Index) ===
+        old_bias = profile.cognitive_map.get("metacognitive_bias", 0.0)
+        old_error = profile.cognitive_map.get("metacognitive_error", 0.0)
+        current_bias = student_confidence - accuracy_score
+        current_error = abs(student_confidence - accuracy_score)
+        profile.cognitive_map["metacognitive_bias"] = round(0.8 * old_bias + 0.2 * current_bias, 4)
+        profile.cognitive_map["metacognitive_error"] = round(0.8 * old_error + 0.2 * current_error, 4)
         
         # === Q-learning: 记录更新后的状态 ===
         new_mastery = profile.concept_mastery.get(concept, 0.45)
@@ -612,6 +770,19 @@ async def evaluate_answer(
             )
         is_correct = accuracy_score >= 0.6
         estimator.update_ability(item_params, is_correct)
+
+        # === 任务 7: 题库参数的在线自适应校准更新 (IRT beta SGD) ===
+        if local_record and not (local_record.options and len(local_record.options) > 0):
+            prob = estimator._probability_correct(estimator.theta, item_params)
+            correct_val = 1.0 if is_correct else 0.0
+            learning_rate = 0.05
+            delta_beta = learning_rate * (prob - correct_val)
+            from app.database import DBQuizItem
+            session.query(DBQuizItem).filter(DBQuizItem.question == local_record.question).update({
+                "irt_beta": DBQuizItem.irt_beta + delta_beta
+            }, synchronize_session=False)
+            session.commit()
+
         # 写回 IRT 状态（存于 rl_q_table 避免与 KnowledgeTrace 类型冲突）
         if profile.rl_q_table is None:
             profile.rl_q_table = {}
@@ -773,44 +944,115 @@ async def adapt_quiz(
         difficulty = "easy"
 
     # Generate follow-up quiz
-    llm = await _get_llm(request)
     # 动态难度：根据画像调整
     cl = profile.cognitive_load; fr = profile.frustration_index; m = profile.concept_mastery.get(target, 0.45)
     if difficulty == "hard" and (cl > 0.7 or fr > 0.6): difficulty = "medium"
     elif difficulty == "easy" and m > 0.7: difficulty = "medium"
-    system_prompt = (
-        "你是一个智能出题考官。根据学生上次的表现和完整画像，生成一道高度定制的跟进简答题。\n"
-        "请以JSON格式返回：\n"
-        "{\n"
-        '  "question": "题目文本（根据画像调整问法和深度）",\n'
-        '  "reference_answer": "分点列出参考答案（用分号分隔）",\n'
-        '  "concept": "考察的知识点",\n'
-        '  "difficulty": "easy/medium/hard",\n'
-        '  "hints": ["提示1", "提示2", "提示3"]\n'
-        "}\n"
-        "出题规则：低掌握度从基础概念问起；高掌握度考综合应用；挫败感高时降低难度并鼓励。"
-    )
-    user_prompt = (
-        f"目标概念：{target}\n"
-        f"难度：{difficulty}\n"
-        f"上次表现建议动作：{previous_action}\n"
-        f"掌握度：{m:.2f}\n"
-        f"认知负荷：{cl:.2f}\n"
-        f"挫败感：{fr:.2f}\n"
-        f"学生画像全文：{profile.profile_prompt()}\n"
-        "请生成一道能真正检验此学生理解的跟进题。"
-    )
 
-    try:
-        response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-        result = _parse_llm_json(response)
-        if result:
-            raw_hints = result.get("hints", [])
-            result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
-        else:
-            raise ValueError("parse failed")
-    except Exception:
-        result = _get_fallback_quiz(target, difficulty)
+    # === 任务 8: 元认知自评偏差的路径路由消费 ===
+    meta_bias = profile.cognitive_map.get("metacognitive_bias", 0.0)
+    if meta_bias > 0.35:
+        difficulty = "hard"
+    elif meta_bias < -0.35 and difficulty != "hard":
+        difficulty = "easy"
+
+    # === 任务 11: 自适应跟进出题融合本地预置题库 ===
+    from app.database import DBQuizItem
+    from mirt_engine import AdaptiveTestEstimator, IRTItemParams
+
+    def select_from_item_bank(session):
+        candidates = session.query(DBQuizItem).filter(
+            DBQuizItem.concept == target
+        ).all()
+        answered = session.query(DBQuizRecord.question).filter(
+            DBQuizRecord.student_id == student_id,
+            DBQuizRecord.student_answer != ""
+        ).all()
+        answered_texts = {a[0].strip() for a in answered if a[0]}
+        available = [c for c in candidates if c.question.strip() not in answered_texts]
+        return available
+
+    available_candidates = await run_db_op(select_from_item_bank)
+    selected_item = None
+
+    if len(available_candidates) >= 3:
+        candidates_dict = [
+            {
+                "id": c.id,
+                "question": c.question,
+                "options": c.options or [],
+                "correct_answer": c.correct_answer,
+                "explanation": c.explanation,
+                "difficulty": c.difficulty,
+                "irt_params": {
+                    "alpha": c.irt_alpha,
+                    "beta": c.irt_beta,
+                    "gamma": c.irt_gamma
+                }
+            }
+            for c in available_candidates
+        ]
+        irt_state = (profile.rl_q_table or {}).get("_irt_estimator", {})
+        estimator = AdaptiveTestEstimator(
+            theta=float(irt_state.get("theta", 0.0)),
+            theta_std=float(irt_state.get("theta_std", 1.0)),
+        )
+        for entry in irt_state.get("response_history", []):
+            estimator.response_history.append({
+                "item": IRTItemParams.from_dict(entry.get("item", {})),
+                "correct": entry.get("correct", False),
+            })
+        selected_item = estimator.select_next_item(candidates_dict)
+
+    if selected_item:
+        result = {
+            "question": selected_item["question"],
+            "reference_answer": selected_item["correct_answer"],
+            "concept": target,
+            "difficulty": selected_item["difficulty"],
+            "hints": ["请仔细阅读题目", "根据已知条件推导", "给出你的详细解答步骤"],
+            "options": selected_item["options"],
+        }
+        if meta_bias < -0.35:
+            result["hints"] = list(result["hints"]) + ["考官提示：你的实力被低估了，放轻松！"]
+    else:
+        # 本地题库不足，降级调用大模型生成
+        llm = await _get_llm(request)
+        system_prompt = (
+            "你是一个智能出题考官。根据学生上次的表现和完整画像，生成一道高度定制的跟进简答题。\n"
+            "请以JSON格式返回：\n"
+            "{\n"
+            '  "question": "题目文本（根据画像调整问法和深度）",\n'
+            '  "reference_answer": "分点列出参考答案（用分号分隔）",\n'
+            '  "concept": "考察的知识点",\n'
+            '  "difficulty": "easy/medium/hard",\n'
+            '  "hints": ["提示1", "提示2", "提示3"]\n'
+            "}\n"
+            "出题规则：低掌握度从基础概念问起；高掌握度考综合应用；挫败感高时降低难度并鼓励。"
+        )
+        user_prompt = (
+            f"目标概念：{target}\n"
+            f"难度：{difficulty}\n"
+            f"上次表现建议动作：{previous_action}\n"
+            f"掌握度：{m:.2f}\n"
+            f"认知负荷：{cl:.2f}\n"
+            f"挫败感：{fr:.2f}\n"
+            f"学生画像全文：{profile.profile_prompt()}\n"
+            "请生成一道能真正检验此学生理解的跟进题。"
+        )
+
+        try:
+            response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
+            result = _parse_llm_json(response)
+            if result:
+                raw_hints = result.get("hints", [])
+                result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
+                if meta_bias < -0.35:
+                    result["hints"] = list(result["hints"]) + ["考官提示：你的实力被低估了，放轻松！"]
+            else:
+                raise ValueError("parse failed")
+        except Exception:
+            result = _get_fallback_quiz(target, difficulty)
 
     new_quiz_id = _generate_quiz_id()
     db_quiz = DBQuizRecord(
@@ -822,6 +1064,7 @@ async def adapt_quiz(
         target_concept=result.get("concept", target),
         attempt_number=int(payload.get("attempt_number", 1)) + 1,
         session_id=payload.get("session_id", ""),
+        options=result.get("options", []),
     )
     
     def save_adapted_quiz(session):
@@ -837,6 +1080,7 @@ async def adapt_quiz(
         "concept": result.get("concept", target),
         "difficulty": result.get("difficulty", difficulty),
         "hints": result.get("hints", []),
+        "options": result.get("options", []),
         "attempt_number": int(payload.get("attempt_number", 1)) + 1,
     }
 
@@ -910,27 +1154,49 @@ async def generate_similar_quiz(
     concept = source.target_concept or "通用概念"
     original_accuracy = source.accuracy_score or 0.0
 
-    # Step 2: LLM 生成相似题（Few-Shot JSON 模板）
+    # === 任务 13: 相似题重测题型一致性失调修复 ===
+    source_has_options = bool(source.options and len(source.options) > 0)
+
+    # Step 2: LLM 生成相似题（Few-Shot JSON 模板，根据题型动态适配）
     llm = await _get_llm(request)
 
-    few_shot_template = (
-        '{"question": "请计算...", '
-        '"options": ["A. ...", "B. ...", "C. ...", "D. ..."], '
-        '"correct_answer": "A", '
-        '"explanation": "解析...", '
-        '"python_validator": "assert ...", '
-        '"difficulty": "medium"}'
-    )
-
-    system_prompt = (
-        "你是一个严格的出题考官。\n"
-        "根据源错题的知识点和难度，生成一道同难度、同考点的相似题。\n"
-        "必须以 JSON 格式输出，严格遵循以下模板结构：\n"
-        f"{few_shot_template}\n"
-        "python_validator 字段是一段可运行的 Python assert 语句，"
-        "用于自动验证你的答案逻辑正确性。\n"
-        "确保 options 中正确答案唯一，且干扰项具有迷惑性但不矛盾。"
-    )
+    if source_has_options:
+        few_shot_template = (
+            '{"question": "请计算...", '
+            '"options": ["A. ...", "B. ...", "C. ...", "D. ..."], '
+            '"correct_answer": "A", '
+            '"explanation": "解析...", '
+            '"python_validator": "assert ...", '
+            '"difficulty": "medium"}'
+        )
+        system_prompt = (
+            "你是一个严格的出题考官。\n"
+            "根据源错题的知识点和难度，生成一道同难度、同考点的相似选择题。\n"
+            "必须以 JSON 格式输出，严格遵循以下模板结构：\n"
+            f"{few_shot_template}\n"
+            "python_validator 字段是一段可运行的 Python assert 语句，"
+            "用于自动验证你的答案逻辑正确性。\n"
+            "确保 options 中正确答案唯一，且干扰项具有迷惑性但不矛盾。"
+        )
+    else:
+        few_shot_template = (
+            '{"question": "请解释...", '
+            '"options": [], '
+            '"correct_answer": "参考答案...", '
+            '"explanation": "解析...", '
+            '"python_validator": "assert ...", '
+            '"difficulty": "medium"}'
+        )
+        system_prompt = (
+            "你是一个严格的出题考官。\n"
+            "根据源错题的知识点和难度，生成一道同难度、同考点的相似主观简答题或代码实操题。\n"
+            "必须以 JSON 格式输出，严格遵循以下模板结构：\n"
+            f"{few_shot_template}\n"
+            "注意：options 必须为空数组 []，因为这是主观题，没有选项。\n"
+            "python_validator 字段是一段可运行的 Python assert 语句，"
+            "用于自动验证你的答案逻辑正确性。\n"
+            "确保题目与源题题型一致，保持认知一致性。"
+        )
     user_prompt = (
         f"源题知识点：{concept}\n"
         f"源题：{source.question[:200]}\n"
@@ -1125,14 +1391,17 @@ async def get_wrong_concepts(student_id: str) -> list[dict]:
 
 
 @router.delete("/wrong-questions/{wrong_id}")
-async def delete_wrong_question(wrong_id: int) -> dict:
+async def delete_wrong_question(wrong_id: int, student_id: str) -> dict:
     """删除指定的错题记录。"""
     from app.database import DBWrongQuestion
 
     def do_delete(session):
-        record = session.query(DBWrongQuestion).filter(DBWrongQuestion.id == wrong_id).first()
+        record = session.query(DBWrongQuestion).filter(
+            DBWrongQuestion.id == wrong_id,
+            DBWrongQuestion.student_id == student_id
+        ).first()
         if not record:
-            raise HTTPException(status_code=404, detail="错题记录不存在")
+            raise HTTPException(status_code=404, detail="错题记录不存在或无权操作")
         session.delete(record)
         session.commit()
         return {"deleted": True, "id": wrong_id}
@@ -1141,14 +1410,17 @@ async def delete_wrong_question(wrong_id: int) -> dict:
 
 
 @router.patch("/wrong-questions/{wrong_id}/pin")
-async def toggle_pin_wrong_question(wrong_id: int) -> dict:
+async def toggle_pin_wrong_question(wrong_id: int, student_id: str) -> dict:
     """切换错题的置顶/取消置顶状态。"""
     from app.database import DBWrongQuestion
 
     def do_pin(session):
-        record = session.query(DBWrongQuestion).filter(DBWrongQuestion.id == wrong_id).first()
+        record = session.query(DBWrongQuestion).filter(
+            DBWrongQuestion.id == wrong_id,
+            DBWrongQuestion.student_id == student_id
+        ).first()
         if not record:
-            raise HTTPException(status_code=404, detail="错题记录不存在")
+            raise HTTPException(status_code=404, detail="错题记录不存在或无权操作")
         record.pinned = not record.pinned
         session.commit()
         return {"id": wrong_id, "pinned": record.pinned}
@@ -1162,12 +1434,16 @@ async def update_wrong_question_notes(wrong_id: int, request: Request) -> dict:
     from app.database import DBWrongQuestion
 
     payload = await request.json()
+    student_id = str(payload.get("student_id", ""))
     notes = str(payload.get("notes", ""))
 
     def do_update(session):
-        record = session.query(DBWrongQuestion).filter(DBWrongQuestion.id == wrong_id).first()
+        record = session.query(DBWrongQuestion).filter(
+            DBWrongQuestion.id == wrong_id,
+            DBWrongQuestion.student_id == student_id
+        ).first()
         if not record:
-            raise HTTPException(status_code=404, detail="错题记录不存在")
+            raise HTTPException(status_code=404, detail="错题记录不存在或无权操作")
         record.notes = notes
         session.commit()
         return {"id": wrong_id, "notes": notes}
@@ -1276,8 +1552,8 @@ async def get_checkin_history(student_id: str, concept: str = "") -> list[dict]:
     return await run_db_op(fetch_history)
 
 
-def _calc_streak(session, student_id: str) -> int:
-    """计算连续打卡天数。"""
+def _calc_streak(session, student_id: str, tz_offset: int = 8) -> int:
+    """计算连续打卡天数。支持时区偏移，避免跨时区截断 bug。"""
     from app.database import DBCheckinLog
     from datetime import date, datetime, timezone, timedelta
 
@@ -1290,13 +1566,14 @@ def _calc_streak(session, student_id: str) -> int:
     if not records:
         return 0
 
-    today_utc = datetime.now(timezone.utc).replace(tzinfo=None).date()
-    expected = today_utc
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    today_local = (now_utc + timedelta(hours=tz_offset)).date()
+    expected = today_local
 
-    # 提取唯一的打卡日期，按降序排列
+    # 提取唯一的打卡日期，按学生本地时区转换，按降序排列
     unique_dates = sorted(
         list({
-            r[0].date() if isinstance(r[0], datetime) else r[0]
+            (r[0] + timedelta(hours=tz_offset)).date() if isinstance(r[0], datetime) else r[0]
             for r in records if r[0]
         }),
         reverse=True
@@ -1304,8 +1581,8 @@ def _calc_streak(session, student_id: str) -> int:
 
     if unique_dates:
         # 如果今天还没打卡，但是昨天打卡了，允许从昨天算起连续打卡天数
-        if unique_dates[0] == today_utc - timedelta(days=1):
-            expected = today_utc - timedelta(days=1)
+        if unique_dates[0] == today_local - timedelta(days=1):
+            expected = today_local - timedelta(days=1)
 
     streak = 0
     for d in unique_dates:

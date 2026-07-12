@@ -133,6 +133,7 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 profile.mental_state_history = list(getattr(db_profile, "mental_state_history", []) or [])
                 profile.concept_layers = dict(getattr(db_profile, "concept_layers", {}) or {})
                 profile.bkt_states = dict(getattr(db_profile, "bkt_states", {}) or {})
+                profile.cognitive_map = dict(getattr(db_profile, "cognitive_map", {}) or {})
                 return profile
         return profile
 
@@ -167,6 +168,7 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
     profile.mental_state_history = list(getattr(db_profile, "mental_state_history", []) or [])
     profile.concept_layers = dict(getattr(db_profile, "concept_layers", {}) or {})
     profile.bkt_states = dict(getattr(db_profile, "bkt_states", {}) or {})
+    profile.cognitive_map = dict(getattr(db_profile, "cognitive_map", {}) or {})
     
     if db_profile.knowledge_traces:
         for k, v in db_profile.knowledge_traces.items():
@@ -263,6 +265,7 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     db_profile.mental_state_history = to_dict_safe(profile.mental_state_history)
     db_profile.concept_layers = to_dict_safe(profile.concept_layers)
     db_profile.bkt_states = to_dict_safe(profile.bkt_states)
+    db_profile.cognitive_map = to_dict_safe(profile.cognitive_map)
     
     db_profile.dimension_states = to_dict_safe(profile.dimension_states)
     db_profile.learning_state_causes = to_dict_safe(profile.learning_state_causes)

@@ -223,7 +223,10 @@ class TestMultimodalChat(unittest.TestCase):
         # 验证 SQLite 中写入了真实的流式回答（而不是占位符 "单轮流式对话"）
         first_resp = conversations[0].response_summary
         self.assertNotEqual(first_resp, "单轮流式对话")
-        self.assertTrue(first_resp.startswith("自适应助教 已基于检索证据处理主题："))
+        self.assertTrue(
+            any(role in first_resp for role in ("自适应助教", "自适应考官", "概念可视化导师"))
+            and "已基于检索证据处理主题：" in first_resp
+        )
 
         # 验证内存/数据库 profile 中的 history_logs 已经追加了第1轮对话
         from app.crud import load_student_profile

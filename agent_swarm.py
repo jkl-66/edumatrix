@@ -603,13 +603,30 @@ class SwarmMediationRouter:
         Returns:
             决策后的 Swarm 运行模式
         """
+        # 从 profile 中还原状态进行有状态 FSM 决策
+        self._accuracy_history = getattr(profile, "fsm_accuracy_history", {}) or {}
+        self._current_mode = SwarmMediationMode(getattr(profile, "fsm_mode", "normal") or "normal")
+
+        # 同步最新的答题记录
+        if getattr(profile, "recent_quiz_accuracy", None):
+            for concept, accs in profile.recent_quiz_accuracy.items():
+                self._accuracy_history[concept] = accs
+
         # ——— 任务 7.3: 基于掌握度的自适应二档教学 ———
         if target and target in profile.concept_mastery:
             mastery = profile.concept_mastery[target]
             if mastery < 0.50:
-                return SwarmMediationMode.SIMPLIFIED_MODE
+                new_mode = SwarmMediationMode.SIMPLIFIED_MODE
+                profile.fsm_mode = new_mode.value
+                profile.fsm_accuracy_history = self._accuracy_history
+                self._current_mode = new_mode
+                return new_mode
             elif mastery > 0.80:
-                return SwarmMediationMode.ADVANCED_MODE
+                new_mode = SwarmMediationMode.ADVANCED_MODE
+                profile.fsm_mode = new_mode.value
+                profile.fsm_accuracy_history = self._accuracy_history
+                self._current_mode = new_mode
+                return new_mode
 
         # ——— 规则 1: DEBATE_MODE ———
         debate_triggered = False
@@ -647,10 +664,15 @@ class SwarmMediationRouter:
 
         # 仅在模式稳定后才切换（防抖）
         if self._mode_hold_count >= 2:
-            return new_mode
+            profile.fsm_mode = self._current_mode.value
+            profile.fsm_accuracy_history = self._accuracy_history
+            return self._current_mode
 
         self._current_mode = new_mode
+        profile.fsm_mode = new_mode.value
+        profile.fsm_accuracy_history = self._accuracy_history
         return new_mode
+
 
     def get_forced_instructions(self, mode: SwarmMediationMode) -> dict[str, str]:
         """根据当前模式返回强制注入各智能体的指令。"""
@@ -853,6 +875,16 @@ async def run_async_thread(func, *args, **kwargs):
     return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 
+async def _trigger_event(callback, event_type, data):
+    if not callback:
+        return
+    import asyncio
+    if asyncio.iscoroutinefunction(callback):
+        await callback(event_type, data)
+    else:
+        callback(event_type, data)
+
+
 class AsyncResourceFactory:
     def __init__(self, generator: AsyncInstructRAGGenerator) -> None:
         self.generator = generator
@@ -1015,6 +1047,8 @@ class AsyncResourceFactory:
         alignment_advice: str = "",
         strategy_plan: LearningStrategyPlan | None = None,
         mediation_instructions: dict[str, str] | None = None,
+        regenerate_only: set[str] | None = None,
+        event_callback = None,
     ) -> tuple[AgentOutput, ...]:
         import asyncio
 
@@ -1065,6 +1099,20 @@ class AsyncResourceFactory:
                 merged_injections[role] = "\n".join(parts)
 
         async def _generate_one(role: str, resource_type: str) -> AgentOutput:
+            # 外科手术式缓存机制：如果指定了 regenerate_only 并且当前角色不需要重新生成，则直接复用
+            if regenerate_only is not None and role not in regenerate_only and previous_resources:
+                for res in previous_resources:
+                    if res.agent == role:
+                        # 触发事件以将缓存内容推送到 SSE
+                        if event_callback:
+                            await _trigger_event(event_callback, "agent_done", {
+                                "agent": role,
+                                "type": resource_type,
+                                "content": res.content,
+                                "cached": True
+                            })
+                        return res
+
             # 准备该角色的强制注入指令
             forced_instruction = merged_injections.get(role, "")
 
@@ -1075,14 +1123,22 @@ class AsyncResourceFactory:
                     from app.agents.coder import async_refine_code_agent
                     refined_code = await async_refine_code_agent(prev_lecture, prev_code, alignment_advice)
                     prev_citations = next((r.citations for r in previous_resources if r.resource_type == "代码实操案例"), ())
-                    return AgentOutput(
+                    res_out = AgentOutput(
                         agent=role,
                         resource_type=resource_type,
                         content=refined_code,
                         citations=prev_citations,
                         private_rationale=f"通过 async_refine_code_agent 重构代码成功。对齐纠偏提示：{alignment_advice}",
                     )
-            return await self.generator.generate(
+                    if event_callback:
+                        await _trigger_event(event_callback, "agent_done", {
+                            "agent": role,
+                            "type": resource_type,
+                            "content": res_out.content
+                        })
+                    return res_out
+
+            res_out = await self.generator.generate(
                 role=role,
                 resource_type=resource_type,
                 query=query,
@@ -1093,9 +1149,17 @@ class AsyncResourceFactory:
                 conversation_memory=conversation_memory,
                 forced_instruction=forced_instruction,
             )
+            if event_callback:
+                await _trigger_event(event_callback, "agent_done", {
+                    "agent": role,
+                    "type": resource_type,
+                    "content": res_out.content
+                })
+            return res_out
 
         tasks = [_generate_one(role, rt) for role, rt in self.jobs]
         outputs = await asyncio.gather(*tasks, return_exceptions=True)
+
 
         results: list[AgentOutput] = []
         for i, output in enumerate(outputs):
@@ -1245,9 +1309,11 @@ class EduMatrixSwarm:
         except Exception:
             return {"is_academic": True, "reason": "分类器异常放行", "reply": ""}
 
-    async def async_process(self, user_input: str, *, student_id: str = "demo-student") -> ResourcePackage:
+    async def async_process(self, user_input: str, *, student_id: str = "demo-student", event_callback = None) -> ResourcePackage:
         with timed_span(TELEMETRY, "swarm.process", student_id=student_id):
             profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
+            
+            await _trigger_event(event_callback, "progress", {"step": "init", "message": "正在初始化并分析学生画像...", "progress": 10})
 
             # === 意图分类与防闲聊拦截 ===
             classification = await self._check_academic_intent(user_input)
@@ -1276,6 +1342,12 @@ class EduMatrixSwarm:
                     error_message="",
                     grading_details={},
                 )
+                if event_callback:
+                    await _trigger_event(event_callback, "agent_done", {
+                        "agent": "Coordinator",
+                        "type": "专业讲义",
+                        "content": reply
+                    })
                 return ResourcePackage(
                     student_id=student_id,
                     target="系统沟通",
@@ -1301,8 +1373,10 @@ class EduMatrixSwarm:
                     student_id=student_id,
                 )
 
+            await _trigger_event(event_callback, "progress", {"step": "profile", "message": "正在使用画像探针更新认知与掌握度状态...", "progress": 25})
             profile = await self.profile_probe.async_update(profile, user_input)
 
+            await _trigger_event(event_callback, "progress", {"step": "planner", "message": "正在规划ZPD学习路径与检索知识库...", "progress": 40})
             retrieval = await self.planner.plan_async(self.rag, user_input, profile)
             debate_result = self.debate.clean(retrieval)
             TELEMETRY.record_metric(
@@ -1315,8 +1389,10 @@ class EduMatrixSwarm:
             swarm_mode = self.mediation_router.decide_mode(
                 profile, target=retrieval.target,
             )
+            await _trigger_event(event_callback, "progress", {"step": "router", "message": f"教学控制官决策当前处于 {swarm_mode.value} 模式", "progress": 50, "mode": swarm_mode.value})
             mediation_instructions = self.mediation_router.get_forced_instructions(swarm_mode)
             TELEMETRY.record_metric(
+
                 "mediation.mode",
                 1.0 if swarm_mode.value != "normal" else 0.0,
                 mode=swarm_mode.value,
@@ -1377,48 +1453,50 @@ class EduMatrixSwarm:
             previous_resources = None
             # === 任务 8.9: 局部外科手术式重新计算缓存 ===
             # 仅对失败的 Agent 触发 regenerate，其他 4 个组件缓存复用
-            regeneration_cache: dict[str, AgentOutput] = {}
             failed_agent_name: str = ""
             for attempt in range(CONFIG.rollback_limit + 1):
-                # 任务 8.9: 若只有特定 agent 失败，仅重新生成该 agent
-                if failed_agent_name and previous_resources:
-                    # 缓存其他成功 agent 的输出
-                    for res in previous_resources:
-                        if res.agent != failed_agent_name:
-                            regeneration_cache[res.agent] = res
-                    resources = await self.factory.generate_all(
-                        query=user_input,
-                        retrieval=retrieval,
-                        clean_evidence=debate_result.clean_evidence,
-                        profile=profile,
-                        correction=correction,
-                        conversation_memory=conversation_memory,
-                        previous_resources=previous_resources,
-                        alignment_advice=correction,
-                        strategy_plan=self.strategy_engine.build_plan(profile, target=retrieval.target),
-                        mediation_instructions=mediation_instructions,
-                    )
-                    # 合并缓存的结果
-                    all_outputs = list(resources)
-                    for res in all_outputs:
-                        if res.agent in regeneration_cache and res.agent != failed_agent_name:
-                            all_outputs[all_outputs.index(res)] = regeneration_cache[res.agent]
-                    resources = tuple(all_outputs)
+                if attempt > 0:
+                    await _trigger_event(event_callback, "progress", {
+                        "step": "alignment_retry",
+                        "message": f"对齐校验未通过，进行第 {attempt} 次自愈纠偏重生成 (针对: {failed_agent_name or '全部'})...",
+                        "progress": 60 + attempt * 5
+                    })
                 else:
-                    resources = await self.factory.generate_all(
-                        query=user_input,
-                        retrieval=retrieval,
-                        clean_evidence=debate_result.clean_evidence,
-                        profile=profile,
-                        correction=correction,
-                        conversation_memory=conversation_memory,
-                        previous_resources=previous_resources,
-                        alignment_advice=correction,
-                        strategy_plan=self.strategy_engine.build_plan(profile, target=retrieval.target),
-                        mediation_instructions=mediation_instructions,
-                    )
+                    await _trigger_event(event_callback, "progress", {
+                        "step": "generation",
+                        "message": "启动 1+3+5 智能体协作流与并行资源生成...",
+                        "progress": 60
+                    })
+
+                # 任务 8.9: 若只有特定 agent 失败，仅重新生成该 agent
+                regenerate_only = {failed_agent_name} if failed_agent_name else None
+                resources = await self.factory.generate_all(
+                    query=user_input,
+                    retrieval=retrieval,
+                    clean_evidence=debate_result.clean_evidence,
+                    profile=profile,
+                    correction=correction,
+                    conversation_memory=conversation_memory,
+                    previous_resources=previous_resources,
+                    alignment_advice=correction,
+                    strategy_plan=self.strategy_engine.build_plan(profile, target=retrieval.target),
+                    mediation_instructions=mediation_instructions,
+                    regenerate_only=regenerate_only,
+                    event_callback=event_callback,
+                )
+
+                await _trigger_event(event_callback, "progress", {
+                    "step": "alignment",
+                    "message": f"资源生成完毕，正在执行第 {attempt+1} 次图谱与语义对齐验证...",
+                    "progress": 75 + attempt * 2
+                })
                 alignment_report = self.alignment.verify(resources)
                 if alignment_report.passed:
+                    await _trigger_event(event_callback, "progress", {
+                        "step": "alignment_passed",
+                        "message": "对齐验证通过！进行最终画像量化评估...",
+                        "progress": 85
+                    })
                     break
 
                 # 归因与自愈引擎介入
@@ -1460,7 +1538,7 @@ class EduMatrixSwarm:
                                         failed_agent_name = res.agent
                                         break
                                 if failed_agent_name:
-                                    break
+                                        break
                         if failed_agent_name:
                             break
 
@@ -1471,6 +1549,7 @@ class EduMatrixSwarm:
                     f"【任务 8.9 局部重写】仅需重写 agent={failed_agent_name or '全部'}"
                 )
             TELEMETRY.record_metric("alignment.rollback_count", rollback_count, target=retrieval.target)
+
 
             if retrieval.out_of_domain:
                 degradation_msg = "\n\n*(提示：EduMatrix 标准学科大纲知识图谱暂未涵盖该领域，系统已自动切换至多模态混合文本检索与实时互联网检索模式进行解答，您可以上传相关课件以扩充图谱。)*"

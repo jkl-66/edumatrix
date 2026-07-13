@@ -134,8 +134,11 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 profile.concept_layers = dict(getattr(db_profile, "concept_layers", {}) or {})
                 profile.bkt_states = dict(getattr(db_profile, "bkt_states", {}) or {})
                 profile.cognitive_map = dict(getattr(db_profile, "cognitive_map", {}) or {})
+                profile.fsm_mode = getattr(db_profile, "fsm_mode", "normal") or "normal"
+                profile.fsm_accuracy_history = dict(getattr(db_profile, "fsm_accuracy_history", {}) or {})
                 return profile
         return profile
+
 
     # 物理反序列化映射：从 SQLite JSON 数据构建内存 Dataclass 实例
     profile = StudentProfile(student_id=student_id)
@@ -169,6 +172,8 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
     profile.concept_layers = dict(getattr(db_profile, "concept_layers", {}) or {})
     profile.bkt_states = dict(getattr(db_profile, "bkt_states", {}) or {})
     profile.cognitive_map = dict(getattr(db_profile, "cognitive_map", {}) or {})
+    profile.fsm_mode = getattr(db_profile, "fsm_mode", "normal") or "normal"
+    profile.fsm_accuracy_history = dict(getattr(db_profile, "fsm_accuracy_history", {}) or {})
     
     if db_profile.knowledge_traces:
         for k, v in db_profile.knowledge_traces.items():
@@ -266,9 +271,12 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     db_profile.concept_layers = to_dict_safe(profile.concept_layers)
     db_profile.bkt_states = to_dict_safe(profile.bkt_states)
     db_profile.cognitive_map = to_dict_safe(profile.cognitive_map)
+    db_profile.fsm_mode = profile.fsm_mode
+    db_profile.fsm_accuracy_history = to_dict_safe(profile.fsm_accuracy_history)
     
     db_profile.dimension_states = to_dict_safe(profile.dimension_states)
     db_profile.learning_state_causes = to_dict_safe(profile.learning_state_causes)
+
     
     db.commit()
 
@@ -693,17 +701,20 @@ async def build_review_adaptation_payload(concept: str, quality: int, mastery: f
 
 
 def record_conversation(
-    db: Session, student_id: str, query: str, response_summary: str, target: str, resources_count: int, alignment_passed: bool
+    db: Session, student_id: str, query: str, response_summary: str, target: str, resources_count: int, alignment_passed: bool, profile_snapshot: dict | None = None
 ) -> DBConversationHistory:
     record = DBConversationHistory(
         student_id=student_id,
         query=query,
         response_summary=response_summary,
+
         target=target,
         resources_count=resources_count,
         alignment_passed=alignment_passed,
+        profile_snapshot=profile_snapshot,
     )
     db.add(record)
+
     db.commit()
     return record
 

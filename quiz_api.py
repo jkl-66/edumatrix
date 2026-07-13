@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 
 from app.database import DBQuizRecord, DBReviewPlan, DBStudentProfile, get_db, run_db_op
 from app.crud import load_student_profile, save_student_profile
@@ -395,18 +395,27 @@ async def generate_quiz(
 
     # === 任务 17: 测验冷启动跨概念先验继承 ===
     if irt_history:
-        prior_theta = float(irt_state.get("theta", 0.0))
+        prior_theta = irt_state.get("theta", [0.0, 0.0, 0.0])
+        prior_std = irt_state.get("theta_std", [1.0, 1.0, 1.0])
+        if isinstance(prior_theta, (int, float)):
+            prior_theta = [float(prior_theta)] * 3
+        if isinstance(prior_std, (int, float)):
+            prior_std = [float(prior_std)] * 3
+        prior_cov = irt_state.get("theta_cov")
     else:
         overall_mastery = profile.mastery_score if hasattr(profile, "mastery_score") else 0.5
-        # 基于画像的整体掌握度计算初始 theta
         from statistics import mean
         if profile.concept_mastery:
             overall_mastery = mean(profile.concept_mastery.values()) if profile.concept_mastery else 0.5
-        prior_theta = (overall_mastery - 0.5) * 3.0
+        prior_val = (overall_mastery - 0.5) * 3.0
+        prior_theta = [prior_val, prior_val * 0.8, prior_val * 0.6]
+        prior_std = [1.0, 1.0, 1.0]
+        prior_cov = None
 
     estimator = AdaptiveTestEstimator(
         theta=prior_theta,
-        theta_std=float(irt_state.get("theta_std", 1.0)),
+        theta_std=prior_std,
+        theta_cov=prior_cov,
     )
     # 恢复答题历史以保持后验估计连续性
     for entry in irt_state.get("response_history", []):
@@ -464,14 +473,17 @@ async def generate_quiz(
                 "explanation": c.explanation,
                 "difficulty": c.difficulty,
                 "irt_params": {
-                    "alpha": c.irt_alpha,
-                    "beta": c.irt_beta,
+                    "alpha": c.irt_alpha_vec if c.irt_alpha_vec is not None else c.irt_alpha,
+                    "beta": c.irt_beta_vec if c.irt_beta_vec is not None else c.irt_beta,
                     "gamma": c.irt_gamma
                 }
             }
             for c in available_candidates
         ]
         selected_item = estimator.select_next_item(candidates_dict)
+
+    irt_alpha_vec = None
+    irt_beta_vec = None
 
     if selected_item:
         # 选中了预置题，直接使用
@@ -483,8 +495,14 @@ async def generate_quiz(
             "hints": ["请仔细阅读题目", "根据已知条件推导", "给出你的详细解答步骤"],
             "options": selected_item["options"],
         }
-        irt_alpha = selected_item["irt_params"]["alpha"]
-        irt_beta = selected_item["irt_params"]["beta"]
+        raw_alpha = selected_item["irt_params"]["alpha"]
+        raw_beta = selected_item["irt_params"]["beta"]
+        
+        irt_alpha_vec = raw_alpha if isinstance(raw_alpha, list) else [raw_alpha, raw_alpha*0.8, raw_alpha*0.6]
+        irt_beta_vec = raw_beta if isinstance(raw_beta, list) else [raw_beta, raw_beta+0.1, raw_beta-0.1]
+        
+        irt_alpha = irt_alpha_vec[0]
+        irt_beta = irt_beta_vec[0]
         irt_gamma = selected_item["irt_params"]["gamma"]
     else:
         # 本地题库不足，降级调用大模型生成
@@ -528,6 +546,9 @@ async def generate_quiz(
         irt_alpha = 1.0
         irt_beta = {"easy": -1.0, "medium": 0.0, "hard": 1.0}.get(result.get("difficulty", difficulty).lower(), 0.0)
         irt_gamma = 0.25
+        
+        irt_alpha_vec = [1.0, 0.8, 0.6]
+        irt_beta_vec = [irt_beta, irt_beta+0.1, irt_beta-0.1]
 
     quiz_id = _generate_quiz_id()
     
@@ -548,6 +569,8 @@ async def generate_quiz(
         irt_alpha=irt_alpha,
         irt_beta=irt_beta,
         irt_gamma=irt_gamma,
+        irt_alpha_vec=irt_alpha_vec,
+        irt_beta_vec=irt_beta_vec,
     )
     
     def save_quiz(session):
@@ -564,6 +587,7 @@ async def generate_quiz(
         p.rl_q_table["_irt_estimator"] = {
             "theta": estimator.theta,
             "theta_std": estimator.theta_std,
+            "theta_cov": estimator.theta_cov,
             "response_history": [
                 {"item": h["item"].to_dict(), "correct": h["correct"]}
                 for h in estimator.response_history
@@ -593,6 +617,7 @@ async def generate_quiz(
 @router.post("/evaluate")
 async def evaluate_answer(
     request: Request,
+    background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
     payload = await request.json()
     quiz_id = str(payload.get("quiz_id", "")).strip()
@@ -646,6 +671,28 @@ async def evaluate_answer(
         # 绕过 LLM，直接进入 updater
         ai_confidence = 1.0
     else:
+        # === 编程/代码题检测，并在沙箱中跑测试用例 ===
+        is_coding = False
+        normalized_q = quiz_record.question.lower()
+        if any(kw in normalized_q for kw in ("代码", "python", "实现", "编程", "函数", "类")):
+            is_coding = True
+            
+        sandbox_report = None
+        if is_coding:
+            code_to_exec = student_answer
+            m = re.search(r'```(?:python)?\s*\n(.+?)\n```', student_answer, re.DOTALL)
+            if m:
+                code_to_exec = m.group(1)
+            
+            # 运行沙箱，获取执行输出
+            stdout, stderr, exec_time = await SANDBOX_RUNNER.run(code_to_exec)
+            sandbox_report = {
+                "stdout": stdout,
+                "stderr": stderr,
+                "exec_time_ms": int(exec_time * 1000),
+                "success": not bool(stderr)
+            }
+
         # === 主观题走 LLM 判卷 ===
         system_prompt = (
             "你是一个严谨的评估者。请从多个维度严格评估学生的答案。\n"
@@ -665,6 +712,8 @@ async def evaluate_answer(
             '  "next_action": "review"|"practice"|"advance",\n'
             '  "metacognitive_gap": "学生自评与真实表现的差异分析"\n'
             "}\n"
+            "对于编程/代码题，后端已经在安全沙箱中执行了学生代码，并提供了运行报告（包括 stdout/stderr）。\n"
+            "请结合此报告对学生代码的正确性进行研判。若代码运行失败（有报错），accuracy_score 最高不能超过 0.4。\n"
             "评分标准：accuracy_score < 0.4=严重不足, 0.4~0.7=部分正确, >0.7=良好。"
         )
         user_prompt = (
@@ -672,8 +721,17 @@ async def evaluate_answer(
             f"参考答案要点：{quiz_record.correct_answer}\n"
             f"学生答案：{student_answer}\n"
             f"学生自评置信度：{student_confidence:.2f}\n"
-            "请严格评估并返回JSON。"
         )
+        if sandbox_report:
+            user_prompt += (
+                f"\n--- 代码沙箱运行报告 ---\n"
+                f"运行是否成功: {sandbox_report['success']}\n"
+                f"控制台输出 (stdout): {sandbox_report['stdout']}\n"
+                f"错误信息 (stderr): {sandbox_report['stderr']}\n"
+                f"运行耗时: {sandbox_report['exec_time_ms']} ms\n"
+                f"-------------------------\n"
+            )
+        user_prompt += "请严格评估并返回JSON。"
 
         try:
             response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
@@ -746,9 +804,18 @@ async def evaluate_answer(
         # === MIRT 能力估计更新：基于答题结果更新 theta ===
         from mirt_engine import AdaptiveTestEstimator, IRTItemParams, estimate_irt_params_from_profile
         irt_state = (profile.rl_q_table or {}).get("_irt_estimator", {})
+        prior_theta = irt_state.get("theta", [0.0, 0.0, 0.0])
+        prior_std = irt_state.get("theta_std", [1.0, 1.0, 1.0])
+        if isinstance(prior_theta, (int, float)):
+            prior_theta = [float(prior_theta)] * 3
+        if isinstance(prior_std, (int, float)):
+            prior_std = [float(prior_std)] * 3
+        prior_cov = irt_state.get("theta_cov")
+
         estimator = AdaptiveTestEstimator(
-            theta=float(irt_state.get("theta", 0.0)),
-            theta_std=float(irt_state.get("theta_std", 1.0)),
+            theta=prior_theta,
+            theta_std=prior_std,
+            theta_cov=prior_cov,
         )
         for entry in irt_state.get("response_history", []):
             estimator.response_history.append({
@@ -756,7 +823,13 @@ async def evaluate_answer(
                 "correct": entry.get("correct", False),
             })
         # 优先使用数据库中题目真实绑定的 IRT 参数进行能力估计更新
-        if local_record and local_record.irt_alpha is not None:
+        if local_record and local_record.irt_alpha_vec is not None:
+            item_params = IRTItemParams.from_dict({
+                "alpha": local_record.irt_alpha_vec,
+                "beta": local_record.irt_beta_vec,
+                "gamma": local_record.irt_gamma
+            })
+        elif local_record and local_record.irt_alpha is not None:
             item_params = IRTItemParams(
                 alpha=float(local_record.irt_alpha),
                 beta=float(local_record.irt_beta),
@@ -771,15 +844,36 @@ async def evaluate_answer(
         is_correct = accuracy_score >= 0.6
         estimator.update_ability(item_params, is_correct)
 
-        # === 任务 7: 题库参数的在线自适应校准更新 (IRT beta SGD) ===
+        # === 任务 7: 题库参数的在线自适应校准更新 (MIRT beta SGD 精确似然更新) ===
         if local_record and not (local_record.options and len(local_record.options) > 0):
+            import math
             prob = estimator._probability_correct(estimator.theta, item_params)
+            prob = max(1e-5, min(1.0 - 1e-5, prob))
             correct_val = 1.0 if is_correct else 0.0
+            
+            # z = sum(alpha_d * (theta_d - beta_d))
+            z = sum(a * (t - b) for a, t, b in zip(item_params.alpha, estimator.theta, item_params.beta))
+            sigma_z = 1.0 / (1.0 + math.exp(-z)) if -z < 700 else 0.0
+            
+            denominator = prob * (1.0 - prob)
+            # 计算方差调整因子
+            weight_factor = (1.0 - item_params.gamma) * sigma_z * (1.0 - sigma_z) / denominator if denominator > 1e-5 else 0.0
+            
             learning_rate = 0.05
-            delta_beta = learning_rate * (prob - correct_val)
+            new_beta_vec = []
+            for d in range(3):
+                # 依据对数似然梯度：d_lnL/d_beta = a_d * (1-gamma) * sigma * (1-sigma) / (P * (1-P)) * (P - U)
+                grad_beta = item_params.alpha[d] * weight_factor * (prob - correct_val)
+                # 限制最大更新步长，防止小样本下因数值噪声导致溢出
+                grad_beta = max(-0.5, min(0.5, grad_beta))
+                new_beta_vec.append(round(item_params.beta[d] + learning_rate * grad_beta, 4))
+                
+            new_beta = new_beta_vec[0]
+            
             from app.database import DBQuizItem
             session.query(DBQuizItem).filter(DBQuizItem.question == local_record.question).update({
-                "irt_beta": DBQuizItem.irt_beta + delta_beta
+                "irt_beta": new_beta,
+                "irt_beta_vec": new_beta_vec
             }, synchronize_session=False)
             session.commit()
 
@@ -789,6 +883,7 @@ async def evaluate_answer(
         profile.rl_q_table["_irt_estimator"] = {
             "theta": estimator.theta,
             "theta_std": estimator.theta_std,
+            "theta_cov": estimator.theta_cov,
             "response_history": [
                 {"item": h["item"].to_dict(), "correct": h["correct"]}
                 for h in estimator.response_history
@@ -836,6 +931,8 @@ async def evaluate_answer(
         return profile.concept_mastery.get(local_record.target_concept if local_record else "", 0.5)
 
     concept_mastery_updated = await run_db_op(perform_eval_updates)
+
+    # MCMC 题库参数校准已移至离线批处理脚本中定时运行
 
     # 获取更新后的 IRT 能力估计状态
     irt_info = {}
@@ -993,9 +1090,18 @@ async def adapt_quiz(
             for c in available_candidates
         ]
         irt_state = (profile.rl_q_table or {}).get("_irt_estimator", {})
+        prior_theta = irt_state.get("theta", [0.0, 0.0, 0.0])
+        prior_std = irt_state.get("theta_std", [1.0, 1.0, 1.0])
+        if isinstance(prior_theta, (int, float)):
+            prior_theta = [float(prior_theta)] * 3
+        if isinstance(prior_std, (int, float)):
+            prior_std = [float(prior_std)] * 3
+        prior_cov = irt_state.get("theta_cov")
+        
         estimator = AdaptiveTestEstimator(
-            theta=float(irt_state.get("theta", 0.0)),
-            theta_std=float(irt_state.get("theta_std", 1.0)),
+            theta=prior_theta,
+            theta_std=prior_std,
+            theta_cov=prior_cov,
         )
         for entry in irt_state.get("response_history", []):
             estimator.response_history.append({
@@ -1592,3 +1698,94 @@ def _calc_streak(session, student_id: str, tz_offset: int = 8) -> int:
         elif d < expected:
             break
     return streak
+
+
+async def trigger_database_mcmc_calibration(student_id: str):
+    """
+    异步后台任务：从数据库拉取答题历史，运行 MCMC 校准三维 MIRT 题目参数，并更新回 quiz_items 表。
+    """
+    from app.database import DBQuizRecord, DBQuizItem, DBStudentProfile
+    from mirt_engine import mcmc_calibrate_item_parameters, IRTItemParams
+    
+    def fetch_mcmc_data(session):
+        # 1. 查找所有参与过测验的学生画像，获取其估计的 theta
+        students = session.query(DBStudentProfile).filter(DBStudentProfile.rl_q_table.isnot(None)).all()
+        student_list = []
+        student_abilities = []
+        for s in students:
+            irt_est = s.rl_q_table.get("_irt_estimator", {})
+            theta = irt_est.get("theta")
+            if theta and isinstance(theta, list) and len(theta) == 3:
+                student_list.append(s.student_id)
+                student_abilities.append(theta)
+                
+        if len(student_list) < 2:
+            return None # 样本不足以运行 MCMC
+            
+        # 2. 查找所有的本地种子题目
+        items = session.query(DBQuizItem).all()
+        if not items:
+            return None
+            
+        item_ids = [item.id for item in items]
+        initial_items = []
+        for item in items:
+            alpha = item.irt_alpha_vec if item.irt_alpha_vec is not None else item.irt_alpha
+            beta = item.irt_beta_vec if item.irt_beta_vec is not None else item.irt_beta
+            initial_items.append(IRTItemParams.from_dict({
+                "alpha": alpha,
+                "beta": beta,
+                "gamma": item.irt_gamma
+            }))
+            
+        # 3. 构造答题矩阵 (N_students, M_items)
+        # 初始化为 0 (回答错误或未作答)
+        response_matrix = [[0] * len(item_ids) for _ in range(len(student_list))]
+        student_idx_map = {sid: idx for idx, sid in enumerate(student_list)}
+        item_idx_map = {iid: idx for idx, iid in enumerate(item_ids)}
+        
+        # 拉取所有的答题记录
+        records = session.query(DBQuizRecord).filter(
+            DBQuizRecord.student_id.in_(student_list)
+        ).all()
+        
+        for r in records:
+            item_match = next((item for item in items if item.question == r.question), None)
+            if item_match:
+                s_idx = student_idx_map.get(r.student_id)
+                i_idx = item_idx_map.get(item_match.id)
+                if s_idx is not None and i_idx is not None:
+                    response_matrix[s_idx][i_idx] = 1 if (r.accuracy_score >= 0.6) else 0
+                    
+        return student_abilities, initial_items, response_matrix, item_ids
+
+    data = await run_db_op(fetch_mcmc_data)
+    if not data:
+        return
+        
+    student_abilities, initial_items, response_matrix, item_ids = data
+    
+    # 运行 MCMC 算法校准参数
+    calibrated = mcmc_calibrate_item_parameters(
+        response_matrix=response_matrix,
+        student_abilities=student_abilities,
+        initial_items=initial_items,
+        iterations=50,
+        burn_in=15
+    )
+    
+    # 更新回数据库
+    def update_calibrated_items(session):
+        from app.database import DBQuizItem
+        for idx, item_id in enumerate(item_ids):
+            c_item = calibrated[idx]
+            session.query(DBQuizItem).filter(DBQuizItem.id == item_id).update({
+                "irt_alpha_vec": c_item.alpha,
+                "irt_beta_vec": c_item.beta,
+                "irt_alpha": c_item.alpha[0],
+                "irt_beta": c_item.beta[0],
+            }, synchronize_session=False)
+        session.commit()
+        
+    await run_db_op(update_calibrated_items)
+    print(f"  [MCMC Calibration] Successfully ran online calibration for {len(item_ids)} questions.")

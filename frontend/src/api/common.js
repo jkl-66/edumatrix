@@ -69,3 +69,8 @@ export async function getFeedback() {
   const r = await api.get('/feedback', { headers: buildHeaders() })
   return r.data
 }
+
+export async function uploadBehaviorLogs(data) {
+  const r = await api.post('/behavior/logs', data, { headers: buildHeaders() })
+  return r.data
+}

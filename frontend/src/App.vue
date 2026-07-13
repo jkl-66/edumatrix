@@ -111,44 +111,74 @@ function handleCaptureError(e) {
   </div>
   <div v-else class="flex h-screen overflow-hidden bg-gray-50">
 
-    <!-- Sidebar — 根据角色切换样式 -->
+    <!-- Sidebar — 玻璃拟态侧边栏 -->
     <aside
-      class="flex flex-col transition-all duration-200 shrink-0"
-      :class="[sidebarCollapsed ? 'w-16' : 'w-56', role === 'teacher' ? 'bg-[#1a1a2e]' : 'bg-[#0f172a]']"
+      class="flex flex-col shrink-0 relative border-r border-white/5 backdrop-blur-xl"
+      style="transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);"
+      :style="{
+        width: sidebarCollapsed ? '64px' : '224px',
+        background: role === 'teacher' ? 'rgba(26, 26, 46, 0.75)' : 'rgba(15, 23, 42, 0.75)'
+      }"
     >
+      <!-- 玻璃光晕装饰 -->
+      <div class="pointer-events-none absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-white/[0.04] to-transparent rounded-t-none" />
+
       <!-- Logo -->
-      <div class="flex items-center gap-2.5 px-4 h-14 border-b shrink-0" :class="role === 'teacher' ? 'border-white/10' : 'border-white/10'">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center cursor-pointer shrink-0" @click="sidebarCollapsed = !sidebarCollapsed">
+      <div class="flex items-center gap-2.5 px-4 h-14 border-b border-white/10 shrink-0">
+        <div
+          class="w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer shrink-0 transition-transform duration-200 hover:scale-110 active:scale-95"
+          :class="role === 'teacher' ? 'bg-gradient-to-br from-amber-400 to-orange-600' : 'bg-gradient-to-br from-blue-500 to-purple-600'"
+          @click="sidebarCollapsed = !sidebarCollapsed"
+        >
           <GraduationCap :size="18" class="text-white" />
         </div>
-        <span v-if="!sidebarCollapsed" class="text-white font-semibold text-sm truncate">{{ role === 'teacher' ? '教师端' : 'EduMatrix' }}</span>
+        <Transition name="sidebar-label">
+          <span v-if="!sidebarCollapsed" class="text-white font-semibold text-sm truncate">
+            {{ role === 'teacher' ? '教师端' : 'EduMatrix' }}
+          </span>
+        </Transition>
       </div>
 
       <!-- Nav -->
       <nav class="flex-1 p-2.5 space-y-0.5 overflow-y-auto scrollbar-thin">
         <router-link v-for="item in navItems" :key="item.path + item.label"
           :to="item.path"
-          class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors"
-          :class="route.path === item.path ? 'bg-white/15 text-white' : 'text-white/60 hover:text-white hover:bg-white/10'">
-          <component :is="item.icon" :size="17" class="shrink-0" />
-          <span v-if="!sidebarCollapsed">{{ item.label }}</span>
+          class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 relative overflow-hidden group"
+          :class="route.path === item.path
+            ? 'bg-white/15 text-white shadow-sm'
+            : 'text-white/60 hover:text-white hover:bg-white/8'"
+        >
+          <!-- 激活状态左侧发光边条 -->
+          <span v-if="route.path === item.path"
+                class="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full"
+                :class="role === 'teacher' ? 'bg-amber-400 shadow-[0_0_8px_2px_rgba(251,191,36,0.5)]' : 'bg-blue-400 shadow-[0_0_8px_2px_rgba(96,165,250,0.5)]'"
+          />
+          <component :is="item.icon" :size="17" class="shrink-0 transition-transform duration-200 group-hover:scale-110" />
+          <Transition name="sidebar-label">
+            <span v-if="!sidebarCollapsed">{{ item.label }}</span>
+          </Transition>
         </router-link>
       </nav>
 
       <!-- User footer -->
-      <div class="p-2.5 border-t shrink-0" :class="role === 'teacher' ? 'border-white/10' : 'border-white/10'">
+      <div class="p-2.5 border-t border-white/10 shrink-0">
         <div class="flex items-center gap-2 px-2 py-1.5">
-          <div class="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
-            :class="role === 'teacher' ? 'bg-gradient-to-br from-amber-400 to-orange-500' : 'bg-gradient-to-br from-emerald-400 to-cyan-500'">
+          <div class="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0 ring-1 ring-white/20"
+               :class="role === 'teacher' ? 'bg-gradient-to-br from-amber-400 to-orange-500' : 'bg-gradient-to-br from-emerald-400 to-cyan-500'">
             {{ role === 'teacher' ? 'T' : 'S' }}
           </div>
-          <div v-if="!sidebarCollapsed" class="min-w-0 flex-1">
-            <div class="text-white text-[11px] font-medium truncate">{{ role === 'teacher' ? '教师' : '学生' }}</div>
-            <div class="text-white/40 text-[9px] truncate">{{ displayName }}</div>
-          </div>
+          <Transition name="sidebar-label">
+            <div v-if="!sidebarCollapsed" class="min-w-0 flex-1">
+              <div class="text-white text-[11px] font-medium truncate">{{ role === 'teacher' ? '教师' : '学生' }}</div>
+              <div class="text-white/40 text-[9px] truncate">{{ displayName }}</div>
+            </div>
+          </Transition>
         </div>
-        <button @click="logout" class="w-full mt-1 flex items-center gap-2 px-2 py-1.5 rounded-lg text-[10px] text-white/40 hover:text-white/60 hover:bg-white/5 transition-colors">
-          <LogOut :size="12" /><span v-if="!sidebarCollapsed">退出登录</span>
+        <button @click="logout" class="w-full mt-1 flex items-center gap-2 px-2 py-1.5 rounded-lg text-[10px] text-white/40 hover:text-white/70 hover:bg-white/8 transition-colors">
+          <LogOut :size="12" />
+          <Transition name="sidebar-label">
+            <span v-if="!sidebarCollapsed">退出登录</span>
+          </Transition>
         </button>
       </div>
     </aside>
@@ -170,12 +200,43 @@ function handleCaptureError(e) {
         </button>
       </header>
 
-      <!-- Page content -->
+      <!-- Page content — 300ms 页面切换平滑动效 -->
       <main class="flex-1 overflow-y-auto p-5">
         <div @error.capture="handleCaptureError">
-          <router-view :key="route.fullPath" :student-id="studentId" />
+          <router-view v-slot="{ Component, route: r }" :student-id="studentId">
+            <Transition name="page" mode="out-in">
+              <component :is="Component" :key="r.fullPath" :student-id="studentId" />
+            </Transition>
+          </router-view>
         </div>
       </main>
     </div>
   </div>
 </template>
+
+<style scoped>
+/* ── 300ms 页面切换淡入淡出 ── */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ── 侧边栏标签文字淡入淡出 ── */
+.sidebar-label-enter-active,
+.sidebar-label-leave-active {
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.sidebar-label-enter-from,
+.sidebar-label-leave-to {
+  opacity: 0;
+  transform: translateX(-4px);
+}
+</style>

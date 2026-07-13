@@ -577,6 +577,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                                 profile_data = {
                                     "weak_points": getattr(p, "weak_points", [])[:5],
                                     "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
+                                    "fsm_mode": getattr(p, "fsm_mode", "normal"),
                                 }
                         except Exception:
                             pass
@@ -630,9 +631,34 @@ async def stream_chat(request: Request) -> StreamingResponse:
 
                 # 4. 构建 System Prompt & User Prompt 进行自适应问答/日常引导
                 if is_academic:
+                    # 触发 FSM 路由决策以获取自适应教学指令并持久化状态
+                    swarm_mode = "normal"
+                    forced_instruction = ""
+                    chat_role = "自适应助教"
+                    try:
+                        target_concept = getattr(retrieval, "target", "") if retrieval else None
+                        swarm_mode = swarm.mediation_router.decide_mode(profile, target=target_concept)
+                        mediation_instructions = swarm.mediation_router.get_forced_instructions(swarm_mode)
+                        
+                        from agent_swarm import SwarmMediationMode
+                        if swarm_mode == SwarmMediationMode.DEBATE_MODE:
+                            forced_instruction = mediation_instructions.get("debater", "")
+                            chat_role = "苏格拉底辩手"
+                        elif swarm_mode == SwarmMediationMode.SIMPLIFIED_MODE:
+                            forced_instruction = mediation_instructions.get("theory", "")
+                            chat_role = "概念可视化导师"
+                        elif swarm_mode == SwarmMediationMode.ADVANCED_MODE:
+                            forced_instruction = mediation_instructions.get("theory", "")
+                            chat_role = "自适应考官"
+                        else:
+                            forced_instruction = mediation_instructions.get("theory", "")
+                            chat_role = "自适应助教"
+                    except Exception as e:
+                        print(f"  [StreamAPI] FSM Routing decision failed in chat mode: {e}")
+
                     history_str = _format_chat_history(profile, max_turns=5)
                     system_prompt = (
-                        "你是一个极具教育学底蕴的 EduMatrix 自适应智能助教。你致力于通过微步启发、苏格拉底式对话引导学生思考，而不是直接给出完整答案。\n"
+                        f"你是一个极具教育学底蕴的 EduMatrix 自适应智能助教。你当前的教学角色是「{chat_role}」。你致力于通过微步启发、苏格拉底式对话引导学生思考，而不是直接给出完整答案。\n"
                         "请根据检索到的背景知识库证据，并结合【历史对话记录】的上下文，回答学生提出的学术或题目疑问。\n"
                         "【要求】：\n"
                         "- 必须使用中文回答，格式为漂亮的 Markdown。\n"
@@ -640,6 +666,10 @@ async def stream_chat(request: Request) -> StreamingResponse:
                         "- 回答结尾必须提供一个具体的启发式问题引导学生下一步动作。\n"
                         f"- 教学风格：{teaching_style or '苏格拉底启发式'}。\n"
                     )
+                    if style_prefix:
+                        system_prompt = style_prefix + system_prompt
+                    if forced_instruction:
+                        system_prompt += f"\n【自适应路由控制指令】：{forced_instruction}\n"
                     user_prompt = ""
                     if history_str:
                         user_prompt += f"【历史对话记录】：\n{history_str}\n\n"
@@ -650,6 +680,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     user_prompt += "请开始提供启发式解答："
                 else:
                     history_str = _format_chat_history(profile, max_turns=3)
+                    chat_role = "自适应助教"
                     system_prompt = (
                         "你是一个温和友好、极具亲和力的 EduMatrix 自适应智能助教。\n"
                         "【任务与要求】：\n"
@@ -665,13 +696,13 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 # 5. 调用大模型流式响应
                 full_response = ""
                 await check_disconnection()
-                yield _sse("progress", {"step": "generating", "message": "自适应助教正在组织回复...", "progress": 65})
+                yield _sse("progress", {"step": "generating", "message": f"{chat_role}正在组织回复...", "progress": 65})
                 
                 # 如果当前主模型不支持多模态，且我们已经提取了 OCR 文本，则最终生成时将图片置空。
                 # 这能够强行让高认知能力的文本主模型 (如 DeepSeek) 承接后续的苏格拉底启发式回答与 RAG 融合，避免 fallback 视觉小模型直接吐出直接答案。
                 final_images = images if getattr(swarm.llm, "has_vision", False) else []
 
-                async for chunk in swarm.llm.generate_stream(system_prompt, user_prompt, role="自适应助教", images=final_images):
+                async for chunk in swarm.llm.generate_stream(system_prompt, user_prompt, role=chat_role, images=final_images):
                     await check_disconnection()
                     full_response += chunk
                     yield _sse("chat_chunk", {"content": chunk})
@@ -754,6 +785,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                             "weak_points": getattr(p, "weak_points", [])[:5],
                             "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
                             "coordinate_map": coordinate_map,
+                            "fsm_mode": getattr(p, "fsm_mode", "normal"),
                         }
                 except Exception as e:
                     print(f"  [StreamAPI] Failed to compute coordinate_map: {e}")
@@ -762,6 +794,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                         profile_data = {
                             "weak_points": getattr(p, "weak_points", [])[:5],
                             "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
+                            "fsm_mode": getattr(p, "fsm_mode", "normal"),
                         }
 
                 resources = [
@@ -921,139 +954,77 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 return
 
             await check_disconnection()
-            yield _sse("progress", {"step": "generating", "message": "5个智能体正在并行生成资源...", "progress": 50})
+            yield _sse("progress", {"step": "generating", "message": "启动 1+3+5 智能体协作流，进行全流程有状态调度...", "progress": 50})
 
-            agent_jobs = [
-                ("理论教授", "专业讲义"),
-                ("逻辑画师", "思维导图"),
-                ("极客助教", "代码实操案例"),
-                ("考官智能体", "练习题"),
-                ("虚拟导演", "虚拟人视频脚本"),
-            ]
-
+            # ===== 核心重构 (Task 4): 委托 EduMatrixSwarm.async_process 进行全流程调度 =====
+            # event_callback 将 Swarm 内部进度事件桥接到当前 SSE 流
+            event_queue: asyncio.Queue = asyncio.Queue()
             streamed_parts = []
-            completed = 0
-            # 流式队列：智能体的 token 通过队列推送到 SSE
-            token_queue: asyncio.Queue[str | None] = asyncio.Queue()
+            alignment_report = None
+            package = None
 
-            async def _stream_one(role: str, rtype: str, primary: bool = False):
-                """流式生成单个智能体的内容。primary=True 时逐 token 推送到队列。"""
-                nonlocal completed
-                accumulated = ""
+            async def _swarm_event_callback(event_type: str, data: dict):
+                await event_queue.put((event_type, data))
+
+            swarm_task = asyncio.create_task(
+                swarm.async_process(
+                    message,
+                    student_id=student_id,
+                    event_callback=_swarm_event_callback,
+                )
+            )
+            running_tasks.append(swarm_task)
+
+            # 实时消费事件队列并转发给前端 SSE
+            while not swarm_task.done():
+                await check_disconnection()
                 try:
-                    print(f"  [StreamAPI] _stream_one({role}): building plan...", flush=True)
-                    plan = swarm.async_generator._build_plan(
-                        role=role, resource_type=rtype,
-                        query=message, graph_context=retrieval.graph_context,
-                        evidence=debate_result.clean_evidence,
-                        profile=swarm.profile_store.get(student_id),
-                        correction='',
-                        conversation_memory=style_prefix,
-                    )
-                    print(f"  [StreamAPI] Plan built for {role}, primary={primary}", flush=True)
-                    if primary:
-                        print(f"  [StreamAPI] Streaming start for {role}", flush=True)
-                        # 主要智能体（理论教授）逐 token 流式推送
-                        async for token in swarm.async_generator.llm.generate_stream(
-                            plan.system_prompt, plan.user_prompt, role=role
-                        ):
-                            accumulated += token
-                            await token_queue.put(token)
-                        result = AgentOutput(
-                            agent=role, resource_type=rtype,
-                            content=accumulated.strip(),
-                            citations=tuple(item.id for item in debate_result.clean_evidence),
-                        )
-                    else:
-                        # 其余智能体后台完整生成
-                        result = await swarm.async_generator.generate(
-                            role=role, resource_type=rtype,
-                            query=message, graph_context=retrieval.graph_context,
-                            evidence=debate_result.clean_evidence,
-                            profile=swarm.profile_store.get(student_id),
-                            conversation_memory=style_prefix,
-                        )
-                    streamed_parts.append(result)
-                    completed += 1
-                    await token_queue.put(None)  # 标记该 agent 完成
-                    return _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10})
-                except Exception as e:
-                    print(f"  [StreamAPI] ERROR in _stream_one({role}): {e}", flush=True)
-                    completed += 1
-                    await token_queue.put(None)
-                    return _sse("agent_done", {"agent": role, "type": rtype, "progress": 50 + completed * 10, "error": str(e)[:80]})
+                    ev_type, ev_data = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                    if ev_type == "progress":
+                        yield _sse("progress", ev_data)
+                    elif ev_type == "agent_done":
+                        yield _sse("agent_done", {
+                            "agent": ev_data.get("agent", ""),
+                            "type": ev_data.get("type", ""),
+                            "progress": 70,
+                        })
+                except asyncio.TimeoutError:
+                    continue
+                except asyncio.CancelledError:
+                    raise
 
-            # 启动智能体：第一个（理论教授）流式，其余后台
-            tasks = []
-            for i, (role, rt) in enumerate(agent_jobs):
-                is_primary = (i == 0)
-                print(f"  [StreamAPI] Creating task #{i}: {role} primary={is_primary}", flush=True)
-                t = asyncio.create_task(_stream_one(role, rt, primary=is_primary))
-                tasks.append(t)
-                running_tasks.append(t)
-
-            # 从队列消费 token 并作为 SSE content 推送
-            finish_count = 0
-            while finish_count < len(agent_jobs):
-                token = await token_queue.get()
-                if token is None:
-                    finish_count += 1
-                    print(f"  [StreamAPI] Agent finished ({finish_count}/{len(agent_jobs)})", flush=True)
-                else:
-                    if finish_count == 0 and len(token) > 0:
-                        print(f"  [StreamAPI] First token received: len={len(token)}", flush=True)
-                    await check_disconnection()
-                    yield _sse("content", {"content": token, "progress": 50 + (completed * 10)})
-
-            # 收集所有 agent_done 事件
-            for t in tasks:
+            # 刷空剩余事件
+            while not event_queue.empty():
                 try:
-                    result = t.result()
-                    if result:
-                        yield result
+                    ev_type, ev_data = event_queue.get_nowait()
+                    if ev_type == "progress":
+                        yield _sse("progress", ev_data)
+                    elif ev_type == "agent_done":
+                        yield _sse("agent_done", {
+                            "agent": ev_data.get("agent", ""),
+                            "type": ev_data.get("type", ""),
+                            "progress": 70,
+                        })
                 except Exception:
-                    pass
-                finally:
-                    if t in running_tasks:
-                        running_tasks.remove(t)
+                    break
 
-            await check_disconnection()
-            yield _sse("progress", {"step": "alignment", "message": "正在校验多模态一致性...", "progress": 85})
+            try:
+                package = swarm_task.result()
+                streamed_parts = list(package.resources) if package else []
+                alignment_report = package.alignment if package else None
+                if package and package.retrieval:
+                    retrieval = package.retrieval
+            except Exception as e:
+                yield _sse("error", {"step": "swarm", "message": f"Swarm 处理异常: {str(e)[:100]}"})
+                return
+            finally:
+                if swarm_task in running_tasks:
+                    running_tasks.remove(swarm_task)
 
-            if streamed_parts:
-                alignment_report = swarm.alignment.verify(streamed_parts, target=retrieval.target)
-                if not alignment_report.passed:
-                    for attempt in range(2):
-                        await check_disconnection()
-                        streamed_parts.clear()
-                        coros = [
-                            swarm.async_generator.generate(
-                                role=role, resource_type=rt,
-                                query=message, graph_context=retrieval.graph_context,
-                                evidence=debate_result.clean_evidence,
-                                profile=swarm.profile_store.get(student_id),
-                                correction=f"第{attempt+1}次对齐失败：{alignment_report.advice[:100]}",
-                                conversation_memory=style_prefix,
-                            )
-                            for role, rt in agent_jobs
-                        ]
-                        async def _gather_all():
-                            return await asyncio.gather(*coros, return_exceptions=True)
-                        gather_task = asyncio.create_task(_gather_all())
-                        running_tasks.append(gather_task)
-                        try:
-                            results = await gather_task
-                        finally:
-                            if gather_task in running_tasks:
-                                running_tasks.remove(gather_task)
-                        
-                        streamed_parts = [r for r in results if not isinstance(r, Exception)]
-                        alignment_report = swarm.alignment.verify(streamed_parts, target=retrieval.target)
-                        if alignment_report.passed:
-                            break
 
             await check_disconnection()
             yield _sse("progress", {"step": "safety", "message": "正在进行内容安全审查...", "progress": 95})
+
 
             safety_content = ""
             for part in streamed_parts:
@@ -1081,13 +1052,15 @@ async def stream_chat(request: Request) -> StreamingResponse:
             if not safety_result["passed"]:
                 final_content = f"[内容安全提示] 部分内容已过滤\n\n{final_content}"
 
-            strategy_plan = None
-            try:
-                p = swarm.profile_store.get(student_id)
-                if p and hasattr(p, "student_id"):
-                    strategy_plan = swarm.strategy_engine.build_plan(p, target=retrieval.target)
-            except Exception:
-                pass
+            # 优先使用 Swarm 流程内已计算好的 strategy_plan（避免重复计算）
+            strategy_plan = package.strategy_plan if package else None
+            if strategy_plan is None:
+                try:
+                    p = swarm.profile_store.get(student_id)
+                    if p and hasattr(p, "student_id"):
+                        strategy_plan = swarm.strategy_engine.build_plan(p, target=retrieval.target)
+                except Exception:
+                    pass
 
             await check_disconnection()
             yield _sse("progress", {"step": "complete", "message": "生成完成！", "progress": 100})
@@ -1109,6 +1082,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                             k: {"percentage": round(v.percentage, 1), "label": v.label}
                             for k, v in list(getattr(p, "learning_state_causes", {}).items())[:7]
                         },
+                        "fsm_mode": getattr(p, "fsm_mode", "normal"),
                     }
             except Exception:
                 pass
@@ -1187,15 +1161,31 @@ async def stream_chat(request: Request) -> StreamingResponse:
             except Exception as e:
                 print(f"  [StreamAPI] Failed to automatically create/update review plan: {e}")
 
-            # === 将本次对话记录写入历史数据库 ===
+            # === 将本次对话记录写入历史数据库（含 profile_snapshot 快照用于时空回溯）===
             try:
                 from app.crud import record_conversation
                 from app.database import run_db_op
-                
+
                 target_concept = getattr(retrieval, "target", "")
                 alignment_passed = alignment_report.passed if alignment_report else True
                 resource_summary = "; ".join(f"{getattr(r, 'agent', '')}:{getattr(r, 'resource_type', '')}" for r in streamed_parts)
-                
+
+                # 构造画像快照供 History.vue 时空回溯
+                p = swarm.profile_store.get(student_id)
+                snapshot = None
+                if p:
+                    try:
+                        snapshot = {
+                            "fsm_mode": getattr(p, "fsm_mode", "normal"),
+                            "concept_mastery": dict(list(getattr(p, "concept_mastery", {}).items())[:20]),
+                            "weak_points": list(getattr(p, "weak_points", [])[:10]),
+                            "cognitive_load": getattr(p, "cognitive_load", 0.5),
+                            "mastery_score": getattr(p, "mastery_score", 0.0),
+                            "motivation_type": getattr(p, "motivation_type", "未诊断"),
+                        }
+                    except Exception:
+                        snapshot = None
+
                 await run_db_op(
                     record_conversation,
                     student_id,
@@ -1203,7 +1193,8 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     resource_summary,
                     target_concept,
                     len(streamed_parts),
-                    alignment_passed
+                    alignment_passed,
+                    snapshot,
                 )
                 print(f"  [StreamAPI] Successfully recorded conversation to history: {message[:30]}...")
             except Exception as e:

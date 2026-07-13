@@ -131,6 +131,7 @@ class SandboxProcessRunner:
         # === 任务 14: 代码沙箱大文件 DoS 攻击防御拦截 ===
         MAX_CODE_SIZE = 50000  # 50KB 限制
         code_bytes_len = len(code.encode('utf-8'))
+        # len(code) > MAX_CODE_SIZE
         if code_bytes_len > MAX_CODE_SIZE:
             return "", f"错误: 代码内容过大 ({code_bytes_len} 字节), 超过沙箱限制 ({MAX_CODE_SIZE} 字节)", 0.0
 

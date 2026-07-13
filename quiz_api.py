@@ -845,6 +845,7 @@ async def evaluate_answer(
         estimator.update_ability(item_params, is_correct)
 
         # === 任务 7: 题库参数的在线自适应校准更新 (MIRT beta SGD 精确似然更新) ===
+        # delta_beta = learning_rate * (prob - correct_val)
         if local_record and not (local_record.options and len(local_record.options) > 0):
             import math
             prob = estimator._probability_correct(estimator.theta, item_params)

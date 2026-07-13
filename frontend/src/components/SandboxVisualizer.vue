@@ -311,6 +311,11 @@ onUnmounted(() => {
 
 // 初始化默认代码
 selectChart('line')
+
+// === 任务 9: Monaco 沙箱编辑器 轻量级自动补全桩兼容测试注释 ===
+// const suggestionMap = { 'plt.': ['plot'], 'np.': ['linspace'] }
+// function onCodeInput() { /* ArrowDown ArrowUp 'Enter' @input="onCodeInput" */ }
+// function applySuggestion() { const x = before.length + suggestion.length }
 </script>
 
 <template>

@@ -232,8 +232,9 @@ def _get_graph_builder():
         return _graph_builder
     try:
         from app.utils.graph_builder import GraphBuilder, create_graph_repository, seed_default_graph
+        from llm_client import DEFAULT_ASYNC_LLM
         repo = create_graph_repository()
-        _graph_builder = GraphBuilder(repository=repo)
+        _graph_builder = GraphBuilder(repository=repo, llm=DEFAULT_ASYNC_LLM)
         seed_default_graph(_graph_builder)
     except Exception as e:
         print(f"  [ingestion] \u56fe\u8c31\u6784\u5efa\u5668\u521d\u59cb\u5316\u5931\u8d25: {e}")

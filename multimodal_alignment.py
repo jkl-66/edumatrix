@@ -12,9 +12,13 @@ from __future__ import annotations
 
 import json
 import math
-import random
+import os
 from pathlib import Path
 from typing import Any
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 try:
     from embedding_models import EMBEDDINGS
@@ -201,6 +205,23 @@ _BUILTIN_SEED_PAIRS = [
 ]
 
 
+
+# PyTorch projection head per implementation plan 1.1
+class ProjectionHead(nn.Module):
+    """Multimodal shared latent space projection network (384 -> 128, L2 norm)."""
+
+    def __init__(self, in_dim=384, out_dim=128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, out_dim),
+            nn.ReLU(),
+            nn.Linear(out_dim, out_dim),
+        )
+
+    def forward(self, x):
+        return F.normalize(self.net(x), p=2, dim=-1)
+
+
 class CrossModalAligner:
     """跨模态特征对齐器：管理文字-图片-公式三模态配对的注册与搜索。
 
@@ -219,9 +240,12 @@ class CrossModalAligner:
 
         # 线性投影矩阵（将各模态映射到共享潜空间）
         # 形状 [original_dim][proj_dim]，即每列是 proj_dim 维的一个投影方向
-        self._text_proj: list[list[float]] = []
-        self._image_proj: list[list[float]] = []
-        self._formula_proj: list[list[float]] = []
+        # PyTorch state dicts (filled after calibrate)
+        self._text_proj_state: dict = {}
+        self._image_proj_state: dict = {}
+        self._formula_proj_state: dict = {}
+        self._proj_in_dim: int = 384
+        self._proj_out_dim: int = 128
 
         # 是否已完成对比学习校准
         self._is_calibrated: bool = False
@@ -229,230 +253,129 @@ class CrossModalAligner:
 
         self._initialized = False
 
-        # 尝试从磁盘加载（含投影矩阵）
+        # Load from disk if available; otherwise build from built-in seeds
         loaded = self._load_from_disk()
         if loaded:
             self._build_embeddings()
+        else:
+            self._build_embeddings()  # Build from _BUILTIN_SEED_PAIRS
 
     # ══════════════════════════════════════════════════════════════
     # 投影矩阵工具方法
     # ══════════════════════════════════════════════════════════════
 
-    def _random_projection_matrix(self, in_dim: int, out_dim: int) -> list[list[float]]:
-        """Xavier 均匀初始化投影矩阵 [in_dim × out_dim]。
-
-        值域: [-limit, limit] where limit = sqrt(6 / (in_dim + out_dim))
-        目的: 保持前向传播时各层输出的方差稳定
-        """
-        limit = math.sqrt(6.0 / (in_dim + out_dim))
-        matrix = []
-        for _ in range(in_dim):
-            row = [random.uniform(-limit, limit) for _ in range(out_dim)]
-            matrix.append(row)
-        return matrix
+    # ── Projection utilities ──
 
     @staticmethod
-    def _project(vec: list[float], proj_matrix: list[list[float]]) -> list[float]:
-        """矩阵乘法: y = vec · proj_matrix → 将向量投影到低维空间。
-
-        vec: [1 × in_dim], proj_matrix: [in_dim × out_dim] → result: [1 × out_dim]
-        """
-        if not proj_matrix or not vec:
-            return list(vec)  # 无法投影时返回原向量（降级）
-        in_dim = len(vec)
-        out_dim = len(proj_matrix[0]) if proj_matrix else len(vec)
-        result = [0.0] * out_dim
-        for j in range(out_dim):
-            s = 0.0
-            for i in range(min(in_dim, len(proj_matrix))):
-                row = proj_matrix[i]
-                if j < len(row):
-                    s += vec[i] * row[j]
-            result[j] = s
-        return result
-
-    @staticmethod
-    def _cosine(v1: list[float], v2: list[float]) -> float:
-        """计算两个向量的余弦相似度，截断到 [0, 1] 范围。"""
+    def _cosine(v1, v2):
         dot = sum(a * b for a, b in zip(v1, v2))
-        n1 = math.sqrt(sum(a * a for a in v1))
-        n2 = math.sqrt(sum(b * b for b in v2))
+        n1 = sum(a * a for a in v1) ** 0.5
+        n2 = sum(b * b for b in v2) ** 0.5
         if n1 == 0.0 or n2 == 0.0:
             return 0.0
         return max(0.0, min(1.0, dot / (n1 * n2)))
 
-    # ══════════════════════════════════════════════════════════════
-    # 对比学习校准 (InfoNCE + 梯度下降)
-    # ══════════════════════════════════════════════════════════════
+    @staticmethod
+    def _list_to_tensor(vecs):
+        return torch.tensor([list(v) for v in vecs], dtype=torch.float32)
 
-    def calibrate(self) -> float:
-        """利用对比损失（InfoNCE）微调投影矩阵，对齐三模态嵌入空间。
+    # ── PyTorch InfoNCE calibration ──
 
-        算法流程:
-        1. 从种子数据中构造正样本对: (text→image), (text→formula), (image→formula)
-        2. 随机打乱配对构造负样本对
-        3. 计算 InfoNCE 损失: -log(exp(sim_pos/τ) / Σ exp(sim/τ))
-        4. 对三个投影矩阵分别执行梯度下降，迭代 _CALIBRATION_EPOCHS 轮
+    def calibrate(self):
+        """Train projection heads via standard InfoNCE contrastive loss.
 
-        Returns:
-            最终一轮的 InfoNCE 损失值。损失越低说明跨模态对齐越好。
-        """
+        Uses PyTorch autograd: cross_entropy on cross-modal similarity matrices.
+        Positive pairs = same concept across modalities; negatives = other concepts.
+        Replaces the broken hand-coded finite-difference approximation."""
         if not self._initialized:
             self._build_embeddings()
         if not self._initialized or len(self._pairs) < 3:
-            return float("inf")
+            return float('inf')
 
         n = len(self._pairs)
-        self._original_dim = len(self._text_embeddings[0]) if self._text_embeddings else 384
-        d_in = self._original_dim
+        d_in = len(self._text_embeddings[0]) if self._text_embeddings else 384
         d_out = self._proj_dim
         tau = _CONTRASTIVE_TEMPERATURE
 
-        # Xavier 初始化投影矩阵
-        self._text_proj = self._random_projection_matrix(d_in, d_out)
-        self._image_proj = self._random_projection_matrix(d_in, d_out)
-        self._formula_proj = self._random_projection_matrix(d_in, d_out)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        text_head = ProjectionHead(d_in, d_out).to(device)
+        image_head = ProjectionHead(d_in, d_out).to(device)
+        formula_head = ProjectionHead(d_in, d_out).to(device)
 
-        # ── 构造正负样本对 ──
-        # 正样本: 同一配对的 text↔image, text↔formula, image↔formula
-        # 负样本: batch 内其他配对（随机打乱）
-        lr = _CALIBRATION_LR
-        final_loss = float("inf")
+        T_t = self._list_to_tensor(self._text_embeddings).to(device)
+        I_t = self._list_to_tensor(self._image_embeddings).to(device)
+        F_t = self._list_to_tensor(self._formula_embeddings).to(device)
+
+        all_params = (list(text_head.parameters()) +
+                      list(image_head.parameters()) +
+                      list(formula_head.parameters()))
+        optimizer = torch.optim.Adam(all_params, lr=_CALIBRATION_LR)
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=max(1, _CALIBRATION_EPOCHS // 2), gamma=0.5)
+
+        final_loss = float('inf')
+        batch_size = min(_CALIBRATION_BATCH_SIZE, n)
+        labels = torch.arange(batch_size).to(device)
 
         for epoch in range(_CALIBRATION_EPOCHS):
             total_loss = 0.0
-            # 学习率衰减：后半段减半
-            if epoch >= _CALIBRATION_EPOCHS // 2:
-                lr = _CALIBRATION_LR * 0.5
+            batches = 0
+            indices = torch.randperm(n)[:batch_size]
+            t_batch, i_batch, f_batch = T_t[indices], I_t[indices], F_t[indices]
 
-            # 随机采样 8 个配对构成 mini-batch（降低计算量）
-            batch_indices = random.sample(range(n), min(_CALIBRATION_BATCH_SIZE, n))
+            t_proj = text_head(t_batch)
+            i_proj = image_head(i_batch)
+            f_proj = formula_head(f_batch)
 
-            for idx in batch_indices:
-                t_vec = self._project(self._text_embeddings[idx], self._text_proj)
-                i_vec = self._project(self._image_embeddings[idx], self._image_proj)
-                f_vec = self._project(self._formula_embeddings[idx], self._formula_proj)
+            loss_ti = F.cross_entropy(torch.matmul(t_proj, i_proj.T) / tau, labels)
+            loss_tf = F.cross_entropy(torch.matmul(t_proj, f_proj.T) / tau, labels)
+            loss_if = F.cross_entropy(torch.matmul(i_proj, f_proj.T) / tau, labels)
 
-                # 对每种跨模态组合计算 InfoNCE 损失
-                # 组合 1: text → image
-                loss_ti = self._infonce_loss(
-                    anchor=t_vec, positive=i_vec,
-                    negatives=[self._project(self._image_embeddings[j], self._image_proj)
-                               for j in batch_indices if j != idx],
-                    tau=tau,
-                )
-                # 组合 2: text → formula
-                loss_tf = self._infonce_loss(
-                    anchor=t_vec, positive=f_vec,
-                    negatives=[self._project(self._formula_embeddings[j], self._formula_proj)
-                               for j in batch_indices if j != idx],
-                    tau=tau,
-                )
-                # 组合 3: image → formula
-                loss_if = self._infonce_loss(
-                    anchor=i_vec, positive=f_vec,
-                    negatives=[self._project(self._formula_embeddings[j], self._formula_proj)
-                               for j in batch_indices if j != idx],
-                    tau=tau,
-                )
-                batch_loss = loss_ti + loss_tf + loss_if
-                total_loss += batch_loss
+            loss = loss_ti + loss_tf + loss_if
+            total_loss += loss.item()
+            batches += 1
 
-                # ── 数值梯度近似更新投影矩阵 ──
-                # 对每个投影矩阵，用有限差分近似梯度: W ← W - lr * ∂L/∂W
-                epsilon = 1e-5
-                self._text_proj = self._gradient_step(
-                    self._text_proj, t_vec, self._text_embeddings[idx], batch_loss, lr, epsilon
-                )
-                self._image_proj = self._gradient_step(
-                    self._image_proj, i_vec, self._image_embeddings[idx], batch_loss, lr, epsilon
-                )
-                self._formula_proj = self._gradient_step(
-                    self._formula_proj, f_vec, self._formula_embeddings[idx], batch_loss, lr, epsilon
-                )
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            final_loss = total_loss / max(batches, 1)
 
-            avg_loss = total_loss / len(batch_indices) if batch_indices else float("inf")
-            final_loss = avg_loss
-
+        self._text_proj_state = {k: v.cpu().tolist() for k, v in text_head.state_dict().items()}
+        self._image_proj_state = {k: v.cpu().tolist() for k, v in image_head.state_dict().items()}
+        self._formula_proj_state = {k: v.cpu().tolist() for k, v in formula_head.state_dict().items()}
+        self._proj_in_dim = d_in
+        self._proj_out_dim = d_out
         self._is_calibrated = True
         self._last_calibration_loss = final_loss
-        print(f"  [CrossModalAligner] 校准完成: loss={final_loss:.4f}, dim={d_in}→{d_out}")
+        print(f'  [CrossModalAligner] PyTorch calibration: loss={final_loss:.4f}, dim={d_in}->{d_out}')
         return final_loss
 
-    def _infonce_loss(
-        self,
-        anchor: list[float],
-        positive: list[float],
-        negatives: list[list[float]],
-        tau: float = 0.07,
-    ) -> float:
-        """计算单样本的 InfoNCE 对比损失。
+    def _get_projection_head(self, modality):
+        """Reconstruct ProjectionHead from saved state dict for inference."""
+        if not self._is_calibrated:
+            return None
+        state = getattr(self, f'_{modality}_proj_state', None)
+        if not state:
+            return None
+        in_dim = getattr(self, '_proj_in_dim', 384)
+        out_dim = getattr(self, '_proj_out_dim', 128)
+        head = ProjectionHead(in_dim, out_dim)
+        head.load_state_dict({k: torch.tensor(v) for k, v in state.items()})
+        head.eval()
+        return head
+    def _calib_project(self, modality, vec):
+        """Project a single vector through the modality's ProjectionHead if calibrated."""
+        if not self._is_calibrated:
+            return vec
+        head = self._get_projection_head(modality)
+        if head is None:
+            return vec
+        with torch.no_grad():
+            t = torch.tensor([list(vec)], dtype=torch.float32)
+            return head(t)[0].tolist()
 
-        L = -log( exp(sim(a, p) / τ) / (exp(sim(a, p) / τ) + Σ exp(sim(a, n_j) / τ)) )
 
-        Args:
-            anchor: 锚点向量（如投影后的 text embedding）
-            positive: 正样本向量（配对的 image embedding）
-            negatives: 负样本向量列表（其他随机配对的 embedding）
-            tau: 温度参数，越低越关注困难负样本
-
-        Returns:
-            标量 InfoNCE 损失值
-        """
-        pos_sim = self._cosine(anchor, positive) / tau
-        neg_sim_sum = sum(
-            math.exp(self._cosine(anchor, neg) / tau) for neg in negatives if neg
-        )
-        pos_exp = math.exp(pos_sim)
-        denom = pos_exp + max(neg_sim_sum, 1e-10)  # 数值保护
-        return -math.log(max(pos_exp / denom, 1e-10))
-
-    def _gradient_step(
-        self,
-        matrix: list[list[float]],
-        projected: list[float],
-        original: list[float],
-        loss: float,
-        lr: float,
-        eps: float = 1e-5,
-    ) -> list[list[float]]:
-        """向量化近似梯度下降更新投影矩阵。
-
-        策略：沿随机方向施加扰动，若损失下降则向该方向更新。
-        相比逐元素梯度，速度提升 ~100 倍，在对比学习中广泛使用
-        (e.g. SPSA, random search optimization)。
-        """
-        if not matrix:
-            return matrix
-        rows = len(matrix)
-        cols = len(matrix[0]) if rows > 0 else 0
-        if rows == 0 or cols == 0:
-            return matrix
-
-        # 生成随机扰动方向（均匀分布在 [-1, 1]）
-        direction = [[random.uniform(-1.0, 1.0) for _ in range(cols)] for _ in range(rows)]
-
-        # 正向扰动
-        perturbed_plus = [[matrix[i][j] + eps * direction[i][j] for j in range(cols)] for i in range(rows)]
-        proj_plus = self._project(original, perturbed_plus)
-        loss_plus = -self._cosine(proj_plus, projected)
-
-        # 负向扰动
-        perturbed_minus = [[matrix[i][j] - eps * direction[i][j] for j in range(cols)] for i in range(rows)]
-        proj_minus = self._project(original, perturbed_minus)
-        loss_minus = -self._cosine(proj_minus, projected)
-
-        # 沿梯度方向更新：W ← W - lr * (L(+) - L(-)) / (2*eps) * direction
-        grad_magnitude = (loss_plus - loss_minus) / (2.0 * eps)
-        step = lr * grad_magnitude
-        for i in range(rows):
-            for j in range(cols):
-                new_val = matrix[i][j] - step * direction[i][j]
-                matrix[i][j] = max(-2.0, min(2.0, new_val))
-
-        return matrix
-
-    # ══════════════════════════════════════════════════════════════
     # 持久化
     # ══════════════════════════════════════════════════════════════
 
@@ -469,10 +392,12 @@ class CrossModalAligner:
                     self._last_calibration_loss = data.get("calibration_loss", float("inf"))
                     proj_data = data.get("projections", {})
                     if proj_data:
-                        self._text_proj = proj_data.get("text_proj", [])
-                        self._image_proj = proj_data.get("image_proj", [])
-                        self._formula_proj = proj_data.get("formula_proj", [])
+                        self._text_proj_state = proj_data.get("text_proj_state", {})
+                        self._image_proj_state = proj_data.get("image_proj_state", {})
+                        self._formula_proj_state = proj_data.get("formula_proj_state", {})
                         self._proj_dim = proj_data.get("proj_dim", _PROJECTION_DIM)
+                    self._proj_in_dim = data.get("proj_in_dim", 384)
+                    self._proj_out_dim = data.get("proj_out_dim", 128)
                     return len(self._pairs) > 0
                 elif isinstance(data, list) and len(data) > 0:
                     self._pairs = data
@@ -488,11 +413,13 @@ class CrossModalAligner:
             "pairs": self._pairs,
             "calibrated": self._is_calibrated,
             "calibration_loss": self._last_calibration_loss,
+            "proj_in_dim": self._proj_in_dim,
+            "proj_out_dim": self._proj_out_dim,
             "projections": {
                 "proj_dim": self._proj_dim,
-                "text_proj": self._text_proj,
-                "image_proj": self._image_proj,
-                "formula_proj": self._formula_proj,
+                "text_proj_state": self._text_proj_state,
+                "image_proj_state": self._image_proj_state,
+                "formula_proj_state": self._formula_proj_state,
             },
         }
         with open(_ALIGNMENT_FILE, "w", encoding="utf-8") as f:
@@ -584,38 +511,43 @@ class CrossModalAligner:
         except Exception:
             return []
 
-        # 若已校准，将查询投影到共享空间
+        # If calibrated, project query via PyTorch ProjectionHead
         if self._is_calibrated:
-            if mode == "text" and self._text_proj:
-                query_vec = self._project(query_vec, self._text_proj)
-            elif mode == "formula" and self._formula_proj:
-                query_vec = self._project(query_vec, self._formula_proj)
-            elif mode == "image" and self._image_proj:
-                query_vec = self._project(query_vec, self._image_proj)
+            head = None
+            if mode == "text":
+                head = self._get_projection_head("text")
+            elif mode == "formula":
+                head = self._get_projection_head("formula")
+            elif mode == "image":
+                head = self._get_projection_head("image")
+            if head is not None:
+                with torch.no_grad():
+                    q_t = torch.tensor([query_vec], dtype=torch.float32)
+                    query_vec = head(q_t)[0].tolist()
 
         results = []
         for i, pair in enumerate(self._pairs):
             scores = {}
             if mode == "text":
                 if self._image_embeddings and i < len(self._image_embeddings):
-                    img_vec = self._project(self._image_embeddings[i], self._image_proj) if self._is_calibrated else self._image_embeddings[i]
+                    img_vec = self._calib_project("image", self._image_embeddings[i])
                     scores["image"] = self._cosine(query_vec, img_vec)
                 if self._formula_embeddings and i < len(self._formula_embeddings):
-                    f_vec = self._project(self._formula_embeddings[i], self._formula_proj) if self._is_calibrated else self._formula_embeddings[i]
+                    f_vec = self._calib_project("formula", self._formula_embeddings[i])
                     scores["formula"] = self._cosine(query_vec, f_vec)
             elif mode == "formula":
                 if self._text_embeddings and i < len(self._text_embeddings):
-                    t_vec = self._project(self._text_embeddings[i], self._text_proj) if self._is_calibrated else self._text_embeddings[i]
+                    t_vec = self._calib_project("text", self._text_embeddings[i])
                     scores["text"] = self._cosine(query_vec, t_vec)
                 if self._image_embeddings and i < len(self._image_embeddings):
-                    img_vec = self._project(self._image_embeddings[i], self._image_proj) if self._is_calibrated else self._image_embeddings[i]
+                    img_vec = self._calib_project("image", self._image_embeddings[i])
                     scores["image"] = self._cosine(query_vec, img_vec)
             elif mode == "image":
                 if self._text_embeddings and i < len(self._text_embeddings):
-                    t_vec = self._project(self._text_embeddings[i], self._text_proj) if self._is_calibrated else self._text_embeddings[i]
+                    t_vec = self._calib_project("text", self._text_embeddings[i])
                     scores["text"] = self._cosine(query_vec, t_vec)
                 if self._formula_embeddings and i < len(self._formula_embeddings):
-                    f_vec = self._project(self._formula_embeddings[i], self._formula_proj) if self._is_calibrated else self._formula_embeddings[i]
+                    f_vec = self._calib_project("formula", self._formula_embeddings[i])
                     scores["formula"] = self._cosine(query_vec, f_vec)
 
             if scores:

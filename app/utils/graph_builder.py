@@ -581,7 +581,35 @@ class GraphBuilder:
         target_alignment = align_entity(triplet.target, self.whitelist)
         return AlignedTriplet(raw=triplet, source_alignment=source_alignment, target_alignment=target_alignment)
 
+    def _has_path(self, start: str, end: str, visited: set | None = None) -> bool:
+        """DFS 检测从 start 到 end 是否存在可达路径。用于环路检测。"""
+        if visited is None:
+            visited = set()
+        if start == end:
+            return True
+        visited.add(start)
+        # 获取 start 的所有直接下游（从 InMemoryRepository 或 Neo4j）
+        downstream: set[str] = set()
+        repo = self.repository
+        if hasattr(repo, "_forward"):
+            downstream = repo._forward.get(start, set())
+        else:
+            try:
+                result = repo.query_prerequisites(start)
+                downstream = set(result.downstream)
+            except Exception:
+                pass
+        for child in downstream:
+            if child not in visited:
+                if self._has_path(child, end, visited):
+                    return True
+        return False
+
     def _write_triplet(self, triplet: Triplet) -> None:
+        # 环路检测：如果 target 已经能到达 source，写出(source→target)会导致环
+        if self._has_path(triplet.target, triplet.source, set()):
+            print(f"  [GraphBuilder] 检测到环路风险: {triplet.target} -> {triplet.source}，拒绝写入边 ({triplet.source} -> {triplet.target})")
+            return
         self.repository.merge_node("Concept", triplet.source)
         self.repository.merge_node("Concept", triplet.target)
         self.repository.merge_edge(triplet.source, triplet.target, triplet.relation)

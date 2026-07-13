@@ -221,30 +221,16 @@ class TestCrossModalAlignment(unittest.TestCase):
         # 注册新配对不影响校准标志，但嵌入库已更新
         self.assertTrue(aligner.is_calibrated)
 
-    def test_random_projection_matrix_shape(self):
-        """验证投影矩阵的维度正确性"""
-        from multimodal_alignment import CrossModalAligner, _PROJECTION_DIM
+    def test_projection_head_output_shape(self):
+        """Verify ProjectionHead produces correct output dimensions (L2-normalized)."""
+        import torch
+        from multimodal_alignment import ProjectionHead, _PROJECTION_DIM
 
-        aligner = CrossModalAligner()
-        self.assertFalse(aligner.is_calibrated)
-
-        in_dim = 384
-        out_dim = _PROJECTION_DIM
-        matrix = aligner._random_projection_matrix(in_dim, out_dim)
-
-        self.assertEqual(len(matrix), in_dim, "投影矩阵行数应等于输入维度")
-        self.assertEqual(len(matrix[0]), out_dim, "投影矩阵列数应等于输出维度")
-
-    def test_project_correct_dimensions(self):
-        """验证投影操作保持正确的维度"""
-        from multimodal_alignment import CrossModalAligner, _PROJECTION_DIM
-
-        aligner = CrossModalAligner()
-        in_dim = 384
-        out_dim = _PROJECTION_DIM
-        matrix = aligner._random_projection_matrix(in_dim, out_dim)
-        vec = [0.1] * in_dim
-
-        projected = aligner._project(vec, matrix)
-        self.assertEqual(len(projected), out_dim,
-                        f"投影后维度应为 {out_dim}，实际 {len(projected)}")
+        head = ProjectionHead(in_dim=384, out_dim=_PROJECTION_DIM)
+        x = torch.randn(4, 384)
+        out = head(x)
+        self.assertEqual(out.shape, (4, _PROJECTION_DIM),
+                        f"Expected (4, {_PROJECTION_DIM}), got {out.shape}")
+        norms = torch.norm(out, p=2, dim=1)
+        self.assertTrue(torch.allclose(norms, torch.ones(4), atol=1e-5),
+                       "Output vectors should be L2-normalized")

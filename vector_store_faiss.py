@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import pickle
@@ -26,6 +27,7 @@ class FaissVectorIndex:
     _next_idx: int = 0
     _index: faiss.Index = None
     _use_ivf: bool = False
+    _write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def __post_init__(self):
         if self.dim == 0:
@@ -90,6 +92,11 @@ class FaissVectorIndex:
             vectors_np = np.array(new_vectors, dtype=np.float32)
             self._index.add(vectors_np)
             self._ensure_index(self._next_idx)
+
+    async def upsert_async(self, items: tuple[Evidence, ...]) -> None:
+        """异步安全的写入接口，使用 asyncio.Lock 防止并发竞态。"""
+        async with self._write_lock:
+            self.upsert(items)
 
     def search(self, query: str, *, top_k: int) -> tuple[Evidence, ...]:
         if self._next_idx == 0:

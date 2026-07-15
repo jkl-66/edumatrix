@@ -16,6 +16,10 @@ const uploadSuccess = ref('')
 const error = ref('')
 const fileInput = ref(null)
 
+// 文档预览 & 导读
+const showDocModal = ref(false)
+const selectedDoc = ref(null)
+
 function triggerSelect() {
   if (fileInput.value) fileInput.value.click()
 }
@@ -302,7 +306,7 @@ async function doCrossModalSearch() {
 
     <!-- 文档卡片网格：玻璃态暗色风格 -->
     <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div v-for="doc in docs" :key="doc.id" class="bg-[#131926]/70 backdrop-blur-md border border-white/[0.06] rounded-xl p-4 hover:border-white/[0.12] hover:shadow-lg hover:shadow-black/20 transition-all duration-300 group">
+      <div v-for="doc in docs" :key="doc.id" class="bg-[#131926]/70 backdrop-blur-md border border-white/[0.06] rounded-xl p-4 hover:border-white/[0.12] hover:shadow-lg hover:shadow-black/20 transition-all duration-300 group cursor-pointer" @click="selectedDoc = doc; showDocModal = true">
         <div class="flex items-start gap-3">
           <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" :class="fileColor(doc.file_type)">
             <component :is="fileIcon(doc.file_type)" :size="20" />
@@ -394,4 +398,93 @@ async function doCrossModalSearch() {
       />
     </div>
   </div>
+
+  <!-- 文档预览 Modal（含 NotbookLM 风格导读） -->
+  <Teleport to="body">
+    <div v-if="showDocModal && selectedDoc" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="showDocModal = false">
+      <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div class="relative bg-[#0b0f19] border border-white/[0.08] rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+        <!-- 头部 -->
+        <div class="sticky top-0 bg-[#0b0f19]/95 backdrop-blur-md border-b border-white/[0.06] px-6 py-4 flex items-center justify-between rounded-t-2xl z-10">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" :class="fileColor(selectedDoc.file_type)">
+              <component :is="fileIcon(selectedDoc.file_type)" :size="20" />
+            </div>
+            <div class="min-w-0">
+              <h3 class="text-sm font-semibold text-[#f3f4f6] truncate">{{ selectedDoc.filename }}</h3>
+              <p class="text-[10px] text-[#64748b]">{{ formatSize(selectedDoc.file_size) }} · {{ selectedDoc.chunk_count }} 知识块</p>
+            </div>
+          </div>
+          <button class="p-1.5 text-[#475569] hover:text-[#cbd5e1] hover:bg-white/[0.06] rounded-lg transition-colors" @click="showDocModal = false">
+            <X :size="18" />
+          </button>
+        </div>
+        
+        <div class="px-6 py-5 space-y-5">
+          <!-- 导读指南面板（NotebookLM 风格） -->
+          <div v-if="selectedDoc.multimodal_metadata?.doc_guide" class="bg-gradient-to-br from-[#0ea5e9]/5 to-[#10b981]/5 border border-[#0ea5e9]/20 rounded-xl p-5 backdrop-blur-sm">
+            <div class="flex items-center gap-2 mb-4">
+              <Sparkles :size="16" class="text-[#0ea5e9]" />
+              <h4 class="text-sm font-semibold text-[#f3f4f6]">文档导读</h4>
+            </div>
+            
+            <!-- 一句话概述 -->
+            <div class="mb-4 p-3 bg-white/[0.03] rounded-lg border border-white/[0.04]">
+              <p class="text-xs text-[#64748b] mb-1">📌 一句话概括</p>
+              <p class="text-sm text-[#f3f4f6] leading-relaxed">{{ selectedDoc.multimodal_metadata.doc_guide.brief_summary }}</p>
+            </div>
+            
+            <!-- 核心看点 -->
+            <div class="mb-4">
+              <p class="text-xs text-[#64748b] mb-2">✨ 核心看点</p>
+              <ul class="space-y-1.5">
+                <li v-for="(hl, i) in selectedDoc.multimodal_metadata.doc_guide.highlights" :key="i"
+                  class="flex items-start gap-2 text-sm text-[#cbd5e1]">
+                  <span class="w-5 h-5 rounded-full bg-[#0ea5e9]/10 text-[#0ea5e9] text-[10px] flex items-center justify-center shrink-0 mt-0.5">{{ i + 1 }}</span>
+                  {{ hl }}
+                </li>
+              </ul>
+            </div>
+            
+            <!-- FAQs -->
+            <div v-if="selectedDoc.multimodal_metadata.doc_guide.faqs?.length > 0">
+              <p class="text-xs text-[#64748b] mb-2">❓ 常见问题</p>
+              <div class="space-y-2">
+                <details v-for="(faq, i) in selectedDoc.multimodal_metadata.doc_guide.faqs" :key="i"
+                  class="bg-white/[0.02] border border-white/[0.04] rounded-lg overflow-hidden group">
+                  <summary class="px-3 py-2 text-xs font-medium text-[#cbd5e1] cursor-pointer hover:bg-white/[0.03] transition-colors list-none flex items-center gap-2">
+                    <span class="w-4 h-4 rounded-full bg-[#10b981]/10 text-[#10b981] text-[9px] flex items-center justify-center shrink-0">?</span>
+                    {{ faq.q }}
+                  </summary>
+                  <div class="px-3 pb-3 pt-1 text-xs text-[#94a3b8] leading-relaxed border-t border-white/[0.04] mt-1">
+                    {{ faq.a }}
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 导读未就绪 -->
+          <div v-else class="bg-white/[0.02] border border-white/[0.04] rounded-xl p-5 text-center">
+            <Sparkles :size="24" class="mx-auto mb-2 text-[#475569]" />
+            <p class="text-sm text-[#64748b]">导读生成中...</p>
+            <p class="text-xs text-[#475569] mt-1">上传后后台自动生成文档摘要和 FAQs</p>
+          </div>
+          
+          <!-- 内容预览 -->
+          <div class="bg-white/[0.02] border border-white/[0.04] rounded-xl p-4">
+            <p class="text-xs text-[#64748b] mb-2">📄 内容预览</p>
+            <p class="text-xs text-[#94a3b8] leading-relaxed whitespace-pre-wrap line-clamp-10">{{ selectedDoc.content_preview }}</p>
+          </div>
+          
+          <!-- 标签 -->
+          <div v-if="selectedDoc.tags?.length > 0" class="flex flex-wrap gap-1.5">
+            <span v-for="tag in selectedDoc.tags" :key="tag" class="inline-flex items-center gap-0.5 bg-[#0ea5e9]/10 text-[#0ea5e9] text-[10px] px-2 py-0.5 rounded-full">
+              <Tag :size="8" /> {{ tag }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>

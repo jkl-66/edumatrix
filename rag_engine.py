@@ -443,6 +443,27 @@ class HybridRAGPipeline:
             # 按检索相关度得分重新排序
             final_evidence.sort(key=lambda item: item.score, reverse=True)
 
+            # === 父子分块：子块匹配 + 父块替换（保持上下文完整性）===
+            parent_expanded: dict[tuple[str, int], Evidence] = {}
+            parent_best_score: dict[tuple[str, int], float] = {}
+            for item in final_evidence:
+                parent_content = item.metadata.get("parent_content", "")
+                if parent_content:
+                    parent_idx = item.metadata.get("parent_index", 0)
+                    key = (item.source, parent_idx)
+                    if key not in parent_expanded:
+                        parent_expanded[key] = item.with_content(parent_content)
+                        parent_best_score[key] = item.score
+                    else:
+                        # 保留同一父块中子块的最高分
+                        if item.score > parent_best_score[key]:
+                            parent_best_score[key] = item.score
+                            parent_expanded[key] = parent_expanded[key].with_score(item.score)
+                else:
+                    dummy_key = (item.source, id(item))
+                    parent_expanded[dummy_key] = item
+            final_evidence = sorted(parent_expanded.values(), key=lambda x: x.score, reverse=True)
+
             # === F3 修复：学生画像感知的个性化重排序 ===
             if profile is not None and hasattr(profile, "concept_mastery"):
                 final_evidence = self._personalized_rerank(final_evidence, profile, target)

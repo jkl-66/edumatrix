@@ -283,7 +283,46 @@ def build_graph_after_upload(
         from rag_engine import hybrid_rag
         if hasattr(builder.repository, "edges") and builder.repository.edges:
             hybrid_rag.graph._load_dynamic_edges(builder.repository)
+
+        # === \u8de8\u6587\u6863\u5171\u73b0\u5173\u8054\uff08CO_OCCUR\uff09===
+        try:
+            co_occur_count = _build_co_occur_edges(evidence_chunks, source, builder)
+        except Exception as e:
+            co_occur_count = 0
+            print(f"  [CO_OCCUR] \u8de8\u6587\u6863\u5173\u8054\u5931\u8d25\uff08\u975e\u81f4\u547d\uff09: {e}")
+
         return report
     except Exception as e:
         print(f"  [ingestion] \u56fe\u8c31\u81ea\u751f\u957f\u5931\u8d25\uff08\u975e\u81f4\u547d\uff09: {e}")
         return None
+
+
+def _build_co_occur_edges(evidence_chunks: tuple, source: str, builder: Any) -> int:
+    """\u8de8\u6587\u6863\u5171\u73b0\u5173\u8054\uff1a\u5bf9\u65b0\u5207\u7247\u641c\u7d22\u5df2\u6709\u7d22\u5f15\u4e2d\u76f8\u4f3c\u5ea6>0.85\u7684\u5207\u7247\uff0c\u5efa\u7acb CO_OCCUR \u8fb9\u3002"""
+    if not evidence_chunks:
+        return 0
+    from rag_engine import hybrid_rag
+    count = 0
+    for chunk in evidence_chunks:
+        content = getattr(chunk, "content", "") or ""
+        if not content.strip():
+            continue
+        try:
+            results = hybrid_rag.user_index.search(content, top_k=5)
+        except Exception:
+            continue
+        for item in results:
+            if getattr(item, "source", "") == source:
+                continue
+            if item.score >= 0.85:
+                src_concept = source[:30]
+                tgt_concept = getattr(item, "source", "")[:30] or f"chunk_{item.id[:8]}"
+                if hasattr(builder.repository, "merge_edge"):
+                    try:
+                        builder.repository.merge_edge(src_concept, tgt_concept, "CO_OCCUR")
+                        count += 1
+                    except Exception:
+                        pass
+    if count:
+        print(f"  [CO_OCCUR] \u8de8\u6587\u6863\u5171\u73b0\u8fb9: {count}")
+    return count

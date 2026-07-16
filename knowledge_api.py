@@ -4,8 +4,9 @@ import hashlib
 import os
 from pathlib import Path
 from typing import Any
+import re
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, Request
+from fastapi import APIRouter, File, HTTPException, UploadFile, Request, BackgroundTasks
 
 from app.database import DBKnowledgeDocument, run_db_op
 from document_parser import chunk_document, parse_uploaded_file, parse_pptx_slides, parse_pdf_visually
@@ -37,17 +38,22 @@ SUPPORTED_EXTENSIONS = {
 @router.post("/upload")
 async def upload_document(
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     student_id: str = "default",
 ) -> dict[str, Any]:
+    # 安全: 无条件 sanitize student_id
+    student_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(student_id))[:64]
     if student_id == "default":
         try:
             form = await request.form()
             form_student_id = form.get("student_id")
             if form_student_id:
-                student_id = str(form_student_id)
+                student_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(form_student_id))[:64]
         except Exception:
             pass
+    if not student_id:
+        student_id = "default"
 
     filename = file.filename or "unnamed"
     ext = os.path.splitext(filename)[1].lower()
@@ -128,6 +134,15 @@ async def upload_document(
     except Exception:
         pass
 
+    # 调度异步文档导读生成（NotebookLM 风格）
+    if text_content.strip():
+        background_tasks.add_task(
+            _generate_doc_guide_for_document,
+            doc_id=doc_id,
+            student_id=student_id,
+            text_content=text_content[:12000],
+        )
+
     return {
         "id": doc_id,
         "filename": filename,
@@ -138,6 +153,7 @@ async def upload_document(
         "tags": list({tag for chunk in evidence_chunks for tag in chunk.tags}),
         "is_multimodal": is_multimodal,
         "multimodal_metadata": extra_metadata,
+        "doc_guide_status": "pending",
         "content_preview": text_content[:300],
         # 成员 3: 视觉解析 & 图谱自生长
         "visual_pages_parsed": len(visual_evidence),
@@ -293,3 +309,71 @@ async def cross_modal_search(
         }
     except Exception as e:
         return {"status": "error", "detail": str(e), "results": []}
+
+
+# === 异步文档导读生成（NotebookLM 风格）===
+
+_DOC_GUIDE_PROMPT = """\
+请仔细阅读以下文档内容，并生成一个 JSON 字典（不要包含任何额外字符或代码块标记）：
+
+{
+  "brief_summary": "一句话核心梗概",
+  "highlights": ["核心看点1", "核心看点2", "核心看点3", "核心看点4", "核心看点5"],
+  "faqs": [
+    {"q": "常见问题1", "a": "答案1"},
+    {"q": "常见问题2", "a": "答案2"},
+    {"q": "常见问题3", "a": "答案3"}
+  ]
+}"""
+
+
+async def _generate_doc_guide_for_document(doc_id: str, student_id: str, text_content: str) -> None:
+    """后台任务：调用 LLM 生成文档导读指南并写入 DB。"""
+    import json
+    import re as _re
+
+    try:
+        from llm_client import DEFAULT_ASYNC_LLM
+
+        result = await DEFAULT_ASYNC_LLM.generate(
+            system_prompt=_DOC_GUIDE_PROMPT,
+            user_prompt=f"文档内容：\n\n{text_content[:12000]}",
+            role="文档导读分析师",
+        )
+
+        # 鲁棒解析：移除可能的 ```json 围栏
+        cleaned = result.strip()
+        cleaned = _re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = _re.sub(r"\s*```$", "", cleaned)
+        
+        guide_data = json.loads(cleaned)
+        
+        if not isinstance(guide_data, dict):
+            raise ValueError("LLM 返回不是 JSON 对象")
+        if "brief_summary" not in guide_data:
+            guide_data["brief_summary"] = "（无摘要）"
+        if "highlights" not in guide_data or not isinstance(guide_data["highlights"], list):
+            guide_data["highlights"] = ["（无看点）"]
+        if "faqs" not in guide_data or not isinstance(guide_data["faqs"], list):
+            guide_data["faqs"] = []
+        
+        def update_doc_guide(session):
+            doc = session.query(DBKnowledgeDocument).filter(
+                DBKnowledgeDocument.id == doc_id,
+                DBKnowledgeDocument.student_id == student_id,
+            ).first()
+            if doc is None:
+                print(f"  [DocGuide] 文档 {doc_id} 不存在，跳过")
+                return
+            meta = dict(doc.multimodal_metadata or {}) if doc.multimodal_metadata else {}
+            meta["doc_guide"] = guide_data
+            doc.multimodal_metadata = meta
+            session.commit()
+            print(f"  [DocGuide] 文档 {doc_id} 导读已生成: {guide_data['brief_summary'][:50]}...")
+
+        await run_db_op(update_doc_guide)
+        
+    except json.JSONDecodeError as e:
+        print(f"  [DocGuide] 文档 {doc_id} 导读 JSON 解析失败: {e}")
+    except Exception as e:
+        print(f"  [DocGuide] 文档 {doc_id} 导读生成失败: {e}")

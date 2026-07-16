@@ -197,7 +197,7 @@ def parse_pdf_visually(raw: bytes, filename: str) -> list[Evidence]:
     patches_dir.mkdir(parents=True, exist_ok=True)
 
     evidence_list = []
-    base_name = Path(filename).stem
+    base_name = Path(filename).stem.replace("..", "").replace("/", "").replace(chr(92), "")[:40]
     vision_available = _check_vision_llm()
 
     for page_info in pages:
@@ -276,19 +276,59 @@ def parse_uploaded_file(file: BinaryIO, filename: str) -> str:
 
 
 def _parse_pdf(raw: bytes) -> str:
+    """解析 PDF 文本，优先 pdfplumber（支持表格提取），降级 PyPDF2，保底 decode。
+    
+    返回包含 Markdown 表格和 LaTeX 公式的纯净文本。
+    """
+    try:
+        import pdfplumber
+        pages_text = []
+        with pdfplumber.open(BytesIO(raw)) as pdf:
+            for page_num, page in enumerate(pdf.pages, 1):
+                page_parts = [f"--- Page {page_num} ---"]
+                
+                # 提取文本（保留段落间距）
+                text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
+                if text.strip():
+                    page_parts.append(text.strip())
+                
+                # 提取表格并转为 Markdown 格式
+                tables = page.extract_tables()
+                for table in tables:
+                    if not table:
+                        continue
+                    md_lines = []
+                    # 表头
+                    header = [_markdown_escape_cell(c) for c in (table[0] or [])]
+                    if header:
+                        md_lines.append("| " + " | ".join(header) + " |")
+                        md_lines.append("| " + " | ".join("---" for _ in header) + " |")
+                    # 数据行
+                    for row in table[1:]:
+                        cells = [_markdown_escape_cell(c) for c in (row or [])]
+                        if cells:
+                            md_lines.append("| " + " | ".join(cells) + " |")
+                    if md_lines:
+                        page_parts.append("\n".join(md_lines))
+                
+                pages_text.append("\n\n".join(page_parts))
+        return "\n\n".join(pages_text)
+    except Exception:
+        pass
     try:
         import PyPDF2
         reader = PyPDF2.PdfReader(BytesIO(raw))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
     except Exception:
         pass
-    try:
-        import pdfplumber
-        with pdfplumber.open(BytesIO(raw)) as pdf:
-            return "\n".join(page.extract_text() or "" for page in pdf.pages)
-    except Exception:
-        pass
     return raw.decode("utf-8", errors="replace")
+
+
+def _markdown_escape_cell(value: str | None) -> str:
+    """转义表格单元格中可能破坏 Markdown 表格的字符。"""
+    if value is None:
+        return ""
+    return value.replace("|", "\\|").replace("\n", " ").strip()
 
 
 def _parse_docx(raw: bytes) -> str:
@@ -402,7 +442,7 @@ def _transcribe_video(raw: bytes, filename: str) -> str:
         import tempfile
         temp_dir = Path("data/uploads/temp_videos")
         temp_dir.mkdir(parents=True, exist_ok=True)
-        temp_path = temp_dir / filename
+        temp_path = temp_dir / Path(filename).name
         with open(temp_path, "wb") as f:
             f.write(raw)
 
@@ -520,6 +560,14 @@ def parse_pptx_slides(raw: bytes) -> tuple[dict, ...]:
 
 
 def chunk_document(text: str, source: str, chunk_size: int = 520, overlap: int = 80) -> tuple[Evidence, ...]:
+    """将文档切分为父子分块结构。
+
+    对于非代码文档：
+      -父块 (Parent): ~1000-1500 字，按段落边界切分
+      -子块 (Child): ~200-250 字，在父块内部切分
+      -每个子块的 Evidence.metadata 包含 parent_content 供 RAG 替换
+    对于代码文件：保持原有类和函数边界切分逻辑。
+    """
     if not text.strip():
         return ()
     
@@ -527,14 +575,19 @@ def chunk_document(text: str, source: str, chunk_size: int = 520, overlap: int =
     is_code_file = source.lower().endswith('.py')
     
     if is_code_file:
-        # 代码文件：优先按类和函数边界切分
-        separators = ["\nclass ", "\ndef ", "\n\n", "\n", " ", ""]
-        chunk_size = 1000
-        overlap = 200
+        # 代码文件：优先按类和函数边界切分（保持原有逻辑）
+        return _chunk_code(text, source)
     else:
-        # 普通文档：按空格归一化
-        text = re.sub(r"\s+", " ", text).strip()
-        separators = ["\n\n", "\n", " ", ""]
+        # 普通文档：父子分块
+        return _chunk_with_parent_child(text, source, child_size=chunk_size)
+
+
+def _chunk_code(text: str, source: str) -> tuple[Evidence, ...]:
+    """代码文件分块（保持原有逻辑）。"""
+    separators = ["\nclass ", "\ndef ", "\n\n", "\n", " ", ""]
+    chunk_size = 1000
+    overlap = 200
+    text = text.strip()
     
     chunks: list[Evidence] = []
     start = 0
@@ -545,13 +598,11 @@ def chunk_document(text: str, source: str, chunk_size: int = 520, overlap: int =
         end = min(text_len, start + chunk_size)
         content = text[start:end]
         
-        # 如果是代码文件，尝试在分隔符处断开
-        if is_code_file and end < text_len:
-            # 从后往前找最佳分隔点
+        if end < text_len:
             best_split = end
             for sep in separators:
                 pos = content.rfind(sep)
-                if pos > chunk_size // 2:  # 确保不会切得太短
+                if pos > chunk_size // 2:
                     best_split = start + pos + len(sep)
                     break
             end = best_split
@@ -577,6 +628,104 @@ def chunk_document(text: str, source: str, chunk_size: int = 520, overlap: int =
         start = max(0, end - overlap)
         idx += 1
     return tuple(chunks)
+
+
+def _chunk_with_parent_child(text: str, source: str, child_size: int = 250) -> tuple[Evidence, ...]:
+    """父子分块：先切父块(~1000-1500字)，再在每个父块内切子块(~200-250字)。"""
+    if not text.strip():
+        return ()
+    
+    # 保留原始段落: 按双换行切分出自然段落
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if not paragraphs:
+        paragraphs = [text.strip()]
+    
+    # 合并段落为父块 (~1000-1500 字)
+    parents: list[str] = []
+    current_parent = ""
+    for para in paragraphs:
+        if len(current_parent) + len(para) < 1200:
+            current_parent = (current_parent + "\n\n" + para).strip()
+        else:
+            if current_parent:
+                parents.append(current_parent)
+            current_parent = para
+    if current_parent:
+        parents.append(current_parent)
+    
+    # 如果父块太大(>2000字)，按句号/换行再分割
+    refined_parents: list[str] = []
+    for p in parents:
+        if len(p) > 2000:
+            # 尝试按句号分割
+            sub_parts = re.split(r'(?<=[。！？.!?])\s+', p)
+            buffer = ""
+            for sp in sub_parts:
+                if len(buffer) + len(sp) < 1200:
+                    buffer = (buffer + sp).strip()
+                else:
+                    if buffer:
+                        refined_parents.append(buffer)
+                    buffer = sp
+            if buffer:
+                refined_parents.append(buffer)
+        else:
+            refined_parents.append(p)
+    parents = refined_parents
+    
+    children: list[Evidence] = []
+    for parent_idx, parent_text in enumerate(parents, 1):
+        # 在父块内切子块 (~200-250 字)
+        # 优先在句子边界切割
+        sentences = re.split(r'(?<=[。！？.!?\n])\s*', parent_text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        child_idx = 1
+        child_buffer = ""
+        for sent in sentences:
+            if len(child_buffer) + len(sent) < child_size:
+                child_buffer = (child_buffer + " " + sent).strip()
+            else:
+                if child_buffer:
+                    chunk_id = hashlib.sha256(f"{source}:p{parent_idx}c{child_idx}:{child_buffer[:64]}".encode()).hexdigest()[:16]
+                    children.append(Evidence(
+                        id=chunk_id,
+                        title=f"{source} P{parent_idx}C{child_idx}",
+                        content=child_buffer,
+                        modality=EvidenceModality.TEXT,
+                        source=source,
+                        tags=_infer_tags(child_buffer),
+                        anchors=tuple(),
+                        metadata={
+                            "chunk_index": child_idx,
+                            "parent_index": parent_idx,
+                            "child_index": child_idx,
+                            "doc_source": source,
+                            "parent_content": parent_text,
+                        },
+                    ))
+                    child_idx += 1
+                child_buffer = sent
+        if child_buffer:
+            chunk_id = hashlib.sha256(f"{source}:p{parent_idx}c{child_idx}:{child_buffer[:64]}".encode()).hexdigest()[:16]
+            children.append(Evidence(
+                id=chunk_id,
+                title=f"{source} P{parent_idx}C{child_idx}",
+                content=child_buffer,
+                modality=EvidenceModality.TEXT,
+                source=source,
+                tags=_infer_tags(child_buffer),
+                anchors=tuple(),
+                metadata={
+                    "chunk_index": child_idx,
+                    "parent_index": parent_idx,
+                    "child_index": child_idx,
+                    "doc_source": source,
+                    "parent_content": parent_text,
+                },
+            ))
+    
+    return tuple(children)
 
 
 def _infer_tags(content: str) -> tuple[str, ...]:

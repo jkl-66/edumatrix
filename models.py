@@ -129,6 +129,20 @@ class Evidence:
             metadata=self.metadata,
         )
 
+    def with_content(self, content: str) -> "Evidence":
+        """返回替换 content 后的新 Evidence（保留其他字段）。"""
+        return Evidence(
+            id=self.id,
+            title=self.title,
+            content=content,
+            modality=self.modality,
+            source=self.source,
+            tags=self.tags,
+            anchors=self.anchors,
+            score=self.score,
+            metadata=self.metadata,
+        )
+
 
 @dataclass(frozen=True)
 class GraphContext:

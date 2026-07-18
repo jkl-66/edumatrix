@@ -7,7 +7,7 @@ import {
   BookOpen, BrainCircuit, Target, TrendingUp, ChevronRight,
   ArrowRight, AlertTriangle, CheckCircle2, Layers, Sparkles,
   Clock, Zap, ChevronLeft, Play, Activity, Unlock, RefreshCw, Search,
-  Maximize2, Minimize2
+  Maximize2, Minimize2, Move
 } from '@lucide/vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 
@@ -26,11 +26,73 @@ const showSimilarityLog = ref(false)
 const semanticChartRef = ref(null)
 let semanticChart = null
 const isSemanticFullscreen = ref(false)
+const selectedSemanticConcept = ref('')
+const isSemanticArranging = ref(false)
+let arrangeTimer = null
 function toggleSemanticFullscreen() {
   isSemanticFullscreen.value = !isSemanticFullscreen.value
 }
-let breathingTimer = null
-let breathingStep = 0
+function resetSemanticLayout() {
+  if (arrangeTimer) {
+    clearTimeout(arrangeTimer)
+    arrangeTimer = null
+  }
+  isSemanticArranging.value = false
+  if (semanticChart) {
+    semanticChart.dispose()
+    semanticChart = null
+  }
+  nextTick(renderSemanticGraph)
+}
+
+function autoArrangeAfterDrag(draggedName) {
+  if (!semanticChart || !draggedName) return
+  if (arrangeTimer) clearTimeout(arrangeTimer)
+  const currentData = semanticChart.getOption()?.series?.[0]?.data || []
+  if (!currentData.length) return
+  const forceData = currentData.map(node => ({
+    ...node,
+    fixed: node.name === draggedName,
+    draggable: true,
+  }))
+  isSemanticArranging.value = true
+  semanticChart.setOption({
+    animationDurationUpdate: 900,
+    animationEasingUpdate: 'cubicInOut',
+    series: [{
+      layout: 'force',
+      data: forceData,
+      force: {
+        repulsion: 230,
+        edgeLength: 150,
+        gravity: 0.08,
+        friction: 0.6,
+        layoutAnimation: true,
+      },
+      labelLayout: {
+        hideOverlap: false,
+        moveOverlap: 'shiftY',
+      },
+    }],
+  })
+  arrangeTimer = setTimeout(() => {
+    if (!semanticChart) return
+    const settledData = semanticChart.getOption()?.series?.[0]?.data || forceData
+    semanticChart.setOption({
+      animationDurationUpdate: 500,
+      series: [{
+        layout: 'none',
+        data: settledData.map(node => ({
+          ...node,
+          fixed: false,
+          draggable: true,
+        })),
+      }],
+    })
+    isSemanticArranging.value = false
+    arrangeTimer = null
+  }, 1250)
+}
 
 const showVideoPanel = ref(false)
 const videoPanelUrl = ref('')
@@ -63,7 +125,50 @@ const semanticLog = computed(() => crossGraph.value?.metadata?.similarity_log ||
 const todayPlan = computed(() => adaptiveRoute.value?.session_plan || {})
 const visibleEstimatedMinutes = computed(() => todayPlan.value?.today_minutes || adaptiveRoute.value?.estimated_minutes || 0)
 const plannerReview = computed(() => adaptiveRoute.value?.planner_review || {})
-const topSemanticLog = computed(() => semanticLog.value.slice(0, 4))
+const semanticFocusConcept = computed(() => {
+  const concepts = (crossGraph.value?.nodes || []).map(node => String(node.concept))
+  if (selectedSemanticConcept.value && concepts.includes(selectedSemanticConcept.value)) {
+    return selectedSemanticConcept.value
+  }
+  const query = semanticQuery.value.trim().toLocaleLowerCase()
+  if (query) {
+    return concepts.find(concept => concept.toLocaleLowerCase() === query)
+      || concepts.find(concept => concept.toLocaleLowerCase().includes(query))
+      || semanticQuery.value.trim()
+  }
+  return routeFinalTarget.value || routeStageTarget.value || concepts[0] || ''
+})
+const semanticMatches = computed(() => {
+  const focus = semanticFocusConcept.value
+  const matches = new Map()
+  semanticLog.value.forEach(item => {
+    if (item.source !== focus && item.target !== focus) return
+    const concept = item.source === focus ? item.target : item.source
+    const previous = matches.get(concept)
+    if (!previous || Number(item.similarity || 0) > previous.similarity) {
+      matches.set(concept, {
+        concept,
+        similarity: Number(item.similarity || 0),
+        evidence: item.evidence || '语义向量与知识依赖共同命中',
+        domain: item.source === focus ? item.target_domain_label : item.source_domain_label,
+      })
+    }
+  })
+  ;(crossGraph.value?.edges || []).forEach(edge => {
+    if (edge.from !== focus && edge.to !== focus) return
+    const concept = edge.from === focus ? edge.to : edge.from
+    if (matches.has(concept)) return
+    matches.set(concept, {
+      concept,
+      similarity: Number(edge.similarity ?? 0.68),
+      evidence: edge.type === 'cross_domain_prerequisite'
+        ? '跨学科前置依赖，可用于补齐当前学习路径'
+        : '课程知识图谱中的直接前置关系',
+      domain: edge.from === focus ? edge.target_domain_label : edge.source_domain_label,
+    })
+  })
+  return Array.from(matches.values()).sort((a, b) => b.similarity - a.similarity).slice(0, 6)
+})
 
 const totalSteps = computed(() => learningChain.value.length)
 const masteredCount = computed(() => learningChain.value.filter(n => n.mastered).length)
@@ -204,91 +309,128 @@ function renderSemanticGraph() {
     semanticChart = echarts.init(semanticChartRef.value)
   }
   const routeSet = new Set(routeNodes.value.map(node => node.concept))
-  const query = semanticQuery.value.trim()
-  const logPairs = new Set()
+  const allNodes = crossGraph.value.nodes || []
+  const focus = semanticFocusConcept.value
+  const nodeByName = new Map(allNodes.map(node => [node.concept, node]))
+  const scoreByPair = new Map()
+  ;(crossGraph.value.edges || []).forEach(edge => {
+    const key = [edge.from, edge.to].sort().join('\u0000')
+    scoreByPair.set(key, Number(edge.similarity ?? 0.68))
+  })
   semanticLog.value.forEach(item => {
-    logPairs.add(item.source)
-    logPairs.add(item.target)
+    const key = [item.source, item.target].sort().join('\u0000')
+    scoreByPair.set(key, Math.max(scoreByPair.get(key) || 0, Number(item.similarity || 0)))
   })
-  const rawNodes = (crossGraph.value.nodes || []).filter(node => {
-    if (routeSet.has(node.concept)) return true
-    if (logPairs.has(node.concept)) return true
-    if (query && String(node.concept).includes(query)) return true
-    return node.resource?.has_animation
-  }).slice(0, 42)
-  const nodeSet = new Set(rawNodes.map(node => node.concept))
-  const categories = Array.from(new Set(rawNodes.map(node => node.domain_label || '课程图谱'))).map(name => ({ name }))
-  
-  const legendColor = '#64748b'
-  const labelColor = '#475569'
 
-  const nodes = rawNodes.map(node => {
-    const active = routeSet.has(node.concept) || (query && String(node.concept).includes(query))
-    const isCompleted = node.mastered || (node.mastery && node.mastery >= 0.9)
-    
-    // Choose beautiful gradient based on category or active state
-    let colorStart, colorEnd, shadowColor
-    if (active) {
-      colorStart = 'rgba(99, 102, 241, 0.95)' // Indigo
-      colorEnd = 'rgba(129, 140, 248, 0.4)'
-      shadowColor = 'rgba(99, 102, 241, 0.7)'
-    } else if (isCompleted) {
-      colorStart = 'rgba(16, 185, 129, 0.9)' // Emerald
-      colorEnd = 'rgba(52, 211, 153, 0.35)'
-      shadowColor = 'rgba(16, 185, 129, 0.45)'
-    } else {
-      colorStart = 'rgba(14, 165, 233, 0.85)' // Sky Blue
-      colorEnd = 'rgba(56, 189, 248, 0.3)'
-      shadowColor = 'rgba(14, 165, 233, 0.3)'
-    }
-    
-    const nodeColor = new echarts.graphic.RadialGradient(0.4, 0.3, 0.8, [
-      { offset: 0, color: colorStart },
-      { offset: 1, color: colorEnd }
-    ])
+  const directNames = new Set()
+  ;(crossGraph.value.edges || []).forEach(edge => {
+    if (edge.from === focus) directNames.add(edge.to)
+    if (edge.to === focus) directNames.add(edge.from)
+  })
+  semanticLog.value.forEach(item => {
+    if (item.source === focus) directNames.add(item.target)
+    if (item.target === focus) directNames.add(item.source)
+  })
 
+  const relationScore = concept => scoreByPair.get([focus, concept].sort().join('\u0000')) || 0
+  const direct = Array.from(directNames)
+    .filter(name => nodeByName.has(name))
+    .sort((a, b) => relationScore(b) - relationScore(a))
+    .slice(0, 9)
+  const context = allNodes
+    .filter(node => node.concept !== focus && !directNames.has(node.concept))
+    .sort((a, b) => Number(routeSet.has(b.concept)) - Number(routeSet.has(a.concept)))
+    .slice(0, 10)
+    .map(node => node.concept)
+  const visibleNames = [focus, ...direct, ...context].filter((name, index, names) => name && names.indexOf(name) === index)
+  const nodeSet = new Set(visibleNames)
+  const categoryNames = Array.from(new Set(visibleNames.map(name => nodeByName.get(name)?.domain_label || '课程图谱')))
+  const categories = categoryNames.map(name => ({ name }))
+  const palette = ['#0f766e', '#2563eb', '#d97706', '#be123c', '#475569', '#7c3aed']
+  const colorByCategory = new Map(categoryNames.map((name, index) => [name, palette[index % palette.length]]))
+
+  const ringPosition = (index, count, radius, offset = -Math.PI / 2) => {
+    const angle = offset + (Math.PI * 2 * index) / Math.max(count, 1)
+    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius }
+  }
+  const graphWidth = semanticChartRef.value.clientWidth || 720
+  const graphHeight = semanticChartRef.value.clientHeight || 380
+  const graphUnit = Math.min(graphWidth, graphHeight)
+  const directRadius = Math.max(140, graphUnit * 0.22)
+  const contextRadius = Math.max(260, graphUnit * 0.42)
+  const positions = new Map([[focus, { x: 0, y: 0 }]])
+  direct.forEach((name, index) => positions.set(name, ringPosition(index, direct.length, directRadius)))
+  context.forEach((name, index) => positions.set(name, ringPosition(index, context.length, contextRadius, -Math.PI / 2 + 0.18)))
+
+  const nodes = visibleNames.map(name => {
+    const node = nodeByName.get(name) || { concept: name }
+    const isFocus = name === focus
+    const isDirect = directNames.has(name)
+    const score = relationScore(name)
+    const domain = node.domain_label || '课程图谱'
+    const position = positions.get(name) || { x: 0, y: 0 }
     return {
-      id: node.concept,
-      name: node.concept,
+      id: name,
+      name,
       value: Math.round((node.mastery || 0) * 100),
-      category: node.domain_label || '课程图谱',
-      symbolSize: active ? 42 : (node.resource?.has_animation ? 34 : 26),
+      similarity: score,
+      domain,
+      category: domain,
+      x: position.x,
+      y: position.y,
+      draggable: true,
+      symbolSize: isFocus ? 58 : isDirect ? 30 + score * 12 : routeSet.has(name) ? 28 : 20,
       itemStyle: {
-        color: nodeColor,
-        borderColor: active ? 'rgba(99, 102, 241, 0.8)' : 'rgba(226, 232, 240, 0.5)',
-        borderWidth: active ? 2 : 1.2,
-        shadowBlur: active ? 16 : 8,
-        shadowColor: shadowColor,
-        shadowOffsetX: 0,
-        shadowOffsetY: 0
+        color: isFocus ? '#111827' : colorByCategory.get(domain),
+        opacity: isFocus || isDirect ? 1 : 0.68,
+        borderColor: '#ffffff',
+        borderWidth: isFocus ? 4 : 2,
+        shadowBlur: isFocus ? 22 : isDirect ? 10 : 3,
+        shadowColor: isFocus ? 'rgba(15, 118, 110, .45)' : 'rgba(15, 23, 42, .16)',
       },
-      label: { 
-        show: true, 
-        fontSize: active ? 11 : 9,
-        fontWeight: active ? 'bold' : 'normal',
-        color: labelColor,
+      label: {
+        show: isFocus || isDirect || routeSet.has(name),
+        fontSize: isFocus ? 12 : 9,
+        fontWeight: isFocus || score >= 0.75 ? 700 : 500,
+        color: isFocus ? '#111827' : '#334155',
         position: 'bottom',
-        distance: 5
+        distance: isFocus ? 11 : 8,
+        width: 92,
+        overflow: 'truncate',
+        textBorderColor: '#ffffff',
+        textBorderWidth: 3,
       },
     }
   })
 
-  const links = (crossGraph.value.edges || [])
-    .filter(edge => nodeSet.has(edge.from) && nodeSet.has(edge.to))
-    .slice(0, 80)
-    .map(edge => {
-      const isCross = edge.type === 'cross_domain_prerequisite'
-      return {
-        source: edge.from,
-        target: edge.to,
-        value: edge.similarity || 0.5,
-        lineStyle: {
-          color: 'source',
-          opacity: 0.6,
-          width: isCross ? 2.5 : 1.2
-        },
-      }
-    })
+  const focusLinks = (crossGraph.value.edges || [])
+    .filter(edge => nodeSet.has(edge.from) && nodeSet.has(edge.to) && (edge.from === focus || edge.to === focus))
+  semanticLog.value.forEach(item => {
+    if (!nodeSet.has(item.source) || !nodeSet.has(item.target)) return
+    if (item.source !== focus && item.target !== focus) return
+    if (!focusLinks.some(edge => edge.from === item.source && edge.to === item.target)) {
+      focusLinks.push({ from: item.source, to: item.target, similarity: item.similarity, type: 'semantic_similarity' })
+    }
+  })
+  const contextLinks = (crossGraph.value.edges || [])
+    .filter(edge => nodeSet.has(edge.from) && nodeSet.has(edge.to) && edge.from !== focus && edge.to !== focus)
+    .slice(0, 12)
+  const links = [...focusLinks, ...contextLinks].map(edge => {
+    const touchesFocus = edge.from === focus || edge.to === focus
+    const score = Number(edge.similarity || scoreByPair.get([edge.from, edge.to].sort().join('\u0000')) || 0.45)
+    return {
+      source: edge.from,
+      target: edge.to,
+      value: score,
+      lineStyle: {
+        color: touchesFocus ? (score >= 0.75 ? '#0f766e' : '#0891b2') : '#94a3b8',
+        opacity: touchesFocus ? 0.48 + score * 0.48 : 0.42,
+        width: touchesFocus ? 1.4 + score * 3.2 : 1.35,
+        type: touchesFocus ? 'solid' : 'dashed',
+        curveness: touchesFocus ? 0.08 : 0.12,
+      },
+    }
+  })
 
   semanticChart.setOption({
     tooltip: {
@@ -304,9 +446,9 @@ function renderSemanticGraph() {
       formatter: params => {
         if (params.dataType === 'edge') {
           return `<div style="display:flex; flex-direction:column; gap:2px;">
-            <span style="font-size:8px; color:#94a3b8;">依赖关联</span>
-            <span style="font-weight:600;">${params.data.source} ➔ ${params.data.target}</span>
-            <span style="font-size:8px; color:#818cf8; font-family:monospace; margin-top:2px;">相关度: ${(params.data.value * 100).toFixed(0)}%</span>
+            <span style="font-size:10px; color:#94a3b8;">知识关联</span>
+            <span style="font-weight:600;">${params.data.source} → ${params.data.target}</span>
+            <span style="font-size:10px; color:#5eead4; margin-top:2px;">点击节点查看关联证据</span>
           </div>`
         }
         const stateColor = params.value >= 60 ? '#10b981' : (params.value >= 30 ? '#f59e0b' : '#ef4444')
@@ -315,76 +457,85 @@ function renderSemanticGraph() {
             <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${stateColor};"></span>
             <span style="font-weight:700; color:#e2e8f0;">${params.name}</span>
           </div>
-          <span style="font-size:8px; color:#94a3b8;">掌握度: <b style="color:#818cf8; font-family:monospace;">${params.value}%</b></span>
+          <span style="font-size:10px; color:#94a3b8;">${params.data.domain} · 掌握度 <b style="color:#5eead4;">${params.value}%</b></span>
         </div>`
       },
     },
-    legend: [{ type: 'scroll', top: 0, textStyle: { fontSize: 10, color: legendColor } }],
+    animationDuration: 650,
+    animationEasingUpdate: 'cubicOut',
     series: [{
       type: 'graph',
-      layout: 'force',
+      layout: 'none',
       roam: true,
+      cursor: 'move',
       categories,
       data: nodes,
       links,
-      edgeSymbol: ['circle', 'arrow'],
-      edgeSymbolSize: [4, 6],
-      force: { repulsion: 380, edgeLength: 160, gravity: 0.05, layoutAnimation: false },
+      edgeSymbol: ['none', 'arrow'],
+      edgeSymbolSize: [0, 5],
       emphasis: { 
         focus: 'adjacency',
+        scale: 1.12,
         lineStyle: {
-          width: 3.5,
-          color: '#818cf8',
-          shadowBlur: 10,
-          shadowColor: 'rgba(129, 140, 248, 0.8)'
+          width: 4,
+          opacity: 1,
+          color: '#0f766e',
         },
         itemStyle: {
-          shadowBlur: 25,
-          shadowColor: 'rgba(99, 102, 241, 0.95)'
+          shadowBlur: 18,
+          shadowColor: 'rgba(15, 118, 110, .5)'
         }
       },
-      label: { color: labelColor },
+      labelLayout: {
+        hideOverlap: false,
+        moveOverlap: 'shiftY',
+      },
     }],
-  })
-
-  // Start breathing animation
-  if (breathingTimer) {
-    clearInterval(breathingTimer)
-    breathingTimer = null
-  }
-  breathingTimer = setInterval(() => {
-    if (!semanticChart) return
-    breathingStep = (breathingStep + 0.08) % (Math.PI * 2)
-    const pulse = Math.sin(breathingStep)
-    
-    const currentOption = semanticChart.getOption()
-    if (currentOption && currentOption.series && currentOption.series[0]) {
-      const seriesData = currentOption.series[0].data
-      if (seriesData) {
-        let changed = false
-        seriesData.forEach(node => {
-          if (node.x !== undefined && node.y !== undefined) {
-            node.fixed = true
-          }
-          const active = routeSet.has(node.name) || (query && String(node.name).includes(query))
-          if (active && node.itemStyle) {
-            node.itemStyle.shadowBlur = Math.round(16 + pulse * 5)
-            changed = true
-          }
-        })
-        if (changed) {
-          semanticChart.setOption({
-            series: [{
-              data: seriesData
-            }]
-          }, { notMerge: false, lazyUpdate: true })
-        }
-      }
+  }, true)
+  requestAnimationFrame(() => semanticChart?.resize())
+  semanticChart.off('click')
+  semanticChart.off('mousedown')
+  semanticChart.off('mouseup')
+  let suppressClick = false
+  semanticChart.on('click', params => {
+    if (params.dataType !== 'node') return
+    if (suppressClick) {
+      suppressClick = false
+      return
     }
-  }, 35)
+    selectedSemanticConcept.value = params.name
+    semanticQuery.value = params.name
+  })
+  let dragStart = null
+  semanticChart.on('mousedown', params => {
+    if (params.dataType !== 'node') return
+    dragStart = {
+      name: params.name,
+      x: Number(params.data?.x),
+      y: Number(params.data?.y),
+    }
+  })
+  semanticChart.on('mouseup', params => {
+    if (!dragStart || params.dataType !== 'node' || params.name !== dragStart.name) {
+      dragStart = null
+      return
+    }
+    const currentNode = (semanticChart.getOption()?.series?.[0]?.data || [])
+      .find(node => node.name === params.name)
+    const currentX = Number(currentNode?.x ?? params.data?.x)
+    const currentY = Number(currentNode?.y ?? params.data?.y)
+    const moved = Number.isFinite(currentX) && Number.isFinite(currentY) && Number.isFinite(dragStart.x) && Number.isFinite(dragStart.y)
+      ? Math.hypot(currentX - dragStart.x, currentY - dragStart.y) > 8
+      : true
+    dragStart = null
+    if (moved) {
+      suppressClick = true
+      autoArrangeAfterDrag(params.name)
+    }
+  })
 }
 
-watch([crossGraph, routeNodes, semanticQuery], () => nextTick(renderSemanticGraph), { deep: true })
+watch([crossGraph, routeNodes, semanticFocusConcept], () => nextTick(renderSemanticGraph), { deep: true })
 watch(isSemanticFullscreen, () => {
   if (semanticChart) {
     semanticChart.dispose()
@@ -394,15 +545,23 @@ watch(isSemanticFullscreen, () => {
     renderSemanticGraph()
   })
 })
-onMounted(loadData)
+function resizeSemanticGraph() {
+  semanticChart?.resize()
+}
+
+onMounted(() => {
+  window.addEventListener('resize', resizeSemanticGraph)
+  loadData()
+})
 onUnmounted(() => {
+  window.removeEventListener('resize', resizeSemanticGraph)
   if (semanticChart) {
     semanticChart.dispose()
     semanticChart = null
   }
-  if (breathingTimer) {
-    clearInterval(breathingTimer)
-    breathingTimer = null
+  if (arrangeTimer) {
+    clearTimeout(arrangeTimer)
+    arrangeTimer = null
   }
 })
 </script>
@@ -611,77 +770,128 @@ onUnmounted(() => {
           ]"
           @click.self="isSemanticFullscreen ? toggleSemanticFullscreen() : null"
         >
-          <div 
+          <section
             :class="[
-              'border p-4 transition-all duration-300 relative flex flex-col bg-white border-slate-200',
+              'semantic-panel border transition-all duration-300 relative flex flex-col bg-white border-slate-200 overflow-hidden',
               isSemanticFullscreen 
-                ? 'w-[90vw] max-w-5xl h-[80vh] shadow-2xl rounded-2xl' 
-                : 'rounded-xl shadow-sm'
+                ? 'w-[94vw] max-w-6xl h-[88vh] shadow-2xl rounded-lg'
+                : 'rounded-lg shadow-sm'
             ]"
           >
-            <div class="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-3">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
               <div>
-                <p class="text-xs font-bold text-slate-700">语义图谱匹配</p>
-                <p class="text-[10px] text-slate-400 mt-0.5">节点来自当前图谱、RAG 和本地动画资源</p>
+                <div class="flex items-center gap-2">
+                  <span class="semantic-live-dot" aria-hidden="true" />
+                  <p class="text-xs font-bold text-slate-800">语义相关性图谱</p>
+                  <span class="rounded bg-teal-50 px-1.5 py-0.5 text-[9px] font-semibold text-teal-700">聚焦模式</span>
+                  <span v-if="isSemanticArranging" class="semantic-arranging-badge" aria-live="polite">
+                    <span class="semantic-arranging-spinner" /> 正在整理
+                  </span>
+                </div>
+                <p class="text-[10px] text-slate-400 mt-1">中心为当前概念，距离和连线强度表示知识相关性</p>
               </div>
-              <div class="flex items-center gap-2">
-                <label class="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
-                  <Search :size="11" class="text-slate-400" />
+              <div class="flex flex-wrap items-center gap-2">
+                <label class="flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 focus-within:border-teal-500 focus-within:bg-white">
+                  <Search :size="13" class="text-slate-400" />
                   <input
                     v-model="semanticQuery"
-                    class="w-28 bg-transparent text-[10px] text-slate-600 outline-none"
-                    placeholder="检索概念"
+                    class="w-32 bg-transparent text-[11px] text-slate-700 outline-none"
+                    placeholder="搜索并聚焦概念"
                   />
                 </label>
                 <button
                   type="button"
-                  class="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                  class="h-8 rounded-md border border-slate-200 px-2.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
                   @click="showSimilarityLog = !showSimilarityLog"
                 >
-                  {{ showSimilarityLog ? '收起日志' : '相似度日志' }}
+                  {{ showSimilarityLog ? '收起全部' : '查看全部关系' }}
                 </button>
                 <button
                   type="button"
-                  class="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 transition-colors flex items-center gap-1 cursor-pointer"
+                  class="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
+                  title="重置节点布局"
+                  aria-label="重置节点布局"
+                  @click="resetSemanticLayout"
+                >
+                  <RefreshCw :size="14" />
+                </button>
+                <button
+                  type="button"
+                  class="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
+                  :title="isSemanticFullscreen ? '退出全屏' : '全屏探索'"
+                  :aria-label="isSemanticFullscreen ? '退出全屏' : '全屏探索'"
                   @click="toggleSemanticFullscreen"
                 >
-                  <Maximize2 v-if="!isSemanticFullscreen" :size="11" />
-                  <Minimize2 v-else :size="11" />
-                  {{ isSemanticFullscreen ? '退出' : '全屏探索' }}
+                  <Maximize2 v-if="!isSemanticFullscreen" :size="14" />
+                  <Minimize2 v-else :size="14" />
                 </button>
               </div>
             </div>
-            <div 
-              ref="semanticChartRef" 
-              class="semantic-graph rounded-xl w-full flex-1" 
-              :class="isSemanticFullscreen ? 'h-full bg-white border border-slate-100' : 'h-64 bg-slate-50/60 border border-slate-100'" 
-            />
-            <div v-if="topSemanticLog.length" class="mt-3 flex flex-wrap gap-2">
-              <div
-                v-for="item in topSemanticLog"
-                :key="`pulse-${item.source}-${item.target}`"
-                class="ripple-chip rounded-lg border border-indigo-100 bg-indigo-50/70 px-2.5 py-1.5 text-[9px] text-indigo-700"
-              >
-                <span class="ripple-dot" />
-                {{ item.source }} ↔ {{ item.target }} · {{ Math.round((item.similarity || 0) * 100) }}%
-              </div>
-            </div>
-            <div v-if="showSimilarityLog" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 overflow-y-auto max-h-[25vh]">
-              <div
-                v-for="item in semanticLog"
-                :key="`${item.source}-${item.target}`"
-                class="rounded-lg border px-3 py-2 bg-slate-50 border-slate-100 text-slate-600"
-              >
-                <div class="flex items-center justify-between gap-2">
-                  <p class="text-[10px] font-semibold truncate text-slate-700">{{ item.source }} → {{ item.target }}</p>
-                  <span class="text-[9px] font-mono text-indigo-600">{{ Math.round((item.similarity || 0) * 100) }}%</span>
+            <div class="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px]">
+              <div class="relative flex min-h-0 flex-col border-b border-slate-100 md:border-b-0 md:border-r">
+                <div class="semantic-legend flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-100 bg-white px-3 py-2 text-[9px] text-slate-500">
+                  <span class="flex items-center gap-1.5"><i class="h-2 w-2 rounded-full bg-slate-900" />当前焦点</span>
+                  <span class="flex items-center gap-1.5"><i class="h-[3px] w-5 rounded bg-teal-600" />强关联</span>
+                  <span class="flex items-center gap-1.5"><i class="h-0 w-5 border-t border-dashed border-slate-400" />补充关系</span>
+                  <span class="ml-auto hidden items-center gap-1 text-slate-400 sm:flex"><Move :size="11" />拖动节点整理布局</span>
                 </div>
-                <p class="text-[9px] text-slate-500 mt-1">
-                  {{ item.source_domain_label }} / {{ item.target_domain_label }} · {{ item.evidence }}
+                <div class="semantic-chart-stage relative min-h-0 flex-1">
+                  <div class="semantic-focus-ripple" aria-hidden="true" />
+                  <div
+                    ref="semanticChartRef"
+                    class="semantic-graph w-full"
+                    :class="isSemanticFullscreen ? 'h-full min-h-[520px]' : 'h-[380px]'"
+                  />
+                </div>
+              </div>
+              <aside class="min-h-0 bg-slate-50/70 p-3 md:overflow-y-auto">
+                <div class="border-b border-slate-200 pb-3">
+                  <p class="text-[9px] font-semibold text-slate-400">当前分析概念</p>
+                  <p class="mt-1 truncate text-sm font-bold text-slate-900">{{ semanticFocusConcept }}</p>
+                  <p class="mt-1 text-[9px] leading-relaxed text-slate-500">点击任意节点可重新聚焦，图谱位置保持稳定。</p>
+                </div>
+                <div class="mt-3 flex items-center justify-between">
+                  <p class="text-[10px] font-bold text-slate-700">关联概念</p>
+                  <span class="text-[9px] text-slate-400">关联证据</span>
+                </div>
+                <div v-if="semanticMatches.length" class="mt-2 space-y-3">
+                  <button
+                    v-for="item in semanticMatches"
+                    :key="`match-${item.concept}`"
+                    type="button"
+                    class="block w-full text-left"
+                    @click="selectedSemanticConcept = item.concept; semanticQuery = item.concept"
+                  >
+                    <span class="flex items-center justify-between gap-2">
+                      <span class="truncate text-[10px] font-semibold text-slate-700">{{ item.concept }}</span>
+                    </span>
+                    <span class="mt-1 line-clamp-2 block text-[9px] leading-relaxed text-slate-400">{{ item.evidence }}</span>
+                  </button>
+                </div>
+                <p v-else class="mt-3 rounded-md border border-dashed border-slate-200 p-3 text-[9px] leading-relaxed text-slate-500">
+                  该概念暂无直接相似度记录，可点击图中相邻节点继续探索。
                 </p>
+                <div class="mt-4 border-t border-slate-200 pt-3 text-[9px] leading-relaxed text-slate-500">
+                  <p><span class="font-semibold text-slate-700">实线</span> 表示当前概念的直接关联</p>
+                  <p class="mt-1"><span class="font-semibold text-slate-700">虚线</span> 表示周边知识的补充关系</p>
+                </div>
+              </aside>
+            </div>
+            <div v-if="showSimilarityLog" class="max-h-[28vh] overflow-y-auto border-t border-slate-100 bg-white p-3">
+              <div class="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <div
+                  v-for="item in semanticLog"
+                  :key="`${item.source}-${item.target}`"
+                  class="rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-slate-600"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <p class="truncate text-[10px] font-semibold text-slate-700">{{ item.source }} → {{ item.target }}</p>
+                  </div>
+                  <p class="mt-1 text-[9px] text-slate-500">{{ item.evidence }}</p>
+                </div>
               </div>
             </div>
-          </div>
+          </section>
         </div>
       </Teleport>
 
@@ -939,30 +1149,63 @@ onUnmounted(() => {
 
 .semantic-graph {
   min-height: 16rem;
+  background-color: #fff;
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(13, 148, 136, 0.06), transparent 42%),
+    linear-gradient(rgba(148, 163, 184, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.09) 1px, transparent 1px);
+  background-size: auto, 28px 28px, 28px 28px;
 }
 
-.ripple-chip {
+.semantic-legend {
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.semantic-arranging-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  padding: 3px 7px;
+  font-size: 9px;
+  font-weight: 700;
 }
 
-.ripple-dot {
-  position: relative;
+.semantic-arranging-spinner {
+  width: 8px;
+  height: 8px;
+  border: 1px solid rgba(194, 65, 12, 0.28);
+  border-top-color: #c2410c;
+  border-radius: 999px;
+  animation: semantic-spin 700ms linear infinite;
+}
+
+.semantic-live-dot {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #6366f1;
-  flex: 0 0 auto;
+  background: #0f766e;
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.1);
 }
 
-.ripple-dot::after {
-  content: "";
+.semantic-focus-ripple {
   position: absolute;
-  inset: -5px;
-  border-radius: inherit;
-  border: 1px solid rgba(99, 102, 241, 0.45);
-  animation: ripple-pulse 1.5s ease-out infinite;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  width: 70px;
+  height: 70px;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(15, 118, 110, 0.25);
+  border-radius: 999px;
+  animation: semantic-ripple 2.4s ease-out infinite;
+}
+
+.semantic-panel {
+  min-width: 0;
 }
 
 .terminal-line {
@@ -978,14 +1221,27 @@ onUnmounted(() => {
   }
 }
 
-@keyframes ripple-pulse {
-  from {
-    opacity: 0.9;
-    transform: scale(0.45);
+@keyframes semantic-ripple {
+  0% {
+    opacity: 0.6;
+    transform: translate(-50%, -50%) scale(0.7);
   }
-  to {
+  75%, 100% {
     opacity: 0;
-    transform: scale(1.8);
+    transform: translate(-50%, -50%) scale(2.1);
+  }
+}
+
+@keyframes semantic-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .semantic-focus-ripple,
+  .semantic-live-dot {
+    animation: none;
   }
 }
 </style>

@@ -300,13 +300,24 @@ def record_alignment_log(db: Session, student_id: str, report: AlignmentReport, 
 def create_note(db: Session, student_id: str, source: str, content: str, tags: list[str] | None = None, concepts: list[str] | None = None) -> DBNote:
     import hashlib
     note_id = hashlib.sha256(f"{student_id}:{content[:64]}:{datetime.utcnow().isoformat()}".encode()).hexdigest()[:16]
+    
+    processed_concepts = []
+    if concepts:
+        for c in concepts:
+            if "与" in c:
+                processed_concepts.extend([sub.strip() for sub in c.split("与") if sub.strip()])
+            elif "和" in c:
+                processed_concepts.extend([sub.strip() for sub in c.split("和") if sub.strip()])
+            else:
+                processed_concepts.append(c)
+
     db_note = DBNote(
         id=note_id,
         student_id=student_id,
         source=source,
         content=content,
         tags=tags or [],
-        concepts=concepts or [],
+        concepts=processed_concepts,
     )
     db.add(db_note)
     db.commit()
@@ -341,7 +352,15 @@ def update_note(db: Session, note_id: str, content: str, tags: list[str] | None 
     if tags is not None:
         db_note.tags = tags
     if concepts is not None:
-        db_note.concepts = concepts
+        processed_concepts = []
+        for c in concepts:
+            if "与" in c:
+                processed_concepts.extend([sub.strip() for sub in c.split("与") if sub.strip()])
+            elif "和" in c:
+                processed_concepts.extend([sub.strip() for sub in c.split("和") if sub.strip()])
+            else:
+                processed_concepts.append(c)
+        db_note.concepts = processed_concepts
     db_note.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(db_note)
@@ -671,11 +690,12 @@ async def build_review_adaptation_payload(concept: str, quality: int, mastery: f
         simplified = fallback_simplified
 
     mermaid = (
-        "flowchart LR\n"
-        f"    A[直觉问题: {concept}] --> B[生活化类比]\n"
-        "    B --> C[关键变量]\n"
-        "    C --> D[最小例题]\n"
-        "    D --> E[重新复述]\n"
+        "mindmap\n"
+        f'    root(("直觉问题: {concept}"))\n'
+        '        生活化类比\n'
+        '        关键变量\n'
+        '        最小例题\n'
+        '        重新复述\n'
     )
     card_back = simplified + "\n\n" + mermaid
     stream_chunks = [card_back[i : i + 28] for i in range(0, len(card_back), 28)]
@@ -727,3 +747,120 @@ def get_conversation_history(db: Session, student_id: str, limit: int = 30) -> l
         .limit(limit)
         .all()
     )
+
+
+def migrate_anonymous_data(db: Session, anon_id: str, target_id: str):
+    """
+    将匿名临时ID(anon_id)产生的所有学情数据迁移/合并到正式账号(target_id)下，
+    防止登录/注册后历史复习计划、笔记、错题本丢失。
+    """
+    if not anon_id or not target_id or anon_id == target_id:
+        return
+
+    # 1. 检查匿名画像和正式账号画像是否存在
+    anon_profile = db.query(DBStudentProfile).filter(DBStudentProfile.student_id == anon_id).first()
+    target_profile = db.query(DBStudentProfile).filter(DBStudentProfile.student_id == target_id).first()
+
+    if not anon_profile:
+        # 匿名账号没有任何画像数据，无需迁移
+        return
+
+    if not target_profile:
+        # 如果正式账号没有画像，可以直接将匿名画像的主键更改为正式账号ID
+        try:
+            anon_profile.student_id = target_id
+            db.commit()
+            return
+        except Exception:
+            db.rollback()
+            # 如果更新报错，回退到普通合并流程
+            target_profile = DBStudentProfile(student_id=target_id)
+            db.add(target_profile)
+            db.commit()
+
+    # 2. 合并画像状态 (Merge Profiles)
+    target_profile.target_course = target_profile.target_course or anon_profile.target_course
+    target_profile.major = target_profile.major or anon_profile.major
+    target_profile.cognitive_style = target_profile.cognitive_style or anon_profile.cognitive_style
+    
+    # 融合 concept_mastery (保留更高的掌握度，或用最新的覆盖)
+    mastery_a = dict(anon_profile.concept_mastery or {})
+    mastery_t = dict(target_profile.concept_mastery or {})
+    for k, v in mastery_a.items():
+        if k not in mastery_t:
+            mastery_t[k] = v
+        else:
+            mastery_t[k] = max(mastery_t[k], v)
+    target_profile.concept_mastery = mastery_t
+
+    # 融合 bkt_states
+    bkt_a = dict(anon_profile.bkt_states or {})
+    bkt_t = dict(target_profile.bkt_states or {})
+    for k, v in bkt_a.items():
+        if k not in bkt_t:
+            bkt_t[k] = v
+    target_profile.bkt_states = bkt_t
+
+    # 融合 weak_points
+    weak_a = list(anon_profile.weak_points or [])
+    weak_t = list(target_profile.weak_points or [])
+    for wp in weak_a:
+        if wp not in weak_t:
+            weak_t.append(wp)
+    target_profile.weak_points = weak_t
+
+    # 融合 history_logs
+    if anon_profile.history_logs:
+        target_profile.history_logs = (target_profile.history_logs or "") + "\n" + anon_profile.history_logs
+
+    db.commit()
+
+    # 3. 级联迁移所有相关的外键数据
+    from app.database import (
+        DBAlignmentLog, DBNote, DBReviewPlan, DBConversationHistory,
+        DBKnowledgeDocument, DBQuizRecord, DBWebSearchHistory,
+        DBCodeExecution, DBWrongQuestion, DBCheckinLog
+    )
+
+    # A. 迁移复习计划 (Review Plans)，防止重复主键冲突
+    for plan in db.query(DBReviewPlan).filter_by(student_id=anon_id).all():
+        exists = db.query(DBReviewPlan).filter_by(student_id=target_id, concept=plan.concept).first()
+        if exists:
+            exists.mastery = max(exists.mastery, plan.mastery)
+            exists.interval_days = max(exists.interval_days, plan.interval_days)
+            db.delete(plan)
+        else:
+            plan.student_id = target_id
+    db.commit()
+
+    # B. 迁移错题本 (Wrong Questions)
+    for wrong in db.query(DBWrongQuestion).filter_by(student_id=anon_id).all():
+        exists = db.query(DBWrongQuestion).filter_by(student_id=target_id, quiz_record_id=wrong.quiz_record_id).first()
+        if exists:
+            db.delete(wrong)
+        else:
+            wrong.student_id = target_id
+    db.commit()
+
+    # C. 批量迁移其他直接字段 (对话记录、笔记、坐标对齐、代码执行、Arxiv检索、打卡等)
+    other_models = [
+        DBAlignmentLog, DBNote, DBConversationHistory,
+        DBKnowledgeDocument, DBQuizRecord, DBWebSearchHistory,
+        DBCodeExecution, DBCheckinLog
+    ]
+
+    for model in other_models:
+        try:
+            db.query(model).filter(model.student_id == anon_id).update({"student_id": target_id}, synchronize_session=False)
+            db.commit()
+        except Exception as err:
+            print(f"  [Migration] Failed to migrate {model.__name__}: {err}")
+            db.rollback()
+
+    # 4. 删除原匿名临时画像
+    try:
+        db.delete(anon_profile)
+        db.commit()
+    except Exception as err:
+        print(f"  [Migration] Failed to delete anon profile: {err}")
+        db.rollback()

@@ -1,13 +1,15 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch, createApp } from 'vue'
 import { useRouter } from 'vue-router'
-import { getStudentProfile, getLearningPath, getReviewPlans, getRecommendations, getNotes, regenerateComponent, getProfileAnalysis } from '../api'
+import { getStudentProfile, getLearningPath, getReviewPlans, getRecommendations, getNotes, regenerateComponent, getProfileAnalysis, updateStudentProfile, getGoalRecommendations } from '../api'
 import {
   Activity, Brain, ArrowRight, Sparkles, BookOpen, Target, TrendingUp,
-  CheckCircle2, Clock, Calendar, GraduationCap, UserCheck, Play
+  CheckCircle2, Clock, Calendar, GraduationCap, UserCheck, Play, Edit3
 } from '@lucide/vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
+import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
+import VideoPlayerCard from '../components/VideoPlayerCard.vue'
 
 const router = useRouter()
 const props = defineProps({ studentId: String })
@@ -29,6 +31,45 @@ const isGenerating = ref(false)
 const currentStudentId = ref(props.studentId || localStorage.getItem('edumatrix_student_id') || 'demo-student')
 
 const pathwayLoading = ref({})
+
+const activeLearningTarget = computed(() => learningPath.value?.active_learning_target || '')
+const goalOrigin = computed(() => learningPath.value?.goal_origin || 'course_default')
+const adaptiveRoute = computed(() => learningPath.value?.adaptive_route || null)
+const availableConcepts = computed(() => {
+  return learningPath.value?.learning_chain?.map(n => n.concept) || []
+})
+
+const goalRecommendations = ref([])
+const showGoalModal = ref(false)
+const newGoalInput = ref('')
+const updatingGoal = ref(false)
+
+async function handleGoalUpdate(newGoal) {
+  if (!newGoal) return
+  updatingGoal.value = true
+  try {
+    await updateStudentProfile(currentStudentId.value, {
+      learning_goals: [newGoal]
+    })
+    // Reload path, recommendations and goal recommendations after update
+    const [lp, recs, p, gr] = await Promise.all([
+      getLearningPath(currentStudentId.value).catch(() => null),
+      getRecommendations(currentStudentId.value).catch(() => []),
+      getStudentProfile(currentStudentId.value).catch(() => null),
+      getGoalRecommendations(currentStudentId.value).catch(() => [])
+    ])
+    learningPath.value = lp
+    recommendations.value = recs || []
+    if (p) profile.value = p
+    goalRecommendations.value = gr || []
+    newGoalInput.value = ''
+    showGoalModal.value = false
+  } catch (err) {
+    console.error('Failed to update learning goal:', err)
+  } finally {
+    updatingGoal.value = false
+  }
+}
 
 async function switchPathway(concept, pathwayCode) {
   pathwayLoading.value[concept] = true
@@ -200,15 +241,33 @@ function openInWorkspace() {
 }
 
 onMounted(async () => {
+  window.startInteractiveQuiz = (conceptName) => {
+    router.push({ path: '/learn', query: { quiz: conceptName } })
+  }
+  window.startInteractiveVideo = () => {
+    const url = `/api/v1/video/stream?student_id=${currentStudentId.value}`
+    playVideo(url)
+  }
+  window.mountCodeToSandbox = (btn) => {
+    const parent = btn.closest('.relative')
+    const pre = parent ? parent.querySelector('pre') : null
+    if (pre) {
+      const rawCode = pre.textContent || ''
+      localStorage.setItem('edumatrix_sandbox_mount_code', rawCode)
+      router.push({ path: '/learn', query: { q: activeResource.value?.concept || '' } })
+    }
+  }
+
   try {
     const sid = currentStudentId.value
-    const [p, lp, rv, recs, notesData, analysisData] = await Promise.all([
+    const [p, lp, rv, recs, notesData, analysisData, gr] = await Promise.all([
       getStudentProfile(sid),
       getLearningPath(sid).catch(() => null),
       getReviewPlans(sid).catch(() => []),
       getRecommendations(sid).catch(() => []),
       getNotes(sid).catch(() => ({ notes: [] })),
-      getProfileAnalysis(sid).catch(() => null)
+      getProfileAnalysis(sid).catch(() => null),
+      getGoalRecommendations(sid).catch(() => [])
     ])
     profile.value = p
     learningPath.value = lp
@@ -216,12 +275,659 @@ onMounted(async () => {
     recommendations.value = recs || []
     studentNotes.value = notesData?.notes || []
     profileAnalysis.value = analysisData
+    goalRecommendations.value = gr || []
   } catch (e) {
     console.error('Dashboard load error:', e)
   } finally {
     loading.value = false
   }
 })
+
+onUnmounted(() => {
+  window.startInteractiveQuiz = null
+  window.startInteractiveVideo = null
+  window.mountCodeToSandbox = null
+  cleanupCustomMindmaps()
+})
+
+watch([activeResource, activeResourceContent], () => {
+  if (activeResource.value && activeResourceContent.value) {
+    nextTick(() => {
+      renderAllDiagrams()
+    })
+  }
+})
+
+function safeParseJson(str, fallback = []) {
+  if (!str) return fallback
+  let cleaned = str.trim()
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\s*/, '').replace(/\s*```$/, '').trim()
+  }
+  const startIdx = cleaned.indexOf('[')
+  const endIdx = cleaned.lastIndexOf(']')
+  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    cleaned = cleaned.substring(startIdx, endIdx + 1)
+  }
+  try {
+    return JSON.parse(cleaned)
+  } catch (e) {
+    console.error("JSON parse failed in Dashboard.vue, attempting fuzzy recovery:", e, str)
+    try {
+      const fixed = cleaned
+        .replace(/,\s*]/g, ']')
+        .replace(/,\s*}/g, '}')
+      return JSON.parse(fixed)
+    } catch (e2) {
+      console.error("Fuzzy JSON recovery failed:", e2)
+      return fallback
+    }
+  }
+}
+
+// --- 任务 8.3: 照搬主对话资源生成的 Markdown 渲染引擎与自愈算法 ---
+function extractCodeFromMarkdown(mdText) {
+  if (!mdText) return ''
+  const regex = /```(?:python|javascript|js|py)?\s*\n([\s\S]*?)```/gi
+  const codes = []
+  let match
+  while ((match = regex.exec(mdText)) !== null) {
+    codes.push(match[1].trim())
+  }
+  if (codes.length > 0) {
+    return codes.join('\n\n')
+  }
+  return mdText.trim()
+}
+
+function sanitizeMermaidCode(code) {
+  let lines = code.split(/\r?\n/)
+  let result = []
+  let isMindmap = false
+  let nodeCounter = 0
+
+  const delimPairs = [
+    { open: '((', close: '))' },
+    { open: '{{', close: '}}' },
+    { open: '(', close: ')' },
+    { open: '[', close: ']' },
+  ];
+
+  for (let line of lines) {
+    let trimmed = line.trim()
+    if (!trimmed) {
+      result.push(line)
+      continue
+    }
+
+    if (trimmed === 'mindmap') {
+      isMindmap = true
+      result.push(line)
+      continue
+    }
+
+    if (!isMindmap) {
+      result.push(line)
+      continue
+    }
+
+    let indent = line.match(/^(\s*)/)[0]
+    let cleaned = trimmed.replace(/^[-*+]\s+/, '')
+    cleaned = cleaned.replace(/\*\*/g, '').replace(/`/g, '')
+
+    if (cleaned.startsWith('%%')) {
+      result.push(line)
+      continue
+    }
+
+    if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+      cleaned = cleaned.slice(1, -1).trim()
+    }
+
+    let isShape = false
+    let id = ''
+    let openDelim = ''
+    let innerText = ''
+    let closeDelim = ''
+
+    for (const pair of delimPairs) {
+      const escapedOpen = pair.open.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
+      const escapedClose = pair.close.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
+      const regex = new RegExp(`^([^({[\\]\\s]+)\\s*(${escapedOpen})\\s*(.*?)\\s*(${escapedClose})$`)
+      const match = cleaned.match(regex)
+      if (match) {
+        id = match[1]
+        openDelim = match[2]
+        innerText = match[3]
+        closeDelim = match[4]
+        isShape = true
+        break
+      }
+    }
+
+    if (isShape) {
+      let cleanText = innerText.trim()
+      if (cleanText.startsWith('"') && cleanText.endsWith('"')) {
+        cleanText = cleanText.slice(1, -1)
+      }
+      cleanText = cleanText.replace(/\\"/g, '"').replace(/"/g, '&quot;').trim()
+      let wrappedText = '"' + cleanText + '"'
+      result.push(indent + id + openDelim + wrappedText + closeDelim)
+      continue
+    }
+
+    const hasSpecial = /[^a-zA-Z0-9_\-]/g.test(cleaned)
+    if (hasSpecial) {
+      nodeCounter++
+      const nodeId = `node_${nodeCounter}`
+      let cleanText = cleaned.replace(/\\"/g, '"').replace(/"/g, '&quot;').trim()
+      let wrappedText = '"' + cleanText + '"'
+      result.push(indent + nodeId + '[' + wrappedText + ']')
+    } else {
+      let cleanText = cleaned.replace(/\\"/g, '"').replace(/"/g, '&quot;').trim()
+      result.push(indent + cleanText)
+    }
+  }
+
+  return result.join('\n')
+}
+
+function renderMarkdown(text, type = '', conceptName = '') {
+  if (!text) return ''
+
+  let cleaned = text.trim()
+  
+  const openTicksCount = (cleaned.match(/```/g) || []).length
+  if (openTicksCount % 2 !== 0) {
+    cleaned += '\n```'
+  }
+  const doubleDollarCount = (cleaned.match(/\$\$/g) || []).length
+  if (doubleDollarCount % 2 !== 0) {
+    cleaned += '\n$$'
+  }
+
+  if (cleaned.startsWith('```markdown') && cleaned.endsWith('```')) {
+    cleaned = cleaned.slice(11, -3).trim()
+  } else if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
+    const firstLineEnd = cleaned.indexOf('\n')
+    if (firstLineEnd !== -1) {
+      const lang = cleaned.substring(3, firstLineEnd).trim().toLowerCase()
+      if (lang === '' || lang === 'markdown' || lang === 'text' || lang === 'txt') {
+        cleaned = cleaned.substring(firstLineEnd + 1, cleaned.length - 3).trim()
+      }
+    }
+  }
+
+  const svgBlocks = []
+  cleaned = cleaned.replace(/(<svg[\s\S]*?<\/svg>)/gi, (match) => {
+    const idx = svgBlocks.length
+    svgBlocks.push(match)
+    return `@@SVGBLOCKTOKEN${idx}@@`
+  })
+
+  const layoutBlocks = []
+  function protectLayout(htmlTag) {
+    const idx = layoutBlocks.length
+    layoutBlocks.push(htmlTag)
+    return `@@LAYOUTTOKEN${idx}@@`
+  }
+
+  function buildThreeLevelHintLadderHtml(rawContent) {
+    if (!rawContent) return ''
+
+    let text = rawContent
+      .replace(/<details[\s\S]*?>/gi, '')
+      .replace(/<\/details>/gi, '')
+      .replace(/<summary>[\s\S]*?<\/summary>/gi, '')
+      .replace(/^[#*\s]*💡?\s*提示阶梯[（(]点击展开[）)]?[#*\s]*\n+/gim, '')
+      .trim()
+
+    const layer1Match = text.match(/(?:[-*+\s]*)\*?\*?第\s*[1一]\s*层[（(]([^）)]+)[）)]\*?\*?\s*[：:]\s*([\s\S]*?)(?=(?:[-*+\s]*)\*?\*?第\s*[2二]\s*层|$)/i)
+    const layer2Match = text.match(/(?:[-*+\s]*)\*?\*?第\s*[2二]\s*层[（(]([^）)]+)[）)]\*?\*?\s*[：:]\s*([\s\S]*?)(?=(?:[-*+\s]*)\*?\*?第\s*[3三]\s*层|$)/i)
+    const layer3Match = text.match(/(?:[-*+\s]*)\*?\*?第\s*[3三]\s*层[（(]([^）)]+)[）)]\*?\*?\s*[：:]\s*([\s\S]*?)(?=$)/i)
+
+    const layers = []
+    if (layer1Match) layers.push({ num: 1, name: layer1Match[1].trim(), content: layer1Match[2].trim() })
+    if (layer2Match) layers.push({ num: 2, name: layer2Match[1].trim(), content: layer2Match[2].trim() })
+    if (layer3Match) layers.push({ num: 3, name: layer3Match[1].trim(), content: layer3Match[2].trim() })
+
+    if (layers.length === 0) {
+      const cardStart = protectLayout(`<div class="edumatrix-accordion-card border border-slate-200/80 dark:border-slate-800/80 rounded-xl my-3 overflow-hidden shadow-sm bg-slate-50/40 dark:bg-slate-900/40 transition-all duration-300">
+  <div onclick="const body=this.nextElementSibling; const icon=this.querySelector('.accordion-icon'); if(body.style.display==='none'||!body.style.display){ body.style.display='block'; if(icon) icon.textContent='▼'; }else{ body.style.display='none'; if(icon) icon.textContent='▶'; }" class="px-4 py-3 font-semibold text-slate-800 dark:text-slate-200 cursor-pointer bg-slate-100/60 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between select-none text-xs">
+    <span class="flex items-center gap-1.5">💡 提示阶梯（点击展开）</span>
+    <span class="accordion-icon text-[10px] text-slate-400 font-mono">▶</span>
+  </div>
+  <div class="accordion-body px-5 py-4 border-t border-slate-100 dark:border-slate-800/60 text-slate-700 dark:text-slate-300 leading-relaxed text-xs" style="display: none;">`)
+      const cardEnd = protectLayout(`</div></div>`)
+      return `\n\n${cardStart}\n\n${text}\n\n${cardEnd}\n\n`
+    }
+
+    const itemsHtml = layers.map(l => {
+      const cardStart = protectLayout(`<div class="edumatrix-accordion-card border border-sky-200/80 dark:border-sky-900/50 rounded-xl my-2 overflow-hidden shadow-sm bg-sky-50/20 dark:bg-slate-900/40 transition-all duration-300">
+  <div onclick="const body=this.nextElementSibling; const icon=this.querySelector('.accordion-icon'); if(body.style.display==='none'||!body.style.display){ body.style.display='block'; if(icon) icon.textContent='▼'; }else{ body.style.display='none'; if(icon) icon.textContent='▶'; }" class="px-4 py-2.5 font-semibold text-sky-900 dark:text-sky-200 cursor-pointer bg-sky-50/80 dark:bg-sky-950/40 hover:bg-sky-100/80 dark:hover:bg-sky-900/60 transition-colors flex items-center justify-between select-none text-xs">
+    <span class="flex items-center gap-1.5">💡 <strong class="text-sky-800 dark:text-sky-300">第 ${l.num} 层提示</strong> · ${l.name}（点击展开）</span>
+    <span class="accordion-icon text-[10px] text-sky-600 dark:text-sky-400 font-mono">▶</span>
+  </div>
+  <div class="accordion-body px-5 py-3.5 border-t border-sky-100 dark:border-sky-900/50 text-slate-700 dark:text-slate-300 leading-relaxed text-xs bg-white/40 dark:bg-slate-900/20" style="display: none;">`)
+      const cardEnd = protectLayout(`</div></div>`)
+      return `\n\n${cardStart}\n\n${l.content}\n\n${cardEnd}\n\n`
+    }).join('\n')
+
+    const wrapperStart = protectLayout(`<div class="edumatrix-hint-ladder-wrapper my-3.5 p-3.5 bg-gradient-to-br from-sky-50/70 via-blue-50/40 to-slate-50/60 dark:from-slate-900/80 dark:via-sky-950/30 dark:to-slate-900/90 rounded-2xl border border-sky-200/80 dark:border-sky-900/50 shadow-sm">
+  <div class="text-xs font-bold text-sky-900 dark:text-sky-300 mb-2 flex items-center gap-1.5 px-1">
+    <span>🪜</span>
+    <span>三层递进提示阶梯（点击各层按需展开查看）：</span>
+  </div>`)
+    const wrapperEnd = protectLayout(`</div>`)
+
+    return `\n\n${wrapperStart}\n${itemsHtml}\n${wrapperEnd}\n\n`
+  }
+
+  cleaned = cleaned.replace(/(?:^|\n)\s*[-*+]*\s*(?:[#*\s]*提示阶梯[：:]*\s*\n+)?<details[\s\S]*?>([\s\S]*?)<\/details>/gi, (match, bodyContent) => {
+    return buildThreeLevelHintLadderHtml(bodyContent)
+  })
+
+  if (!cleaned.includes('@@LAYOUTTOKEN')) {
+    cleaned = cleaned.replace(
+      /(?:[#*]*\s*提示阶梯[：:]?\s*[#*]*\s*\n+)?((?:[-*]\s*\*?第[123一二三]层[\s\S]*?)(?=\n\s*\n(?![-\s]*\*?第[123一二三]层)|\n[#*]{1,3}\s+|<div|$))/gi,
+      (match, hintsContent) => {
+        return buildThreeLevelHintLadderHtml(hintsContent)
+      }
+    )
+  }
+
+  let html = cleaned
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+  const blockMath = []
+  html = html.replace(/\DoubleDollar([\s\S]*?)\DoubleDollar/g, (_, math) => {
+    const idx = blockMath.length
+    blockMath.push({ math: math.trim(), display: true })
+    return `@@BLOCKMATHTOKEN${idx}@@`
+  }).replace(/\$\$/g, '$$$$') // Escape backslashes for double dollars replacement safely
+  html = html.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
+    const idx = blockMath.length
+    blockMath.push({ math: math.trim(), display: true })
+    return `@@BLOCKMATHTOKEN${idx}@@`
+  })
+
+  const inlineMath = []
+  html = html.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
+    const idx = inlineMath.length
+    inlineMath.push({ math: math.trim(), display: false })
+    return `@@INLINEMATHTOKEN${idx}@@`
+  })
+  html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => {
+    const idx = inlineMath.length
+    inlineMath.push({ math: math.trim(), display: false })
+    return `@@INLINEMATHTOKEN${idx}@@`
+  })
+
+  const codeBlocks = []
+  html = html.replace(/```([^\r\n]*)\r?\n([\s\S]*?)```/g, (_, lang, code) => {
+    const isMermaid = lang.toLowerCase().includes('mermaid') || code.includes('mindmap') || code.includes('graph ') || code.includes('sequenceDiagram')
+    let blockHtml = ''
+    if (isMermaid) {
+      let cleanCode = code.trim()
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+
+      const tokenRegex = /@@INLINEMATHTOKEN(\d+)@@/g
+      cleanCode = cleanCode.replace(tokenRegex, (match, idx) => {
+        const item = inlineMath[parseInt(idx)]
+        if (item) {
+          return item.math
+            .replace(/\$/g, '')
+            .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '$1^')
+            .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '$1/$2')
+            .replace(/\\partial/g, 'd')
+            .replace(/\\Sigma/g, 'sum')
+            .replace(/\\sigma/g, 'sigma')
+            .replace(/\\alpha/g, 'alpha')
+            .replace(/\\cdot/g, '·')
+            .replace(/\\/g, '')
+        }
+        return ''
+      })
+
+      const blockTokenRegex = /@@BLOCKMATHTOKEN(\d+)@@/g
+      cleanCode = cleanCode.replace(blockTokenRegex, (match, idx) => {
+        const item = blockMath[parseInt(idx)]
+        if (item) {
+          return item.math
+            .replace(/\$/g, '')
+            .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '$1^')
+            .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '$1/$2')
+            .replace(/\\partial/g, 'd')
+            .replace(/\\Sigma/g, 'sum')
+            .replace(/\\sigma/g, 'sigma')
+            .replace(/\\alpha/g, 'alpha')
+            .replace(/\\cdot/g, '·')
+            .replace(/\\/g, '')
+        }
+        return ''
+      })
+
+      cleanCode = sanitizeMermaidCode(cleanCode)
+      const escapedCode = encodeURIComponent(cleanCode)
+
+      if (cleanCode.includes('mindmap')) {
+        blockHtml = `<div class="custom-mindmap-placeholder" data-code="${escapedCode}"></div>`
+      } else {
+        blockHtml = `<div class="my-3 p-4 bg-white border border-gray-200 rounded-xl text-xs flex flex-col items-center shadow-sm max-w-full">
+          <div class="w-full flex items-center justify-between mb-3 pb-2 border-b border-gray-100">
+            <div class="flex items-center gap-1.5">
+              <span class="text-base">📊</span>
+              <span class="font-bold text-gray-800 text-xs">概念思维导图</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-[9px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-mono font-medium">Mermaid</span>
+            </div>
+          </div>
+          <div class="mermaid-container w-full overflow-auto flex justify-center py-2 bg-white max-h-[300px]">
+            <div class="mermaid w-full flex justify-center" data-code="${escapedCode}"><div class="mermaid-loading flex flex-col items-center justify-center gap-1.5 py-6 text-gray-400 select-none"><div class="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div><span class="text-[10px] text-indigo-500 font-semibold animate-pulse">正在绘制思维导图...</span></div></div>
+          </div>
+        </div>`
+      }
+    } else {
+      const cleanLang = (lang || 'python').trim().toLowerCase()
+      blockHtml = `<div class="relative group my-3">
+        <pre class="p-3 bg-gray-900 rounded-lg overflow-x-auto text-xs leading-relaxed language-${cleanLang}"><code class="language-${cleanLang}">${code.trim()}</code></pre>
+        <button onclick="window.mountCodeToSandbox && window.mountCodeToSandbox(this)" class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity px-2.5 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-[10px] flex items-center gap-1 shadow-sm font-semibold transition-all">
+          💻 挂载至沙箱
+        </button>
+      </div>`
+    }
+    const idx = codeBlocks.length
+    codeBlocks.push(blockHtml)
+    return `@@CODEBLOCKTOKEN${idx}@@`
+  })
+
+  html = html.replace(/`([^`\n]+)`/g, (_, code) => {
+    const blockHtml = `<code class="px-1.5 py-0.5 bg-gray-100 text-red-600 rounded font-mono text-xs font-medium">${code}</code>`
+    const idx = codeBlocks.length
+    codeBlocks.push(blockHtml)
+    return `@@CODEBLOCKTOKEN${idx}@@`
+  })
+
+  const lines = html.split('\n')
+  let inTable = false
+  let tableHeader = []
+  let tableRows = []
+  let inList = false
+  const processedLines = []
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+    const isTableRow = trimmed.startsWith('|') && trimmed.endsWith('|')
+    if (isTableRow) {
+      if (inList) {
+        processedLines.push('</ul>')
+        inList = false
+      }
+      const cells = trimmed.slice(1, -1).split('|').map(c => c.trim())
+      const isSeparator = cells.every(c => /^[:-]+$/.test(c))
+      if (isSeparator) {
+        continue
+      }
+      if (!inTable) {
+        inTable = true
+        tableHeader = cells
+      } else {
+        tableRows.push(cells)
+      }
+      continue
+    } else {
+      if (inTable) {
+        processedLines.push(generateTableHtml(tableHeader, tableRows))
+        inTable = false
+        tableHeader = []
+        tableRows = []
+      }
+    }
+
+    const listMatch = line.match(/^(\s*)[-*+]\s+(.*)$/)
+    if (listMatch) {
+      const content = listMatch[2]
+      if (!inList) {
+        processedLines.push('<ul class="my-2 space-y-1 list-disc list-inside">')
+        inList = true
+      }
+      processedLines.push(`<li class="ml-4 text-xs text-gray-600 my-1 leading-relaxed">${content}</li>`)
+    } else {
+      if (inList) {
+        processedLines.push('</ul>')
+        inList = false
+      }
+      processedLines.push(line)
+    }
+  }
+
+  if (inTable) {
+    processedLines.push(generateTableHtml(tableHeader, tableRows))
+  }
+  if (inList) {
+    processedLines.push('</ul>')
+  }
+
+  html = processedLines.join('\n')
+
+  function generateTableHtml(header, rows) {
+    let tableHtml = '<div class="overflow-x-auto my-4 border border-gray-200/80 rounded-xl shadow-sm bg-white"><table class="min-w-full divide-y divide-gray-200">'
+    if (header && header.length > 0) {
+      tableHtml += '<thead class="bg-gray-50/75"><tr>'
+      header.forEach(h => {
+        tableHtml += `<th class="px-4 py-2.5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">${h}</th>`
+      })
+      tableHtml += '</tr></thead>'
+    }
+    tableHtml += '<tbody class="divide-y divide-gray-100 bg-white">'
+    rows.forEach(row => {
+      tableHtml += '<tr class="hover:bg-gray-50/50 transition-colors">'
+      row.forEach(cell => {
+        tableHtml += `<td class="px-4 py-2 text-xs text-gray-600">${cell}</td>`
+      })
+      tableHtml += '</tr>'
+    })
+    tableHtml += '</tbody></table></div>'
+    return tableHtml
+  }
+
+  html = html.replace(/!\[([^\]]*)\]\s*\(([^)]+)\)/g, (match, alt, url) => {
+    const cleanUrl = url.replace(/\s+/g, '')
+    return `<img src="${cleanUrl}" alt="${alt}" class="max-w-full max-h-[300px] object-contain rounded-xl my-3 shadow-sm border border-gray-100 bg-white p-1" />`
+  })
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-gray-900">$1</strong>')
+  html = html.replace(/\*([^*]+)\*/g, '<em class="italic text-gray-800">$1</em>')
+  html = html.replace(/^### (.*$)/gim, '<h4 class="text-xs font-bold text-gray-800 mt-4 mb-1.5 flex items-center gap-1">$1</h4>')
+  html = html.replace(/^## (.*$)/gim, '<h3 class="text-sm font-semibold text-gray-900 mt-5 mb-2 border-b border-gray-100 pb-1 flex items-center gap-1.5">$1</h3>')
+  html = html.replace(/^# (.*$)/gim, '<h2 class="text-base font-bold text-gray-900 mt-6 mb-3 flex items-center gap-2">$1</h2>')
+
+  html = html.replace(/\n\n/g, '<div class="h-2.5"></div>')
+
+  function renderMath(math, display) {
+    const cleanMathContent = math
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+
+    if (window.katex) {
+      try {
+        return window.katex.renderToString(cleanMathContent, {
+          displayMode: display,
+          throwOnError: false,
+          trust: true
+        })
+      } catch (err) {
+        console.error('KaTeX rendering error:', err)
+      }
+    }
+    const cleanMath = cleanMathContent
+      .replace(/\\Sigma/g, '∑')
+      .replace(/\\sigma/g, 'σ')
+      .replace(/\\mu/g, 'μ')
+      .replace(/\\beta/g, 'β')
+      .replace(/\\theta/g, 'θ')
+      .replace(/\\alpha/g, 'α')
+      .replace(/\\lambda/g, 'λ')
+      .replace(/\\partial/g, '∂')
+      .replace(/\\infty/g, '∞')
+      .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '<span style="text-decoration: overline">$1</span>')
+      .replace(/([a-zA-Z0-9]+)_([a-zA-Z0-9]+)/g, '$1<sub>$2</sub>')
+      .replace(/([a-zA-Z0-9]+)\^([a-zA-Z0-9]+)/g, '$1<sup>$2</sup>')
+      .replace(/\\cdot/g, '·')
+      .replace(/\\times/g, '×')
+      .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1)/($2)')
+      .replace(/\\sqrt\{([^}]+)\}/g, '√($1)')
+      .replace(/\\text\{([^}]+)\}/g, '$1')
+      .replace(/\\quad/g, '&nbsp;&nbsp;')
+
+    if (display) {
+      return `<div class="my-3.5 p-4 bg-gray-50/75 border border-gray-100 rounded-xl text-center font-serif text-sm overflow-x-auto select-all shadow-inner text-gray-800">${cleanMath}</div>`
+    } else {
+      return `<span class="font-serif italic bg-gray-50/75 px-1.5 py-0.5 rounded text-xs select-all text-gray-800 border border-gray-100/50">${cleanMath}</span>`
+    }
+  }
+
+  html = html
+    .replace(/\\in\b/g, ' ∈ ')
+    .replace(/\\sigma\b/g, 'σ')
+    .replace(/\\hat\{([a-zA-Z0-9]+)\}/g, '<span style="text-decoration: overline">$1</span>')
+    .replace(/\\([{}])/g, '$1')
+    .replace(/([a-zA-Z0-9])_([a-zA-Z0-9_]+)/g, '$1<sub>$2</sub>')
+    .replace(/([a-zA-Z0-9])_\{([^}]+)\}/g, '$1<sub>$2</sub>')
+    .replace(/([a-zA-Z0-9])\^([a-zA-Z0-9+-\\*\\top\\partial]+)/g, (match, base, exp) => {
+      const displayExp = exp === '\\top' || exp === 'top' ? 'T' : exp
+      return `${base}<sup>${displayExp}</sup>`
+    })
+    .replace(/([a-zA-Z0-9])\^\{([^}]+)\}/g, (match, base, exp) => {
+      const displayExp = exp === '\\top' || exp === 'top' ? 'T' : exp
+      return `${base}<sup>${displayExp}</sup>`
+    })
+
+  layoutBlocks.forEach((block, idx) => {
+    html = html.split(`@@LAYOUTTOKEN${idx}@@`).join(block)
+  })
+
+  blockMath.forEach((item, idx) => {
+    html = html.split(`@@BLOCKMATHTOKEN${idx}@@`).join(renderMath(item.math, true))
+  })
+  inlineMath.forEach((item, idx) => {
+    html = html.split(`@@INLINEMATHTOKEN${idx}@@`).join(renderMath(item.math, false))
+  })
+  codeBlocks.forEach((block, idx) => {
+    html = html.split(`@@CODEBLOCKTOKEN${idx}@@`).join(block)
+  })
+  svgBlocks.forEach((block, idx) => {
+    html = html.split(`@@SVGBLOCKTOKEN${idx}@@`).join(block)
+  })
+
+  const normalizedType = type.toLowerCase()
+  if (normalizedType.includes('assess') || normalizedType.includes('quiz') || normalizedType.includes('考官') || normalizedType.includes('评测')) {
+    const escapedConcept = (conceptName || '机器学习').replace(/'/g, "\\'")
+    html += `<div class="mt-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 flex items-center justify-between">
+      <div class="text-xs text-blue-800">
+        <strong>📝 评测联动已就绪：</strong>已为您准备了针对此概念的自适应多步评测。
+      </div>
+      <button onclick="window.startInteractiveQuiz && window.startInteractiveQuiz('${escapedConcept}')" class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all whitespace-nowrap">
+        去测验板作答 (CAT) →
+      </button>
+    </div>`
+  } else if (normalizedType.includes('director') || normalizedType.includes('video') || normalizedType.includes('导演') || normalizedType.includes('视频')) {
+    html += `<div class="mt-4 p-3 bg-indigo-50/50 rounded-xl border border-indigo-100 flex items-center justify-between">
+      <div class="text-xs text-indigo-800">
+        <strong>🎬 视频演示已就绪：</strong>已为您量身定制并合成了该知识点的教学短视频。
+      </div>
+      <button onclick="window.startInteractiveVideo && window.startInteractiveVideo()" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all whitespace-nowrap">
+        播放讲解视频 →
+      </button>
+    </div>`
+  }
+
+  return html
+}
+
+function mountCustomMindmaps() {
+  nextTick(() => {
+    try {
+      const placeholders = document.querySelectorAll('.custom-mindmap-placeholder:not([data-mounted="true"])')
+      placeholders.forEach((el) => {
+        const rawCode = decodeURIComponent(el.getAttribute('data-code') || '')
+        const app = createApp(CollapsibleMindmap, { code: rawCode })
+        app.mount(el)
+        el.setAttribute('data-mounted', 'true')
+        el.__vue_app__ = app
+      })
+    } catch (err) {
+      console.error('Mount custom mindmaps error:', err)
+    }
+  })
+}
+
+function cleanupCustomMindmaps() {
+  const elements = document.querySelectorAll('.custom-mindmap-placeholder[data-mounted="true"]')
+  elements.forEach((el) => {
+    if (el.__vue_app__) {
+      try {
+        el.__vue_app__.unmount()
+      } catch (e) {}
+      delete el.__vue_app__
+    }
+  })
+}
+
+function initMermaid() {
+  if (typeof window.mermaid !== 'undefined') {
+    nextTick(() => {
+      try {
+        window.mermaid.initialize({
+          startOnLoad: false,
+          theme: 'default',
+          securityLevel: 'loose',
+          themeVariables: {
+            background: '#ffffff',
+            primaryColor: '#ff79c6',
+            primaryTextColor: '#111827',
+            lineColor: '#6366f1',
+            fontSize: '12px'
+          }
+        })
+        const elements = document.querySelectorAll('.mermaid:not([data-processed="true"])')
+        elements.forEach((el) => {
+          try {
+            const rawCode = decodeURIComponent(el.getAttribute('data-code') || '')
+            if (rawCode) {
+              el.textContent = rawCode
+            }
+            window.mermaid.init(undefined, el)
+          } catch (err) {
+            console.error('Individual Mermaid render error:', err)
+          }
+        })
+      } catch (err) {
+        console.error('Mermaid render error:', err)
+      }
+    })
+  }
+}
+
+function renderAllDiagrams() {
+  initMermaid()
+  mountCustomMindmaps()
+  if (typeof window.Prism !== 'undefined') {
+    nextTick(() => {
+      window.Prism.highlightAll()
+    })
+  }
+}
 </script>
 
 <template>
@@ -342,11 +1048,197 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 下一步学习推荐 -->
-    <div v-if="nextUp.length" class="bg-blue-50 rounded-2xl border border-blue-100 p-4">
-      <h2 class="text-sm font-semibold text-blue-800 mb-2 flex items-center gap-2">
-        <Sparkles :size="15" /> 继续学习
+    <!-- 🎯 唯一主攻锚点与最终目标微调中心 -->
+    <div v-if="activeLearningTarget" class="bg-gradient-to-r from-amber-500/10 via-amber-600/5 to-amber-700/0 border border-amber-500/30 rounded-2xl p-5 shadow-sm space-y-3 relative overflow-hidden">
+      <!-- Background micro-glow decoration -->
+      <div class="absolute -right-8 -top-8 w-24 h-24 rounded-full bg-amber-400/20 blur-xl pointer-events-none" />
+
+      <!-- Card Header / Goal Resolver UI -->
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-500/20 pb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center text-xs font-bold shadow-md shadow-amber-500/20">🎯</span>
+          <div>
+            <h3 class="text-xs font-bold text-slate-800 leading-none">自适应学习主攻卡</h3>
+            <span class="text-[9px] text-slate-400 mt-1 block">A* 算法全局拓扑寻优路线</span>
+          </div>
+        </div>
+
+        <!-- 最终目标微调中心 -->
+        <div class="flex items-center gap-1.5 bg-white/60 border border-slate-200/80 px-2.5 py-1 rounded-xl text-[10px] font-semibold text-slate-600 shadow-inner">
+          <span>最终通关目标:</span>
+          <strong class="text-indigo-600 font-bold">{{ adaptiveRoute?.target_concept || '未指定' }}</strong>
+          <span class="px-1.5 py-0.5 text-[8px] rounded-md scale-95 font-bold"
+            :class="{
+              'bg-blue-50 text-blue-700': goalOrigin === 'user',
+              'bg-emerald-50 text-emerald-700': goalOrigin === 'document',
+              'bg-amber-50 text-amber-700': goalOrigin === 'course_default',
+            }">
+            {{ goalOrigin === 'user' ? '✨ 手设' : goalOrigin === 'document' ? '📂 文档' : '📚 大纲' }}
+          </span>
+          <button @click="showGoalModal = true" class="ml-1 p-0.5 hover:bg-slate-200 rounded transition-colors text-slate-400 hover:text-indigo-600" title="微调目标">
+            <Edit3 :size="10" />
+          </button>
+        </div>
+      </div>
+
+      <!-- Core Guidance Statement -->
+      <div class="space-y-1 pb-1">
+        <h4 class="text-xs font-bold text-slate-850 flex items-center gap-1">
+          🎯 当前主攻概念：{{ activeLearningTarget }}（掌握度: {{ Math.round((profile?.concept_mastery?.[activeLearningTarget] || 0.0) * 100) }}%）
+        </h4>
+        <p class="text-[11px] text-slate-600 leading-relaxed font-medium mt-1.5">
+          💡 智能指引：这是根据您的备考目标规划出的 A* 核心路线第一步。系统已在下方为您准备了该概念的 5 维专属自适应学习资源，请优先攻克。
+        </p>
+      </div>
+
+      <!-- Horizontal Step Pipeline -->
+      <div v-if="adaptiveRoute?.nodes?.length" class="pt-2">
+        <div class="text-[9px] text-slate-400 font-bold mb-1.5 flex items-center gap-1">
+          <span>🛤️ A* 通关推进链条:</span>
+          <span class="text-slate-300">(共 {{ adaptiveRoute.nodes.length }} 步)</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-y-2 gap-x-1.5 py-1.5 max-w-full">
+          <div v-for="(node, index) in adaptiveRoute.nodes" :key="node.concept" class="flex items-center shrink-0">
+            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[10px] font-bold select-none transition-all cursor-pointer hover:scale-[1.01]"
+              @click="goLearn(node.concept)"
+              :class="node.concept === activeLearningTarget 
+                ? 'bg-amber-500 text-white border-amber-500 shadow-md ring-2 ring-amber-400/40 ring-offset-2 scale-[1.03] animate-pulse'
+                : (profile?.concept_mastery?.[node.concept] || 0.0) >= 0.7 
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                  : 'bg-white text-slate-500 border-slate-100 hover:border-slate-200'">
+              <span>{{ index + 1 }}. {{ node.concept }}</span>
+              <span v-if="(profile?.concept_mastery?.[node.concept] || 0.0) >= 0.7" class="text-[8px]">✅</span>
+            </div>
+            <span v-if="index < adaptiveRoute.nodes.length - 1" class="text-slate-300 mx-1 font-bold text-xs">→</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Goal Resolver Select Modal -->
+    <div v-if="showGoalModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm transition-all" @click="showGoalModal = false">
+      <div class="w-full max-w-2xl bg-white rounded-2xl shadow-2xl p-5 space-y-4 border border-slate-100 animate-scale-up mx-4 max-h-[90vh] overflow-y-auto" @click.stop>
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <h3 class="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+            🎯 A* 最终学习目标与智能路径规划中心
+          </h3>
+          <button @click="showGoalModal = false" class="text-slate-400 hover:text-slate-600 text-sm">✕</button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <!-- Left side: Manual selection -->
+          <div class="md:col-span-1 space-y-3.5">
+            <div>
+              <label class="text-[10px] text-slate-400 font-bold block mb-1">手动微调最终通关目标</label>
+              <select v-model="newGoalInput" class="w-full p-2.5 bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all">
+                <option value="" disabled>-- 请选择目标概念 --</option>
+                <option v-for="conceptName in availableConcepts" :key="conceptName" :value="conceptName">
+                  {{ conceptName }}
+                </option>
+              </select>
+            </div>
+
+            <p class="text-[10px] text-slate-400 leading-relaxed">
+              ✏️ 说明：选择目标概念后，A* 寻路算法及推送卡片会自动更新以其为终点。如果包含未掌握的前置依赖，系统将引导您优先攻克首个薄弱概念。
+            </p>
+
+            <div class="flex items-center gap-2 pt-2">
+              <button @click="showGoalModal = false" class="flex-1 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-bold rounded-xl transition-all">
+                取消
+              </button>
+              <button @click="handleGoalUpdate(newGoalInput)" :disabled="!newGoalInput || updatingGoal"
+                class="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center gap-1">
+                <span v-if="updatingGoal" class="animate-spin w-3 h-3 border-2 border-white border-t-transparent rounded-full" />
+                确认设定
+              </button>
+            </div>
+          </div>
+
+          <!-- Right side: AI smart pathway recommendations -->
+          <div class="md:col-span-2 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-4">
+            <h4 class="text-[11px] font-bold text-slate-800 flex items-center gap-1.5 mb-2.5">
+              <Sparkles :size="12" class="text-amber-500 animate-pulse" />
+              AI 自适应学习路径推荐 (多路线通关)
+            </h4>
+            <div v-if="goalRecommendations.length" class="space-y-3 max-h-[320px] overflow-y-auto pr-1">
+              <div v-for="pw in goalRecommendations" :key="pw.target_concept"
+                class="bg-slate-50 hover:bg-slate-100/70 border border-slate-150 rounded-xl p-3 space-y-2 transition-all">
+                
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <h5 class="text-[11px] font-extrabold text-slate-800">{{ pw.pathway_name }}</h5>
+                    <p class="text-[9px] text-slate-400 font-medium mt-0.5">{{ pw.description }}</p>
+                  </div>
+                  <button @click="handleGoalUpdate(pw.target_concept)" :disabled="updatingGoal"
+                    class="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white text-[10px] font-extrabold rounded-lg shadow-sm transition-all shrink-0">
+                    选择该目标
+                  </button>
+                </div>
+
+                <!-- Progress bar and Metrics -->
+                <div class="flex items-center justify-between gap-3 text-[9px] font-mono text-slate-500 flex-wrap">
+                  <div class="flex items-center gap-1.5 flex-1 min-w-[120px]">
+                    <span class="font-bold shrink-0">通关进度:</span>
+                    <div class="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                      <div class="h-full bg-emerald-500 rounded-full transition-all" :style="{ width: pw.completion_rate + '%' }" />
+                    </div>
+                    <span class="font-bold text-emerald-600 shrink-0">{{ pw.completion_rate }}%</span>
+                  </div>
+                  
+                  <div class="flex items-center gap-1.5">
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                      ⏱️ 预估通关: {{ pw.expected_minutes }} 分钟
+                    </span>
+                    <span class="px-2 py-0.5 rounded font-extrabold border"
+                      :class="{
+                        'bg-emerald-50 text-emerald-700 border-emerald-100': pw.cognitive_load_index === '轻度学习',
+                        'bg-amber-50 text-amber-700 border-amber-100': pw.cognitive_load_index === '中度攻坚',
+                        'bg-rose-50 text-rose-700 border-rose-100': pw.cognitive_load_index === '深度挑战'
+                      }">
+                      🧠 {{ pw.cognitive_load_index }}
+                    </span>
+                  </div>
+                </div>
+
+                <!-- Horizontal workflow crumbs node chain (wrapped to avoid truncation) -->
+                <div class="flex flex-wrap items-center gap-y-2 gap-x-1.5 py-1.5 max-w-full">
+                  <div v-for="(node, index) in pw.nodes" :key="node.concept + '_' + index" class="flex items-center shrink-0">
+                    <span v-if="node.is_ellipsis" class="text-slate-400 font-bold px-1 select-none">...</span>
+                    <span v-else class="px-2 py-0.5 rounded text-[9px] font-bold border select-none transition-all"
+                      :class="node.concept === activeLearningTarget
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm animate-pulse'
+                        : node.is_target
+                          ? 'bg-indigo-50 text-indigo-700 border-indigo-200 font-extrabold ring-1 ring-indigo-100/50'
+                          : node.mastered 
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                            : 'bg-white text-slate-400 border-slate-100'">
+                      {{ node.concept }}
+                      <span v-if="node.mastered" class="text-[8px] ml-0.5">✓</span>
+                    </span>
+                    <span v-if="index < pw.nodes.length - 1" class="text-slate-300 mx-0.5 text-[9px] font-bold">→</span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+            <div v-else class="flex flex-col items-center justify-center h-40 text-xs text-gray-400 gap-1.5">
+              <span class="animate-spin w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
+              <p>AI 正在分析核心路径推荐...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 备选解锁方向 -->
+    <div v-if="nextUp.length" class="bg-blue-50/75 rounded-2xl border border-blue-100 p-4">
+      <h2 class="text-sm font-bold text-blue-800 mb-1 flex items-center gap-2">
+        <Sparkles :size="15" class="text-blue-600 animate-pulse" />
+        <span>备选解锁方向 (Alternative Directions)</span>
       </h2>
+      <p class="text-[10px] text-blue-600 font-medium mb-3">
+        以下知识点您的前置依赖已满足，可以随时作为备选方向切换学习。
+      </p>
       <div class="flex flex-wrap gap-2">
         <button v-for="n in nextUp" :key="n.concept"
           class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-blue-700 border border-blue-200 hover:bg-blue-100 transition-all"
@@ -367,7 +1259,10 @@ onMounted(async () => {
       <div class="space-y-5">
         <!-- Iterate over recommended concepts -->
         <div v-for="conceptRec in recommendations" :key="conceptRec.concept"
-          class="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 relative overflow-hidden">
+          class="bg-white rounded-2xl border p-5 space-y-4 relative overflow-hidden transition-all duration-300"
+          :class="conceptRec.concept === activeLearningTarget 
+            ? 'border-amber-400/80 shadow-[0_0_15px_rgba(245,158,11,0.12)] ring-2 ring-amber-400/30 ring-offset-2' 
+            : 'border-slate-100 shadow-sm'">
           
           <!-- Concept Header -->
           <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
@@ -575,12 +1470,12 @@ onMounted(async () => {
         <Clock :size="15" class="text-amber-500" /> 待复习
       </h2>
       <div class="space-y-1">
-        <div v-for="r in reviews.slice(0, 5)" :key="r.concept_name || r.id"
+        <div v-for="r in reviews.slice(0, 5)" :key="r.concept || r.id"
           class="flex items-center gap-2 text-xs py-1.5">
           <div class="w-1.5 h-1.5 rounded-full bg-amber-400" />
-          <span class="text-gray-700 flex-1">{{ r.concept_name || '未命名概念' }}</span>
-          <span class="text-gray-400 text-[10px]">{{ r.next_review_time ? new Date(r.next_review_time).toLocaleDateString() : '' }}</span>
-          <button class="text-[10px] text-amber-600 hover:text-amber-800 font-medium" @click="goLearn(r.concept_name)">去复习</button>
+          <span class="text-gray-700 flex-1">{{ r.concept || '未命名概念' }}</span>
+          <span class="text-gray-400 text-[10px]">{{ r.next_review_at ? new Date(r.next_review_at).toLocaleDateString() : '' }}</span>
+          <button class="text-[10px] text-amber-600 hover:text-amber-800 font-medium" @click="goLearn(r.concept)">去复习</button>
         </div>
       </div>
     </div>
@@ -663,9 +1558,24 @@ onMounted(async () => {
               </button>
             </div>
 
-            <!-- Content Area (Markdown render) -->
-            <div class="markdown-body bg-slate-50/50 border border-slate-100 rounded-xl p-5 overflow-x-auto text-xs leading-relaxed max-w-full text-slate-700">
-              <div class="whitespace-pre-wrap font-sans text-xs leading-relaxed">{{ activeResourceContent || '内容加载中...' }}</div>
+            <!-- Video Player Block (if video resource) -->
+            <div v-if="activeResource.res.role === '视频推荐官' || activeResource.res.role === '虚拟导演' || activeResource.res.resource_type === '自适应推荐视频' || activeResource.res.resource_type === '虚拟人视频脚本'" class="space-y-3">
+              <template v-if="safeParseJson(activeResourceContent).length > 0">
+                <VideoPlayerCard 
+                  :videos="safeParseJson(activeResourceContent)" 
+                  :concept="activeResource.concept" 
+                />
+              </template>
+              <template v-else>
+                <div class="markdown-body bg-slate-50/50 border border-slate-100 rounded-xl p-5 overflow-x-auto text-xs leading-relaxed max-w-full text-slate-700">
+                  <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(activeResourceContent || '内容加载中...', activeResource?.res?.resource_type || '', activeResource?.concept || '')"></div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Content Area (Markdown render, for regular resources) -->
+            <div v-else class="markdown-body bg-slate-50/50 border border-slate-100 rounded-xl p-5 overflow-x-auto text-xs leading-relaxed max-w-full text-slate-700">
+              <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(activeResourceContent || '内容加载中...', activeResource?.res?.resource_type || '', activeResource?.concept || '')"></div>
             </div>
 
           </div>

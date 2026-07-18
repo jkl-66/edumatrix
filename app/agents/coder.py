@@ -23,13 +23,16 @@ async def async_refine_code_agent(context_lecture: str, error_code: str, alignme
         if "/chat/completions" in base_url:
             base_url = base_url.replace("/chat/completions", "")
             
-        client = instructor.patch(openai.AsyncClient(base_url=base_url, api_key=api_key))
-        refined_json = await client.chat.completions.create(
-            model=model_name,
-            response_model=PyTorchPoolCodeSchema,
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0.01,
-            timeout=2.0
+        import asyncio
+        client = instructor.patch(openai.AsyncClient(base_url=base_url, api_key=api_key, timeout=1.0))
+        refined_json = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=model_name,
+                response_model=PyTorchPoolCodeSchema,
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                temperature=0.01,
+            ),
+            timeout=1.0
         )
         return f"{refined_json.import_blocks}\n{refined_json.tensor_init}\n{refined_json.pool_layer_api}\n{refined_json.forward_and_print}"
     except (ValidationError, Exception) as e:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 import re
 import uuid
 import time
@@ -44,28 +45,132 @@ async def web_search(
     payload = await request.json()
     query = str(payload.get("query", "")).strip()
     student_id = str(payload.get("student_id", "default"))
-    max_results = int(payload.get("max_results", 5))
+    max_results = int(payload.get("max_results", 10))
+    category = str(payload.get("category", "all")).strip().lower()
 
     if not query:
         raise HTTPException(status_code=400, detail="搜索查询不能为空")
 
-    # 检查缓存
+    # 1. 对文档类别自动添加查询修饰词
+    adjusted_query = query
+    if category == "document":
+        adjusted_query = f"{query} pdf"
+
+    # 2. 确定查询数量 (对文档查询使用更大候选池以供过滤)
+    fetch_limit = max_results
+    if category == "document":
+        fetch_limit = max(max_results * 4, 20)
+
+    # 检查缓存 (根据 category 和 query 复合缓存键，避免交叉污染)
     import time as _time
-    cache_key = query.lower().strip()
+    cache_key = f"{category}:{query.lower().strip()}"
     now = _time.time()
     if cache_key in _search_cache:
         ts, cached_results = _search_cache[cache_key]
         if now - ts < _SEARCH_CACHE_TTL:
-            search_results = cached_results[:max_results]
+            search_results = cached_results
         else:
             del _search_cache[cache_key]
-            search_results = await _perform_web_search(query, max_results)
+            search_results = None
     else:
-        search_results = await _perform_web_search(query, max_results)
+        search_results = None
 
-    # 写缓存
-    if search_results:
-        _search_cache[cache_key] = (now, search_results)
+    if search_results is None:
+        if category == "document":
+            # 并行并发检索 pdf, ppt, doc, mp4 资源，彻底避免 Bing CN 在 OR 语法下的表现退化
+            import asyncio
+            tasks = [
+                _perform_web_search(f"{query} pdf", fetch_limit),
+                _perform_web_search(f"{query} ppt", fetch_limit),
+                _perform_web_search(f"{query} doc", fetch_limit),
+                _perform_web_search(f"{query} mp4", fetch_limit)
+            ]
+            results_lists = await asyncio.gather(*tasks)
+            # 交替合并检索到的各个类别的文档
+            search_results = []
+            max_len = max(len(lst) for lst in results_lists) if results_lists else 0
+            for i in range(max_len):
+                for lst in results_lists:
+                    if i < len(lst):
+                        search_results.append(lst[i])
+        else:
+            search_results = await _perform_web_search(adjusted_query, fetch_limit)
+
+        # 写缓存
+        if search_results:
+            _search_cache[cache_key] = (now, search_results)
+
+    # 3. 结构化结果并检测文件资源扩展名与关键词
+    structured_results = []
+    for r in search_results:
+        url = r.get("url", "")
+        parsed_url = urlparse(url)
+        path = parsed_url.path.lower()
+        
+        is_file = False
+        file_type = ""
+        
+        if path.endswith(".pdf"):
+            is_file = True
+            file_type = "pdf"
+        elif path.endswith(".pptx"):
+            is_file = True
+            file_type = "pptx"
+        elif path.endswith(".ppt"):
+            is_file = True
+            file_type = "ppt"
+        elif path.endswith(".docx"):
+            is_file = True
+            file_type = "docx"
+        elif path.endswith(".doc"):
+            is_file = True
+            file_type = "doc"
+        elif path.endswith(".mp4"):
+            is_file = True
+            file_type = "mp4"
+        elif path.endswith(".avi"):
+            is_file = True
+            file_type = "avi"
+        elif path.endswith(".mov"):
+            is_file = True
+            file_type = "mov"
+        elif path.endswith(".mkv"):
+            is_file = True
+            file_type = "mkv"
+        elif path.endswith(".xlsx") or path.endswith(".xls"):
+            is_file = True
+            file_type = "xlsx"
+        
+        # 兜底匹配 title 中的标识
+        title = r.get("title", "").lower()
+        if not is_file:
+            if "[pdf]" in title or ".pdf" in title:
+                is_file = True
+                file_type = "pdf"
+            elif "[ppt]" in title or ".pptx" in title or ".ppt" in title:
+                is_file = True
+                file_type = "pptx"
+            elif "[doc]" in title or ".docx" in title or ".doc" in title:
+                is_file = True
+                file_type = "docx"
+            elif "[mp4]" in title or ".mp4" in title or "视频" in title or "录像" in title:
+                is_file = True
+                file_type = "mp4"
+
+        # 如果是学术文档分类搜索，强制过滤掉所有非文件结果
+        if category == "document" and not is_file:
+            continue
+
+        structured_results.append({
+            "title": r.get("title", ""),
+            "url": url,
+            "snippet": r.get("snippet", ""),
+            "is_file": is_file,
+            "file_type": file_type
+        })
+
+    # 最终结果限制在 max_results 长度内
+    final_structured_results = structured_results[:max_results]
 
     # Summarize search results with LLM
     llm = await _get_llm(request)
@@ -75,22 +180,20 @@ async def web_search(
     )
     user_prompt = f"用户查询：{query}\n\n搜索结果：\n" + "\n\n".join(
         f"[{i+1}] {r['title']}\n{r['snippet']}\n来源: {r['url']}"
-        for i, r in enumerate(search_results)
+        for i, r in enumerate(final_structured_results)
     )
 
     summary = ""
     try:
         summary = await llm.generate(system_prompt, user_prompt, role="极客助教")
     except Exception:
-        summary = f"已搜索到 {len(search_results)} 条关于 '{query}' 的结果"
+        summary = f"已搜索到 {len(final_structured_results)} 条关于 '{query}' 的结果"
 
-    # Ingest search results into RAG
+    # Combined text for history logs
     combined_text = "\n\n".join(
-        f"标题: {r['title']}\n内容: {r['snippet']}" for r in search_results
+        f"标题: {r['title']}\n内容: {r['snippet']}" for r in final_structured_results
     )
-    evidence_chunks = chunk_document(combined_text, source=f"web_search:{query}")
-    if evidence_chunks:
-        hybrid_rag.ingest_user_documents(evidence_chunks)
+    evidence_chunks = []
 
     search_id = _generate_id()
     db_record = DBWebSearchHistory(
@@ -112,14 +215,7 @@ async def web_search(
     return {
         "search_id": search_id,
         "query": query,
-        "results": [
-            {
-                "title": r["title"],
-                "url": r["url"],
-                "snippet": r["snippet"],
-            }
-            for r in search_results
-        ],
+        "results": final_structured_results,
         "summary": summary,
         "chunks_ingested": len(evidence_chunks),
     }
@@ -130,7 +226,7 @@ async def _perform_web_search(query: str, max_results: int = 5) -> list[dict[str
 
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
             search_url = f"https://html.duckduckgo.com/html/?q={query}"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -144,7 +240,7 @@ async def _perform_web_search(query: str, max_results: int = 5) -> list[dict[str
     if not results:
         try:
             import httpx
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
                 url = f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1"
                 resp = await client.get(url, headers={"User-Agent": "EduMatrix/1.0"})
                 if resp.status_code == 200:
@@ -158,6 +254,40 @@ async def _perform_web_search(query: str, max_results: int = 5) -> list[dict[str
                         })
         except Exception:
             pass
+
+    if not results:
+        # Fallback to Baidu CN (Direct search without VPN in China)
+        try:
+            import httpx
+            search_url = f"https://www.baidu.com/s?wd={urllib.parse.quote(query)}&rn=50"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9"
+            }
+            async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+                resp = await client.get(search_url, headers=headers, follow_redirects=True)
+                if resp.status_code == 200:
+                    results = _parse_baidu_html(resp.text, max(max_results, 50))
+        except Exception as e:
+            print(f"  [WebSearch] Baidu CN fallback failed: {e}")
+
+    if not results:
+        # Third fallback layer: Bing CN (No Captchas, fast, highly accessible in CN)
+        try:
+            import httpx
+            search_url = f"https://cn.bing.com/search?q={urllib.parse.quote(query)}&count=50"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9"
+            }
+            async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+                resp = await client.get(search_url, headers=headers, follow_redirects=True)
+                if resp.status_code == 200:
+                    results = _parse_bing_html(resp.text, max(max_results, 50))
+        except Exception as e:
+            print(f"  [WebSearch] Bing CN fallback failed: {e}")
 
     if not results:
         results = [{
@@ -198,6 +328,112 @@ def _parse_duckduckgo_html(html: str, max_results: int) -> list[dict[str, str]]:
             })
     except Exception:
         pass
+    return results
+
+
+def _parse_baidu_html(html: str, max_results: int) -> list[dict[str, str]]:
+    results = []
+    try:
+        import html as html_lib
+        # Split by result div container to avoid ad injection and get full abstract block
+        parts = re.split(r'<div[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>', html)
+        for part in parts[1:]:
+            if len(results) >= max_results:
+                break
+                
+            # Filter out ads (Baidu commercial ads)
+            if any(indicator in part for indicator in ["ec_title", "ec_desc", "ec-tuiguang", "商业推广", "广告"]):
+                continue
+
+            link_match = re.search(r'<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>', part, re.DOTALL)
+            if not link_match:
+                continue
+            url = link_match.group(1).strip()
+            
+            # Filter out advertisements or sidebar board URLs
+            if "baidu.php" in url or "top.baidu.com" in url:
+                continue
+                
+            title_html = link_match.group(2).strip()
+            title = re.sub(r"<[^>]+>", "", title_html).strip()
+            title = html_lib.unescape(title)
+            
+            snippet = ""
+            # Search for summary-text block
+            summary_match = re.search(r'class="[^"]*\bsummary-text[^"]*"[^>]*>(.*?)</span>', part, re.DOTALL)
+            if summary_match:
+                snippet = summary_match.group(1).strip()
+            else:
+                abstract_match = re.search(r'class="[^"]*\bc-abstract[^"]*"[^>]*>(.*?)(?:</span>|</div>)', part, re.DOTALL)
+                if abstract_match:
+                    snippet = abstract_match.group(1).strip()
+                    
+            if not snippet:
+                # Fallback to any generic span
+                text_match = re.search(r'<span[^>]*>(.*?)</span>', part, re.DOTALL)
+                if text_match:
+                    snippet = text_match.group(1).strip()
+                    
+            snippet = re.sub(r"<[^>]+>", "", snippet).strip()
+            snippet = html_lib.unescape(snippet)
+            
+            if not url.startswith("http"):
+                continue
+                
+            results.append({
+                "title": title or "搜索结果",
+                "url": url,
+                "snippet": snippet[:300] if snippet else "暂无页面摘要。"
+            })
+    except Exception as e:
+        print(f"  [WebSearch] Parse Baidu HTML failed: {e}")
+    return results
+
+
+def _parse_bing_html(html: str, max_results: int) -> list[dict[str, str]]:
+    results = []
+    try:
+        import html as html_lib
+        parts = re.split(r'<li[^>]*class="[^"]*\bb_algo\b[^"]*"[^>]*>', html)
+        for part in parts[1:]:
+            if len(results) >= max_results:
+                break
+            
+            h2_match = re.search(r'<h2[^>]*>.*?<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?</h2>', part, re.DOTALL)
+            if not h2_match:
+                continue
+            url = h2_match.group(1).strip()
+            title_html = h2_match.group(2).strip()
+            title = re.sub(r"<[^>]+>", "", title_html).strip()
+            title = html_lib.unescape(title)
+            
+            snippet = ""
+            snippet_match = re.search(r'<div[^>]*class="[^"]*\bb_caption\b[^"]*"[^>]*>.*?<p[^>]*>(.*?)</p>', part, re.DOTALL)
+            if snippet_match:
+                snippet = snippet_match.group(1).strip()
+            else:
+                snippet_match2 = re.search(r'<p[^>]*class="[^"]*\bb_lineLimit\w*[^"]*"[^>]*>(.*?)</p>', part, re.DOTALL)
+                if snippet_match2:
+                    snippet = snippet_match2.group(1).strip()
+                    
+            if not snippet:
+                p_match = re.search(r'<p[^>]*>(.*?)</p>', part, re.DOTALL)
+                if p_match:
+                    snippet = p_match.group(1).strip()
+
+            snippet = re.sub(r"<[^>]+>", "", snippet).strip()
+            snippet = html_lib.unescape(snippet)
+            
+            if not url.startswith("http"):
+                continue
+                
+            results.append({
+                "title": title or "搜索结果",
+                "url": url,
+                "snippet": snippet[:300] if snippet else "暂无页面摘要。"
+            })
+    except Exception as e:
+        print(f"  [WebSearch] Parse Bing HTML failed: {e}")
     return results
 
 
@@ -487,3 +723,201 @@ async def explicit_arxiv_search(query: str, max_results: int = 5) -> dict[str, A
         "total_returned": len(formatted_papers),
         "papers": formatted_papers
     }
+
+
+def to_embedded_player_url(url: str) -> str:
+    if not url:
+        return ""
+    url_lower = url.lower()
+    
+    # 1. Bilibili 视频链接适配
+    if "bilibili.com" in url_lower or "b23.tv" in url_lower:
+        bvid_match = re.search(r'(BV[a-zA-Z0-9]{10})', url, re.IGNORECASE)
+        if bvid_match:
+            return f"//player.bilibili.com/player.html?bvid={bvid_match.group(1)}&high_quality=1&as_wide=1"
+        avid_match = re.search(r'/av([0-9]+)', url, re.IGNORECASE)
+        if avid_match:
+            return f"//player.bilibili.com/player.html?aid={avid_match.group(1)}&high_quality=1&as_wide=1"
+            
+    # 2. YouTube 视频链接适配
+    if "youtube.com" in url_lower or "youtu.be" in url_lower:
+        v_match = re.search(r'(?:v=|\/embed\/|\/watch\?v=|\/youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
+        if v_match:
+            return f"https://www.youtube.com/embed/{v_match.group(1)}"
+            
+    # 3. 腾讯视频 (Tencent Video) 链接适配
+    if "v.qq.com" in url_lower:
+        vid_match = re.search(r'/(?:cover|page)/(?:[^/]+/)*([a-zA-Z0-9_-]+)\.html', url)
+        if not vid_match:
+            vid_match = re.search(r'/([a-zA-Z0-9_-]+)\.html', url)
+        if vid_match:
+            return f"https://v.qq.com/txp/iframe/player.html?vid={vid_match.group(1)}"
+            
+    # 4. 优酷 (Youku) 链接适配
+    if "youku.com" in url_lower:
+        vid_match = re.search(r'id_([a-zA-Z0-9_=-]+)\.html', url)
+        if vid_match:
+            return f"https://player.youku.com/embed/{vid_match.group(1)}"
+            
+    # 5. 本地动画微课直升流
+    if "/api/v1/animations/video/" in url_lower:
+        return url
+        
+    return url
+
+
+async def search_videos(query: str, max_results: int = 5) -> list[dict]:
+    local_videos = []
+    try:
+        from animation_api import _animations_dir, _get_knowledge_videos
+        from animation_resources import load_animation_resource_index
+        base_dir = _animations_dir()
+        if base_dir:
+            resource_index = load_animation_resource_index(str(base_dir))
+            matched_kp = None
+            if query in resource_index:
+                matched_kp = query
+            else:
+                for kp in sorted(resource_index):
+                    if query in kp or kp in query:
+                        matched_kp = kp
+                        break
+            if matched_kp:
+                files = _get_knowledge_videos(matched_kp)
+                for f in files:
+                    local_videos.append({
+                        "title": f"【本地动画】{matched_kp} - {Path(f['filename']).stem}",
+                        "url": f["url"],
+                        "source": "本地动画",
+                        "description": f"本地配套高清动画微课视频，讲解【{matched_kp}】的核心几何逻辑与流程运行机制。"
+                    })
+    except Exception as e:
+        print(f"  [search_videos] Local animation search failed: {e}")
+
+    online_videos = []
+    try:
+        # 1. 优先尝试使用 Bilibili 官方 API (带 buvid3 Cookie 绕过 412) 直接搜索
+        import uuid
+        import random
+        import httpx
+        
+        buvid3 = f"{str(uuid.uuid4()).upper()}{''.join(str(random.randint(0, 9)) for _ in range(5))}infoc"
+        bili_api_url = (
+            f"https://api.bilibili.com/x/web-interface/search/type"
+            f"?search_type=video&keyword={urllib.parse.quote(query)}&page=1&page_size={max_results * 2}"
+        )
+        bili_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.bilibili.com/",
+            "Origin": "https://www.bilibili.com",
+            "Cookie": f"buvid3={buvid3}"
+        }
+        
+        bili_results = []
+        try:
+            async with httpx.AsyncClient(timeout=8.0, trust_env=False) as client:
+                resp = await client.get(bili_api_url, headers=bili_headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("code") == 0:
+                        for item in data.get("data", {}).get("result", []):
+                            bvid = item.get("bvid", "")
+                            aid = item.get("aid")
+                            title = item.get("title", "").replace('<em class="keyword">', "").replace("</em>", "")
+                            desc = item.get("description", "")[:200]
+                            url = f"https://www.bilibili.com/video/{bvid}" if bvid else f"https://www.bilibili.com/video/av{aid}"
+                            bili_results.append({
+                                "title": title,
+                                "url": url,
+                                "snippet": desc
+                            })
+        except Exception as e:
+            print(f"  [search_videos] Direct Bilibili API failed: {e}")
+            
+        search_results = bili_results
+        
+        # 2. 如果官方 API 检索失败或无结果，则优雅降级为搜索引擎备用检索
+        if not search_results:
+            adjusted_query = f"{query} site:bilibili.com"
+            fetch_limit = max(max_results * 2, 10)
+            search_results = await _perform_web_search(adjusted_query, fetch_limit)
+            
+            # 如果结果中没有任何 B站 链接，或者结果过少，则尝试通用视频搜索作为补充
+            if not any(r for r in search_results if "bilibili.com" in r.get("url", "").lower()):
+                generic_results = await _perform_web_search(f"{query} 视频", fetch_limit)
+                search_results = search_results + generic_results
+        
+        for r in search_results:
+            url = r.get("url", "")
+            title = r.get("title", "")
+            snippet = r.get("snippet", "")
+            if not url:
+                continue
+            
+            # 严格过滤掉泛化的 bilibili 首页、搜索页、排行榜等不包含具体视频的无用网页
+            url_lower = url.lower()
+            is_valid_video_page = False
+            if "/video/bv" in url_lower or "/video/av" in url_lower or "/watch?v=" in url_lower or "/embed/" in url_lower or "youtu.be/" in url_lower:
+                is_valid_video_page = True
+            elif "v.qq.com" in url_lower and (".html" in url_lower or "vid=" in url_lower):
+                is_valid_video_page = True
+            elif "youku.com" in url_lower and (".html" in url_lower or "embed/" in url_lower):
+                is_valid_video_page = True
+            
+            # 如果是泛化的 bilibili 域名但没有任何具体视频标识（例如 bilibili 首页、频道页等），过滤之
+            if "bilibili.com" in url_lower and not ("/video/" in url_lower or "/blackboard/" in url_lower):
+                continue
+                
+            is_video = is_valid_video_page
+            if not is_video:
+                # 兜底：如果标题包含强视频关键词，且不是明显的首页
+                if any(kw in title for kw in ("视频", "录像", "微课", "播放", "在线看", "讲课")) and len(url) > 15:
+                    if not any(home in url_lower for home in ("bilibili.com/index.html", "bilibili.com/default.html", "bilibili.com/search")):
+                        is_video = True
+                
+            if is_video:
+                embed_url = to_embedded_player_url(url)
+                # 只有成功转换为有效播放地址（即包含bvid, av, embed等，或者不是空白）才添加
+                if not embed_url or embed_url == url:
+                    if not ("/video/" in url_lower or "/watch?" in url_lower or "embed" in url_lower):
+                        continue
+                        
+                if "bilibili.com" in url_lower or "b23.tv" in url_lower:
+                    source_label = "B站视频"
+                elif "youtube.com" in url_lower or "youtu.be" in url_lower:
+                    source_label = "YouTube"
+                elif "v.qq.com" in url_lower:
+                    source_label = "腾讯视频"
+                elif "youku.com" in url_lower:
+                    source_label = "优酷视频"
+                else:
+                    source_label = "网络视频"
+                
+                # 提取干净的视频标题，过滤掉一些带 B站 站台前缀的无用文字
+                clean_title = re.sub(r"_哔哩哔哩_bilibili|_bilibili", "", title).strip()
+                
+                online_videos.append({
+                    "title": clean_title,
+                    "url": embed_url,
+                    "source": source_label,
+                    "description": snippet
+                })
+    except Exception as e:
+        print(f"  [search_videos] Online video search failed: {e}")
+
+    merged = []
+    max_len = max(len(local_videos), len(online_videos))
+    for i in range(max_len):
+        if i < len(local_videos):
+            merged.append(local_videos[i])
+        if i < len(online_videos):
+            merged.append(online_videos[i])
+            
+    seen_urls = set()
+    unique_videos = []
+    for v in merged:
+        if v["url"] not in seen_urls:
+            unique_videos.append(v)
+            seen_urls.add(v["url"])
+            
+    return unique_videos[:max_results]

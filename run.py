@@ -21,6 +21,9 @@ import sys
 import subprocess
 import uvicorn
 
+# 强力防御：防止评委或本地电脑开启全局系统代理导致 B站 WAF 阻断
+os.environ["NO_PROXY"] = "bilibili.com,biliapi.net,biliapi.com,baidu.com,bing.com"
+
 # 加载 .env 环境变量（必须在任何 os.getenv 之前）
 try:
     from dotenv import load_dotenv

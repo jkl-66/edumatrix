@@ -79,13 +79,14 @@ def _local_files(folder: Path) -> list[dict[str, Any]]:
         media_type = _media_type_for_file(path)
         if media_type == "file":
             continue
+        import urllib.parse
         files.append(
             {
                 "filename": path.name,
                 "size": path.stat().st_size,
                 "media_type": media_type,
                 "path": f"{folder.name}/{path.name}",
-                "url": f"/api/v1/animations/video/{folder.name}/{path.name}" if media_type == "video" else "",
+                "url": f"/api/v1/animations/video/{urllib.parse.quote(folder.name)}/{urllib.parse.quote(path.name)}" if media_type == "video" else "",
             }
         )
     return files

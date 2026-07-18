@@ -133,6 +133,7 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
     weak_points = profile.weak_points or []
     mastery = profile.concept_mastery or {}
     causes = profile.learning_state_causes or {}
+    from models import LearningStateCause, CAUSE_LABELS
 
     # 根因映射
     cause_map = {
@@ -141,26 +142,117 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
         "cognitive_load": "认知负荷过高: 概念复杂度较高，需要分步拆解",
         "strategy_gap": "学习策略不足: 需要更有效的学习和复习方法",
         "affective_barrier": "情绪阻滞: 挫败感影响了学习信心",
+        "interaction_mismatch": "教学偏好不匹配: 现有的资源类型与当前学习状态不契合",
+        "metacognitive_mismatch": "元认知偏差: 自我掌握度判断与实际测试结果存在明显偏差"
     }
 
     results = []
     for point in weak_points:
         score = mastery.get(point, 0.0)
-        # 找到最匹配的根因
+        
+        # 针对每个概念，筛选与之直接相关的证据
+        concept_evidences = [
+            ev for ev in profile.profile_evidence 
+            if point in ev.text or any(point in f for f in ev.features)
+        ]
+        
+        concept_cause_scores = {cause.value: 0.0 for cause in LearningStateCause}
+        
+        # 语义规则映射，用于对子句重新跑特征提取，确保高精度关联
+        feature_map_rules = (
+            ("prerequisite_gap", ("基础", "前置", "定义", "概念搞不懂", "公式看不懂", "从哪来", "为什么这么算", "不知道", "原理不懂", "没学过", "忘了基础", "基础不牢", "底层逻辑", "为什么是这样", "推导过程", "数学基础", "先修知识")),
+            ("misconception", ("总混", "混淆", "分不清", "老是错", "错题", "误区", "最大池化平均池化", "套公式", "相似概念", "区别是什么", "差异在哪", "这两个有什么不同", "等价吗", "是不是一样的", "混为一谈", "容易搞混", "混得", "概念混", "一塌糊涂")),
+            ("cognitive_load", ("题干长", "条件太多", "漏看", "多步骤", "跳步", "信息太多", "绕", "复杂", "迷糊", "步骤太多", "记不住步骤", "绕不过来", "参数太多", "看不过来", "哪里是重点", "抓不住关键", "脑子", "不够用", "受挫")),
+            ("strategy_gap", ("看答案", "背下来", "不会复习", "忘了", "记不住", "刷题没用", "不知道怎么学", "只会看视频", "效率低", "学不进去", "没有方法", "死记硬背", "不知道怎么练", "该从哪开始")),
+            ("metacognitive_mismatch", ("以为会", "一做就错", "不确定", "不知道哪里不会", "感觉懂", "自评", "没法判断", "看懂了但不会做", "听懂了但写不出来", "眼高手低", "觉得自己会了", "一考试就懵")),
+            ("affective_barrier", ("焦虑", "害怕", "崩溃", "烦", "挫败", "没信心", "怕学不会", "压力大", "想放弃了", "太难了", "不适合", "跟不上了", "别人都会我不会", "心态崩了", "焦虑得睡不着")),
+            ("interaction_mismatch", ("讲太快", "太抽象", "听不进去", "换种讲法", "别直接给答案", "要例子", "要图", "要代码", "有没有更直观的", "能不能用比喻", "听不懂", "讲得再细点", "需要实操", "能不能演示", "一步一步来"))
+        )
+
+        def is_student_voice(ev) -> bool:
+            if ev.source == "student_message":
+                return True
+            if "LLM画像" in ev.text:
+                return True
+            if ev.source == "student_feedback":
+                if any(w in ev.text for w in ("同学", "我们看到", "我们不妨", "系统已为您", "为您调配", "你这个问题", "很高兴", "你好呀")):
+                    return False
+                return True
+            return False
+            
+        import re
+        if concept_evidences:
+            for index, ev in enumerate(concept_evidences):
+                # 区分学生自主表达与系统噪声，赋予学生端证据最高 5.0x 权值，非学生证据完全忽略 (0.0)
+                weight_factor = 5.0 if is_student_voice(ev) else 0.0
+                if weight_factor == 0.0:
+                    continue
+                
+                # 时序增量因子
+                recency = 1.0 + min(0.35, index * 0.02)
+                
+                # 子句/分句高精度关联提取
+                sub_sentences = [s.strip() for s in re.split(r'[;；,，.。!！?？]', ev.text) if s.strip()]
+                matched_subs = [s for s in sub_sentences if point in s]
+                
+                if matched_subs and len(sub_sentences) > 1:
+                    matched_text = " ".join(matched_subs)
+                    sub_features = set()
+                    for cause, keywords in feature_map_rules:
+                        if any(keyword in matched_text for keyword in keywords):
+                            sub_features.add(cause)
+                    if any(word in matched_text for word in ("看不懂", "不会", "不理解")):
+                        sub_features.add("prerequisite_gap")
+                    if "图" in matched_text or "代码" in matched_text or "一步步" in matched_text:
+                        sub_features.add("interaction_mismatch")
+                        
+                    active_features = sub_features.intersection(ev.features)
+                    if not active_features:
+                        active_features = ev.features
+                else:
+                    active_features = ev.features
+                    
+                for feature in active_features:
+                    if feature in concept_cause_scores:
+                        concept_cause_scores[feature] += ev.weight * ev.confidence * weight_factor * recency
+        
+        # 结合该概念的实际知识追踪表现（错误尝试次数）来校准根因
+        trace = profile.knowledge_traces.get(point)
+        if trace:
+            wrong_attempts = trace.attempts - trace.correct_attempts
+            if wrong_attempts > 0:
+                concept_cause_scores[LearningStateCause.STRATEGY_GAP.value] += wrong_attempts * 0.5
+                concept_cause_scores[LearningStateCause.PREREQUISITE_GAP.value] += wrong_attempts * 0.4
+                
+        active_total = sum(concept_cause_scores.values())
         root_causes = []
-        sorted_causes = sorted(causes.values(), key=lambda c: c.percentage, reverse=True)
-        for cause in sorted_causes[:2]:
-            if cause.key in cause_map:
-                root_causes.append({
-                    "cause": cause.label,
-                    "detail": cause_map[cause.key],
-                    "percentage": cause.percentage,
-                })
+        
+        if active_total > 0:
+            sorted_causes = sorted(concept_cause_scores.items(), key=lambda x: x[1], reverse=True)
+            for key, val in sorted_causes:
+                if val > 0 and key in cause_map:
+                    pct = round(val / active_total * 100, 1)
+                    root_causes.append({
+                        "cause": CAUSE_LABELS[key],
+                        "detail": cause_map[key],
+                        "percentage": pct,
+                    })
+                    
+        # 兜底：如果该概念没有专属特征，则平滑并入全局前两大原因进行适配
+        if not root_causes:
+            sorted_causes = sorted(causes.values(), key=lambda c: c.percentage, reverse=True)
+            for cause in sorted_causes[:2]:
+                if cause.key in cause_map:
+                    root_causes.append({
+                        "cause": cause.label,
+                        "detail": cause_map[cause.key],
+                        "percentage": cause.percentage,
+                    })
 
         results.append({
             "concept": point,
             "mastery": round(score, 2),
-            "root_causes": root_causes or [{"cause": "待诊断", "detail": "需要更多交互数据来准确诊断根因", "percentage": 0}],
+            "root_causes": root_causes[:2] or [{"cause": "待诊断", "detail": "需要更多交互数据来准确诊断根因", "percentage": 0}],
         })
 
     return results
@@ -202,8 +294,19 @@ async def get_profile(
 
     embeddings = await asyncio.to_thread(_bulk_embed, concepts)
     coordinate_map = await asyncio.to_thread(poincare_to_2d_coordinates, embeddings)
+    from app.database import DBAlignmentLog
+    def _fetch_alignment_op(db_session):
+        return db_session.query(DBAlignmentLog).filter(DBAlignmentLog.student_id == student_id).order_by(DBAlignmentLog.timestamp.desc()).first()
+    
+    latest_log = await run_db_op(_fetch_alignment_op)
+    alignment_data = {
+        "passed": latest_log.passed if latest_log else True,
+        "distance": round(latest_log.distance, 3) if latest_log else 0.0,
+        "conflicts": latest_log.conflicts if latest_log else []
+    }
 
     return {
+        "alignment": alignment_data,
         "student_id": student_id,
         "display_name": display_name,
         "major": getattr(profile, "major", ""),
@@ -229,6 +332,8 @@ async def get_profile(
             for k, v in (getattr(profile, "learning_state_causes", {}) or {}).items()
         },
         "cognitive_load": round(getattr(profile, "cognitive_load", 0.0), 2),
+        "frustration_index": round(getattr(profile, "frustration_index", 0.0), 2),
+        "motivation_type": getattr(profile, "motivation_type", ""),
         "focus_level": round(getattr(profile, "focus_level", 0.0), 2),
         "knowledge_traces": {
             k: {"mastery": round(v.mastery, 2), "attempts": v.attempts, "correct": v.correct_attempts}
@@ -424,6 +529,24 @@ async def update_profile(
 
     await run_db_op(save_student_profile, profile)
 
+    try:
+        from learning_event_bus import LearningEventBus, ProfileUpdatedEvent
+        bus = LearningEventBus.get_instance()
+        if update_data.major is not None:
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="major", new_value=profile.major))
+        if update_data.target_course is not None:
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="target_course", new_value=profile.target_course))
+        if update_data.cognitive_style is not None:
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="cognitive_style", new_value=profile.cognitive_style))
+        if update_data.motivation_type is not None:
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="motivation_type", new_value=profile.motivation_type))
+        if update_data.learning_goals is not None:
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="learning_goals", new_value=profile.learning_goals))
+        if update_data.learning_preferences is not None:
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="interaction_preferences", new_value=profile.interaction_preferences))
+    except Exception:
+        pass
+
     return {
         "status": "success",
         "message": "Student profile updated successfully.",
@@ -488,15 +611,27 @@ async def get_profile_analysis(
     # 4. 薄弱点根因分析
     weak_analysis = _build_weak_point_analysis(profile)
 
-    # 5. 个性化教学建议汇总
+    # 5. 个性化教学建议汇总 (自适应分层提炼)
     summary_suggestions = []
-    for dim_key, dim_data in dimensions.items():
-        if dim_data["level"] == "low":
-            summary_suggestions.append(f"[{dim_data['label']}] {dim_data['diagnosis']}")
+    low_dims = [d for d in dimensions.values() if d["level"] == "low"]
+    medium_dims = [d for d in dimensions.values() if d["level"] == "medium"]
+
+    if low_dims:
+        for dim_data in low_dims:
+            summary_suggestions.append(f"🔴 [{dim_data['label']}] {dim_data['diagnosis']}")
             for s in dim_data["suggestions"]:
                 summary_suggestions.append(f"  → {s}")
+
+    # 如果有 Low 维度，只补充展示 1 个 Medium 维度的建议以防界面过长；如果没有 Low，展示最多 3 个 Medium 建议
+    if medium_dims:
+        limit = 3 if not low_dims else 1
+        for dim_data in medium_dims[:limit]:
+            summary_suggestions.append(f"🟡 [{dim_data['label']}] {dim_data['diagnosis']}")
+            for s in dim_data["suggestions"]:
+                summary_suggestions.append(f"  → {s}")
+
     if not summary_suggestions:
-        summary_suggestions.append("当前各维度状态良好，建议保持当前学习节奏。")
+        summary_suggestions.append("🟢 当前各维度状态非常优秀，建议继续保持现有的学习节奏与策略。")
 
     # 6. 读取仪表盘全局学情分析报告与叙事报告
     narrative_report = getattr(profile, "narrative_report", "")
@@ -520,29 +655,85 @@ async def get_profile_analysis(
         )
 
     # === 任务：卡尔曼滤波防抖与时序心智负荷展示数据处理 ===
-    active_concept = "池化层"
-    if profile.concept_mastery:
-        active_concept = list(profile.concept_mastery.keys())[0]
+    # 物理数据库历史重构：从 SQLite 中捞取该学生所有真实的答题记录，用于修复由于老系统序列化漏洞缺失的 BKT 答题历史
+    from app.database import SessionLocal, DBQuizRecord
+    session = SessionLocal()
+    concept_histories = {}
+    try:
+        records = (
+            session.query(DBQuizRecord)
+            .filter(DBQuizRecord.student_id == student_id)
+            .order_by(DBQuizRecord.created_at.asc())
+            .all()
+        )
+        for r in records:
+            c = r.target_concept
+            if c:
+                concept_histories.setdefault(c, []).append(r.accuracy_score >= 0.6)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Error loading quiz records for history reconstruction: {e}")
+    finally:
+        session.close()
 
-    bkt_snap = profile.bkt_states.get(active_concept, {})
-    raw_history = bkt_snap.get("history", [])
+    # 优先选择有真实答题历史（history 长度 >= 3）的概念作为卡尔曼去噪大盘的展示对象
+    active_concept = None
+    for concept, snap in (profile.bkt_states or {}).items():
+        hist = snap.get("history") or concept_histories.get(concept, [])
+        if hist and len(hist) >= 3:
+            active_concept = concept
+            break
+            
+    if not active_concept:
+        # 其次选择有任意答题历史的概念
+        for concept, snap in (profile.bkt_states or {}).items():
+            hist = snap.get("history") or concept_histories.get(concept, [])
+            if hist:
+                active_concept = concept
+                break
+                
+    if not active_concept:
+        # 最后兜底使用掌握度列表中的第一个或者固定值
+        if profile.concept_mastery:
+            active_concept = list(profile.concept_mastery.keys())[0]
+        else:
+            active_concept = "池化层"
+
+    bkt_snap = (profile.bkt_states or {}).get(active_concept, {})
+    raw_history = bkt_snap.get("history") or concept_histories.get(active_concept, [])
     
     from bkt_engine import KalmanFilter
     kf = KalmanFilter(x_init=0.3, p_init=1.0)
     
     steps = []
-    if len(raw_history) < 3:
-        steps = [
-            {"correct": True, "load": 0.4, "frustration": 0.1, "label": "07-05 09:15"},
-            {"correct": True, "load": 0.45, "frustration": 0.15, "label": "07-05 09:20"},
-            {"correct": True, "load": 0.48, "frustration": 0.2, "label": "07-06 10:12"},
-            {"correct": False, "load": 0.75, "frustration": 0.8, "label": "07-06 10:15"},
-            {"correct": True, "load": 0.5, "frustration": 0.3, "label": "07-07 14:32"},
-            {"correct": True, "load": 0.45, "frustration": 0.15, "label": "07-07 14:40"}
-        ]
-    else:
+    # 答题冷启动优化：如果真实答题历史少于 3 次，将 baseline 模拟步骤与当前学生的真实答卷进行平滑拼接，保证即时答题能立刻呈现在曲线上
+    base_steps = [
+        {"correct": True, "load": 0.4, "frustration": 0.1, "label": "07-05 09:15"},
+        {"correct": True, "load": 0.45, "frustration": 0.15, "label": "07-05 09:20"},
+        {"correct": True, "load": 0.48, "frustration": 0.2, "label": "07-06 10:12"},
+        {"correct": False, "load": 0.75, "frustration": 0.8, "label": "07-06 10:15"},
+        {"correct": True, "load": 0.5, "frustration": 0.3, "label": "07-07 14:32"},
+        {"correct": True, "load": 0.45, "frustration": 0.15, "label": "07-07 14:40"}
+    ]
+    
+    if len(raw_history) == 0:
+        steps = base_steps
+    elif len(raw_history) < 3:
+        # 混合拼接：取 base_steps 的前 (6 - len(raw_history)) 个元素，并把学生的真实答题结果拼在后面
+        steps = base_steps[:-len(raw_history)]
+        import datetime
         for i, corr in enumerate(raw_history):
-            # 模拟随时间推移的答题时间戳
+            # 以 5 分钟为间隔生成最新的交互标签
+            time_label = (datetime.datetime.now() - datetime.timedelta(minutes=(len(raw_history) - i - 1) * 5)).strftime("%m-%d %H:%M")
+            steps.append({
+                "correct": corr,
+                "load": getattr(profile, "cognitive_load", 0.45) if i == len(raw_history) - 1 else (0.4 + (0.1 if not corr else 0)),
+                "frustration": getattr(profile, "frustration_index", 0.0) if i == len(raw_history) - 1 else (0.2 + (0.4 if not corr else 0)),
+                "label": time_label
+            })
+    else:
+        # 拥有 >= 3 次的完全真实答题历史
+        for i, corr in enumerate(raw_history):
             import datetime
             base_time = datetime.datetime.now() - datetime.timedelta(days=len(raw_history) - i)
             time_str = base_time.strftime("%m-%d %H:%M")
@@ -625,6 +816,53 @@ async def get_profile_analysis(
     }
 
 
+def resolve_learning_goals_three_tiers(db, profile, concepts: set[str], dag: dict[str, list[str]]) -> tuple[list[str], str]:
+    """
+    三级自适应最终目标智能决策器：
+    返回 (resolved_goals_list, goal_origin_type)
+    - resolved_goals_list: 具体的知识概念列表
+    - goal_origin_type: 目标的来源类型: 'user' (用户输入), 'document' (课件提取), 'course_default' (当前学习课程骨干)
+    """
+    import json
+    from app.database import DBKnowledgeDocument
+    
+    mastery = profile.concept_mastery or {}
+    goals = getattr(profile, "learning_goals", []) or []
+    
+    # 1. 第一优先级：用户自主输入/设定的具体图谱概念目标
+    real_goals = [g for g in goals if g in concepts]
+    if real_goals:
+        return real_goals, "user"
+        
+    # 2. 第二优先级：如果用户未指定具体知识点，但上传了新的知识库课件
+    docs = db.query(DBKnowledgeDocument).filter(DBKnowledgeDocument.student_id == profile.student_id).all()
+    doc_concepts = set()
+    for doc in docs:
+        if doc.tags:
+            tags_list = doc.tags if isinstance(doc.tags, list) else []
+            if not tags_list and isinstance(doc.tags, str):
+                try:
+                    tags_list = json.loads(doc.tags)
+                except Exception:
+                    pass
+            doc_concepts.update([t for t in tags_list if t in concepts])
+            
+    if doc_concepts:
+        # 寻找掌握度最低的核心概念
+        sorted_doc_concepts = sorted(doc_concepts, key=lambda c: (mastery.get(c, 0.0), -len(dag.get(c, []) or [])))
+        if sorted_doc_concepts:
+            return [sorted_doc_concepts[0]], "document"
+            
+    # 3. 第三优先级：基于“当前课程（target_course）”自动寻找最关键的骨干知识点
+    target_course = getattr(profile, "target_course", "机器学习导论") or "机器学习导论"
+    # 获取跟课程关联度数最高的骨干节点作为默认最终目标
+    core_backbones = sorted(concepts, key=lambda c: (-len(dag.get(c, []) or []), c))
+    if core_backbones:
+        return [core_backbones[0]], "course_default"
+        
+    return ["机器学习"], "course_default"
+
+
 @router.get("/{student_id}/learning-path")
 async def get_learning_path(
     student_id: str,
@@ -640,26 +878,27 @@ async def get_learning_path(
 
     mastery = profile.concept_mastery or {}
 
-    # === 拓扑排序：计算每个概念的学习层级 ===
-    all_concepts = set(mastery.keys()) | set(KNOWLEDGE_DAG.keys())
-    for prereqs in KNOWLEDGE_DAG.values():
+    # === 动态图谱融合与成分前置自动推导 ===
+    from learning_strategy import build_resource_aware_dag, compute_concept_tiers
+
+    active_dag, _ = build_resource_aware_dag(KNOWLEDGE_DAG)
+    all_concepts = set(mastery.keys()) | set(active_dag.keys())
+    for prereqs in active_dag.values():
         all_concepts.update(prereqs or [])
     all_concepts.discard("")
     all_concepts.discard(None)
 
-    concept_tier: dict[str, int] = {}
-    remaining = set(all_concepts)
-    changed = True
-    while remaining and changed:
-        changed = False
-        for c in list(remaining):
-            prereqs = KNOWLEDGE_DAG.get(c, [])
-            prereq_tiers = [concept_tier.get(p, -1) for p in prereqs]
-            if all(pt >= 0 for pt in prereq_tiers):
-                max_pt = max(prereq_tiers) if prereq_tiers else -1
-                concept_tier[c] = max_pt + 1
-                remaining.remove(c)
-                changed = True
+    # 动态成分前置推导：若复合概念 c 包含现有基础概念 p (p != c, len(p) >= 2)，自动识别 p 为 c 的前置依赖
+    for c in list(all_concepts):
+        active_dag.setdefault(c, [])
+        for p in all_concepts:
+            if p != c and len(p) >= 2 and p in c:
+                if p not in active_dag[c]:
+                    # 避免直接包含反向循环
+                    if c not in active_dag.get(p, []):
+                        active_dag[c].append(p)
+
+    concept_tier = compute_concept_tiers(active_dag, all_concepts)
 
     # 按层级分组
     tiers: dict[int, list[dict]] = {}
@@ -671,7 +910,7 @@ async def get_learning_path(
         if t not in tiers:
             tiers[t] = []
         score = mastery.get(c, 0.0)
-        prereqs = KNOWLEDGE_DAG.get(c, [])
+        prereqs = active_dag.get(c, [])
         prereqs_ready = all(mastery.get(p, 0) >= 1 if p == "无" else mastery.get(p, 0) >= 0.4 for p in prereqs)
         mastered = score >= 0.7
 
@@ -825,16 +1064,42 @@ async def get_learning_path(
         cognitive_load=cognitive_load,
         frustration=frustration,
     )
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        resolved_goals, goal_origin = resolve_learning_goals_three_tiers(db, profile, all_concepts, active_dag)
+    finally:
+        db.close()
+
     adaptive_route = await asyncio.to_thread(
         PATH_PLANNER.plan,
         mastery,
-        learning_goals=getattr(profile, "learning_goals", []) or [],
+        learning_goals=resolved_goals,
         weak_points=getattr(profile, "weak_points", []) or [],
         concept_tier=concept_tier,
         cognitive_load=cognitive_load,
         frustration=frustration,
         max_steps=8,
     )
+    
+    # === 唯一主攻锚点计算 (Active Learning Anchor) ===
+    active_target = None
+    if adaptive_route and "nodes" in adaptive_route:
+        for node in adaptive_route["nodes"]:
+            concept_name = node.get("concept")
+            if concept_name and mastery.get(concept_name, 0.0) < 0.70:
+                active_target = concept_name
+                break
+                
+    if not active_target and next_steps:
+        active_target = next_steps[0]["concept"]
+        
+    if not active_target and mastery:
+        active_target = min(mastery.items(), key=lambda x: x[1])[0]
+        
+    if not active_target:
+        active_target = "机器学习"
+
     route_concepts = [node["concept"] for node in adaptive_route.get("nodes", [])]
     adaptive_route["cross_domain_supports"] = suggest_cross_domain_supports(
         cross_domain_micro_graph,
@@ -857,7 +1122,175 @@ async def get_learning_path(
         "cross_domain_micro_graph": cross_domain_micro_graph,
         "concept_tiers": {str(k): [n["concept"] for n in v] for k, v in sorted(tiers.items())},
         "updated_at": profile.last_update_timestamp if hasattr(profile, 'last_update_timestamp') else "",
+        "goal_origin": goal_origin,
+        "active_learning_target": active_target,
     }
+
+
+@router.get("/{student_id}/goal-recommendations")
+async def get_goal_recommendations(
+    student_id: str,
+    request: Request,
+) -> list[dict[str, Any]]:
+    """根据学情与 DAG 结构，智能发现顶级终极目标，并规划出多路径通关路线，以活跃剪裁视窗展示节点及状态"""
+    swarm = build_swarm_from_headers(request.headers)
+    profile = swarm.profile_store.get(student_id)
+    if not profile:
+        profile = await run_db_op(load_student_profile, student_id)
+        swarm.profile_store[student_id] = profile
+
+    mastery = profile.concept_mastery or {}
+    
+    # 1. 获取 DAG 和 Tiers
+    from learning_strategy import build_resource_aware_dag, compute_concept_tiers, _concept_domain, _domain_label, _animation_index
+    active_dag, _ = build_resource_aware_dag(KNOWLEDGE_DAG)
+    all_concepts = set(mastery.keys()) | set(active_dag.keys())
+    for prereqs in active_dag.values():
+        all_concepts.update(prereqs or [])
+    all_concepts.discard("")
+    all_concepts.discard(None)
+    all_concepts = sorted(all_concepts)
+    
+    concept_tiers = compute_concept_tiers(active_dag, all_concepts)
+    res_index = _animation_index()
+
+    # 2. 寻觅终极叶子节点 (出度为 0，且拥有前置依赖)
+    out_degrees = {c: 0 for c in all_concepts}
+    for prereqs in active_dag.values():
+        for p in prereqs:
+            if p in out_degrees:
+                out_degrees[p] += 1
+
+    # 过滤出被依赖数为 0 的顶层叶子概念
+    leaf_goals = [
+        c for c in all_concepts 
+        if out_degrees[c] == 0 and len(active_dag.get(c, []) or []) > 0
+    ]
+
+    # 3. 对每个终极目标，回溯其完整的 topological 学习路线并进行前沿剪枝与负荷计量
+    pathways = []
+    
+    def expand_prereqs_rec(target: str) -> list[str]:
+        expanded = []
+        def visit(c: str):
+            for p in sorted(active_dag.get(c, []) or [], key=lambda x: (concept_tiers.get(x, 99), x)):
+                if p not in expanded:
+                    visit(p)
+            if c not in expanded:
+                expanded.append(c)
+        visit(target)
+        return expanded
+
+    # 遍历推荐候选
+    for leaf in leaf_goals:
+        path_nodes = expand_prereqs_rec(leaf)
+        if len(path_nodes) < 2:
+            continue
+            
+        mastered_nodes = [c for c in path_nodes if mastery.get(c, 0.0) >= 0.70]
+        completion_rate = int(round(len(mastered_nodes) / len(path_nodes) * 100))
+        
+        # A. 计算难度指标与通关时长
+        unmastered_nodes = [c for c in path_nodes if mastery.get(c, 0.0) < 0.70]
+        
+        # 预估通关时长 (unmastered nodes)
+        expected_minutes = 0
+        for c in unmastered_nodes:
+            # 基础时长由 concept tier 决定
+            t_val = concept_tiers.get(c, 1)
+            mins = 15 + t_val * 10
+            if c in res_index:
+                mins += 10
+            expected_minutes += mins
+            
+        # 认知负荷评级 (基于 unmastered 节点的平均 tier 阶层)
+        if unmastered_nodes:
+            avg_tier = sum(concept_tiers.get(c, 1) for c in unmastered_nodes) / len(unmastered_nodes)
+            if avg_tier < 1.5:
+                cognitive_load_index = "轻度学习"
+            elif avg_tier < 2.5:
+                cognitive_load_index = "中度攻坚"
+            else:
+                cognitive_load_index = "深度挑战"
+        else:
+            cognitive_load_index = "轻度学习"
+
+        # B. 学习前沿视窗裁剪 (Frontier Windowing)
+        active_idx = -1
+        for idx, c in enumerate(path_nodes):
+            if mastery.get(c, 0.0) < 0.70:
+                active_idx = idx
+                break
+        
+        has_ellipsis = False
+        if active_idx == -1:
+            window_concepts = path_nodes[-6:] if len(path_nodes) > 6 else path_nodes
+        else:
+            start_idx = max(0, active_idx - 2)
+            end_idx = min(len(path_nodes), active_idx + 4) # 2 mastered + 1 active + 3 unmastered
+            window_concepts = path_nodes[start_idx:end_idx]
+            if path_nodes[-1] not in window_concepts:
+                has_ellipsis = True
+
+        # C. 拼装前沿节点结构
+        nodes_list = []
+        for c in window_concepts:
+            c_mastery = mastery.get(c, 0.0)
+            nodes_list.append({
+                "concept": c,
+                "percentage": int(round(c_mastery * 100)),
+                "mastered": c_mastery >= 0.70,
+                "is_ellipsis": False,
+                "is_target": False
+            })
+            
+        if has_ellipsis:
+            nodes_list.append({
+                "concept": "...",
+                "percentage": 0,
+                "mastered": False,
+                "is_ellipsis": True,
+                "is_target": False
+            })
+            target_mastery = mastery.get(leaf, 0.0)
+            nodes_list.append({
+                "concept": leaf,
+                "percentage": int(round(target_mastery * 100)),
+                "mastered": target_mastery >= 0.70,
+                "is_ellipsis": False,
+                "is_target": True
+            })
+            
+        # D. 动态学科语义域合成命名
+        domain_key = _concept_domain(leaf, res_index)
+        domain_name = _domain_label(domain_key)
+        
+        if "深度" in domain_name or "神经网络" in leaf or leaf in ("Transformer", "卷积神经网络"):
+            name = f"深度学习与 {leaf} 进阶路线"
+            desc = f"聚焦于{domain_name}前沿，深度突破 {leaf} 及其拓扑依赖链路。"
+        elif "数学" in domain_name or "统计" in domain_name:
+            name = f"数学推导与 {leaf} 强化路线"
+            desc = f"夯实数学基础，梳理 {leaf} 关联的微积分、概率分布与公式推演。"
+        elif "机器" in domain_name or "回归" in leaf or "分类" in leaf:
+            name = f"经典算法与 {leaf} 实战路线"
+            desc = f"攻克经典机器学习模型，掌握以 {leaf} 为核心的分类及拟合流程。"
+        else:
+            name = f"{domain_name}专题：{leaf} 通关路线"
+            desc = f"依托课程 {domain_name} 知识域体系，规划从基础到终极目标 {leaf} 的最短拓扑路线。"
+        
+        pathways.append({
+            "pathway_name": name,
+            "target_concept": leaf,
+            "description": desc,
+            "nodes": nodes_list,
+            "completion_rate": completion_rate,
+            "expected_minutes": expected_minutes,
+            "cognitive_load_index": cognitive_load_index
+        })
+
+    pathways.sort(key=lambda x: (-x["completion_rate"], len(x["nodes"])))
+    
+    return pathways[:4]
 
 
 @router.post("/{student_id}")
@@ -904,6 +1337,20 @@ async def update_profile(
 
     profile._refresh_dynamic_profile()
     await run_db_op(save_student_profile, profile)
+
+    try:
+        from learning_event_bus import LearningEventBus, ProfileUpdatedEvent
+        bus = LearningEventBus.get_instance()
+        if major:
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="major", new_value=profile.major))
+        if course:
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="target_course", new_value=profile.target_course))
+        if goals and isinstance(goals, list):
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="learning_goals", new_value=profile.learning_goals))
+        if preferences and isinstance(preferences, list):
+            await bus.publish(ProfileUpdatedEvent(student_id=student_id, field="interaction_preferences", new_value=profile.interaction_preferences))
+    except Exception:
+        pass
 
     return {"status": "updated", "student_id": student_id}
 
@@ -1055,4 +1502,73 @@ async def rollback_profile(
             "mastery_score": snapshot.get("mastery_score", 0.0),
             "weak_points_count": len(snapshot.get("weak_points", [])),
         },
+    }
+
+
+@router.delete("/{student_id}/concept/{concept_name}")
+async def delete_student_concept(
+    student_id: str,
+    concept_name: str,
+    request: Request,
+) -> dict[str, Any]:
+    """物理删除学生画像中的指定知识点（如测试产生的垃圾/非法词条），并级联清理关联复习计划"""
+    swarm = build_swarm_from_headers(request.headers)
+    profile = swarm.profile_store.get(student_id)
+    if not profile:
+        profile = await run_db_op(load_student_profile, student_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Student profile not found.")
+        swarm.profile_store[student_id] = profile
+
+    target = concept_name.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="Concept name cannot be empty.")
+
+    # 1. 从内存画像及各个子状态中清除
+    if hasattr(profile, "concept_mastery") and target in profile.concept_mastery:
+        profile.concept_mastery.pop(target, None)
+    if hasattr(profile, "bkt_states") and target in profile.bkt_states:
+        profile.bkt_states.pop(target, None)
+    if hasattr(profile, "concept_layers") and target in profile.concept_layers:
+        profile.concept_layers.pop(target, None)
+    if hasattr(profile, "recent_quiz_accuracy") and target in profile.recent_quiz_accuracy:
+        profile.recent_quiz_accuracy.pop(target, None)
+    if hasattr(profile, "weak_points") and target in profile.weak_points:
+        profile.weak_points = [w for w in profile.weak_points if w != target]
+
+    # 2. 删除对应的复习计划数据库记录 (DBReviewPlan)
+    def _delete_review_plan_db(session):
+        from app.database import DBReviewPlan
+        session.query(DBReviewPlan).filter(
+            DBReviewPlan.student_id == student_id,
+            DBReviewPlan.concept == target
+        ).delete(synchronize_session=False)
+        session.commit()
+
+    await run_db_op(_delete_review_plan_db)
+
+    # 3. 持久化保存删除后的画像
+    await run_db_op(save_student_profile, profile)
+
+    # 4. 强力同步更新 Swarm 全局缓存中的所有副本
+    from swarm_factory import _swarm_cache
+    for sw in _swarm_cache.values():
+        cached = sw.profile_store.get(student_id)
+        if cached:
+            if hasattr(cached, "concept_mastery"):
+                cached.concept_mastery.pop(target, None)
+            if hasattr(cached, "bkt_states"):
+                cached.bkt_states.pop(target, None)
+            if hasattr(cached, "concept_layers"):
+                cached.concept_layers.pop(target, None)
+            if hasattr(cached, "recent_quiz_accuracy"):
+                cached.recent_quiz_accuracy.pop(target, None)
+            if hasattr(cached, "weak_points"):
+                cached.weak_points = [w for w in cached.weak_points if w != target]
+
+    return {
+        "status": "success",
+        "message": f"Successfully deleted concept '{target}' from profile and review plans.",
+        "student_id": student_id,
+        "deleted_concept": target,
     }

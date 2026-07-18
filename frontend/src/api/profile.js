@@ -31,6 +31,11 @@ export async function updateStudentProfile(studentId, data) {
   return r.data
 }
 
+export async function getGoalRecommendations(studentId) {
+  const r = await api.get(`/profile/${studentId}/goal-recommendations`, { headers: buildHeaders() })
+  return r.data
+}
+
 export async function getRecommendations(studentId, concept = null, pathway = null) {
   const params = {}
   if (concept) params.concept = concept
@@ -46,5 +51,11 @@ export async function rollbackProfile(studentId, conversationId) {
     { conversation_id: conversationId },
     { headers: buildHeaders() }
   )
+  return r.data
+}
+
+// 物理删除学生画像中的指定知识点与关联复习计划
+export async function deleteStudentConcept(studentId, conceptName) {
+  const r = await api.delete(`/profile/${studentId}/concept/${encodeURIComponent(conceptName)}`, { headers: buildHeaders() })
   return r.data
 }

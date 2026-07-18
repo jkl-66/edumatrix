@@ -1,7 +1,8 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { getReviewPlans, createReviewPlan, reviewFlashcard } from '../api'
 import { Calendar, Plus, CheckCircle2, Clock, Brain } from '@lucide/vue'
+import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 
 const props = defineProps({ studentId: String })
 
@@ -39,16 +40,27 @@ function playAdaptiveReview(payload) {
   morphText.value = ''
   morphTrace.value = []
   morphing.value = true
-  const chunks = payload?.stream_chunks?.length
-    ? payload.stream_chunks
-    : [payload?.simplified_explanation || '', payload?.mermaid || ''].filter(Boolean)
+
+  const explanation = payload?.simplified_explanation || ''
+  const chunks = []
+  for (let i = 0; i < explanation.length; i += 28) {
+    chunks.push(explanation.slice(i, i + 28))
+  }
+
   chunks.forEach((chunk, index) => {
     const timer = setTimeout(() => {
       morphText.value += chunk
-      if (index === chunks.length - 1) morphing.value = false
+      if (index === chunks.length - 1) {
+        morphing.value = false
+      }
     }, index * 90)
     morphTimers.push(timer)
   })
+  
+  if (chunks.length === 0) {
+    morphing.value = false
+  }
+
   ;(payload?.agent_trace || []).forEach((line, index) => {
     const timer = setTimeout(() => {
       morphTrace.value.push(line)
@@ -172,7 +184,10 @@ onUnmounted(clearMorphTimers)
           </span>
         </div>
       </div>
-      <pre class="mt-3 overflow-x-auto rounded-lg bg-white/80 border border-amber-100 p-3 text-[10px] leading-relaxed text-slate-700">{{ adaptiveReview.mermaid }}</pre>
+      <!-- 思维导图可视化区域 (照搬 CollapsibleMindmap 可折叠交互组件) -->
+      <div v-if="adaptiveReview.mermaid" class="mt-3 w-full">
+        <CollapsibleMindmap :code="adaptiveReview.mermaid" />
+      </div>
       <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
         <p
           v-for="line in morphTrace"

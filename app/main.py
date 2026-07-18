@@ -98,8 +98,9 @@ async def add_process_time_header(request: Request, call_next):
 
 
 @app.post("/api/auth/login")
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     """JWT 登录接口，获取访问令牌"""
+    anon_student_id = request.headers.get("x-anon-student-id")
     def do_auth(session):
         user = authenticate_user(session, form_data.username, form_data.password)
         if not user:
@@ -110,6 +111,12 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
                 session.refresh(user)
             else:
                 return None
+        
+        # 将在此设备上匿名生成的复习计划、笔记、历史记录合并迁移到登录账户中
+        if anon_student_id:
+            from app.crud import migrate_anonymous_data
+            migrate_anonymous_data(session, anon_student_id, user.username)
+        session.refresh(user)
         return user
 
     user = await run_db_op(do_auth)
@@ -145,6 +152,8 @@ async def register_user(request: Request):
     major = str(payload.get("major", "计算机科学")).strip()
     cognitive_style = str(payload.get("cognitive_style", "visual")).strip()
     motivation_type = str(payload.get("motivation_type", "未诊断")).strip()
+    
+    anon_student_id = request.headers.get("x-anon-student-id")
     
     if not username or not password:
         raise HTTPException(status_code=400, detail="用户名和密码不能为空")
@@ -185,6 +194,12 @@ async def register_user(request: Request):
             
         session.add(db_profile)
         session.commit()
+        
+        # 将在此设备上匿名生成的复习计划、笔记、历史记录合并迁移到新注册账户中
+        if anon_student_id:
+            from app.crud import migrate_anonymous_data
+            migrate_anonymous_data(session, anon_student_id, username)
+            
         session.refresh(user)
         return user
 
@@ -650,9 +665,12 @@ async def socratic_explain_direct(request: Request) -> dict[str, Any]:
     is_formula = bool(re.search(r'[\\∂∫∑πθ∏∐∆∇∞∧∨∩∪⊂⊃∈∉≤≥≠≈≡⇒⇔∀∃]', target_text))
     is_code = bool(re.search(r'(def |import |class |\bfor\b|\bif\b|return |lambda |async |await )', target_text))
 
-    if follow_up and history:
-        system = "你是一位温和的苏格拉底导师。根据之前的对话和学生追问继续引导，不要重复已讲内容。使用中文。"
-        user = f"【学生画像】{profile_context}\n【原始内容】{target_text}\n【历史对话】{history}\n【学生追问】{follow_up}"
+    if follow_up:
+        system = "你是一位温和的苏格拉底导师。根据先前的对话和学生追问进行详细引导，不要重复已讲内容。使用中文。"
+        if history:
+            user = f"【学生画像】{profile_context}\n【原始内容】{target_text}\n【历史对话】{history}\n【学生追问】{follow_up}"
+        else:
+            user = f"【学生画像】{profile_context}\n【原始内容】{target_text}\n【上文】{context_before}\n【下文】{context_after}\n【学生追问】{follow_up}"
     elif is_formula:
         system = f"你是一位温和的苏格拉底导师。{profile_context}。用户点击了一个数学公式，请用启发式分步推导解释。\n规则：1)拆解公式结构，用通俗比喻 2)给出具体数值例子 3)结合学生背景 4)最后问引导性问题 5)使用中文。"
         user = f"公式: {target_text}\n上文: {context_before}\n下文: {context_after}"

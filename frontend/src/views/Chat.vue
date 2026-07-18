@@ -11,11 +11,11 @@ import {
   getLocalAnimations, uploadBehaviorLogs,
 } from '../api'
 import {
-  Send, Bot, User, Loader2, BookOpen, Code2, LayoutGrid, HelpCircle, Video,
+  Send, Bot, User, Loader2, BookOpen, Code2, LayoutGrid, HelpCircle, Video, Cpu,
   CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp,
   Search, Globe, ExternalLink, Terminal, Play, Trash2, MessageSquare,
   BrainCircuit, Target, TrendingUp, Sparkles, Users,
-  RotateCcw, RotateCw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar, X, Film,
+  RotateCcw, RotateCw, Download, FileText, Maximize2, Minimize2, Lightbulb, Copy, Calendar, X, Film, Upload
 } from '@lucide/vue'
 import { useChatStore } from '../stores/chat'
 import { useQuizStore } from '../stores/quiz'
@@ -28,6 +28,7 @@ import AgentTimeline from '../components/AgentTimeline.vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 import LocalVideoPlayer from '../components/LocalVideoPlayer.vue'
+import VideoPlayerCard from '../components/VideoPlayerCard.vue'
 import ManifoldVisualizer from '../components/ManifoldVisualizer.vue'
 import IncrementalMarkdownRenderer from '../components/IncrementalMarkdownRenderer.vue'
 
@@ -358,13 +359,217 @@ watch(messages, (newMsgs, oldMsgs) => {
 }, { deep: true })
 
 const input = ref('')
+const showSuggest = ref(false)
+const suggestType = ref('') // 'command' | 'file'
+const suggestQuery = ref('')
+const suggestIndex = ref(0)
+const availableCommands = ref([
+  { name: '/explain', desc: '强制指定理论教授生成理论讲义', label: '理论精讲' },
+  { name: '/map', desc: '强制指定逻辑画师生成 Mermaid 拓扑图', label: '思维导图' },
+  { name: '/code', desc: '强制指定极客助教生成 PyTorch 实操代码', label: '代码案例' },
+  { name: '/quiz', desc: '强制指定考官智能体生成测验题', label: '随堂测试' },
+  { name: '/video', desc: '强制指定虚拟导演生成视频解说脚本', label: '视频讲解' }
+])
+const availableDocuments = ref([])
+
+import { listKnowledgeDocuments, addWebSource, downloadWebFile, getKnowledgeDocument } from '../api'
+
+const docs = ref([])
+const selectedDocIds = ref([])
+const leftPanelCollapsed = ref(true)
+
+function getFileIcon(filename, type) {
+  if (filename && (filename.startsWith('[网页]') || type === 'web')) return Globe
+  if (type && ['mp4', 'avi', 'mov', 'video'].includes(type)) return Film
+  return FileText
+}
+
+function getFileColorClass(filename, type) {
+  if (filename && (filename.startsWith('[网页]') || type === 'web')) return 'text-blue-500 bg-blue-50'
+  if (type && ['mp4', 'avi', 'mov', 'video'].includes(type)) return 'text-purple-500 bg-purple-50'
+  if (type === 'pptx') return 'text-orange-500 bg-orange-50'
+  if (type === 'pdf') return 'text-red-500 bg-red-50'
+  return 'text-emerald-500 bg-emerald-50 hover:bg-emerald-100/50'
+}
+
+async function loadDocuments() {
+  try {
+    const data = await listKnowledgeDocuments(props.studentId || 'default')
+    docs.value = Array.isArray(data) ? data : []
+    // 首次加载时，默认全部勾选
+    if (selectedDocIds.value.length === 0) {
+      selectedDocIds.value = docs.value.map(d => d.id)
+    }
+  } catch (e) {
+    console.error('Failed to load documents:', e)
+  }
+}
+
+async function ingestWebSearchItem(item) {
+  if (!item || item.adding) return
+  item.adding = true
+  try {
+    const studentId = props.studentId || 'default'
+    if (item.is_file) {
+      await downloadWebFile(item.url, item.file_type, item.title, studentId)
+    } else {
+      await addWebSource(searchQuery.value || '未知搜索', item.title, item.url || '', item.snippet || '', studentId)
+    }
+    // 成功后，重新加载文档列表，使勾选框中能显示新导入的文档
+    await loadDocuments()
+  } catch (e) {
+    console.error('Failed to ingest web search item:', e)
+    alert('导入失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    item.adding = false
+  }
+}
+
+const showDocViewerModal = ref(false)
+const docViewerLoading = ref(false)
+const activeDocViewer = ref({ title: '', content: '', filename: '', file_type: '', file_size: 0 })
+
+async function openDocViewer(doc) {
+  showDocViewerModal.value = true
+  docViewerLoading.value = true
+  activeDocViewer.value = {
+    title: doc.title || doc.filename,
+    content: '',
+    filename: doc.filename,
+    file_type: doc.file_type || 'txt',
+    file_size: doc.file_size || 0
+  }
+  try {
+    const studentId = props.studentId || 'default'
+    const data = await getKnowledgeDocument(doc.id, studentId)
+    activeDocViewer.value.content = data.content || '无文本内容'
+  } catch (e) {
+    console.error('Failed to load document content:', e)
+    activeDocViewer.value.content = '加载失败: ' + (e.message || '未知错误')
+  } finally {
+    docViewerLoading.value = false
+  }
+}
+
+const isAllSelected = computed({
+  get() {
+    return docs.value.length > 0 && selectedDocIds.value.length === docs.value.length
+  },
+  set(val) {
+    if (val) {
+      selectedDocIds.value = docs.value.map(d => d.id)
+    } else {
+      selectedDocIds.value = []
+    }
+  }
+})
+
+async function loadDocsForAutocomplete() {
+  try {
+    await loadDocuments()
+    availableDocuments.value = docs.value.map(d => ({
+      name: `@${d.filename}`,
+      desc: d.title,
+      label: `${(d.file_size / 1024).toFixed(1)} KB`
+    }))
+  } catch (e) {
+    console.error('Failed to load documents for autocomplete:', e)
+  }
+}
+
+const showDocSelector = ref(false)
+const docSelectorQuery = ref('')
+
+function toggleDocSelector() {
+  showDocSelector.value = !showDocSelector.value
+  if (showDocSelector.value) {
+    loadDocsForAutocomplete()
+  }
+}
+
+const filteredDocSelectorList = computed(() => {
+  const list = availableDocuments.value
+  if (!docSelectorQuery.value) return list
+  const q = docSelectorQuery.value.toLowerCase()
+  return list.filter(item => 
+    (item.name && item.name.toLowerCase().includes(q)) || 
+    (item.desc && item.desc.toLowerCase().includes(q))
+  )
+})
+
+function insertDocReference(docName) {
+  const currentVal = input.value
+  if (currentVal.endsWith('@')) {
+    input.value = currentVal.slice(0, -1) + docName + ' '
+  } else {
+    const suffix = currentVal && !currentVal.endsWith(' ') ? ' ' : ''
+    input.value = currentVal + suffix + docName + ' '
+  }
+  showDocSelector.value = false
+  docSelectorQuery.value = ''
+}
+
+const closeDocSelectorOnOutsideClick = (e: MouseEvent) => {
+  const target = e.target as HTMLElement
+  if (showDocSelector.value && !target.closest('.doc-selector-trigger') && !target.closest('.doc-selector-panel')) {
+    showDocSelector.value = false
+  }
+}
+onMounted(() => {
+  window.addEventListener('click', closeDocSelectorOnOutsideClick)
+  loadDocuments()
+})
+onUnmounted(() => {
+  window.removeEventListener('click', closeDocSelectorOnOutsideClick)
+})
+
+watch(input, (newVal) => {
+  if (!newVal) {
+    showSuggest.value = false
+    return
+  }
+  const lastWordMatch = newVal.match(/[\/@][^\s]*$/)
+  if (lastWordMatch) {
+    const trigger = lastWordMatch[0][0]
+    const query = lastWordMatch[0].slice(1)
+    suggestType.value = trigger === '/' ? 'command' : 'file'
+    suggestQuery.value = query
+    showSuggest.value = true
+    suggestIndex.value = 0
+    if (trigger === '@') {
+      loadDocsForAutocomplete()
+    }
+  } else {
+    showSuggest.value = false
+  }
+})
+
+const filteredSuggestions = computed(() => {
+  const list = suggestType.value === 'command' ? availableCommands.value : availableDocuments.value
+  if (!suggestQuery.value) return list
+  const q = suggestQuery.value.toLowerCase()
+  return list.filter(item => 
+    (item.name && item.name.toLowerCase().includes(q)) || 
+    (item.desc && item.desc.toLowerCase().includes(q))
+  )
+})
+
+function selectSuggestion(item) {
+  const currentVal = input.value
+  const lastWordMatch = currentVal.match(/[\/@][^\s]*$/)
+  if (lastWordMatch) {
+    const startIdx = lastWordMatch.index
+    input.value = currentVal.slice(0, startIdx) + item.name + ' '
+  }
+  showSuggest.value = false
+}
+
 const showResources = ref(new Set())
 watch(showResources, () => {
   renderAllDiagrams()
 }, { deep: true })
 const activeTab = ref(quizStore.quizState !== 'idle' ? 'quiz' : 'chat') // chat | quiz | code | websearch
 
-// --- 任务 8.1: 行级/公式悬浮答疑状态 ---
 const socraticPopup = ref({
   visible: false,
   targetText: '',
@@ -374,9 +579,20 @@ const socraticPopup = ref({
   messageIndex: -1,
 })
 
+const textSelection = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  text: '',
+})
+
+const quotedContent = ref(null) // { text: '', source: '' }
+const isDragging = ref(false)
+const dragOffset = { x: 0, y: 0 }
+
 // --- 任务 8.4: 双栏阻尼排版 ---
 const rightPanelCollapsed = ref(false)
-const rightPanelActiveTab = ref('knowledge')
+const rightPanelActiveTab = ref('canvas')
 const sandboxInitialCode = ref("import numpy as np\nprint('Hello, EduMatrix!')")
 
 function extractCodeFromMarkdown(mdText) {
@@ -515,6 +731,7 @@ const showCodeViz = ref(false)
 
 // --- Web Search State ---
 const searchQuery = ref('')
+const searchCategory = ref('all')
 const searchResults = ref([])
 const searchSummary = ref('')
 const searchLoading = ref(false)
@@ -592,11 +809,30 @@ function getSlideName(content) {
   return filename
 }
 
-async function triggerMatrixGeneration(concept) {
+function getCleanUserQuery(idx) {
+  if (idx > 0 && messages.value[idx - 1]?.role === 'user') {
+    const rawContent = messages.value[idx - 1].content
+    const parsed = parseQuoteFromMessage(rawContent)
+    return parsed.remaining.trim()
+  }
+  return null
+}
+
+async function triggerMatrixGeneration(concept, idx) {
   if (!concept || sending.value) return
   activeTab.value = 'chat'
+  
+  // 智能继承上下文：提取上一轮用户提问的真实意图，防止资源与用户提问意图错位
+  let queryText = concept
+  if (idx !== undefined && idx > 0) {
+    const originalQuery = getCleanUserQuery(idx)
+    if (originalQuery && originalQuery !== concept) {
+      queryText = `一键生成资源包: ${originalQuery} (知识点: ${concept})`
+    }
+  }
+  
   try {
-    await chatStore.sendChatMessage(concept, props.studentId, 'matrix')
+    await chatStore.sendChatMessage(queryText, props.studentId, 'matrix', [], selectedDocIds.value)
   } catch (e) {
     console.error('Swarm generation failed:', e)
   }
@@ -618,6 +854,12 @@ async function send() {
   const imgs = [...uploadedImages.value]
   if ((!text && imgs.length === 0) || sending.value) return
   
+  let finalMsg = text
+  if (quotedContent.value) {
+    finalMsg = `[引用: ${quotedContent.value.source}] "${quotedContent.value.text}"\n\n我的追问: ${text}`
+    quotedContent.value = null
+  }
+
   input.value = ''
   uploadedImages.value = []
   
@@ -645,7 +887,7 @@ async function send() {
     activeTab.value = 'chat'
     await nextTick()
     try {
-      await chatStore.sendChatMessage(concept, props.studentId, 'matrix')
+      await chatStore.sendChatMessage(concept, props.studentId, 'matrix', [], selectedDocIds.value)
     } catch (e) {
       console.error('Matrix generation failed:', e)
     }
@@ -654,9 +896,19 @@ async function send() {
   
   await nextTick()
   try {
-    await chatStore.sendChatMessage(text || '分析以下题目截图：', props.studentId, 'chat', imgs)
+    await chatStore.sendChatMessage(finalMsg || '分析以下题目截图：', props.studentId, 'chat', imgs, selectedDocIds.value)
   } catch (e) {
     console.error('Streaming failed:', e)
+  }
+}
+
+async function askSuggestedQuestion(q) {
+  if (sending.value) return
+  try {
+    const studentId = props.studentId || 'default'
+    await chatStore.sendChatMessage(q, studentId, 'chat', [], selectedDocIds.value)
+  } catch (e) {
+    console.error('Sending suggested question failed:', e)
   }
 }
 
@@ -668,7 +920,34 @@ function toggleResource(msgIdx, resIdx) {
 }
 
 function usePreset(text) { input.value = text; send() }
-function handleKeydown(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }
+function handleKeydown(e) {
+  if (showSuggest.value && filteredSuggestions.value.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      suggestIndex.value = (suggestIndex.value + 1) % filteredSuggestions.value.length;
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      suggestIndex.value = (suggestIndex.value - 1 + filteredSuggestions.value.length) % filteredSuggestions.value.length;
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      selectSuggestion(filteredSuggestions.value[suggestIndex.value]);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      showSuggest.value = false;
+      return;
+    }
+  }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    send();
+  }
+}
 
 // ======================== QUIZ ========================
 
@@ -754,15 +1033,97 @@ async function copyCode() {
 
 // ======================== 任务 8.1: 行级/公式点击答疑 ========================
 
-function openSocraticPopup(targetText, contextBefore, contextAfter, lineIndex, messageIndex) {
+function openSocraticPopup(targetText, contextBefore = '', contextAfter = '', lineIndex = 0, messageIndex = -1) {
   socraticPopup.value = {
     visible: true,
-    targetText: targetText.slice(0, 200),
-    contextBefore: contextBefore.slice(0, 300),
-    contextAfter: contextAfter.slice(0, 300),
+    targetText: targetText ? targetText.slice(0, 30000) : '',
+    contextBefore: contextBefore ? contextBefore.slice(0, 10000) : '',
+    contextAfter: contextAfter ? contextAfter.slice(0, 10000) : '',
     lineIndex,
     messageIndex,
   }
+  textSelection.value.visible = false
+}
+
+function setQuote(text, source) {
+  quotedContent.value = {
+    text: text,
+    source: source
+  }
+  textSelection.value.visible = false
+  nextTick(() => {
+    const el = document.querySelector('textarea')
+    if (el) el.focus()
+  })
+}
+
+function parseQuoteFromMessage(content) {
+  if (!content) return { hasQuote: false, source: '', text: '', remaining: '' }
+  const match = content.match(/^\[引用:\s*([^\]]+)\]\s*"([\s\S]*?)"\n\n([\s\S]*)$/)
+  if (match) {
+    return {
+      hasQuote: true,
+      source: match[1],
+      text: match[2],
+      remaining: match[3]
+    }
+  }
+  return { hasQuote: false, source: '', text: '', remaining: content }
+}
+
+function handleGlobalMouseUp(e) {
+  if (e && e.target && e.target.closest('.selection-capsule')) {
+    return
+  }
+  setTimeout(() => {
+    if (isDragging.value) return
+    const selection = window.getSelection()
+    const text = selection.toString().trim()
+    if (text.length > 2) {
+      try {
+        const range = selection.getRangeAt(0)
+        const rect = range.getBoundingClientRect()
+        textSelection.value = {
+          visible: true,
+          x: rect.left + rect.width / 2,
+          y: rect.top - 38,
+          text: text
+        }
+      } catch (err) {
+        textSelection.value.visible = false
+      }
+    } else {
+      textSelection.value.visible = false
+    }
+  }, 10)
+}
+
+function handleGlobalMouseDown(e) {
+  if (e && e.target && e.target.closest('.selection-capsule')) {
+    return
+  }
+  textSelection.value.visible = false
+}
+
+function startDrag(e) {
+  if (!textSelection.value.visible) return
+  isDragging.value = true
+  dragOffset.x = e.clientX - textSelection.value.x
+  dragOffset.y = e.clientY - textSelection.value.y
+  document.addEventListener('mousemove', onDrag)
+  document.addEventListener('mouseup', stopDrag)
+}
+
+function onDrag(e) {
+  if (!isDragging.value) return
+  textSelection.value.x = e.clientX - dragOffset.x
+  textSelection.value.y = e.clientY - dragOffset.y
+}
+
+function stopDrag() {
+  isDragging.value = false
+  document.removeEventListener('mousemove', onDrag)
+  document.removeEventListener('mouseup', stopDrag)
 }
 
 /**
@@ -770,6 +1131,8 @@ function openSocraticPopup(targetText, contextBefore, contextAfter, lineIndex, m
  * 在 Chat 组件挂载后需绑定点击事件到渲染内容
  */
 onMounted(async () => {
+  document.addEventListener('mouseup', handleGlobalMouseUp)
+  document.addEventListener('mousedown', handleGlobalMouseDown)
   // 委托监听：捕获 Markdown 卡片内的代码块和公式点击
   document.addEventListener('click', handleMarkdownClick)
 
@@ -815,6 +1178,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('mouseup', handleGlobalMouseUp)
+  document.removeEventListener('mousedown', handleGlobalMouseDown)
   document.removeEventListener('click', handleMarkdownClick)
   window.startInteractiveQuiz = null
   window.startInteractiveVideo = null
@@ -855,19 +1220,15 @@ function handleMarkdownClick(e) {
     const targetLine = lines[lineIdx] || ''
     const contextB = lines.slice(Math.max(0, lineIdx - 2), lineIdx).join('\n')
     const contextA = lines.slice(lineIdx + 1, lineIdx + 4).join('\n')
-
     openSocraticPopup(targetLine.trim(), contextB, contextA, lineIdx, msgIndex)
     e.preventDefault()
     e.stopPropagation()
   } else if (formulaBlock) {
     const formulaText = formulaBlock.textContent || ''
-
-    // 查找公式在消息内容中的上下文
     const content = msg.content || ''
     const formulaIdx = content.indexOf(formulaText)
     const contextB = content.slice(Math.max(0, formulaIdx - 100), formulaIdx)
     const contextA = content.slice(formulaIdx + formulaText.length, formulaIdx + formulaText.length + 100)
-
     openSocraticPopup(formulaText.trim(), contextB, contextA, 0, msgIndex)
     e.preventDefault()
     e.stopPropagation()
@@ -896,6 +1257,9 @@ function getAgentConfig(agentName, resourceType) {
   if (name.includes('assess') || name.includes('quiz') || name.includes('考官') || name.includes('评测')) {
     return { label: '考官智能体', color: 'text-rose-600 bg-rose-50 border-rose-100', icon: 'BrainCircuit' }
   }
+  if (name.includes('video') || name.includes('recommender') || name.includes('视频') || name.includes('推荐官') || name.includes('director')) {
+    return { label: '视频推荐官', color: 'text-emerald-600 bg-emerald-50 border-emerald-100', icon: 'Film' }
+  }
   return { label: agentName || resourceType || '教育智能体', color: 'text-gray-600 bg-gray-50 border-gray-100', icon: 'Bot' }
 }
 
@@ -907,9 +1271,43 @@ function getIconComponent(iconName) {
     HelpCircle,
     Terminal,
     BrainCircuit,
+    Film,
     Bot
   }
   return mapping[iconName] || Bot
+}
+
+function safeParseJson(str, fallback = []) {
+  if (!str) return fallback
+  let cleaned = str.trim()
+  
+  // 1. 自动剥离 Markdown json 代码块包裹（如 ```json ... ``` 或 ``` ... ```）
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\s*/, '').replace(/\s*```$/, '').trim()
+  }
+  
+  // 2. 智能截取首个 '[' 到最后一个 ']' 之间的 JSON 数组内容
+  const startIdx = cleaned.indexOf('[')
+  const endIdx = cleaned.lastIndexOf(']')
+  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    cleaned = cleaned.substring(startIdx, endIdx + 1)
+  }
+  
+  try {
+    return JSON.parse(cleaned)
+  } catch (e) {
+    console.error("JSON parse failed in Chat.vue, attempting fuzzy recovery:", e, str)
+    try {
+      // 3. 容错净化：修复常见的小尾巴逗号或未闭合转义符
+      const fixed = cleaned
+        .replace(/,\s*]/g, ']')
+        .replace(/,\s*}/g, '}')
+      return JSON.parse(fixed)
+    } catch (e2) {
+      console.error("Fuzzy JSON recovery failed:", e2)
+      return fallback
+    }
+  }
 }
 
 /**
@@ -1103,7 +1501,7 @@ async function regenerateMessage(idx) {
   // Resend the user message
   try {
     const studentId = props.studentId || 'default'
-    await chatStore.sendChatMessage(userMsg.content, studentId, 'chat', userMsg.images || [])
+    await chatStore.sendChatMessage(userMsg.content, studentId, 'chat', userMsg.images || [], selectedDocIds.value)
   } catch (err) {
     console.error('Regenerate failed:', err)
   }
@@ -1121,7 +1519,7 @@ async function regenerateFromUserMsg(idx) {
   // Resend
   try {
     const studentId = props.studentId || 'default'
-    await chatStore.sendChatMessage(userMsg.content, studentId, 'chat', userMsg.images || [])
+    await chatStore.sendChatMessage(userMsg.content, studentId, 'chat', userMsg.images || [], selectedDocIds.value)
   } catch (err) {
     console.error('Regenerate failed:', err)
   }
@@ -1185,7 +1583,7 @@ watch(hasVisualContent, (newVal) => {
     rightPanelActiveTab.value = 'canvas'
     rightPanelCollapsed.value = false
   }
-}, { immediate: true })
+})
 
 const studentMastery = computed(() => {
   let profile = latestProfile.value
@@ -1240,16 +1638,31 @@ const lastAssistantMessage = computed(() => {
 })
 
 const klDivergence = computed(() => {
-  return lastAssistantMessage.value?.alignment?.distance ?? 0.0
+  // 1. 如果是 Swarm 矩阵生成场景，优先使用消息级别的 RAG 流形对齐距离
+  const msgDist = lastAssistantMessage.value?.alignment?.distance
+  if (msgDist !== undefined && msgDist !== 0) {
+    return msgDist
+  }
+  // 2. 否则，根据学生当前的 concept_mastery 动态计算平均偏差 (1.0 - 平均掌握度) 作为认知对齐散度
+  const profile = latestProfile.value || capturedInitialProfile.value
+  if (!profile || !profile.concept_mastery) return 0.45 // 默认中等散度
+  const scores = Object.values(profile.concept_mastery)
+  if (scores.length === 0) return 0.45
+  const avgMastery = scores.reduce((sum, val) => sum + val, 0) / scores.length
+  return Math.max(0.0, Math.min(1.0, 1.0 - avgMastery))
 })
 
 const conflictDetected = computed(() => {
-  return !(lastAssistantMessage.value?.alignment?.passed ?? true)
+  const msgPassed = lastAssistantMessage.value?.alignment?.passed
+  if (msgPassed !== undefined) {
+    return !msgPassed
+  }
+  // 认知冲突阈值：当散度 KL > 0.45 (即平均掌握度低于 55%) 时触发预警
+  return klDivergence.value > 0.45
 })
 
 const alignmentProgress = computed(() => {
   const dist = klDivergence.value
-  if (dist === 0) return 100
   return Math.max(0, Math.min(100, (1 - dist) * 100))
 })
 
@@ -1291,7 +1704,7 @@ async function doWebSearch() {
   searchSummary.value = ''
 
   try {
-    const data = await webSearch(searchQuery.value, props.studentId)
+    const data = await webSearch(searchQuery.value, props.studentId, searchCategory.value)
     searchResults.value = data.results || []
     searchSummary.value = data.summary || ''
   } catch (e) {
@@ -1299,6 +1712,20 @@ async function doWebSearch() {
   } finally {
     searchLoading.value = false
   }
+}
+
+function getDomain(urlStr) {
+  if (!urlStr) return ''
+  try {
+    return new URL(urlStr).hostname.replace('www.', '')
+  } catch {
+    return urlStr
+  }
+}
+
+function openUrl(urlStr) {
+  if (!urlStr) return
+  window.open(urlStr, '_blank')
 }
 
 async function doLoadUrl() {
@@ -1478,6 +1905,10 @@ function renderMarkdown(text, type = '', conceptName = '') {
   })
 
   let html = cleaned
+    .replace(/<details(\s+open)?>/gi, (_, open) => open ? '@@DETAILSTOKEN_OPEN@@' : '@@DETAILSTOKEN@@')
+    .replace(/<\/details>/gi, '@@ENDDETAILSTOKEN@@')
+    .replace(/<summary>/gi, '@@SUMMARYTOKEN@@')
+    .replace(/<\/summary>/gi, '@@ENDSUMMARYTOKEN@@')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -1797,6 +2228,17 @@ function renderMarkdown(text, type = '', conceptName = '') {
     html = html.split(`@@SVGBLOCKTOKEN${idx}@@`).join(block)
   })
 
+  const detailsClass = 'class="border border-slate-200/80 dark:border-slate-800/80 rounded-xl my-3 overflow-hidden shadow-sm bg-slate-50/40 dark:bg-slate-900/40 hover:bg-slate-50 dark:hover:bg-slate-900/60 transition-all duration-300"'
+  const summaryClass = 'class="px-4 py-3 font-semibold text-slate-800 dark:text-slate-200 cursor-pointer bg-slate-100/60 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors flex items-center select-none outline-none text-xs"'
+  const contentClass = 'class="px-5 py-4 border-t border-slate-100 dark:border-slate-800/60 text-slate-700 dark:text-slate-300 leading-relaxed text-xs"'
+
+  html = html
+    .split('@@DETAILSTOKEN_OPEN@@').join(`<details open ${detailsClass}>`)
+    .split('@@DETAILSTOKEN@@').join(`<details ${detailsClass}>`)
+    .split('@@ENDDETAILSTOKEN@@').join('</div></details>')
+    .split('@@SUMMARYTOKEN@@').join(`<summary ${summaryClass}>`)
+    .split('@@ENDSUMMARYTOKEN@@').join(`</summary><div ${contentClass}>`)
+
   // 6. Append quiz CAT link button for assessor agent or Video button for director agent
   const normalizedType = type.toLowerCase()
   if (normalizedType.includes('assess') || normalizedType.includes('quiz') || normalizedType.includes('考官') || normalizedType.includes('评测')) {
@@ -1826,6 +2268,51 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
 <template>
   <div class="flex gap-4 h-full">
+    <!-- Left panel: NotebookLM-style Checked Sources -->
+    <div
+      v-if="activeTab === 'chat'"
+      class="shrink-0 border border-gray-100 rounded-2xl bg-white shadow-sm flex flex-col p-4 transition-all duration-300"
+      :class="leftPanelCollapsed ? 'w-0 border-r-0 overflow-hidden px-0 py-0 opacity-0' : 'w-[260px] opacity-100'"
+    >
+      <div class="flex items-center justify-between mb-4 border-b border-gray-100 pb-2 shrink-0">
+        <span class="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+          <BookOpen :size="14" class="text-blue-500" /> 知识库源 ({{ selectedDocIds.length }}/{{ docs.length }})
+        </span>
+        <button @click="leftPanelCollapsed = true" class="text-gray-400 hover:text-gray-600 hover:bg-gray-50 p-1 rounded-lg transition-colors">
+          <Minimize2 :size="12" />
+        </button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto space-y-2 mb-3 min-h-0 scrollbar-thin">
+        <!-- Select All checkbox -->
+        <label v-if="docs.length > 0" class="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-xl cursor-pointer text-xs font-semibold text-gray-600 border border-transparent select-none">
+          <input type="checkbox" v-model="isAllSelected" class="rounded text-blue-500 cursor-pointer" />
+          全选 (Select All)
+        </label>
+        
+        <div v-if="docs.length === 0" class="h-full flex flex-col items-center justify-center text-center p-4">
+          <BookOpen :size="24" class="text-gray-300 mb-2" />
+          <p class="text-[11px] text-gray-400">知识库为空</p>
+        </div>
+
+        <div v-for="doc in docs" :key="doc.id" class="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-xl border border-transparent text-xs select-none group" :class="{ 'bg-blue-50/40 border-blue-100/50': selectedDocIds.includes(doc.id) }">
+          <input type="checkbox" :value="doc.id" v-model="selectedDocIds" class="rounded text-blue-500 cursor-pointer shrink-0" />
+          <div class="flex items-center gap-1.5 min-w-0 flex-1 cursor-pointer" @click="openDocViewer(doc)">
+            <component :is="getFileIcon(doc.filename, doc.file_type)" :size="12" class="shrink-0" :class="getFileColorClass(doc.filename, doc.file_type)" />
+            <span class="truncate text-gray-700 font-medium hover:text-blue-600 hover:underline flex-1" :title="doc.filename">{{ doc.filename }}</span>
+            <ExternalLink :size="10" class="text-gray-300 opacity-0 group-hover:opacity-100 shrink-0 transition-opacity" />
+          </div>
+        </div>
+      </div>
+      
+      <!-- Upload / Add Website Shortcut buttons -->
+      <div class="border-t border-gray-100 pt-3 flex flex-col gap-2 shrink-0">
+        <router-link to="/knowledge" class="w-full py-2 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition-all flex items-center justify-center gap-1 select-none">
+          <Upload :size="12" /> 管理知识库
+        </router-link>
+      </div>
+    </div>
+
     <!-- Main content area -->
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Premium Tabs -->
@@ -1845,6 +2332,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
           </button>
         </div>
         <div class="flex items-center gap-2">
+          <button v-if="activeTab === 'chat' && leftPanelCollapsed"
+            @click="leftPanelCollapsed = false"
+            class="px-2.5 py-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-100 bg-indigo-50 rounded-lg flex items-center gap-1 transition-all border border-indigo-200">
+            <BookOpen :size="12" /> 展开源文件列表
+          </button>
           <button v-if="activeTab === 'chat' && messages.length > 0"
             @click="clearChat"
             class="px-2.5 py-1 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-100 bg-red-50 rounded-lg flex items-center gap-1 transition-all border border-red-200">
@@ -1887,7 +2379,16 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
               <!-- 用户消息气泡：圆角矩形，加深蓝色精致边框，大行距，优雅字体 -->
               <div class="max-w-[75%] chat-card-user text-blue-600 shadow-sm flex flex-col gap-2">
-                <p class="text-sm whitespace-pre-wrap leading-relaxed">{{ msg.content }}</p>
+                <template v-if="parseQuoteFromMessage(msg.content).hasQuote">
+                  <div class="border-l-2 border-blue-500 pl-2.5 py-1 mb-1 bg-slate-50/50 dark:bg-slate-900/40 rounded text-[11px] text-slate-550 dark:text-slate-400 font-mono italic max-h-[80px] overflow-y-auto break-all text-left">
+                    <span class="font-bold text-[9px] text-blue-600 dark:text-blue-450 block not-italic uppercase tracking-wider mb-0.5">引用 · {{ parseQuoteFromMessage(msg.content).source }}</span>
+                    "{{ parseQuoteFromMessage(msg.content).text }}"
+                  </div>
+                  <p class="text-sm whitespace-pre-wrap leading-relaxed text-left">{{ parseQuoteFromMessage(msg.content).remaining }}</p>
+                </template>
+                <template v-else>
+                  <p class="text-sm whitespace-pre-wrap leading-relaxed text-left">{{ msg.content }}</p>
+                </template>
                 <div v-if="msg.images && msg.images.length > 0" class="flex gap-2 flex-wrap mt-1">
                   <div v-for="(img, imgIdx) in msg.images" :key="imgIdx" class="w-24 h-24 rounded-lg overflow-hidden border border-blue-200 shadow-sm bg-white shrink-0">
                     <img :src="img" class="w-full h-full object-cover cursor-pointer" @click="openImageModal(img)" />
@@ -1932,12 +2433,95 @@ function renderMarkdown(text, type = '', conceptName = '') {
                       </button>
                       <span class="text-[9px] text-gray-300">💡 点击代码块/公式可即时答疑</span>
                     </div>
+                    <!-- Inline Agent Traces Panel -->
+                    <div class="mb-3">
+                      <!-- Live Progress Traces (When streaming) -->
+                      <div v-if="idx === messages.length - 1 && chatStore.sending" class="flex flex-wrap gap-1.5 p-2 bg-gray-50 border border-gray-150 rounded-xl">
+                        <span class="text-[9px] text-gray-400 font-mono w-full mb-1 flex items-center gap-1">
+                          <Loader2 :size="8" class="animate-spin text-indigo-500" /> Swarm 协同执行轨迹:
+                        </span>
+                        <!-- Coord -->
+                        <span class="px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border"
+                              :class="chatStore.streamingProgress >= 10 ? 'bg-green-50 text-green-600 border-green-200/60 font-medium' : 'bg-white text-gray-400 border-gray-200/80'">
+                          🎯 主控官
+                        </span>
+                        <!-- Diag -->
+                        <span class="px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border"
+                              :class="chatStore.streamingProgress >= 25 ? 'bg-green-50 text-green-600 border-green-200/60 font-medium' : 'bg-white text-gray-400 border-gray-200/80'">
+                          🔍 诊断官
+                        </span>
+                        <!-- Planner -->
+                        <span class="px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border"
+                              :class="chatStore.streamingProgress >= 40 ? 'bg-green-50 text-green-600 border-green-200/60 font-medium' : 'bg-white text-gray-400 border-gray-200/80'">
+                          🗺️ 规划官
+                        </span>
+                        <!-- Parallel Agent Factory (理論, 邏輯, 極客, 考官, 導演) -->
+                        <template v-for="agent in ['理论教授', '逻辑画师', '极客助教', '考官智能体', '虚拟导演']">
+                          <span v-if="chatStore.streamingAgents[agent]" :key="agent" 
+                                class="px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border"
+                                :class="chatStore.streamingAgents[agent]?.done ? 'bg-green-50 text-green-600 border-green-200/60 font-medium' : 'bg-blue-50 text-blue-600 border-blue-200/60 animate-pulse font-medium'">
+                            <span v-if="agent === '理论教授'">📚 理论教授</span>
+                            <span v-else-if="agent === '逻辑画师'">🎨 逻辑画师</span>
+                            <span v-else-if="agent === '极客助教'">💻 极客助教</span>
+                            <span v-else-if="agent === '考官智能体'">📝 考官智能体</span>
+                            <span v-else-if="agent === '虚拟导演'">🎬 虚拟导演</span>
+                          </span>
+                        </template>
+                      </div>
+
+                      <!-- Completed Static Traces (When finished) -->
+                      <div v-else-if="msg.resources && msg.resources.length > 0" class="flex flex-wrap gap-1.5 p-2 bg-gray-50 border border-gray-150 rounded-xl">
+                        <span class="text-[9px] text-gray-400 font-mono w-full mb-1">
+                          🛠️ 本轮调用工具与智能体 (共 {{ msg.resources.length }} 个):
+                        </span>
+                        <div v-for="res in msg.resources" :key="res.agent" 
+                             class="relative group px-2 py-0.5 rounded-lg text-[10px] font-medium bg-white border border-gray-200/80 text-gray-600 shadow-sm flex items-center gap-1 hover:border-indigo-400 hover:text-indigo-600 transition-all cursor-help">
+                          <span v-if="res.agent === '理论教授'">📚 理论教授 ({{ res.type }})</span>
+                          <span v-else-if="res.agent === '逻辑画师'">🎨 逻辑画师 ({{ res.type }})</span>
+                          <span v-else-if="res.agent === '极客助教'">💻 极客助教 ({{ res.type }})</span>
+                          <span v-else-if="res.agent === '考官智能体'">📝 考官智能体 ({{ res.type }})</span>
+                          <span v-else-if="res.agent === '虚拟导演'">🎬 虚拟导演 ({{ res.type }})</span>
+                          <span v-else>🤖 {{ res.agent }} ({{ res.type }})</span>
+
+                          <!-- Custom Tooltip -->
+                          <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 hidden group-hover:block w-80 p-3 bg-gray-950 text-gray-200 rounded-xl border border-gray-800 shadow-2xl z-50 pointer-events-none transition-all duration-200">
+                            <div class="font-bold text-indigo-400 mb-1 flex items-center gap-1">
+                              <span>{{ res.agent }}</span>
+                              <span class="text-[8px] px-1 py-0.1 bg-indigo-950 text-indigo-300 rounded border border-indigo-900/50">{{ res.type }}</span>
+                            </div>
+                            <div class="text-gray-300 font-sans leading-relaxed whitespace-pre-line text-left text-[10px]"
+                                 style="display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden;">
+                              {{ res.content.slice(0, 300) + (res.content.length > 300 ? '...' : '') }}
+                            </div>
+                            <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-950"></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                     <!-- 增量渲染：流式消息用 IncrementalMarkdownRenderer，完成消息用 renderMarkdown -->
-                    <IncrementalMarkdownRenderer v-if="idx === messages.length - 1 && chatStore.sending && streamingContent" :text="streamingContent" />
+                    <IncrementalMarkdownRenderer v-if="idx === messages.length - 1 && chatStore.sending && streamingContent" :text="streamingContent" class="prose prose-sm max-w-none text-sm" />
                     <div v-else class="prose prose-sm max-w-none text-sm" v-html="renderMarkdown(msg.content)"></div>
                     <!-- 打字光标 -->
                     <span v-if="idx === messages.length - 1 && chatStore.sending && chatStore.streamingMode !== 'matrix'"
                       class="inline-block w-[2px] h-4 bg-blue-500 animate-pulse ml-0.5 align-text-bottom" />
+
+                    <!-- Suggested Questions (NotebookLM style) -->
+                    <div v-if="msg.suggested_questions && msg.suggested_questions.length > 0 && !msg.streaming" class="mt-4 pt-3 border-t border-slate-100 dark:border-slate-850 flex flex-col gap-2 text-left">
+                      <p class="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5 select-none">
+                        <Sparkles :size="10" class="text-blue-500" /> 您可能还想了解：
+                      </p>
+                      <div class="flex flex-col gap-1.5">
+                        <button v-for="(q, qIdx) in msg.suggested_questions" :key="qIdx"
+                          @click="askSuggestedQuestion(q)"
+                          class="w-full text-left text-xs text-slate-700 dark:text-slate-350 px-3.5 py-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 hover:border-blue-400 hover:bg-blue-50/30 dark:hover:border-blue-700 dark:hover:bg-blue-900/20 active:scale-[0.99] transition-all flex items-center gap-2 group cursor-pointer font-medium"
+                          :disabled="sending">
+                          <span class="w-1.5 h-1.5 rounded-full bg-blue-500 group-hover:scale-125 transition-transform" />
+                          <span class="flex-1 truncate">{{ q }}</span>
+                          <span class="text-[10px] text-blue-500 font-semibold opacity-0 group-hover:opacity-100 transition-opacity">🚀 发送</span>
+                        </button>
+                      </div>
+                    </div>
 
                     <!-- 本地动画播放按钮 -->
                     <div v-if="msg._localVideos?.length" class="mt-3 pt-2 border-t border-gray-100">
@@ -1971,7 +2555,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
                     <!-- 一键矩阵资源生成按钮 -->
                     <div v-if="msg.target && getRegularResources(msg).length === 0 && !msg.streaming" class="mt-3.5 pt-3 border-t border-gray-100/60 flex items-center justify-between">
                       <span class="text-[11px] text-gray-400 font-medium">深度学习该概念的讲义、思维导图、代码沙箱及小测：</span>
-                      <button @click="triggerMatrixGeneration(msg.target)" class="btn text-xs font-semibold py-1.5 px-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-xl shadow-sm hover:shadow-blue-500/10 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer font-semibold" :disabled="sending">
+                      <button @click="triggerMatrixGeneration(msg.target, idx)" class="btn text-xs font-semibold py-1.5 px-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-xl shadow-sm hover:shadow-blue-500/10 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer font-semibold" :disabled="sending">
                         <Sparkles :size="12" /> 一键生成专属教学资源包
                       </button>
                     </div>
@@ -2032,51 +2616,74 @@ function renderMarkdown(text, type = '', conceptName = '') {
                           </div>
                         </div>
                         <div v-if="showResources.has(`${idx}-${ri}`)" class="px-5 py-4 border-t border-gray-100 bg-white">
-                          <!-- 虚拟导演卡片：显示本地视频 -->
-                          <div v-if="(res.agent === '虚拟导演' || res.resource_type === 'video' || res.type === 'video') && msg._localVideos?.length" class="space-y-2">
-                            <div class="flex items-center gap-2 text-xs text-gray-500">
-                              <Film :size="14" class="text-blue-500" />
-                              <span>本地动画 · {{ msg._localVideoKp || msg.target }}</span>
-                              <span class="text-gray-300">|</span>
-                              <span>{{ msg._localVideos.length }} 个视频</span>
-                            </div>
-                            <!-- 视频列表 -->
-                            <div class="grid gap-2">
-                              <div v-for="(v, vi) in msg._localVideos.slice(0, 3)" :key="vi"
-                                class="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                                <div class="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
-                                  <span class="text-xs text-gray-600 truncate flex-1">{{ v.filename }}</span>
-                                  <span class="text-[10px] text-gray-400 ml-2">{{ (v.size / 1024 / 1024).toFixed(1) }}MB</span>
+                          <!-- 视频推荐官/自适应推荐视频卡片：免跳转视频播放舱 -->
+                          <div v-if="res.agent === '视频推荐官' || res.agent === '虚拟导演' || res.resource_type === '自适应推荐视频' || res.resource_type === '虚拟人视频脚本' || res.type === '自适应推荐视频'">
+                            <!-- 如果是新版的 JSON 视频列表 -->
+                            <template v-if="safeParseJson(res.content).length > 0">
+                              <VideoPlayerCard 
+                                :videos="safeParseJson(res.content)" 
+                                :concept="msg.target" 
+                              />
+                            </template>
+                            <!-- 如果是旧版的 Markdown 文本格式，且有本地动画匹配 -->
+                            <template v-else-if="msg._localVideos?.length">
+                              <div class="space-y-2">
+                                <div class="flex items-center gap-2 text-xs text-gray-500">
+                                  <Film :size="14" class="text-blue-500" />
+                                  <span>本地动画 · {{ msg._localVideoKp || msg.target }}</span>
+                                  <span class="text-gray-300">|</span>
+                                  <span>{{ msg._localVideos.length }} 个视频</span>
                                 </div>
-                                <div v-if="inlineVideoIndex === ri + '_' + vi" class="bg-black">
-                                  <video
-                                    :src="v.url"
-                                    class="w-full"
-                                    style="max-height: 300px"
-                                    controls
-                                    autoplay
-                                    @ended="inlineVideoIndex = -1"
-                                  />
+                                <div class="grid gap-2">
+                                  <div v-for="(v, vi) in msg._localVideos.slice(0, 3)" :key="vi"
+                                    class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                                    <div class="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
+                                      <span class="text-xs text-gray-600 truncate flex-1">{{ v.filename }}</span>
+                                      <span class="text-[10px] text-gray-400 ml-2">{{ (v.size / 1024 / 1024).toFixed(1) }}MB</span>
+                                    </div>
+                                    <div v-if="inlineVideoIndex === ri + '_' + vi" class="bg-black">
+                                      <video
+                                        :src="v.url"
+                                        class="w-full"
+                                        style="max-height: 300px"
+                                        controls
+                                        autoplay
+                                        @ended="inlineVideoIndex = -1"
+                                      />
+                                    </div>
+                                    <div v-else class="p-2">
+                                      <button
+                                        class="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                                        @click="inlineVideoIndex = ri + '_' + vi"
+                                      >
+                                        <Play :size="12" /> 播放
+                                      </button>
+                                    </div>
+                                  </div>
                                 </div>
-                                <div v-else class="p-2">
-                                  <button
-                                    class="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
-                                    @click="inlineVideoIndex = ri + '_' + vi"
-                                  >
-                                    <Play :size="12" /> 播放
-                                  </button>
-                                </div>
+                                <p class="text-[10px] text-gray-400 mt-1">视频脚本：{{ res.content.slice(0, 200) }}{{ res.content.length > 200 ? '...' : '' }}</p>
                               </div>
+                            </template>
+                            <!-- 普通 Markdown 渲染 fallback -->
+                            <template v-else>
+                              <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(res.content, res.type || res.resource_type || res.agent, msg.target)"></div>
+                            </template>
+                            <div class="mt-3 flex justify-end gap-2">
+                              <button @click="setQuote(res.content, getAgentConfig(res.agent, res.resource_type || res.type).label)" class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:hover:bg-blue-900/50 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/40 rounded-lg text-[10px] font-semibold shadow-sm transition-all flex items-center gap-1">
+                                <MessageSquare :size="10" /> 💬 追问 →
+                              </button>
                             </div>
-                            <p class="text-[10px] text-gray-400 mt-1">视频脚本：{{ res.content.slice(0, 200) }}{{ res.content.length > 200 ? '...' : '' }}</p>
                           </div>
                           <!-- 普通资源卡片：Markdown 渲染 -->
                           <div v-else>
                             <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(res.content, res.type || res.resource_type || res.agent, msg.target)"></div>
-                            <!-- 如果是极客助教资源，添加一键挂载至沙箱按钮 -->
-                            <div v-if="getAgentConfig(res.agent, res.resource_type || res.type).label === '极客助教'" class="mt-3 flex justify-end">
-                              <button @click="mountToSandbox(res.content)" class="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg text-xs font-semibold shadow-sm transition-all flex items-center gap-1">
-                                <Terminal :size="12" /> 挂载至沙箱 →
+                            <div class="mt-3 flex justify-end gap-2">
+                              <!-- 如果是极客助教资源，添加一键挂载至沙箱按钮 -->
+                              <button v-if="getAgentConfig(res.agent, res.resource_type || res.type).label === '极客助教'" @click="mountToSandbox(res.content)" class="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 dark:bg-green-900/30 dark:hover:bg-green-900/50 dark:text-green-400 border border-green-200/50 dark:border-green-800/40 rounded-lg text-[10px] font-semibold shadow-sm transition-all flex items-center gap-1">
+                                <Terminal :size="10" /> 挂载至沙箱 →
+                              </button>
+                              <button @click="setQuote(res.content, getAgentConfig(res.agent, res.resource_type || res.type).label)" class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:hover:bg-blue-900/50 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/40 rounded-lg text-[10px] font-semibold shadow-sm transition-all flex items-center gap-1">
+                                <MessageSquare :size="10" /> 💬 追问 →
                               </button>
                             </div>
                           </div>
@@ -2131,24 +2738,99 @@ function renderMarkdown(text, type = '', conceptName = '') {
           </button>
         </div>
 
-        <!-- 图片预览 row -->
-        <div v-if="uploadedImages.length > 0" class="flex gap-2 flex-wrap mb-2 p-2 bg-gray-50 rounded-xl border border-gray-200/60 shadow-inner">
-          <div v-for="(img, idx) in uploadedImages" :key="idx" class="relative w-16 h-16 rounded-lg overflow-hidden border border-gray-200 shadow-sm bg-white shrink-0">
-            <img :src="img" class="w-full h-full object-cover" />
-            <button @click="removeUploadedImage(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 hover:bg-black text-white flex items-center justify-center cursor-pointer transition-all border-none" title="移除图片">
-              <X :size="10" />
+        <!-- 输入区域容器 -->
+        <div class="relative mt-2 shrink-0">
+          <!-- 📚 课件选择面板 -->
+          <div v-if="showDocSelector" id="doc-selector-panel" class="doc-selector-panel absolute bottom-full mb-2 left-0 w-80 bg-white border border-gray-200 rounded-2xl shadow-2xl p-3.5 z-50 flex flex-col gap-2.5 animate-fade-in">
+            <div class="flex items-center justify-between pb-2 border-b border-gray-100">
+              <span class="text-xs font-semibold text-gray-800 flex items-center gap-1.5">
+                <BookOpen :size="13" class="text-indigo-500" /> 选择并引用课件文件
+              </span>
+              <button @click="showDocSelector = false" class="text-gray-400 hover:text-gray-600 border-none bg-transparent cursor-pointer flex items-center justify-center">
+                <X :size="13" />
+              </button>
+            </div>
+            <!-- 搜索框 -->
+            <div class="relative flex items-center">
+              <Search :size="12" class="absolute left-3 text-gray-400" />
+              <input v-model="docSelectorQuery" 
+                     class="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-gray-200 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-50 outline-none transition-all placeholder:text-gray-400" 
+                     placeholder="搜索课件名称..." />
+            </div>
+            <!-- 课件列表 -->
+            <div class="max-h-48 overflow-y-auto flex flex-col gap-1 pr-1 custom-scrollbar">
+              <div v-if="filteredDocSelectorList.length === 0" class="text-[10px] text-gray-400 py-6 text-center">
+                暂无匹配课件，请先在知识库页面上传
+              </div>
+              <button v-for="doc in filteredDocSelectorList" :key="doc.name"
+                      @click="insertDocReference(doc.name)"
+                      class="w-full px-2.5 py-2 text-left rounded-xl hover:bg-indigo-50/50 transition-all border-none bg-transparent cursor-pointer flex items-center justify-between group">
+                <div class="flex flex-col min-w-0 pr-2">
+                  <span class="text-xs font-medium text-gray-700 truncate group-hover:text-indigo-600">{{ doc.desc }}</span>
+                  <span class="text-[9px] text-gray-400 truncate mt-0.5">{{ doc.name }}</span>
+                </div>
+                <span class="text-[9px] px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-500 shrink-0 group-hover:bg-indigo-100 group-hover:text-indigo-600 transition-colors">{{ doc.label }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Autocomplete Suggestions Dropdown -->
+          <div v-if="showSuggest && filteredSuggestions.length > 0" class="absolute bottom-full mb-2 left-0 right-0 bg-gray-900 border border-gray-800 rounded-xl shadow-xl overflow-hidden z-50 max-h-48 overflow-y-auto border-purple-500/30">
+            <div v-for="(item, idx) in filteredSuggestions" :key="item.name" 
+                 class="flex items-center justify-between px-4 py-2 cursor-pointer text-xs transition-colors border-b border-gray-800 last:border-b-0 animate-fade-in"
+                 :class="idx === suggestIndex ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-800'"
+                 @click="selectSuggestion(item)">
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-indigo-400" :class="{'text-white': idx === suggestIndex}">{{ item.name }}</span>
+                <span class="text-gray-400 text-[10px]" :class="{'text-gray-200': idx === suggestIndex}">{{ item.desc }}</span>
+              </div>
+              <span class="px-1.5 py-0.5 rounded text-[10px] bg-gray-950 text-indigo-300" :class="{'bg-indigo-700 text-white': idx === suggestIndex}">{{ item.label }}</span>
+            </div>
+          </div>
+
+          <!-- 图片预览 row -->
+          <div v-if="uploadedImages.length > 0" class="flex gap-2 flex-wrap mb-2 p-2 bg-gray-50 rounded-xl border border-gray-200/60 shadow-inner">
+            <div v-for="(img, idx) in uploadedImages" :key="idx" class="relative w-16 h-16 rounded-lg overflow-hidden border border-gray-200 shadow-sm bg-white shrink-0">
+              <img :src="img" class="w-full h-full object-cover" />
+              <button @click="removeUploadedImage(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 hover:bg-black text-white flex items-center justify-center cursor-pointer transition-all border-none" title="移除图片">
+                <X :size="10" />
+              </button>
+            </div>
+          </div>
+
+          <!-- Doubao-style Quote Reference Bar -->
+          <div 
+            v-if="quotedContent" 
+            class="flex items-center justify-between gap-3 px-3 py-2 bg-blue-50/70 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/60 rounded-xl mb-2 text-xs text-slate-600 dark:text-slate-400 backdrop-blur-md animate-fade-in shadow-sm select-none"
+          >
+            <div class="flex items-center gap-2 truncate">
+              <span class="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 px-1.5 py-0.5 rounded font-semibold shrink-0">引用 · {{ quotedContent.source }}</span>
+              <span class="truncate font-mono italic text-slate-500 dark:text-slate-400">"{{ quotedContent.text }}"</span>
+            </div>
+            <button 
+              @click="quotedContent = null" 
+              class="p-1 hover:bg-blue-100 dark:hover:bg-blue-900/60 rounded-lg text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors shrink-0 border-none bg-transparent cursor-pointer"
+              title="清除引用"
+            >
+              <X :size="14" />
             </button>
           </div>
-        </div>
 
-        <div class="flex items-end gap-2 bg-white border border-gray-200 rounded-xl p-2 shadow-sm">
-          <!-- 📎 图片上传按钮 -->
-          <label class="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-gray-50 shrink-0 cursor-pointer transition-all flex items-center justify-center" title="上传题目截图/数学公式图片">
-            <FileText :size="16" />
-            <input type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
-          </label>
-          <textarea v-model="input" class="flex-1 resize-none outline-none text-sm px-2 py-1.5 max-h-32" placeholder="输入学习问题，可上传题目/公式图片进行多模态答疑..." rows="1" @keydown="handleKeydown" />
-          <button class="btn btn-primary shrink-0" :disabled="(!input.trim() && uploadedImages.length === 0) || sending" @click="send"><Send :size="16" /></button>
+          <div class="flex items-end gap-2 bg-white border border-gray-200 rounded-xl p-2 shadow-sm">
+            <!-- 📚 课件选择按钮 -->
+            <button @click.stop="toggleDocSelector" 
+                    class="doc-selector-trigger p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-gray-50 shrink-0 cursor-pointer transition-all flex items-center justify-center border-none bg-transparent" 
+                    title="选择并引用课件文件">
+              <BookOpen :size="16" />
+            </button>
+            <!-- 📎 图片上传按钮 -->
+            <label class="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-gray-50 shrink-0 cursor-pointer transition-all flex items-center justify-center" title="上传题目截图/数学公式图片">
+              <FileText :size="16" />
+              <input type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
+            </label>
+            <textarea v-model="input" class="flex-1 resize-none outline-none text-sm px-2 py-1.5 max-h-32" placeholder="输入学习问题，可使用 / 调用智能体，使用 @ 引用知识库文件..." rows="1" @keydown="handleKeydown" />
+            <button class="btn btn-primary shrink-0" :disabled="(!input.trim() && uploadedImages.length === 0) || sending" @click="send"><Send :size="16" /></button>
+          </div>
         </div>
       </div>
 
@@ -2380,23 +3062,68 @@ function renderMarkdown(text, type = '', conceptName = '') {
                 <Search :size="14" /> {{ searchLoading ? '搜索中...' : '搜索' }}
               </button>
             </div>
+
+            <!-- 分类选择器 -->
+            <div class="flex items-center gap-1.5 mt-3 p-1 bg-gray-50 rounded-xl w-fit border border-gray-100/50">
+              <button 
+                v-for="cat in [
+                  { id: 'all', label: '全部资源' },
+                  { id: 'web', label: '在线网页' },
+                  { id: 'document', label: '学术文档' }
+                ]"
+                :key="cat.id"
+                @click="searchCategory = cat.id"
+                class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all border border-transparent"
+                :class="searchCategory === cat.id 
+                  ? 'bg-white text-blue-600 shadow-sm border-gray-100' 
+                  : 'text-gray-500 hover:text-gray-800'"
+              >
+                {{ cat.label }}
+              </button>
+            </div>
+
             <div v-if="searchLoading" class="flex items-center gap-2 mt-3 text-gray-400 text-xs">
               <div class="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
               正在搜索并索引...
             </div>
             <div v-if="searchSummary" class="mt-3 text-sm text-gray-700 bg-gradient-to-r from-blue-50 to-indigo-50/50 rounded-xl p-4 whitespace-pre-wrap border border-blue-100/50 leading-relaxed">{{ searchSummary }}</div>
             <div v-if="searchResults.length" class="mt-3 space-y-1">
-              <div v-for="(r, i) in searchResults" :key="i" class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-all cursor-pointer" @click="window.open(r.url, '_blank')">
-                <div class="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center shrink-0 mt-0.5">
-                  <FileText :size="12" class="text-blue-500" />
+              <div v-for="(r, i) in searchResults" :key="i" class="flex items-start justify-between gap-3 p-3 rounded-xl hover:bg-gray-50 transition-all cursor-pointer" @click="openUrl(r.url)">
+                <div class="flex items-start gap-3 min-w-0 flex-1">
+                  <div class="w-6 h-6 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
+                       :class="r.is_file
+                         ? (r.file_type === 'pdf' ? 'bg-red-50 text-red-500' : 'bg-orange-50 text-orange-500')
+                         : 'bg-blue-50 text-blue-500'">
+                    <component :is="r.is_file ? FileText : Globe" :size="12" />
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <p class="text-xs font-semibold text-gray-800 hover:text-blue-600 flex items-center gap-1.5 truncate">
+                      <span v-if="r.is_file" 
+                            class="px-1 py-0.5 text-[8px] font-bold rounded uppercase shrink-0"
+                            :class="r.file_type === 'pdf' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'">
+                        {{ r.file_type }}
+                      </span>
+                      {{ r.title }}
+                    </p>
+                    <p class="text-[10px] text-gray-400 mt-0.5 line-clamp-2 leading-relaxed">{{ r.snippet }}</p>
+                    <p v-if="r.url" class="text-[9px] text-gray-300 mt-0.5 truncate flex items-center gap-1">
+                      <Globe :size="8" class="shrink-0" />
+                      {{ getDomain(r.url) }}
+                    </p>
+                  </div>
                 </div>
-                <div class="min-w-0 flex-1">
-                  <p class="text-xs font-semibold text-gray-800 hover:text-blue-600 truncate">{{ r.title }}</p>
-                  <p class="text-[10px] text-gray-400 mt-0.5 line-clamp-2 leading-relaxed">{{ r.snippet }}</p>
-                  <p v-if="r.url" class="text-[9px] text-gray-300 mt-0.5 truncate flex items-center gap-1">
-                    <Globe :size="8" class="shrink-0" />
-                    {{ new URL(r.url).hostname.replace('www.', '') }}
-                  </p>
+                <div class="flex items-center self-center shrink-0">
+                  <button
+                    @click.stop="ingestWebSearchItem(r)"
+                    :disabled="r.adding || docs.some(d => d.filename.includes(r.title))"
+                    class="px-2.5 py-1.5 text-[10px] font-bold rounded-lg border flex items-center gap-1 transition-all"
+                    :class="docs.some(d => d.filename.includes(r.title)) 
+                      ? 'bg-emerald-50 text-emerald-600 border-emerald-200 cursor-not-allowed' 
+                      : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100/70 hover:text-blue-700'"
+                  >
+                    <component :is="docs.some(d => d.filename.includes(r.title)) ? CheckCircle2 : Sparkles" :size="10" />
+                    {{ docs.some(d => d.filename.includes(r.title)) ? '已导入' : r.adding ? (r.is_file ? '下载解析中...' : '总结导入中...') : (r.is_file ? '下载并解析文件' : '导入知识库') }}
+                  </button>
                 </div>
               </div>
             </div>
@@ -2573,12 +3300,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
         <div class="flex items-center justify-between mb-3 border-b border-gray-800 pb-2">
           <div class="flex flex-wrap gap-1">
             <button
-              v-if="hasVisualContent"
               @click="rightPanelActiveTab = 'canvas'"
               class="px-2 py-1 rounded text-[10px] transition-all font-semibold"
               :class="rightPanelActiveTab === 'canvas' ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
             >
-              🎨 画布
+              🎨 双曲圆盘
             </button>
             <button
               @click="rightPanelActiveTab = 'sandbox'"
@@ -2649,6 +3375,30 @@ function renderMarkdown(text, type = '', conceptName = '') {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- 全局划词即时追问悬浮胶囊 -->
+    <div 
+      v-if="textSelection.visible" 
+      class="fixed z-[100] animate-fade-in flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 rounded-full px-3 py-1.5 shadow-xl border border-slate-200 dark:border-slate-800/80 backdrop-blur-md selection-capsule select-none"
+      :style="{ left: textSelection.x + 'px', top: textSelection.y + 'px', transform: 'translateX(-50%)' }"
+    >
+      <!-- Drag handle -->
+      <div 
+        @mousedown="startDrag" 
+        class="cursor-grab active:cursor-grabbing px-1 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-350 text-xs flex items-center justify-center font-bold"
+        title="按住拖拽移动位置"
+      >
+        ⋮⋮
+      </div>
+      <button 
+        @mousedown.stop
+        @click="openSocraticPopup(textSelection.text, '', '', 0, -1)"
+        class="flex items-center gap-1.5 px-1 py-0.5 text-slate-700 dark:text-slate-200 rounded-full text-xs font-bold hover:scale-105 active:scale-95 transition-transform cursor-pointer whitespace-nowrap bg-transparent border-none outline-none"
+      >
+        <MessageSquare :size="12" class="text-blue-600 dark:text-blue-400 shrink-0" />
+        <span>💬 追问</span>
+      </button>
     </div>
 
     <!-- ========== 任务 8.1: 行级悬浮苏格拉底即时答疑弹窗 ========== -->
@@ -2787,6 +3537,39 @@ function renderMarkdown(text, type = '', conceptName = '') {
           <div class="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100 bg-gray-50 shrink-0">
             <button class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-xs font-semibold transition-all" @click="showNoteModal = false">取消</button>
             <button class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all" :disabled="noteModalLoading" @click="confirmSaveNote">确认保存到笔记本</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ========== 知识库源内容预览 Modal ========== -->
+    <Teleport to="body">
+      <div v-if="showDocViewerModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showDocViewerModal = false">
+        <div class="bg-white rounded-2xl shadow-2xl w-[700px] max-h-[85vh] flex flex-col overflow-hidden border border-gray-100 animate-fade-in">
+          <div class="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-blue-50/20 shrink-0">
+            <h3 class="text-sm font-bold text-gray-800 flex items-center gap-1.5 min-w-0">
+              <component :is="getFileIcon(activeDocViewer.filename, activeDocViewer.file_type)" :size="15" :class="getFileColorClass(activeDocViewer.filename, activeDocViewer.file_type)" class="shrink-0" />
+              <span class="truncate pr-4">{{ activeDocViewer.title }}</span>
+            </h3>
+            <button class="text-gray-400 hover:text-gray-600 text-lg leading-none shrink-0" @click="showDocViewerModal = false"><X :size="16" /></button>
+          </div>
+          <div class="flex-1 overflow-y-auto p-5 min-h-0">
+            <div v-if="docViewerLoading" class="flex flex-col items-center justify-center py-20 text-gray-400">
+              <Loader2 :size="24" class="animate-spin text-blue-500 mb-2" />
+              <span class="text-xs">正在流式加载并解析文档内容...</span>
+            </div>
+            <div v-else class="h-full flex flex-col">
+              <div class="bg-gray-50 border border-gray-150 rounded-xl p-4 flex-1 overflow-y-auto max-h-[50vh] min-h-[300px]">
+                <pre class="text-xs text-gray-700 whitespace-pre-wrap font-sans leading-relaxed break-all">{{ activeDocViewer.content }}</pre>
+              </div>
+              <div class="mt-3 text-[10px] text-gray-400 flex items-center justify-between">
+                <span>文件类型: <span class="font-semibold uppercase">{{ activeDocViewer.file_type }}</span></span>
+                <span>大小: <span class="font-semibold">{{ (activeDocViewer.file_size / 1024).toFixed(1) }} KB</span></span>
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center justify-end px-5 py-3 border-t border-gray-100 bg-gray-50 shrink-0">
+            <button class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all animate-fade-in" @click="showDocViewerModal = false">关闭窗口</button>
           </div>
         </div>
       </div>

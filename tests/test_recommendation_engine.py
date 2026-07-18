@@ -77,7 +77,7 @@ class TestRecommendationEngine(unittest.TestCase):
         # 创建学生画像，偏好设置为代码实操
         profile = DBStudentProfile(
             student_id=self.student_id,
-            concept_mastery={"梯度下降": 0.20},
+            concept_mastery={"机器学习": 0.80, "线性回归": 0.80, "梯度下降": 0.20, "微积分": 0.80, "概率统计": 0.80},
             learning_goals=["梯度下降"],
             weak_points=["梯度下降"],
             interaction_preferences=["代码实操"],
@@ -124,7 +124,7 @@ class TestRecommendationEngine(unittest.TestCase):
         """测试认知矩阵优先级计算、最高掌握度资源标记以及动态大纲编译"""
         profile = DBStudentProfile(
             student_id=self.student_id,
-            concept_mastery={"梯度下降": 0.20},
+            concept_mastery={"机器学习": 0.80, "线性回归": 0.80, "梯度下降": 0.20, "微积分": 0.80, "概率统计": 0.80},
             learning_goals=["梯度下降"],
             weak_points=["梯度下降"],
             interaction_preferences=["代码实操"],

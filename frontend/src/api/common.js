@@ -40,18 +40,29 @@ export async function loginUser(username, password) {
   const params = new URLSearchParams()
   params.append('username', username)
   params.append('password', password)
-  const r = await api.post('/auth/login', params, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-  })
+  
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded' }
+  const anonId = localStorage.getItem('edumatrix_student_id')
+  if (anonId && anonId.startsWith('stu-')) {
+    headers['X-Anon-Student-ID'] = anonId
+  }
+
+  const r = await api.post('/auth/login', params, { headers })
   return r.data
 }
 
 export async function registerUser(username, password, displayName) {
+  const headers = {}
+  const anonId = localStorage.getItem('edumatrix_student_id')
+  if (anonId && anonId.startsWith('stu-')) {
+    headers['X-Anon-Student-ID'] = anonId
+  }
+
   const r = await api.post('/auth/register', {
     username,
     password,
     display_name: displayName
-  })
+  }, { headers })
   return r.data
 }
 

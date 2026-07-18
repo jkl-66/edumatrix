@@ -60,7 +60,7 @@ class AsyncOpenAIChatLLM:
     api_key: str
     model: str
     temperature: float = 0.3
-    max_tokens: int = 4096
+    max_tokens: int = 8192
     timeout_seconds: int = 120
     multimodal_endpoint: str | None = None
     multimodal_api_key: str | None = None
@@ -253,7 +253,7 @@ class OpenAIChatLLM:
         api_key: str,
         model: str = "gpt-4o-mini",
         temperature: float = 0.3,
-        max_tokens: int = 4096,
+        max_tokens: int = 8192,
         timeout_seconds: int = 60,
     ) -> None:
         self.endpoint = endpoint
@@ -301,7 +301,7 @@ class SparkClient:
     domain: str = CONFIG.spark_domain
     timeout_seconds: int = 45
     temperature: float = 0.25
-    max_tokens: int = 4096
+    max_tokens: int = 8192
 
     def _create_url(self) -> str:
         parsed = urlparse(self.spark_url)
@@ -384,7 +384,7 @@ class AsyncSparkClient:
     domain: str = CONFIG.spark_domain
     timeout_seconds: int = 45
     temperature: float = 0.25
-    max_tokens: int = 4096
+    max_tokens: int = 8192
 
     def _create_url(self) -> str:
         parsed = urlparse(self.spark_url)
@@ -508,6 +508,8 @@ class DeterministicEducationLLM:
             return _quiz(topic)
         if "虚拟导演" in role:
             return _video_script(topic)
+        if "视频推荐官" in role:
+            return _video_recommendations(topic)
         if "路径规划师" in role:
             return f"学习路径建议：先补齐前置概念，再学习 {topic} 的定义、计算流程、代码实现和易错点。"
         return f"{role} 已基于检索证据处理主题：{topic}。"
@@ -640,14 +642,16 @@ def _guess_topic(text: str) -> str:
         target = next((group for group in target_match.groups() if group), "").strip()
         if target:
             return target
-    for word in (
+    words = (
         "池化层", "最大池化", "平均池化", "卷积核", "特征图",
         "反向传播", "链式法则", "梯度下降", "逻辑回归", "线性回归",
         "决策树", "支持向量机", "过拟合", "正则化", "交叉验证",
         "机器学习", "监督学习", "模型评估", "前向传播", "损失函数",
         "欠拟合", "激活函数", "Transformer", "注意力机制",
         "神经网络", "卷积神经网络", "混淆矩阵",
-    ):
+    )
+    sorted_words = sorted(words, key=len, reverse=True)
+    for word in sorted_words:
         if word in text:
             return word
     return "目标知识点"
@@ -852,6 +856,24 @@ def _video_script(topic: str) -> str:
             "再展示训练误差下降、验证误差上升的过拟合曲线，最后用正则化和交叉验证完成修正。"
         )
     return (
-        "虚拟人脚本：先展示 4x4 特征图，再高亮第一个 2x2 窗口，播报\u201c我们取这个窗口里最大的 6\u201d，"
-        "随后移动窗口得到 2x2 输出矩阵，最后提示最大池化降低尺寸但保留显著特征。"
+        "虚拟人脚本：先展示 4x4 特征图，再高亮第一个 2x2 窗口，播报“我们取这个窗口里最大的 6”，"
+        "随后移动窗口得到 2x2 输出矩阵，最后提示最大池化降低尺寸 but 保留显著特征。"
     )
+
+
+def _video_recommendations(topic: str) -> str:
+    import json
+    return json.dumps([
+        {
+            "title": f"Bilibili: 机器学习中{topic}的可视化教学",
+            "url": "https://www.bilibili.com/video/BV1111111111",
+            "source": "B站视频",
+            "recommendation": f"该视频通过精美的三维动画直观地演示了{topic}的运行轨迹，非常适合帮助建立空间与几何直观感知。"
+        },
+        {
+            "title": f"本地三维演示动画 - {topic}",
+            "url": "/api/v1/animations/video/gd.mp4",
+            "source": "本地动画",
+            "recommendation": f"系统为您量身定制的{topic}本地推导演示动画，分步剖析其底层数学运算逻辑。"
+        }
+    ], ensure_ascii=False)

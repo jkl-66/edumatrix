@@ -48,7 +48,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertEqual(len(package.resources), 5)
         self.assertEqual(
             {resource.resource_type for resource in package.resources},
-            {"专业讲义", "思维导图", "代码实操案例", "练习题", "虚拟人视频脚本"},
+            {"专业讲义", "思维导图", "代码实操案例", "练习题", "自适应推荐视频"},
         )
         self.assertIn("knowledge_mastery", package.profile.dimension_states)
         self.assertTrue(package.profile.learning_state_causes)
@@ -71,7 +71,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
         factory = AsyncResourceFactory(gen)
         self.assertEqual(len(factory.jobs), 5)
         types = {t for _, t in factory.jobs}
-        self.assertEqual(types, {"专业讲义", "思维导图", "代码实操案例", "练习题", "虚拟人视频脚本"})
+        self.assertEqual(types, {"专业讲义", "思维导图", "代码实操案例", "练习题", "自适应推荐视频"})
         # 3. asyncio.gather
         source = inspect.getsource(factory.generate_all)
         self.assertIn("asyncio.gather", source)
@@ -425,7 +425,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
             # Task 7.5: 3D Anki闪卡
             ('frontend/src/components/AnkiFlashcard.vue', 'rotateY(180deg)', '3D翻转'),
             # Task 8.1: 行级苏格拉底答疑
-            ('frontend/src/components/InlineSocraticPopup.vue', '苏格拉底即时答疑', '行级答疑悬浮框'),
+            ('frontend/src/components/InlineSocraticPopup.vue', '即时追问舱', '行级答疑悬浮框'),
             # Task 8.4: 沙箱可视化终端
             ('frontend/src/components/SandboxConsole.vue', '代码沙箱控制台', '代码沙箱控制台'),
             # Task 8.5: 视频生成播放器
@@ -924,7 +924,7 @@ print("Val:", s.val)
                 if quality == 2:
                     self.assertTrue(data["adaptive_review"]["triggered"])
                     self.assertIn("Mermaid", " ".join(data["adaptive_review"]["agent_trace"]))
-                    self.assertIn("flowchart", data["adaptive_review"]["mermaid"])
+                    self.assertIn("mindmap", data["adaptive_review"]["mermaid"])
                     self.assertTrue(data["adaptive_review"]["stream_chunks"])
                     self.assertIn("llm_backend", data["adaptive_review"])
                 else:
@@ -1748,6 +1748,57 @@ print("Val:", s.val)
         self.assertEqual(data["status"], "success")
         self.assertIn("content", data)
 
+    def test_notebooklm_suggested_questions(self):
+        """验证 NotebookLM 式建议追问提取及流式返回正确性"""
+        from stream_api import _extract_suggested_questions
+        
+        # 1. 验证解析提取辅助函数
+        raw_text = (
+            "这是学术回答的正文内容。\n"
+            "===\n"
+            "===SUGGESTED_QUESTIONS===\n"
+            "[建议追问]\n"
+            "1. 什么是偏导数？\n"
+            "2. 它是如何计算的？\n"
+            "3. 什么时候用它？\n"
+            "========================\n"
+        )
+        clean_text, qs = _extract_suggested_questions(raw_text)
+        self.assertEqual(clean_text, "这是学术回答的正文内容。\n===")
+        self.assertEqual(len(qs), 3)
+        self.assertEqual(qs[0], "什么是偏导数？")
+        self.assertEqual(qs[1], "它是如何计算的？")
+        self.assertEqual(qs[2], "什么时候用它？")
+
+        # 2. 验证流式 SSE complete payload 包含 suggested_questions
+        from fastapi.testclient import TestClient
+        from app.main import app
+        import uuid
+        import json
+        
+        client = TestClient(app)
+        student_id = f"test-suggest-{uuid.uuid4().hex[:8]}"
+        response = client.post(
+            "/api/stream/chat",
+            json={"message": "梯度下降算法的收敛条件是什么", "student_id": student_id}
+        )
+        self.assertEqual(response.status_code, 200)
+        
+        complete_payload = None
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                try:
+                    data = json.loads(line[6:])
+                    if "suggested_questions" in data:
+                        complete_payload = data
+                        break
+                except Exception:
+                    pass
+        
+        self.assertIsNotNone(complete_payload)
+        self.assertIn("suggested_questions", complete_payload)
+        self.assertEqual(len(complete_payload["suggested_questions"]), 3)
+
     def test_component_regeneration_endpoint(self):
         import uuid
         from app.database import SessionLocal
@@ -2407,6 +2458,604 @@ print("Val:", s.val)
         for r in range(M):
             row_sum = float(np.sum(F_local[r]))
             self.assertAlmostEqual(row_sum, 1.0, places=5, msg=f"Row {r} sum is not 1.0: {row_sum}")
+
+    def test_direct_slash_commands_routing(self):
+        """验证 Slash 快捷指令能够绕过常规意图分类，直接将定向参数及约束传给 EduMatrixSwarm"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        import json
+        import uuid
+
+        client = TestClient(app)
+        student_id = f"test-slash-{uuid.uuid4().hex[:8]}"
+
+        # 测试 /code 快捷指令，期待仅运行“极客助教”
+        response = client.post(
+            "/api/stream/chat",
+            json={"message": "/code 快速排序算法", "student_id": student_id, "mode": "chat"}
+        )
+        self.assertEqual(response.status_code, 200)
+
+        # 校验响应流中是否仅包含极客助教 (Sandbox Coder)
+        complete_payload = None
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                try:
+                    data = json.loads(line[6:])
+                    if "resources" in data:
+                        complete_payload = data
+                        break
+                except Exception:
+                    pass
+
+        self.assertIsNotNone(complete_payload)
+        resources = complete_payload["resources"]
+        # 我们期待只有一个资源，且其 agent 为 “极客助教”
+        self.assertEqual(len(resources), 1)
+        self.assertEqual(resources[0]["agent"], "极客助教")
+        self.assertEqual(resources[0]["type"], "代码实操案例")
+
+    def test_rag_document_constraint_retrieval(self):
+        """验证 @ 课件引用约束能够成功地把检索候选池约束到特定课件"""
+        from app.database import SessionLocal, DBKnowledgeDocument, DBStudentProfile
+        from app.crud import save_student_profile
+        from models import StudentProfile, Evidence, EvidenceModality
+        from rag_engine import hybrid_rag
+        import uuid
+
+        student_id = f"test-constraint-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            profile = StudentProfile(student_id=student_id)
+            save_student_profile(session, profile)
+
+            # 在 user_index 中注入两份不同 source 的文档数据进行区分
+            doc1_chunk = Evidence(
+                id="doc1_chunk1",
+                title="神经网络导论",
+                content="反向传播在神经网络中至关重要。",
+                modality=EvidenceModality.TEXT,
+                source="神经网络导论.md",
+                tags=("反向传播",),
+            )
+            doc2_chunk = Evidence(
+                id="doc2_chunk1",
+                title="支持向量机深入",
+                content="核函数是SVM用于升维的关键机制。",
+                modality=EvidenceModality.TEXT,
+                source="支持向量机深入.pdf",
+                tags=("SVM",),
+            )
+            hybrid_rag.ingest_user_documents((doc1_chunk, doc2_chunk))
+
+            # 执行带文件过滤条件的检索
+            result = hybrid_rag.retrieve(
+                "什么是反向传播",
+                profile=profile,
+                doc_constraint="神经网络导论.md"
+            )
+
+            # 断言只召回了 神经网络导论.md 的内容，支持向量机的内容被过滤掉了
+            self.assertTrue(len(result.evidence) > 0)
+            for ev in result.evidence:
+                self.assertEqual(ev.source, "神经网络导论.md")
+
+            # 清除注入的文档
+            hybrid_rag.remove_user_documents("神经网络导论.md")
+            hybrid_rag.remove_user_documents("支持向量机深入.pdf")
+
+            prof_now = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if prof_now:
+                session.delete(prof_now)
+            session.commit()
+        finally:
+            session.close()
+
+    def test_multiple_doc_constraints_filtering(self):
+        """验证多文档约束条件下的前置过滤与合并检索"""
+        from app.database import SessionLocal
+        from models import StudentProfile, Evidence, EvidenceModality
+        from rag_engine import hybrid_rag
+        import uuid
+
+        student_id = f"test-multi-const-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            profile = StudentProfile(student_id=student_id)
+            # 注入三份不同 source 的文档数据进行区分
+            doc1_chunk = Evidence(
+                id="doc_m1_c1",
+                title="神经网络导论",
+                content="反向传播在神经网络中至关重要。",
+                modality=EvidenceModality.TEXT,
+                source="神经网络导论.md",
+                tags=("反向传播",),
+            )
+            doc2_chunk = Evidence(
+                id="doc_m2_c1",
+                title="支持向量机深入",
+                content="核函数是SVM用于升维的关键机制。",
+                modality=EvidenceModality.TEXT,
+                source="支持向量机深入.pdf",
+                tags=("SVM",),
+            )
+            doc3_chunk = Evidence(
+                id="doc_m3_c1",
+                title="无关文献数据",
+                content="无关内容数据。",
+                modality=EvidenceModality.TEXT,
+                source="无关文献数据.txt",
+                tags=("无关",),
+            )
+            hybrid_rag.ingest_user_documents((doc1_chunk, doc2_chunk, doc3_chunk))
+
+            # 执行带多文件过滤条件的检索 (限定 doc1 和 doc2)
+            result = hybrid_rag.retrieve(
+                "什么是反向传播和SVM",
+                profile=profile,
+                doc_constraint=["神经网络导论.md", "支持向量机深入.pdf"]
+            )
+
+            # 断言只召回了 doc1 和 doc2 的内容，而 doc3 (无关文献数据) 绝不出现
+            self.assertTrue(len(result.evidence) > 0)
+            for ev in result.evidence:
+                self.assertIn(ev.source, ["神经网络导论.md", "支持向量机深入.pdf"])
+                self.assertNotEqual(ev.source, "无关文献数据.txt")
+
+            # 清除注入的文档
+            hybrid_rag.remove_user_documents("神经网络导论.md")
+            hybrid_rag.remove_user_documents("支持向量机深入.pdf")
+            hybrid_rag.remove_user_documents("无关文献数据.txt")
+        finally:
+            session.close()
+
+    def test_add_web_source_endpoint(self):
+        """测试 POST /api/knowledge/add-web-source 接口"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal, DBStudentProfile, DBKnowledgeDocument
+        import uuid
+
+        client = TestClient(app)
+        student_id = f"test-web-source-{uuid.uuid4().hex[:8]}"
+        
+        # 1. 必须先创建 Student Profile 以满足 FOREIGN KEY 约束
+        session = SessionLocal()
+        try:
+            db_profile = DBStudentProfile(student_id=student_id)
+            session.add(db_profile)
+            session.commit()
+        finally:
+            session.close()
+
+        payload = {
+            "query": "神经网络 IBM",
+            "title": "IBM 神经网络教程",
+            "url": "https://www.ibm.com/topics/neural-networks",
+            "snippet": "人工神经网络是通过模拟人脑神经元结构来实现机器学习算法的模型。",
+            "student_id": student_id
+        }
+        
+        try:
+            response = client.post("/api/knowledge/add-web-source", json=payload)
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["status"], "success")
+            self.assertIn("[网页] IBM 神经网络教程.txt", data["filename"])
+            self.assertTrue(data["chunk_count"] > 0)
+
+            # 验证数据库中确实写入了记录
+            session = SessionLocal()
+            try:
+                db_doc = session.query(DBKnowledgeDocument).filter_by(id=data["id"]).first()
+                self.assertIsNotNone(db_doc)
+                self.assertEqual(db_doc.student_id, student_id)
+                self.assertEqual(db_doc.file_type, "txt")
+                
+                # 删除数据并提交
+                session.delete(db_doc)
+                session.commit()
+            finally:
+                session.close()
+        finally:
+            # 清理 Student Profile
+            session = SessionLocal()
+            try:
+                db_profile = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+                if db_profile:
+                    session.delete(db_profile)
+                    session.commit()
+            finally:
+                session.close()
+
+    def test_web_search_category_and_file_type_detection(self):
+        """测试 Web 搜索的分类查询（在线网页/文档）以及返回项的文件类型检测标记"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal, DBStudentProfile, DBWebSearchHistory
+        import uuid
+        
+        client = TestClient(app)
+        student_id = f"test-sec-cat-{uuid.uuid4().hex[:8]}"
+        
+        # 1. 注册学生 profile 以满足 FK
+        session = SessionLocal()
+        try:
+            db_profile = DBStudentProfile(student_id=student_id)
+            session.add(db_profile)
+            session.commit()
+        finally:
+            session.close()
+
+        payload = {
+            "query": "深度学习 讲义",
+            "category": "document",
+            "student_id": student_id
+        }
+        
+        try:
+            response = client.post("/api/web/search", json=payload)
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertIn("results", data)
+            self.assertIn("summary", data)
+            
+            # 验证返回的每个结果都拥有 is_file 和 file_type 字段
+            for r in data["results"]:
+                self.assertIn("is_file", r)
+                self.assertIn("file_type", r)
+                
+            # 清理 Web Search 历史数据
+            session = SessionLocal()
+            try:
+                db_hist = session.query(DBWebSearchHistory).filter_by(id=data["search_id"]).first()
+                if db_hist:
+                    session.delete(db_hist)
+                    session.commit()
+            finally:
+                session.close()
+        finally:
+            # 清理 student profile
+            session = SessionLocal()
+            try:
+                db_profile = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+                if db_profile:
+                    session.delete(db_profile)
+                    session.commit()
+            finally:
+                session.close()
+
+    def test_download_web_file_pipeline(self):
+        """测试在线文档流式下载与本地 RAG 深度导入管道 (Mock 下载和解析)"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal, DBStudentProfile, DBKnowledgeDocument
+        from unittest.mock import patch, MagicMock
+        import uuid
+
+        client = TestClient(app)
+        student_id = f"test-dl-web-{uuid.uuid4().hex[:8]}"
+        
+        # 1. 注册学生 profile 以满足 FK
+        session = SessionLocal()
+        try:
+            db_profile = DBStudentProfile(student_id=student_id)
+            session.add(db_profile)
+            session.commit()
+        finally:
+            session.close()
+
+        payload = {
+            "url": "https://example.com/lecture_notes.pdf",
+            "file_type": "pdf",
+            "title": "卷积神经网络讲义",
+            "student_id": student_id
+        }
+
+        # Mock httpx.AsyncClient.get() 以及 pdf/视觉/图谱解析部分，确保测试在离线时也可 100% 通过
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"%PDF-1.4 mock pdf data"
+
+        with patch("httpx.AsyncClient.get", return_value=mock_response), \
+             patch("knowledge_api.parse_uploaded_file", return_value="卷积核和池化层是卷积神经网络的核心组成部分。"), \
+             patch("knowledge_api.parse_pdf_visually", return_value=[]), \
+             patch("knowledge_api.build_graph_after_upload", return_value=None):
+             
+            response = client.post("/api/knowledge/download-web-file", json=payload)
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["file_type"], "pdf")
+            self.assertEqual(data["filename"], "[下载] 卷积神经网络讲义.pdf")
+
+            # 验证数据库落盘
+            session = SessionLocal()
+            try:
+                db_doc = session.query(DBKnowledgeDocument).filter_by(id=data["id"]).first()
+                self.assertIsNotNone(db_doc)
+                self.assertEqual(db_doc.student_id, student_id)
+                self.assertIn("卷积核和池化层", db_doc.content)
+                
+                # 清除
+                session.delete(db_doc)
+                session.commit()
+            finally:
+                session.close()
+
+            # 清理临时下载生成的文件以保持干净
+            import os
+            from pathlib import Path
+            temp_file = Path("data/uploads") / student_id / f"{data['id']}.pdf"
+            if temp_file.exists():
+                os.remove(temp_file)
+            if (Path("data/uploads") / student_id).exists():
+                os.rmdir(Path("data/uploads") / student_id)
+
+        # 清理 student profile
+        session = SessionLocal()
+        try:
+            db_profile = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if db_profile:
+                session.delete(db_profile)
+                session.commit()
+        finally:
+            session.close()
+
+    def test_web_source_dehydration_summary(self):
+        """测试网页导入时，LLM 智能脱水总结将其格式化为结构化 Markdown 笔记的过程"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal, DBStudentProfile, DBKnowledgeDocument
+        from unittest.mock import patch
+        import uuid
+
+        client = TestClient(app)
+        student_id = f"test-dehyd-{uuid.uuid4().hex[:8]}"
+
+        # 注册学生 profile 以满足 FK
+        session = SessionLocal()
+        try:
+            db_profile = DBStudentProfile(student_id=student_id)
+            session.add(db_profile)
+            session.commit()
+        finally:
+            session.close()
+
+        payload = {
+            "query": "注意力机制",
+            "title": "Transformer中的自注意力机制详解",
+            "url": "https://blog.example.com/self-attention",
+            "snippet": "自注意力机制允许输入中的每个单词与所有其他单词建立关联，从而计算权重并学习上下文依赖。",
+            "student_id": student_id
+        }
+
+        # Mock LLM generate 接口以生成稳定的 Markdown 结构
+        mock_summary = (
+            "# Transformer中的自注意力机制详解\n\n"
+            "## 核心概念定义\n自注意力机制 (Self-Attention) 是 Transformer 的基石。\n\n"
+            "## 核心推导/要点概括\n- Q, K, V 矩阵投影\n- 缩放点积注意力公式计算\n\n"
+            "## 拓展/知识拓扑\n- Multi-Head Attention\n- Transformer Encoder"
+        )
+
+        with patch("llm_client.DeterministicEducationLLM.generate", return_value=mock_summary):
+            response = client.post("/api/knowledge/add-web-source", json=payload)
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["filename"], "[网页] Transformer中的自注意力机制详解.txt")
+
+            # 验证数据库中确实存下了 LLM 总结后的 Markdown 内容而不是 snippet 原文
+            session = SessionLocal()
+            try:
+                db_doc = session.query(DBKnowledgeDocument).filter_by(id=data["id"]).first()
+                self.assertIsNotNone(db_doc)
+                self.assertIn("## 核心概念定义", db_doc.content)
+                self.assertIn("## 核心推导/要点概括", db_doc.content)
+                self.assertNotIn("允许输入中的每个单词与所有其他单词建立关联", db_doc.content) # 原snippet应被替换/脱水总结
+
+                # 清理
+                session.delete(db_doc)
+                session.commit()
+            finally:
+                session.close()
+
+            # 清理物理备份文件
+            import os
+            from pathlib import Path
+            temp_file = Path("data/uploads") / student_id / f"{data['id']}.txt"
+            if temp_file.exists():
+                os.remove(temp_file)
+            if (Path("data/uploads") / student_id).exists():
+                os.rmdir(Path("data/uploads") / student_id)
+
+        # 清理 student profile
+        session = SessionLocal()
+        try:
+            db_profile = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            if db_profile:
+                session.delete(db_profile)
+                session.commit()
+        finally:
+            session.close()
+
+    def test_get_single_document_details(self):
+        """测试 GET /api/knowledge/{doc_id} 接口以获取知识库文档完整文本内容"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal, DBStudentProfile, DBKnowledgeDocument
+        import uuid
+
+        client = TestClient(app)
+        student_id = f"test-get-doc-{uuid.uuid4().hex[:8]}"
+
+        # 1. 注册学生 profile 以满足 FK
+        session = SessionLocal()
+        try:
+            db_profile = DBStudentProfile(student_id=student_id)
+            session.add(db_profile)
+            session.commit()
+        finally:
+            session.close()
+
+        # 2. 插入一个带有长文本的 mock 课件
+        doc_id = f"mock-doc-{uuid.uuid4().hex[:8]}"
+        session = SessionLocal()
+        try:
+            db_doc = DBKnowledgeDocument(
+                id=doc_id,
+                student_id=student_id,
+                filename="测试文档_完整版.txt",
+                file_type="txt",
+                file_size=120,
+                title="测试文档_完整版",
+                content="这是为了测试 GET 单个文档完整内容接口而准备的超级长的文章，里面必须包含很多核心的知识概念和原理。",
+                tags=["测试"],
+                chunk_count=1,
+                is_multimodal=False
+            )
+            session.add(db_doc)
+            session.commit()
+        finally:
+            session.close()
+
+        try:
+            # 3. 访问 GET 单个文档详情路由
+            response = client.get(f"/api/knowledge/{doc_id}?student_id={student_id}")
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["id"], doc_id)
+            self.assertEqual(data["title"], "测试文档_完整版")
+            self.assertIn("这是为了测试 GET 单个文档", data["content"])
+        finally:
+            # 4. 清理数据库
+            session = SessionLocal()
+            try:
+                db_doc = session.query(DBKnowledgeDocument).filter_by(id=doc_id).first()
+                if db_doc:
+                    session.delete(db_doc)
+                db_profile = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+                if db_profile:
+                    session.delete(db_profile)
+                session.commit()
+            finally:
+                session.close()
+
+    def test_video_embedded_url_mapping(self):
+        from web_search_api import to_embedded_player_url
+        bili_url = "https://www.bilibili.com/video/BV1xx411c7m9/?spm_id_from=333.337.search-card.all.click"
+        self.assertEqual(
+            to_embedded_player_url(bili_url),
+            "//player.bilibili.com/player.html?bvid=BV1xx411c7m9&high_quality=1&as_wide=1"
+        )
+        yt_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        self.assertEqual(
+            to_embedded_player_url(yt_url),
+            "https://www.youtube.com/embed/dQw4w9WgXcQ"
+        )
+        # 3. Tencent Video link
+        qq_url = "https://v.qq.com/x/cover/mzc00200h2j3rru/o0034aovl8u.html"
+        self.assertEqual(
+            to_embedded_player_url(qq_url),
+            "https://v.qq.com/txp/iframe/player.html?vid=o0034aovl8u"
+        )
+        # 4. Youku link
+        yk_url = "https://v.youku.com/v_show/id_XNTkwNzc0NDk0MA==.html"
+        self.assertEqual(
+            to_embedded_player_url(yk_url),
+            "https://player.youku.com/embed/XNTkwNzc0NDk0MA=="
+        )
+        # 5. Local range video
+        local_url = "/api/v1/animations/video/%E6%B1%A0%E5%8C%96%E5%B1%82/pool.mp4"
+        self.assertEqual(
+            to_embedded_player_url(local_url),
+            local_url
+        )
+
+    def test_video_recommender_swarm_flow(self):
+        from agent_swarm import EduMatrixSwarm
+        import json
+        swarm = EduMatrixSwarm()
+        package = swarm.process("我想要看梯度下降的视频演示。")
+        self.assertTrue(package.alignment.passed)
+        video_output = next((r for r in package.resources if r.agent == "视频推荐官"), None)
+        self.assertIsNotNone(video_output)
+        self.assertEqual(video_output.resource_type, "自适应推荐视频")
+        videos_list = json.loads(video_output.content)
+        self.assertTrue(isinstance(videos_list, list))
+        self.assertTrue(len(videos_list) > 0)
+        first_video = videos_list[0]
+        self.assertIn("title", first_video)
+        self.assertIn("url", first_video)
+        self.assertIn("source", first_video)
+        self.assertIn("recommendation", first_video)
+
+    def test_anonymous_data_migration(self):
+        """验证匿名临时ID的数据能够在登录时成功迁移/合并到正式账号中。"""
+        from app.database import SessionLocal, DBReviewPlan, DBNote, DBStudentProfile, DBUser
+        from app.crud import upsert_review_plan, create_note, migrate_anonymous_data
+        from app.auth import get_password_hash
+        from fastapi.testclient import TestClient
+        from app.main import app
+        import uuid
+
+        anon_id = f"stu-test-anon-{uuid.uuid4().hex[:6]}"
+        target_id = f"test-user-{uuid.uuid4().hex[:6]}"
+        password = "testpassword123"
+
+        session = SessionLocal()
+        try:
+            # 1. 匿名用户创建数据
+            upsert_review_plan(session, anon_id, "卷积神经网络", 0.3, 1)
+            create_note(session, anon_id, "conversation", "卷积核提取局部特征", tags=["CNN"], concepts=["卷积神经网络"])
+
+            # 2. 预先注册正式账号
+            user = DBUser(username=target_id, hashed_password=get_password_hash(password), role="student")
+            session.add(user)
+            db_profile = DBStudentProfile(student_id=target_id, target_course="机器学习导论", concept_mastery={"卷积神经网络": 0.8})
+            session.add(db_profile)
+            session.commit()
+        finally:
+            session.close()
+
+        # 3. 通过 API 发起带 X-Anon-Student-ID 头的登录请求
+        client = TestClient(app)
+        response = client.post(
+            "/api/auth/login",
+            data={"username": target_id, "password": password},
+            headers={"X-Anon-Student-ID": anon_id}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+        # 4. 验证数据已成功合并迁移
+        session = SessionLocal()
+        try:
+            # A. 匿名画像应被删除
+            anon_profile = session.query(DBStudentProfile).filter_by(student_id=anon_id).first()
+            self.assertIsNone(anon_profile)
+
+            # B. 概念掌握度应合并 (0.3 与 0.8 融合，取最大值 0.8)
+            target_profile = session.query(DBStudentProfile).filter_by(student_id=target_id).first()
+            self.assertIsNotNone(target_profile)
+            self.assertEqual(target_profile.concept_mastery.get("卷积神经网络"), 0.8)
+
+            # C. 复习计划及笔记已迁移至正式账号
+            plan = session.query(DBReviewPlan).filter_by(student_id=target_id, concept="卷积神经网络").first()
+            self.assertIsNotNone(plan)
+
+            note = session.query(DBNote).filter_by(student_id=target_id).first()
+            self.assertIsNotNone(note)
+            self.assertIn("卷积核提取局部特征", note.content)
+            
+            # 清理
+            if plan: session.delete(plan)
+            if note: session.delete(note)
+            if target_profile: session.delete(target_profile)
+            db_user = session.query(DBUser).filter_by(username=target_id).first()
+            if db_user: session.delete(db_user)
+            session.commit()
+        finally:
+            session.close()
 
 
 if __name__ == "__main__":

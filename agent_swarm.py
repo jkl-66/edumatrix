@@ -349,7 +349,7 @@ class ZPDPlannerAgent:
     def __init__(self):
         self._last_path_plan: dict | None = None
 
-    def plan(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile, loop: Any = None):
+    def plan(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile, loop: Any = None, doc_constraint: str | list[str] | None = None):
         """执行 ZPD 路径规划。"""
         from bkt_engine import (
             BKTEngine,
@@ -392,9 +392,16 @@ class ZPDPlannerAgent:
         for p in prereqs:
             prereq_masteries[p] = bkt.get_mastery(p, profile.bkt_states) * 0.6 + profile.concept_mastery.get(p, 0.3) * 0.4
 
+        # 清除查询中的模板前缀后缀，避免检索污染（例如把“一键生成资源包:”和“ (知识点: 神经网络)”清除）
+        cleaned_query = query.strip()
+        if cleaned_query.startswith("一键生成资源包:"):
+            cleaned_query = cleaned_query[8:].strip()
+            import re
+            cleaned_query = re.sub(r"\((?:知识点|指定概念):\s*.+?\)|\[指定概念:\s*.+?\]", "", cleaned_query).strip()
+
         # Step 3: 执行 ZPD 路径规划
         path_plan = get_zpd_path_plan(
-            target=target or query,
+            target=target or cleaned_query,
             target_mastery=mastery,
             graph_neighbors=active_dag,
             prereq_masteries=prereq_masteries,
@@ -406,19 +413,19 @@ class ZPDPlannerAgent:
         rollback = path_plan.get("rollback_to")
 
         if difficulty == "basic":
-            enhanced_query = f"{query} 基础 前置知识"
+            enhanced_query = f"{cleaned_query} 基础 前置知识"
             if rollback:
-                enhanced_query = f"{' '.join(rollback)} 基础概念 {query}"
+                enhanced_query = f"{' '.join(rollback)} 基础概念 {cleaned_query}"
         elif difficulty == "advanced":
-            enhanced_query = f"{query} 进阶 应用"
+            enhanced_query = f"{cleaned_query} 进阶 应用"
         else:
-            enhanced_query = query
+            enhanced_query = cleaned_query
 
         # Step 5: 执行检索
-        retrieval = rag.retrieve(enhanced_query, target=target, profile=profile)
+        retrieval = rag.retrieve(enhanced_query, target=target, profile=profile, doc_constraint=doc_constraint)
         return retrieval
 
-    async def plan_async(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile):
+    async def plan_async(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile, doc_constraint: str | list[str] | None = None):
         """异步版本的 ZPD 路径规划。
 
         将同步的 plan() 卸载到默认线程池，避免阻塞事件循环上的其他协程
@@ -426,7 +433,7 @@ class ZPDPlannerAgent:
         """
         import asyncio
         loop = asyncio.get_running_loop()
-        return await asyncio.to_thread(self.plan, rag, query, profile, loop)
+        return await asyncio.to_thread(self.plan, rag, query, profile, loop, doc_constraint)
 
     def get_path_plan(self) -> dict | None:
         return self._last_path_plan
@@ -436,6 +443,14 @@ class ZPDPlannerAgent:
         if not query:
             return None
         cleaned = query.strip()
+
+        # 0. 优先提取显式指定的概念标识
+        import re
+        m = re.search(r"\[指定概念:\s*(.+?)\]|\((?:知识点|指定概念):\s*(.+?)\)", cleaned)
+        if m:
+            val = m.group(1) or m.group(2)
+            if val:
+                return val.strip()
 
         # 1. 动态拉取活跃节点（避免白名单硬编码）
         try:
@@ -452,13 +467,39 @@ class ZPDPlannerAgent:
             if cleaned == concept:
                 return concept
 
-        # 3. 从长到短子串匹配，防止如“神经网络”被“卷积神经网络”遮蔽
+        # 3. 从长到短子串匹配，提取所有匹配的概念并排重
         sorted_concepts = sorted(concepts, key=len, reverse=True)
+        found_concepts = []
         for concept in sorted_concepts:
             if concept in cleaned:
-                return concept
+                # 避免子字符串包含匹配冲突（例如 "卷积神经网络" 已经包含 "卷积核"）
+                if not any(concept in existing for existing in found_concepts):
+                    found_concepts.append(concept)
 
-        # 4. 动态指代消解 (Pronoun Reference Resolution)
+        # 4. 过滤掉较宽泛的祖先概念（如果同时存在更具体的后代概念）
+        if len(found_concepts) > 1:
+            try:
+                from rag_engine import graph_rag
+                if graph_rag and hasattr(graph_rag, "_ancestors"):
+                    specific_concepts = []
+                    for c in found_concepts:
+                        is_ancestor_of_others = False
+                        for other in found_concepts:
+                            if other != c and c in graph_rag._ancestors(other):
+                                is_ancestor_of_others = True
+                                break
+                        if not is_ancestor_of_others:
+                            specific_concepts.append(c)
+                    found_concepts = specific_concepts
+            except Exception:
+                pass
+
+        if found_concepts:
+            # 按照它们在查询中的出现顺序排序，提升可读性
+            found_concepts.sort(key=lambda c: cleaned.find(c))
+            return "与".join(found_concepts)
+
+        # 5. 动态指代消解 (Pronoun Reference Resolution)
         # 检测是否包含指示代词/指代倾向
         pronouns = ("这个", "那个", "这", "那", "它", "上面", "刚才", "这个概念", "如何理解", "怎么算", "解释一下")
         has_pronoun = any(p in cleaned for p in pronouns)
@@ -491,8 +532,8 @@ class ZPDPlannerAgent:
                     future = asyncio.run_coroutine_threadsafe(coro, loop)
                     response = future.result(timeout=10.0)
                 else:
-                    # 兜底：如果是在非异步上下文（如单元测试）中运行且没有 loop，
-                    # 尝试直接运行协程（新建事件循环）
+                    # 兜底：如果是在非异步上下文中运行且没有 loop，
+                    # 尝试直接运行协程
                     async def _run_fallback():
                         return await DEFAULT_ASYNC_LLM.generate(
                             system_prompt=system_prompt,
@@ -893,7 +934,7 @@ class AsyncResourceFactory:
             ("逻辑画师", "思维导图"),
             ("极客助教", "代码实操案例"),
             ("考官智能体", "练习题"),
-            ("虚拟导演", "虚拟人视频脚本"),
+            ("视频推荐官", "自适应推荐视频"),
         )
 
     @staticmethod
@@ -1068,7 +1109,8 @@ class AsyncResourceFactory:
             "mapper": "逻辑画师",
             "coder": "极客助教",
             "quiz": "考官智能体",
-            "director": "虚拟导演",
+            "director": "视频推荐官",
+            "video": "视频推荐官",
         }
         REVERSE_ROLE_MAP = {v: k for k, v in ROLE_MAP.items()}
 
@@ -1157,15 +1199,21 @@ class AsyncResourceFactory:
                 })
             return res_out
 
-        tasks = [_generate_one(role, rt) for role, rt in self.jobs]
-        outputs = await asyncio.gather(*tasks, return_exceptions=True)
+        active_jobs = []
+        for role, rt in self.jobs:
+            if regenerate_only is not None and role not in regenerate_only:
+                if not previous_resources:
+                    continue
+            active_jobs.append((role, rt))
 
+        tasks = [_generate_one(role, rt) for role, rt in active_jobs]
+        outputs = await asyncio.gather(*tasks, return_exceptions=True)
 
         results: list[AgentOutput] = []
         for i, output in enumerate(outputs):
+            role_name = active_jobs[i][0]
+            resource_type_name = active_jobs[i][1]
             if isinstance(output, Exception):
-                role_name = self.jobs[i][0]
-                resource_type_name = self.jobs[i][1]
                 TELEMETRY.record_metric(
                     "resource_factory.error", 1.0,
                     role=role_name, error=str(output)[:100],
@@ -1309,14 +1357,16 @@ class EduMatrixSwarm:
         except Exception:
             return {"is_academic": True, "reason": "分类器异常放行", "reply": ""}
 
-    async def async_process(self, user_input: str, *, student_id: str = "demo-student", event_callback = None) -> ResourcePackage:
+    async def async_process(self, user_input: str, *, student_id: str = "demo-student", event_callback = None, forced_target_agent: str | None = None, doc_constraint: str | list[str] | None = None) -> ResourcePackage:
         with timed_span(TELEMETRY, "swarm.process", student_id=student_id):
             profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
             
             await _trigger_event(event_callback, "progress", {"step": "init", "message": "正在初始化并分析学生画像...", "progress": 10})
 
-            # === 意图分类与防闲聊拦截 ===
-            classification = await self._check_academic_intent(user_input)
+            if user_input.startswith("一键生成资源包:"):
+                classification = {"is_academic": True, "reply": ""}
+            else:
+                classification = await self._check_academic_intent(user_input)
             if not classification.get("is_academic", True):
                 from models import AlignmentReport, LearningSignal
                 reply = classification.get("reply") or "## 智能答疑 / 系统说明\n\n您好！我是 EduMatrix 智能自适应助教。我目前专注于为您解答机器学习和数据科学等学术问题，请提出与学习相关的疑问，谢谢！"
@@ -1377,7 +1427,7 @@ class EduMatrixSwarm:
             profile = await self.profile_probe.async_update(profile, user_input)
 
             await _trigger_event(event_callback, "progress", {"step": "planner", "message": "正在规划ZPD学习路径与检索知识库...", "progress": 40})
-            retrieval = await self.planner.plan_async(self.rag, user_input, profile)
+            retrieval = await self.planner.plan_async(self.rag, user_input, profile, doc_constraint=doc_constraint)
             debate_result = self.debate.clean(retrieval)
             TELEMETRY.record_metric(
                 "debate.keep_rate",
@@ -1402,7 +1452,7 @@ class EduMatrixSwarm:
             conversation_memory = _build_conversation_memory(profile, max_turns=6)
 
             # === 任务 8.1 / 低置信度幻觉拦截 ===
-            if retrieval.low_confidence:
+            if retrieval.low_confidence and not forced_target_agent:
                 from models import AlignmentReport
                 refusal_msg = "抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉，建议您在‘课件管理’页面中上传包含该概念的教学资料。"
                 resources = tuple(
@@ -1453,7 +1503,7 @@ class EduMatrixSwarm:
             previous_resources = None
             # === 任务 8.9: 局部外科手术式重新计算缓存 ===
             # 仅对失败的 Agent 触发 regenerate，其他 4 个组件缓存复用
-            failed_agent_name: str = ""
+            failed_agent_name: str = forced_target_agent or ""
             for attempt in range(CONFIG.rollback_limit + 1):
                 if attempt > 0:
                     await _trigger_event(event_callback, "progress", {

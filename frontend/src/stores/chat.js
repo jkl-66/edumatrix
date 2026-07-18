@@ -1,6 +1,32 @@
 import { defineStore } from 'pinia'
 import { streamChat, abortStream } from '../api'
 
+function cleanStreamingContent(text) {
+  if (!text) return ''
+  const markers = [
+    '===SUGGESTED_QUESTIONS===',
+    '[建议追问]',
+    '【建议追问】',
+    '建议追问（点击可追问）',
+    '建议追问(点击可追问)',
+    '\n建议追问'
+  ]
+  for (const marker of markers) {
+    const idx = text.indexOf(marker)
+    if (idx !== -1) {
+      let sliceIdx = idx
+      const before = text.substring(0, idx).trim()
+      if (before.endsWith('===')) {
+        sliceIdx = text.substring(0, idx).lastIndexOf('===')
+      } else if (before.endsWith('---')) {
+        sliceIdx = text.substring(0, idx).lastIndexOf('---')
+      }
+      return text.substring(0, sliceIdx).trim()
+    }
+  }
+  return text
+}
+
 export const useChatStore = defineStore('chat', {
   state: () => ({
     messages: (() => {
@@ -17,7 +43,11 @@ export const useChatStore = defineStore('chat', {
     streamingAgents: {},
     streamingMode: 'chat',  // 当前流式传输模式 (chat / matrix)
     streamingContent: '',  // 任务 1: 增量流式内容缓存
+    rawStreamingContent: '', // Full raw streaming content
     _cleanupStream: null,  // 任务 8.2: AbortController 清理函数
+    latestMetrics: null,    // 上一次生成性能指标
+    sessionTotalTokens: 0,  // 当前会话总Token数
+    sessionTotalCost: 0,    // 当前会话估算花费(元)
   }),
   actions: {
     /**
@@ -33,6 +63,8 @@ export const useChatStore = defineStore('chat', {
         this.sending = false
       }
       this.streamingMode = 'chat'
+      this.streamingContent = ''
+      this.rawStreamingContent = ''
     },
 
     saveMessages() {
@@ -84,7 +116,7 @@ export const useChatStore = defineStore('chat', {
       return result
     },
 
-    async sendChatMessage(message, studentId, mode = 'chat', images = []) {
+    async sendChatMessage(message, studentId, mode = 'chat', images = [], activeDocIds = []) {
       if (this.sending) return
       this.sending = true
       this.streamingProgress = 10
@@ -114,27 +146,36 @@ export const useChatStore = defineStore('chat', {
               this.streamingProgress = data.progress || this.streamingProgress
               this.streamingStatus = data.message || this.streamingStatus
             } else if (event === 'chat_chunk') {
+              this.rawStreamingContent += data.content || ''
+              this.streamingContent = cleanStreamingContent(this.rawStreamingContent)
+              
               const lastMsg = this.messages[this.messages.length - 1]
               if (lastMsg && lastMsg.role === 'assistant') {
-                lastMsg.content += data.content || ''
+                lastMsg.content = this.streamingContent
                 this.saveMessages()
               }
-              this.streamingContent += data.content || ''
             } else if (event === 'agent_done') {
               this.streamingProgress = data.progress || this.streamingProgress
-              this.streamingAgents[data.agent] = {
+              const agentName = data.agent === '视频推荐官' ? '虚拟导演' : data.agent
+              this.streamingAgents[agentName] = {
                 type: data.type,
                 error: data.error || null,
                 done: true,
               }
-              this.streamingStatus = `[${data.agent}] 生成完成`
+              this.streamingStatus = `[${agentName}] 生成完成`
             } else if (event === 'content') {
-              // 任务 1: 流式 token 追加（逐 token 累加）
-              this.streamingContent += data.content || ''
+              this.rawStreamingContent += data.content || ''
+              this.streamingContent = cleanStreamingContent(this.rawStreamingContent)
               this.streamingProgress = data.progress || this.streamingProgress
             } else if (event === 'complete') {
               this.streamingProgress = 100
               this.streamingStatus = '生成完成！'
+
+              if (data.metrics) {
+                this.latestMetrics = data.metrics
+                this.sessionTotalTokens += data.metrics.tokens_used || 0
+                this.sessionTotalCost += data.metrics.cost_cny || 0
+              }
 
               const safeContent = this.getSafeContent(data.content)
 
@@ -142,51 +183,62 @@ export const useChatStore = defineStore('chat', {
                 ? safeContent
                 : `## 学习目标：${data.target || '未识别'}\n\n` + safeContent
 
+              const normalizedResources = (data.resources || []).map(r => ({
+                ...r,
+                agent: r.agent === '视频推荐官' ? '虚拟导演' : r.agent
+              }))
+
               const lastIdx = this.messages.length - 1
               if (lastIdx >= 0 && this.messages[lastIdx].role === 'assistant') {
-                this.messages[lastIdx] = {
+                this.messages.splice(lastIdx, 1, {
                   role: 'assistant',
                   content: finalMsgContent,
-                  resources: data.resources || [],
+                  resources: normalizedResources,
+                  suggested_questions: data.suggested_questions || [],
                   profile: data.profile || null,
                   strategy: data.strategy_plan || null,
                   target: data.target || '',
                   safety: data.safety || null,
                   alignment: data.alignment || {},
                   rdi: data.rdi || null,
+                  metrics: data.metrics || null,
                   streaming: false,
-                }
+                })
               } else {
                 this.addMessage({
                   role: 'assistant',
                   content: finalMsgContent,
-                  resources: data.resources || [],
+                  resources: normalizedResources,
+                  suggested_questions: data.suggested_questions || [],
                   profile: data.profile || null,
                   strategy: data.strategy_plan || null,
                   target: data.target || '',
                   safety: data.safety || null,
                   alignment: data.alignment || {},
                   rdi: data.rdi || null,
+                  metrics: data.metrics || null,
                   streaming: false,
                 })
               }
               this.saveMessages()
               this.sending = false
               this.streamingContent = ''
+              this.rawStreamingContent = ''
               this._cleanupStream = null
               resolve(data)
             } else if (event === 'error') {
               this.sending = false
               this.streamingContent = ''
+              this.rawStreamingContent = ''
               this._cleanupStream = null
               const lastIdx = this.messages.length - 1
               if (lastIdx >= 0 && this.messages[lastIdx].role === 'assistant') {
-                this.messages[lastIdx] = {
+                this.messages.splice(lastIdx, 1, {
                   role: 'assistant',
                   content: `错误：${data.message || '生成失败'}`,
                   error: true,
                   streaming: false,
-                }
+                })
               } else {
                 this.addMessage({
                   role: 'assistant',
@@ -222,7 +274,8 @@ export const useChatStore = defineStore('chat', {
             reject(err)
           },
           mode,
-          images
+          images,
+          activeDocIds
         )
       })
     }

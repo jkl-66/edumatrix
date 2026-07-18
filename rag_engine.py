@@ -113,6 +113,13 @@ class GraphRAG:
         self.forward: dict[str, set[str]] = defaultdict(set)
         self.reverse: dict[str, set[str]] = defaultdict(set)
         self._build_professional_knowledge_graph()
+        # === F1 修复与启动并网：若 repository 为 None，自动拉取数据库中的默认图数据库连接以加载自生长边 ===
+        if repository is None:
+            try:
+                from app.utils.graph_builder import create_graph_repository
+                repository = create_graph_repository()
+            except Exception as exc:
+                print(f"  [GraphRAG] 自动加载默认图数据库仓库失败: {exc}")
         # === F1 修复：从动态图谱仓库加载边，与硬编码边合并 ===
         if repository is not None:
             self._load_dynamic_edges(repository)
@@ -144,6 +151,8 @@ class GraphRAG:
 
     def _build_professional_knowledge_graph(self) -> None:
         edges = [
+            ("机器学习", "监督学习"), ("机器学习", "数据预处理"), ("机器学习", "模型评估"),
+            ("机器学习", "交叉验证"),
             ("Python编程", "数据预处理"), ("线性代数", "向量表示"), ("概率统计", "模型评估"),
             ("概率统计", "朴素贝叶斯"), ("微积分", "梯度下降"), ("数据预处理", "特征工程"),
             ("特征工程", "监督学习"), ("监督学习", "线性回归"), ("监督学习", "逻辑回归"),
@@ -159,6 +168,10 @@ class GraphRAG:
             ("填充", "卷积运算"), ("卷积运算", "特征图"), ("特征图", "池化层"),
             ("池化层", "最大池化"), ("池化层", "平均池化"), ("池化层", "全连接层"),
             ("激活函数", "卷积神经网络"), ("全连接层", "卷积神经网络"),
+            ("反向传播", "神经网络"), ("梯度下降", "神经网络"),
+            ("神经网络", "注意力机制"), ("神经网络", "卷积神经网络"),
+            ("卷积核", "卷积神经网络"), ("池化层", "卷积神经网络"),
+            ("注意力机制", "Transformer"), ("反向传播", "Transformer"),
         ]
         for source, target in edges:
             self._add_edge(source, target)
@@ -167,8 +180,8 @@ class GraphRAG:
         aliases = {
             "Pooling": "池化层", "pooling": "池化层", "池化": "池化层",
             "CNN": "卷积神经网络", "Feature Map": "特征图", "ReLU": "激活函数",
-            "ML": "监督学习", "机器学习": "监督学习", "machine learning": "监督学习",
-            "Machine Learning": "监督学习", "分类": "逻辑回归", "回归": "线性回归",
+            "ML": "机器学习", "机器学习": "机器学习", "machine learning": "机器学习",
+            "Machine Learning": "机器学习", "分类": "逻辑回归", "回归": "线性回归",
             "过拟合": "过拟合",
         }
         if target in self.nodes:
@@ -314,6 +327,48 @@ class TextKnowledgeIndex:
         return tuple(item for item in ranked[:top_k] if item.score > 0.0)
 
 
+def pre_filter_index(
+    index: Any,
+    query: str,
+    query_with_graph: str,
+    doc_constraints: list[str] | str | None,
+    top_k: int
+) -> list[Evidence]:
+    """Helper to pre-filter items of an index by doc_constraints and compute similarities."""
+    matches = []
+    
+    # Standardize doc_constraints to a list of lowercased strings
+    constraints_list = []
+    if doc_constraints:
+        if isinstance(doc_constraints, str):
+            constraints_list = [doc_constraints.lower()]
+        elif isinstance(doc_constraints, list):
+            constraints_list = [c.lower() for c in doc_constraints if c]
+
+    # If it is a FAISSIndexSet, recurse on each of its loaded indexes
+    if hasattr(index, "indexes") and isinstance(index.indexes, dict):
+        for sub_index in index.indexes.values():
+            matches.extend(pre_filter_index(sub_index, query, query_with_graph, constraints_list, top_k))
+        return sorted(matches, key=lambda x: x.score, reverse=True)[:top_k]
+
+    # For InMemoryVectorIndex or FaissVectorIndex, get items from _items
+    items = []
+    if hasattr(index, "_items") and isinstance(index._items, dict):
+        items = list(index._items.values())
+    elif hasattr(index, "documents") and isinstance(index.documents, tuple):
+        items = list(index.documents)
+
+    for item in items:
+        source_val = (item.source or "").lower()
+        title_val = (item.title or "").lower()
+        # If constraints list is empty, treat as matching all items
+        if not constraints_list or any(c in source_val or c in title_val for c in constraints_list):
+            score = _similarity(query_with_graph, item)
+            matches.append(item.with_score(score))
+
+    return sorted(matches, key=lambda x: x.score, reverse=True)[:top_k]
+
+
 class HybridRAGPipeline:
     def __init__(
         self,
@@ -356,66 +411,132 @@ class HybridRAGPipeline:
         if removed > 0:
             TELEMETRY.record_metric("user_index.documents_removed", removed)
 
-    def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k, profile: Any | None = None, disable_external: bool = False) -> RetrievalBundle:
+    def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k, profile: Any | None = None, disable_external: bool = False, doc_constraint: str | list[str] | None = None) -> RetrievalBundle:
         # === 关键修复：延迟加载，打破循环导入 ===
         from web_search_api import search_arxiv
         
         with timed_span(TELEMETRY, "hybrid_rag.retrieve", top_k=top_k):
-            out_of_domain = not self._is_ml_concept(query)
+            # 清洗 query，避免将 "一键生成资源包: " 动作前缀和 "(知识点: ...)" 传入检索与向量搜索中
+            cleaned_query = query.strip()
+            if cleaned_query.startswith("一键生成资源包:"):
+                cleaned_query = cleaned_query[8:].strip()
+                import re
+                cleaned_query = re.sub(r"\((?:知识点|指定概念):\s*.+?\)|\[指定概念:\s*.+?\]", "", cleaned_query).strip()
+
+            out_of_domain = not self._is_ml_concept(cleaned_query)
             if out_of_domain:
                 graph_context = GraphContext(
-                    target=query,
+                    target=cleaned_query,
                     learning_path=(),
                     prerequisite_edges=(),
                     downstream_edges=(),
                 )
-                query_with_graph = query
+                query_with_graph = cleaned_query
             else:
-                target = target or self._infer_target(query)
+                target = target or self._infer_target(cleaned_query)
                 graph_context = self.graph.get_context(target)
-                query_with_graph = f"{query} {' '.join(graph_context.learning_path)}"
+                query_with_graph = f"{cleaned_query} {' '.join(graph_context.learning_path)}"
 
-            candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
+            if doc_constraint:
+                # Convert string or list to doc_constraints list
+                doc_constraints = []
+                if isinstance(doc_constraint, str):
+                    doc_constraints = [doc_constraint]
+                elif isinstance(doc_constraint, list):
+                    doc_constraints = doc_constraint
 
-            # === 核心修改区：并发拉取本地库和外网 arXiv ===
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                # 提交本地检索任务
+                # 1. 前置过滤 visual_index
+                candidates = pre_filter_index(self.visual_index, query, query_with_graph, doc_constraints, top_k)
+                
+                # 2. 前置过滤本地文本库
                 if self.faiss_indexes is not None:
-                    future_local = executor.submit(self.faiss_indexes.search, query_with_graph, top_k)
+                    local_hits = pre_filter_index(self.faiss_indexes, query, query_with_graph, doc_constraints, top_k)
                 else:
-                    future_local = executor.submit(self.text_index.search, query_with_graph, top_k)
+                    local_hits = pre_filter_index(self.text_index, query, query_with_graph, doc_constraints, top_k)
+                candidates.extend(local_hits)
                 
-                # 仅在非禁用外部搜索时提交外网 arXiv 检索任务
-                future_arxiv = None
-                if not disable_external:
-                    future_arxiv = executor.submit(search_arxiv, query, 2) 
+                # 3. 前置过滤 user_index
+                user_hits = pre_filter_index(self.user_index, query, query_with_graph, doc_constraints, top_k)
+                candidates.extend(user_hits)
+            else:
+                candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
 
-                # 收集结果
-                try:
-                    candidates.extend(future_local.result())
-                except Exception as e:
-                    print(f"  [RAG] Local search failed: {e}")
-                
-                if future_arxiv is not None:
+                # === 核心修改区：并发拉取本地库和外网 arXiv ===
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    # 提交本地检索任务
+                    if self.faiss_indexes is not None:
+                        future_local = executor.submit(self.faiss_indexes.search, query_with_graph, top_k)
+                    else:
+                        future_local = executor.submit(self.text_index.search, query_with_graph, top_k)
+                    
+                    # 仅在非禁用外部搜索时提交外网 arXiv 检索任务
+                    future_arxiv = None
+                    if not disable_external:
+                        future_arxiv = executor.submit(search_arxiv, query, 2) 
+
+                    # 收集结果
                     try:
-                        candidates.extend(future_arxiv.result())
+                        candidates.extend(future_local.result())
                     except Exception as e:
-                        print(f"  [RAG] arXiv search failed: {e}")
-            # === 修改区结束 ===
+                        print(f"  [RAG] Local search failed: {e}")
+                    
+                    if future_arxiv is not None:
+                        try:
+                            candidates.extend(future_arxiv.result())
+                        except Exception as e:
+                            print(f"  [RAG] arXiv search failed: {e}")
+                # === 修改区结束 ===
 
-            user_results = self.user_index.search(query_with_graph, top_k=top_k)
-            candidates.extend(user_results)
+                user_results = self.user_index.search(query_with_graph, top_k=top_k)
+                candidates.extend(user_results)
 
-            # === F2 修复：公式双轨检索结果合并 ===
-            # 仅在查询明确涉及公式/数学/偏导/损失函数等时触发，避免噪声注入
-            _formula_keywords = ("公式", "偏导", "损失函数", "交叉熵", "sigmoid", "softmax", 
-                                "梯度下降", "MSE", "正则化", "导数", "微积分", "数学", "LaTeX")
-            if self.formula_rag is not None and any(kw in query for kw in _formula_keywords):
-                try:
-                    formula_evidence = self.formula_rag.search_as_evidence(query, top_k=min(2, top_k))
-                    candidates.extend(formula_evidence)
-                except Exception as e:
-                    print(f"  [RAG] Formula RAG search failed: {e}")
+                # === 视频推荐数据接入 ===
+                if not disable_external:
+                    try:
+                        # 优先采用清洗后的具体查询进行检索，若无结果，再降级使用目标概念进行保底检索
+                        videos = _search_videos_sync(cleaned_query, max_results=top_k)
+                        if not videos and target:
+                            videos = _search_videos_sync(target, max_results=top_k)
+                            
+                        for idx, v in enumerate(videos):
+                            from models import EvidenceModality
+                            ev = Evidence(
+                                id=f"video_{idx}_{hash(v['url']) % 10000}",
+                                title=v["title"],
+                                content=f"视频地址={v['url']}｜描述={v['description']}",
+                                modality=EvidenceModality.TEXT,
+                                source=v["source"],
+                                tags=(target or "视频",),
+                                anchors=(v["title"],),
+                            ).with_score(0.85)
+                            candidates.append(ev)
+                    except Exception as e:
+                        print(f"  [RAG] Video search injection failed: {e}")
+
+                # === F2 修复：公式双轨检索结果合并 ===
+                # 仅在查询明确涉及公式/数学/偏导/损失函数等时触发，避免噪声注入
+                _formula_keywords = ("公式", "偏导", "损失函数", "交叉熵", "sigmoid", "softmax", 
+                                    "梯度下降", "MSE", "正则化", "导数", "微积分", "数学", "LaTeX")
+                if self.formula_rag is not None and any(kw in query for kw in _formula_keywords):
+                    try:
+                        formula_evidence = self.formula_rag.search_as_evidence(query, top_k=min(2, top_k))
+                        candidates.extend(formula_evidence)
+                    except Exception as e:
+                        print(f"  [RAG] Formula RAG search failed: {e}")
+
+            if doc_constraint:
+                doc_constraints = []
+                if isinstance(doc_constraint, str):
+                    doc_constraints = [doc_constraint]
+                elif isinstance(doc_constraint, list):
+                    doc_constraints = doc_constraint
+
+                constraints_lower = [c.lower() for c in doc_constraints if c]
+                if constraints_lower:
+                    candidates = [
+                        c for c in candidates
+                        if any(l_c in (c.source or "").lower() or l_c in (c.title or "").lower() for l_c in constraints_lower)
+                    ]
 
             dedup: dict[str, Evidence] = {}
             for item in candidates:
@@ -523,9 +644,17 @@ class HybridRAGPipeline:
         return reranked
 
     def _infer_target(self, query: str) -> str:
+        found_concepts = []
         for concept in sorted(self.graph.nodes, key=len, reverse=True):
             if concept in query:
-                return concept
+                # 避免子字符串包含匹配冲突（例如 "卷积神经网络" 已经包含 "卷积核"）
+                if not any(concept in existing for existing in found_concepts):
+                    found_concepts.append(concept)
+        if found_concepts:
+            # 按照它们在查询中的出现顺序排序，提升可读性
+            found_concepts.sort(key=lambda c: query.find(c))
+            return "与".join(found_concepts)
+
         if "Pooling" in query or "池化" in query:
             return "池化层"
         if "过拟合" in query or "正则化" in query:
@@ -643,6 +772,25 @@ class FAISSIndexSet:
         if category in self.indexes:
             return self.indexes[category].search(query, top_k=top_k)
         return ()
+
+
+def _search_videos_sync(query: str, max_results: int = 5) -> list[dict]:
+    """同步包装异步视频搜索函数，支持在各种上下文下（有/无运行中的event loop）正确运行"""
+    from web_search_api import search_videos
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(search_videos(query, max_results), loop)
+            return future.result(timeout=10.0)
+    except RuntimeError:
+        pass
+    # 降级：启动独立事件循环运行
+    try:
+        return asyncio.run(search_videos(query, max_results))
+    except Exception as e:
+        print(f"  [RAG] Synchronous video search failed: {e}")
+        return []
 
 
 def build_rag_pipeline(repository: Any | None = None) -> HybridRAGPipeline:

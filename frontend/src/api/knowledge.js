@@ -21,6 +21,11 @@ export async function listKnowledgeDocuments(studentId = 'default') {
   return r.data
 }
 
+export async function getKnowledgeDocument(docId, studentId = 'default') {
+  const r = await api.get(`/knowledge/${docId}?student_id=${studentId}`, { headers: buildHeaders() })
+  return r.data
+}
+
 export async function deleteKnowledgeDocument(docId, studentId = 'default') {
   const r = await api.delete(`/knowledge/${docId}?student_id=${studentId}`, { headers: buildHeaders() })
   return r.data
@@ -37,5 +42,19 @@ export async function crossModalSearch(query, mode = 'text', topK = 5) {
     headers: buildHeaders(),
     params: { query, mode, top_k: topK },
   })
+  return r.data
+}
+
+export async function addWebSource(query, title, url, snippet, studentId = 'default') {
+  const r = await api.post('/knowledge/add-web-source', {
+    query, title, url, snippet, student_id: studentId
+  }, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function downloadWebFile(url, fileType, title, studentId = 'default') {
+  const r = await api.post('/knowledge/download-web-file', {
+    url, file_type: fileType, title, student_id: studentId
+  }, { headers: buildHeaders() })
   return r.data
 }

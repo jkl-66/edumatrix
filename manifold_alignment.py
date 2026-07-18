@@ -42,12 +42,16 @@ def apply_manifold_projection(vec: tuple[float, ...] | list[float]) -> list[floa
 
 def get_dag_depth(concept: str) -> int:
     try:
+        from agent_swarm import DEFAULT_KNOWLEDGE_DAG
         from rag_engine import graph_rag
+        
+        # 创新物理并网：以 graph_rag.reverse 动态抽取的依赖优先，缺失概念以 DEFAULT_KNOWLEDGE_DAG 兜底合并
+        active_dag = {}
+        active_dag.update(DEFAULT_KNOWLEDGE_DAG)
         if graph_rag and getattr(graph_rag, "reverse", None):
-            active_dag = {node: list(prereqs) for node, prereqs in graph_rag.reverse.items()}
-        else:
-            from agent_swarm import DEFAULT_KNOWLEDGE_DAG
-            active_dag = DEFAULT_KNOWLEDGE_DAG
+            for node, prereqs in graph_rag.reverse.items():
+                if prereqs:
+                    active_dag[node] = list(prereqs)
     except Exception:
         active_dag = {
             "池化层": ["卷积核", "特征图"],
@@ -345,7 +349,9 @@ class CouncilDecisionEngine:
             for item in decision.get("verdicts", []):
                 agent_name = item.get("agent", "")
                 is_passed = item.get("passed", True)
-                fact_score = item.get("score", 0.8)
+                fact_score = item.get("score")
+                if fact_score is None:
+                    fact_score = 0.8
                 
                 # 寻找匹配的 resource
                 matched_r = next((r for r in resources if getattr(r, "agent", "") == agent_name), None)

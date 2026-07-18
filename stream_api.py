@@ -57,6 +57,128 @@ def _run_formative_check(query: str, target: str, streamed_parts: list, profile)
     }
 
 
+
+async def _upsert_review_plans_for_concept(swarm, student_id: str, target_concept: str):
+    if not target_concept or target_concept == "未知":
+        return
+    concepts = []
+    if "与" in target_concept:
+        concepts = target_concept.split("与")
+    elif "and" in target_concept.lower():
+        # Match English "and" or similar separators if they occur
+        concepts = target_concept.split(" and ")
+    elif "和" in target_concept:
+        concepts = target_concept.split("和")
+    else:
+        concepts = [target_concept]
+
+    from app.crud import upsert_review_plan
+    from app.database import run_db_op
+    p = swarm.profile_store.get(student_id)
+    for c in concepts:
+        c = c.strip()
+        if c:
+            mastery = p.concept_mastery.get(c, 0.5) if p and hasattr(p, "concept_mastery") else 0.5
+            await run_db_op(upsert_review_plan, student_id, c, mastery, 1)
+
+
+def _extract_suggested_questions(content: str) -> tuple[str, list[str]]:
+    import re
+    # Define a pattern that matches the header or separator line for suggested questions
+    header_pattern = r'(?:===SUGGESTED_QUESTIONS===|\[建议追问\]|【建议追问】|建议追问\s*[\(（]点击可追问[\)）]|建议追问|推荐追问)(?:\uff1a|:)?'
+    
+    match = re.search(header_pattern, content, re.IGNORECASE)
+    
+    if match:
+        found_idx = match.start()
+        # Backtrack if preceded by list markers like "1."
+        prefix = content[:found_idx]
+        list_match = re.search(r'\b1\s*[\.\u3002\uFF0E、\-\s]\s*$', prefix)
+        if list_match:
+            found_idx = list_match.start()
+        questions_block = content[match.end():].strip()
+    else:
+        # Fallback if no header, look for the list start "1. 【建议追问】" or "1. 建议追问" or just "1. "
+        fallback_match = re.search(r'\b1\s*[\.\u3002\uFF0E、\-\s]\s*(?:[\u3010\[]建议追问[\u3011\]]|【建议追问】|\[建议追问\]|建议追问)?', content)
+        if fallback_match:
+            found_idx = fallback_match.start()
+            questions_block = content[fallback_match.start():].strip()
+        else:
+            return content, []
+            
+    main_content = content[:found_idx].strip()
+    questions_block = re.sub(r'^[：:\s=\-]*', '', questions_block).strip()
+    
+    # Split questions_block into individual items
+    if "\n" in questions_block:
+        parts = questions_block.split("\n")
+    else:
+        pattern = r'\s+(?=\d+[\.\u3002\uFF0E、\-\s])|(?<=[？\uff1f！\uff01。\.])\s*(?=\d+[\.\u3002\uFF0E、\-\s])'
+        parts = re.split(pattern, questions_block)
+        
+    questions = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        cleaned = re.sub(r'^\d+[\.\u3002\uFF0E\s、\-]*\s*', '', part).strip()
+        cleaned = re.sub(r'^[\u3010\[]建议追问[\u3011\]]', '', cleaned).strip()
+        cleaned = re.sub(r'^建议追问', '', cleaned).strip()
+        cleaned = re.sub(r'[=\-]{3,}$', '', cleaned).strip()
+        cleaned = cleaned.strip()
+        if cleaned:
+            questions.append(cleaned)
+            
+    questions = [q for q in questions if len(q) > 2 and not q.startswith("===") and not q.startswith("---")]
+    
+    if len(questions) >= 1:
+        return main_content, questions[:3]
+        
+    return content, []
+
+
+async def _generate_suggested_questions(swarm: Any, concept: str, profile: Any) -> list[str]:
+    if not concept:
+        return ["什么是机器学习？", "如何零基础开始学机器学习？", "什么是神经网络？"]
+    
+    import re
+    profile_context = ""
+    if profile:
+        weak = "、".join(profile.weak_points[:3]) if getattr(profile, "weak_points", None) else "暂无"
+        goals = "、".join(profile.learning_goals[:3]) if getattr(profile, "learning_goals", None) else "暂无"
+        major = getattr(profile, "major", None) or getattr(profile, "major_preference", None) or "计算机"
+        profile_context = f"学生专业={major}，学习目标={goals}，薄弱点={weak}"
+        
+    system_prompt = (
+        "你是一个顶级的自适应教育顾问。根据给定的机器学习/编程知识点概念以及学生的学情画像，"
+        "生成 3 个学生可能会想要继续提问的、最具有学习价值的后续追问问题。\n"
+        "【生成规则】：\n"
+        "1. 必须针对当前知识点 concept 的原理细节、推导步骤或代码实践。\n"
+        "2. 结合学生的背景（例如：如果学生是计算机专业，可问算法实现或推导；如果基础弱，可问概念比喻）。\n"
+        "3. 保持简短（每题 18 字以内，结尾带问号）。\n"
+        "4. 必须输出 3 个问题，用换行分隔，前面加数字序号（如 1. 2. 3.）。不要输出任何其他内容。"
+    )
+    user_prompt = f"核心知识点概念: {concept}\n学生学情画像: {profile_context}"
+    try:
+        raw = await swarm.llm.generate(system_prompt, user_prompt, role="提示顾问")
+        questions = []
+        for line in raw.split("\n"):
+            line = line.strip()
+            if line:
+                cleaned = re.sub(r'^\d+\.\s*', '', line).strip()
+                if cleaned:
+                    questions.append(cleaned)
+        if len(questions) >= 3:
+            return questions[:3]
+    except Exception:
+        pass
+    return [
+        f"如何用 Python 实现 {concept} 的最简 Demo？",
+        f"在实际项目中，{concept} 最常见的错误和陷阱是什么？",
+        f"{concept} 与它最临近的算法/概念有什么区别？"
+    ]
+
+
 async def _classify_academic_intent(llm: Any, message: str) -> dict[str, Any]:
     """使用大语言模型快速分类学生输入的意图是学术学习相关，还是闲聊/无关内容。"""
     system_prompt = (
@@ -263,11 +385,93 @@ def _format_chat_history(profile, max_turns: int = 5) -> str:
 
 @router.post("/chat")
 async def stream_chat(request: Request) -> StreamingResponse:
+    import time
+    start_time = time.time()
+
+    def _make_metrics(content: str, query: str) -> dict:
+        rtt = int((time.time() - start_time) * 1000)
+        tokens = int(len(content or "") * 0.75 + len(query or "") * 0.75)
+        cost = round(tokens * 0.000015, 4)
+        return {
+            "rtt_ms": rtt,
+            "tokens_used": tokens,
+            "cost_cny": cost,
+            "model": "EduMatrix Swarm 1+3+5",
+            "circuit_breaker": "CLOSED",
+        }
+
     payload = await request.json()
     message = str(payload.get("message", "")).strip()
     student_id = str(payload.get("student_id", "default"))
     mode = str(payload.get("mode", "chat")).strip()
     images = list(payload.get("images", []))
+    active_doc_ids = list(payload.get("active_doc_ids", []))
+
+    forced_target_agent = None
+    doc_constraint = None
+    doc_constraints = []
+
+    # 1. 解析 active_doc_ids 并映射到文件名
+    if active_doc_ids:
+        try:
+            from app.database import DBKnowledgeDocument, run_db_op
+            def fetch_doc_filenames(session):
+                return (
+                    session.query(DBKnowledgeDocument.filename)
+                    .filter(DBKnowledgeDocument.id.in_(active_doc_ids))
+                    .all()
+                )
+            records = await run_db_op(fetch_doc_filenames)
+            if records:
+                doc_constraints.extend([r[0] for r in records if r[0]])
+        except Exception as e:
+            print(f"  [stream_api] 解析 active_doc_ids 异常: {e}")
+
+    import re
+    # 2. 匹配快捷 Slash 命令并映射到相应 Agent
+    cmd_match = re.match(r"^/(explain|map|code|quiz|video)\s+(.*)", message, re.IGNORECASE)
+    if cmd_match:
+        cmd = cmd_match.group(1).lower()
+        message = cmd_match.group(2).strip()
+        mode = "matrix"
+        ROLE_MAP = {
+            "explain": "理论教授",
+            "map": "逻辑画师",
+            "code": "极客助教",
+            "quiz": "考官智能体",
+            "video": "视频推荐官",
+        }
+        forced_target_agent = ROLE_MAP.get(cmd)
+
+    # 3. 匹配并提取 `@` 课件过滤条件 (优先检索数据库以完全兼容文件名空格)
+    try:
+        from app.database import DBKnowledgeDocument, run_db_op
+        def fetch_docs(session):
+            return session.query(DBKnowledgeDocument.filename).all()
+        db_records = await run_db_op(fetch_docs)
+        db_filenames = [r[0] for r in db_records] if db_records else []
+        db_filenames.sort(key=len, reverse=True) # 优先匹配长名
+        for fname in db_filenames:
+            ref = f"@{fname}"
+            if ref in message:
+                doc_constraint = fname
+                message = message.replace(ref, "").strip()
+                break
+    except Exception as e:
+        print(f"  [stream_api] 检索课件库文件名异常: {e}")
+
+    if not doc_constraint:
+        # 正则降级匹配 (仅支持不含空格的文件名)
+        doc_match = re.search(r"@([^\s]+)", message)
+        if doc_match:
+            doc_constraint = doc_match.group(1).strip()
+            message = message.replace(doc_match.group(0), "").strip()
+
+    if doc_constraint:
+        doc_constraints.append(doc_constraint)
+
+    # 统一转换约束列表，如果为空则为 None
+    final_constraints = doc_constraints if doc_constraints else None
 
     if message.startswith("/matrix "):
         concept = message[8:].strip()
@@ -327,17 +531,29 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     yield _sse("progress", {"step": "peer_pk", "message": "正在连接学伴小明并生成对抗挑战...", "progress": 15})
 
                     concept = specified_concept
-                    if not concept:
-                        # 优先获取最新一次对话关联的知识点概念，防止重复率过高
-                        try:
-                            from app.crud import get_conversation_history
-                            from app.database import run_db_op
+                    recent_history = ""
+                    try:
+                        from app.crud import get_conversation_history
+                        from app.database import run_db_op
 
-                            history = await run_db_op(get_conversation_history, student_id, 1)
-                            if history and history[0].target:
-                                concept = history[0].target
-                        except Exception as e:
-                            print(f"  [StreamAPI] Failed to retrieve last conversation target concept: {e}")
+                        # 核心防线：拉取最近 10 条（5 轮）对话上下文，确保对抗挑战紧密契合当前教学语境，非孤立概念生成
+                        history_records = await run_db_op(get_conversation_history, student_id, 10)
+                        if history_records:
+                            lines = []
+                            for h in reversed(history_records):
+                                role_name = "学生" if h.role == "user" else "系统"
+                                lines.append(f"{role_name}: {h.message_body}")
+                            recent_history = "\n".join(lines)
+
+                            # 自动获取最近对话的目标知识点概念，防漏和跨越
+                            if not concept:
+                                for h in history_records:
+                                    if h.target and h.target != "未知":
+                                        concept = h.target
+                                        break
+                        
+                    except Exception as e:
+                        print(f"  [StreamAPI] Failed to retrieve history for peer PK: {e}")
 
                     if not concept or concept == "未知":
                         if profile and getattr(profile, "weak_points", []):
@@ -354,9 +570,10 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     try:
                         system_prompt = (
                             "你是一个顶级的机器学习特级教师及对抗教学设计专家。\n"
-                            "请为学生设计一个「找学伴小明的代码逻辑 Bug」的对抗性挑战（Adversarial Peer Challenge）。\n"
+                            "请根据学生最近的对话历史上下文，为学生设计一个「找学伴小明的代码逻辑 Bug」的对抗性挑战（Adversarial Peer Challenge）。\n"
                             "【设计准则】：\n"
                             f"- 针对知识点「{concept}」。\n"
+                            "- 必须要紧密结合学生在历史对话中讨论/追问的具体技术细节或痛点，不要出与当前讨论完全无关的孤立知识点。\n"
                             "- 必须要设计出极具学术水平、高难度、在实际模型开发中极其隐蔽的逻辑 Bug（例如：注意力权重漏掉 sqrt(d_k) 缩放、反向传播矩阵乘法转置写错、残差连接漏加输入、Adam 偏差修正分子分母写反、Softmax 计算指数溢出未作数值稳定、计算交叉熵时没有限制数值导致 log(0) 产生 NaN 等）。\n"
                             "- 小明的代码必须看起来非常专业规范，逻辑谬误不能是一眼看出的拼写错误，而必须是数学原理或算法实现层面的深层次 Bug。\n"
                             "- 提供包含该 Bug 的完整 Python 代码片段。\n"
@@ -367,7 +584,10 @@ async def stream_chat(request: Request) -> StreamingResponse:
                             '  "wrong_reason": "Bug 原理解析与教育学建议",\n'
                             '  "correction_instructions": "具体的修正动作描述"\n'
                         )
-                        user_prompt = f"请生成知识点「{concept}」的高难度代码 Bug 对抗挑战。"
+                        user_prompt = (
+                            f"请生成与以下对话上下文高度关联的「{concept}」代码 Bug 对抗挑战。\n\n"
+                            f"【最近对话上下文】：\n{recent_history if recent_history else '无历史对话'}"
+                        )
 
                         response = await swarm.llm.generate(
                             system_prompt,
@@ -665,6 +885,14 @@ async def stream_chat(request: Request) -> StreamingResponse:
                         "- 如果学生上传了题目图片（根据提供的图片文字内容），请分步解析题目，提示核心公式和关键步骤，然后向学生提出一个引导性的思考问题。\n"
                         "- 回答结尾必须提供一个具体的启发式问题引导学生下一步动作。\n"
                         f"- 教学风格：{teaching_style or '苏格拉底启发式'}。\n"
+                        "- 并在你的回答正文的【最末尾换行输出 3 个学生可能会想要继续追问的问题】，必须严格遵循以下格式（包含横线和建议追问标志，用于系统提取后独立渲染为可点击按钮，不要加任何加粗，短小精练且极具学习价值，必须是提问问句）：\n"
+                        "===\n"
+                        "===SUGGESTED_QUESTIONS===\n"
+                        "[建议追问]\n"
+                        "1. 第一个建议追问问题？\n"
+                        "2. 第二个建议追问问题？\n"
+                        "3. 第三个建议追问问题？\n"
+                        "========================\n"
                     )
                     if style_prefix:
                         system_prompt = style_prefix + system_prompt
@@ -687,6 +915,14 @@ async def stream_chat(request: Request) -> StreamingResponse:
                         "1. 学生输入了一个与机器学习/编程学术无关的闲聊或日常问答。请你**极其简短**地回应或回答学生的问题（控制在2-3句话，保持温和与礼貌）。\n"
                         "2. 在回答的结尾，用一句话温馨、生动地将话题**引导回机器学习、数据科学或编程学术学习上**，并向学生推荐一两个可以提问的例子（例如提示学生可以询问‘什么是最大池化？’或‘神经网络是如何学习的？’来开始学习）。\n"
                         "3. 必须使用中文回答，格式为漂亮的 Markdown。\n"
+                        "4. 并在你的回答正文的【最末尾换行输出 3 个学生可能会想要继续追问的问题】，必须严格遵循以下格式（包含横线和建议追问标志，用于系统提取后独立渲染为可点击按钮，不要加任何加粗，短小精练且极具学习价值，必须是提问问句）：\n"
+                        "===\n"
+                        "===SUGGESTED_QUESTIONS===\n"
+                        "[建议追问]\n"
+                        "1. 第一个建议追问问题？\n"
+                        "2. 第二个建议追问问题？\n"
+                        "3. 第三个建议追问问题？\n"
+                        "========================\n"
                     )
                     user_prompt = ""
                     if history_str:
@@ -733,11 +969,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     try:
                         target_concept = getattr(retrieval, "target", "")
                         if target_concept and target_concept != "未知":
-                            p = swarm.profile_store.get(student_id)
-                            mastery = p.concept_mastery.get(target_concept, 0.5) if p and hasattr(p, "concept_mastery") else 0.5
-                            from app.crud import upsert_review_plan
-                            from app.database import run_db_op
-                            await run_db_op(upsert_review_plan, student_id, target_concept, mastery, 1)
+                            await _upsert_review_plans_for_concept(swarm, student_id, target_concept)
                     except Exception as e:
                         print(f"  [StreamAPI] Failed to update review plan in chat mode: {e}")
 
@@ -802,10 +1034,16 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     for img in matched_images
                 ]
 
+                clean_reply, suggested_qs = _extract_suggested_questions(full_response)
+                if not suggested_qs:
+                    target_concept = getattr(retrieval, "target", "") if retrieval else message
+                    suggested_qs = await _generate_suggested_questions(swarm, target_concept, profile)
+
                 yield _sse("progress", {"step": "complete", "message": "生成完成！", "progress": 100})
                 yield _sse("complete", {
                     "target": getattr(retrieval, "target", "") if retrieval else "系统沟通",
-                    "content": full_response,
+                    "content": clean_reply,
+                    "suggested_questions": suggested_qs,
                     "resources": resources,
                     "safety": {
                         "passed": safety_result["passed"],
@@ -814,144 +1052,151 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     "profile": profile_data,
                     "alignment": {"passed": True, "distance": 0.0, "conflicts": []},
                     "rdi": rdi_data,
-                    "strategy_plan": None
-                })
-                return
-
-            # === 意图分类与防闲聊拦截 ===
-            classification = await _classify_academic_intent(swarm.llm, message)
-            if not classification.get("is_academic", True):
-                reply = classification.get("reply") or "## 智能答疑 / 系统说明\n\n您好！我是 EduMatrix 智能自适应助教。我目前专注于为您解答机器学习和数据科学等学术问题，请提出与学习相关的疑问，谢谢！"
-                await check_disconnection()
-                yield _sse("progress", {"step": "complete", "message": "已识别为闲聊或非学术疑问。", "progress": 100})
-                
-                profile_data = None
-                try:
-                    if profile and hasattr(profile, "weak_points"):
-                        profile_data = {
-                            "weak_points": getattr(profile, "weak_points", [])[:5],
-                            "concept_mastery": {k: round(v, 2) for k, v in list(getattr(profile, "concept_mastery", {}).items())[:10]},
-                        }
-                except Exception:
-                    pass
-                
-                yield _sse("complete", {
-                    "content": reply,
-                    "target": "系统沟通",
-                    "resources": [],
-                    "profile": profile_data,
-                    "strategy_plan": [],
-                    "alignment": {"passed": True, "distance": 0.0, "conflicts": []}
-                })
-                return
-
-            await check_disconnection()
-            yield _sse("progress", {"step": "profile", "message": "正在分析学生画像...", "progress": 10})
-
-            try:
-                profile_obj = swarm.profile_store.get(student_id)
-                if profile_obj and hasattr(profile_obj, "update_from_message"):
-                    probe_task = asyncio.create_task(swarm.profile_probe.async_update(profile_obj, message))
-                    running_tasks.append(probe_task)
-                    try:
-                        await probe_task
-                    finally:
-                        if probe_task in running_tasks:
-                            running_tasks.remove(probe_task)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                pass
-
-            await check_disconnection()
-            yield _sse("progress", {"step": "rag", "message": "正在检索知识库...", "progress": 25})
-
-            try:
-                retrieval = await swarm.planner.plan_async(swarm.rag, message, swarm.profile_store.get(student_id))
-                debate_result = swarm.debate.clean(retrieval)
-                await check_disconnection()
-                yield _sse("progress", {"step": "debate", "message": f"证据清洗完成 ({len(debate_result.clean_evidence)} 条证据保留)", "progress": 40})
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                yield _sse("error", {"step": "rag", "message": f"检索失败: {str(e)[:100]}"})
-                return
-
-            # === 任务 8.1 / 低置信度幻觉拦截 ===
-            if getattr(retrieval, "low_confidence", False):
-                refusal_msg = "抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉，建议您在‘课件管理’页面中上传包含该概念的教学资料。"
-                await check_disconnection()
-                yield _sse("progress", {"step": "complete", "message": "置信度过低，已被安全拦截。", "progress": 100})
-                
-                profile_data = None
-                try:
-                    p = swarm.profile_store.get(student_id)
-                    if p and hasattr(p, "weak_points"):
-                        profile_data = {
-                            "weak_points": getattr(p, "weak_points", [])[:5],
-                            "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
-                            "cognitive_style": getattr(p, "cognitive_style", ""),
-                            "learning_goals": getattr(p, "learning_goals", [])[:3],
-                            "dimensions": {
-                                k: {"score": round(v.score, 2), "status": v.status, "label": v.label}
-                                for k, v in list(getattr(p, "dimension_states", {}).items())[:10]
-                            },
-                            "causes": {
-                                k: {"percentage": round(v.percentage, 1), "label": v.label}
-                                for k, v in list(getattr(p, "learning_state_causes", {}).items())[:7]
-                            },
-                        }
-                except Exception:
-                    pass
-
-                # === 将低置信度拒绝回复写入学生画像历史中 ===
-                try:
-                    p = swarm.profile_store.get(student_id)
-                    if p and hasattr(p, "update_from_feedback"):
-                        p.update_from_feedback(
-                            feedback=refusal_msg,
-                            accuracy=None,
-                            self_confidence=None,
-                            hint_count=0,
-                        )
-                except Exception:
-                    pass
-
-                # === 将低置信度拒绝记录写入历史数据库 ===
-                try:
-                    from app.crud import record_conversation
-                    from app.database import run_db_op
-                    await run_db_op(
-                        record_conversation,
-                        student_id,
-                        message,
-                        "系统拦截:低置信度拒绝",
-                        "未知",
-                        0,
-                        True
-                    )
-                except Exception as e:
-                    print(f"  [StreamAPI] Failed to record low confidence refusal: {e}")
-
-                yield _sse("complete", {
-                    "target": "未知",
-                    "content": f"## ⚠️ 置信度拦截提示\n\n{refusal_msg}",
-                    "resources": [],
-                    "safety": {
-                        "passed": True,
-                        "issues_count": 0,
-                    },
-                    "profile": profile_data,
-                    "alignment": {
-                        "passed": True,
-                        "distance": 0.0,
-                        "threshold": 0.65,
-                        "conflicts": [],
-                        "advice": "低置信度拦截，跳过对齐生成"
-                    },
                     "strategy_plan": None,
+                    "metrics": _make_metrics(clean_reply, message),
                 })
                 return
+
+            retrieval = None
+            if not forced_target_agent:
+                if message.startswith("一键生成资源包:"):
+                    classification = {"is_academic": True}
+                else:
+                    classification = await _classify_academic_intent(swarm.llm, message)
+                if not classification.get("is_academic", True):
+                    reply = classification.get("reply") or "## 智能答疑 / 系统说明\n\n您好！我是 EduMatrix 智能自适应助教。我目前专注于为您解答机器学习和数据科学等学术问题，请提出与学习相关的疑问，谢谢！"
+                    await check_disconnection()
+                    yield _sse("progress", {"step": "complete", "message": "已识别为闲聊或非学术疑问。", "progress": 100})
+                    
+                    profile_data = None
+                    try:
+                        if profile and hasattr(profile, "weak_points"):
+                            profile_data = {
+                                "weak_points": getattr(profile, "weak_points", [])[:5],
+                                "concept_mastery": {k: round(v, 2) for k, v in list(getattr(profile, "concept_mastery", {}).items())[:10]},
+                            }
+                    except Exception:
+                        pass
+                    
+                    yield _sse("complete", {
+                        "content": reply,
+                        "target": "系统沟通",
+                        "resources": [],
+                        "profile": profile_data,
+                        "strategy_plan": [],
+                        "alignment": {"passed": True, "distance": 0.0, "conflicts": []},
+                        "metrics": _make_metrics(reply, message),
+                    })
+                    return
+
+                await check_disconnection()
+                yield _sse("progress", {"step": "profile", "message": "正在分析学生画像...", "progress": 10})
+
+                try:
+                    profile_obj = swarm.profile_store.get(student_id)
+                    if profile_obj and hasattr(profile_obj, "update_from_message"):
+                        probe_task = asyncio.create_task(swarm.profile_probe.async_update(profile_obj, message))
+                        running_tasks.append(probe_task)
+                        try:
+                            await probe_task
+                        finally:
+                            if probe_task in running_tasks:
+                                running_tasks.remove(probe_task)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+
+                await check_disconnection()
+                yield _sse("progress", {"step": "rag", "message": "正在检索知识库...", "progress": 25})
+
+                try:
+                    retrieval = await swarm.planner.plan_async(swarm.rag, message, swarm.profile_store.get(student_id))
+                    debate_result = swarm.debate.clean(retrieval)
+                    await check_disconnection()
+                    yield _sse("progress", {"step": "debate", "message": f"证据清洗完成 ({len(debate_result.clean_evidence)} 条证据保留)", "progress": 40})
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    yield _sse("error", {"step": "rag", "message": f"检索失败: {str(e)[:100]}"})
+                    return
+
+                # === 任务 8.1 / 低置信度幻觉拦截 ===
+                if getattr(retrieval, "low_confidence", False):
+                    refusal_msg = "抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉，建议您在‘课件管理’页面中上传包含该概念的教学资料。"
+                    await check_disconnection()
+                    yield _sse("progress", {"step": "complete", "message": "置信度过低，已被安全拦截。", "progress": 100})
+                    
+                    profile_data = None
+                    try:
+                        p = swarm.profile_store.get(student_id)
+                        if p and hasattr(p, "weak_points"):
+                            profile_data = {
+                                "weak_points": getattr(p, "weak_points", [])[:5],
+                                "concept_mastery": {k: round(v, 2) for k, v in list(getattr(p, "concept_mastery", {}).items())[:10]},
+                                "cognitive_style": getattr(p, "cognitive_style", ""),
+                                "learning_goals": getattr(p, "learning_goals", [])[:3],
+                                "dimensions": {
+                                    k: {"score": round(v.score, 2), "status": v.status, "label": v.label}
+                                    for k, v in list(getattr(p, "dimension_states", {}).items())[:10]
+                                },
+                                "causes": {
+                                    k: {"percentage": round(v.percentage, 1), "label": v.label}
+                                    for k, v in list(getattr(p, "learning_state_causes", {}).items())[:7]
+                                },
+                            }
+                    except Exception:
+                        pass
+
+                    # === 将低置信度拒绝回复写入学生画像历史中 ===
+                    try:
+                        p = swarm.profile_store.get(student_id)
+                        if p and hasattr(p, "update_from_feedback"):
+                            p.update_from_feedback(
+                                feedback=refusal_msg,
+                                accuracy=None,
+                                self_confidence=None,
+                                hint_count=0,
+                            )
+                    except Exception:
+                        pass
+
+                    # === 将低置信度拒绝记录写入历史数据库 ===
+                    try:
+                        from app.crud import record_conversation
+                        from app.database import run_db_op
+                        await run_db_op(
+                            record_conversation,
+                            student_id,
+                            message,
+                            "系统拦截:低置信度拒绝",
+                            "未知",
+                            0,
+                            True
+                        )
+                    except Exception as e:
+                        print(f"  [StreamAPI] Failed to record low confidence refusal: {e}")
+
+                    yield _sse("complete", {
+                        "target": "未知",
+                        "content": f"## ⚠️ 置信度拦截提示\n\n{refusal_msg}",
+                        "resources": [],
+                        "safety": {
+                            "passed": True,
+                            "issues_count": 0,
+                        },
+                        "profile": profile_data,
+                        "alignment": {
+                            "passed": True,
+                            "distance": 0.0,
+                            "threshold": 0.65,
+                            "conflicts": [],
+                            "advice": "低置信度拦截，跳过对齐生成"
+                        },
+                        "strategy_plan": None,
+                        "metrics": _make_metrics(refusal_msg, message),
+                    })
+                    return
 
             await check_disconnection()
             yield _sse("progress", {"step": "generating", "message": "启动 1+3+5 智能体协作流，进行全流程有状态调度...", "progress": 50})
@@ -971,9 +1216,18 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     message,
                     student_id=student_id,
                     event_callback=_swarm_event_callback,
+                    forced_target_agent=forced_target_agent,
+                    doc_constraint=final_constraints,
                 )
             )
             running_tasks.append(swarm_task)
+
+            # Launch suggested questions generation task in parallel with Swarm execution
+            target_concept = getattr(retrieval, "target", "") or message
+            suggested_task = asyncio.create_task(
+                _generate_suggested_questions(swarm, target_concept, profile)
+            )
+            running_tasks.append(suggested_task)
 
             # 实时消费事件队列并转发给前端 SSE
             while not swarm_task.done():
@@ -1058,9 +1312,15 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 try:
                     p = swarm.profile_store.get(student_id)
                     if p and hasattr(p, "student_id"):
-                        strategy_plan = swarm.strategy_engine.build_plan(p, target=retrieval.target)
+                        strategy_plan = swarm.strategy_engine.build_plan(p, target=getattr(retrieval, "target", "未知") if retrieval else "未知")
                 except Exception:
                     pass
+
+            suggested_questions = []
+            try:
+                suggested_questions = await suggested_task
+            except Exception as e:
+                print(f"  [StreamAPI] Failed to get suggested questions in Swarm mode: {e}")
 
             await check_disconnection()
             yield _sse("progress", {"step": "complete", "message": "生成完成！", "progress": 100})
@@ -1116,7 +1376,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                 "思维导图": 1, "逻辑画师": 1,
                 "代码实操案例": 2, "极客助教": 2,
                 "练习题": 3, "考官智能体": 3,
-                "虚拟人视频脚本": 4, "虚拟导演": 4
+                "自适应推荐视频": 4, "视频推荐官": 4
             }
             def get_order_key(r):
                 rtype = getattr(r, "resource_type", "")
@@ -1149,14 +1409,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
             try:
                 target_concept = getattr(retrieval, "target", "")
                 if target_concept and target_concept != "未知" and not getattr(retrieval, "low_confidence", False):
-                    p = swarm.profile_store.get(student_id)
-                    mastery = p.concept_mastery.get(target_concept, 0.5) if p and hasattr(p, "concept_mastery") else 0.5
-                    
-                    from app.crud import upsert_review_plan
-                    from app.database import run_db_op
-                    
-                    # 默认初始复习间隔为 1 天
-                    await run_db_op(upsert_review_plan, student_id, target_concept, mastery, 1)
+                    await _upsert_review_plans_for_concept(swarm, student_id, target_concept)
                     print(f"  [StreamAPI] Automatically created/updated review plan for concept: {target_concept}")
             except Exception as e:
                 print(f"  [StreamAPI] Failed to automatically create/update review plan: {e}")
@@ -1210,6 +1463,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     {"agent": getattr(r, "agent", ""), "type": getattr(r, "resource_type", ""), "content": getattr(r, "content", "") or ""}
                     for r in sorted_parts[:8]
                 ],
+                "suggested_questions": suggested_questions,
                 "safety": {
                     "passed": safety_result["passed"],
                     "issues_count": len(safety_result.get("issues", [])),
@@ -1224,6 +1478,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
                     ],
                     "rationale": strategy_plan.rationale if strategy_plan else "",
                 } if strategy_plan else None,
+                "metrics": _make_metrics(final_content, message),
             })
         finally:
             for task in running_tasks:
@@ -1250,6 +1505,12 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
     if not role or not resource_type or not query:
         raise HTTPException(status_code=400, detail="参数缺失")
         
+    # 兼容历史遗留的虚拟导演/剧本命名的重算拦截与重映射，确保返回 JSON 推荐列表
+    if role in ("虚拟导演", "director"):
+        role = "视频推荐官"
+    if resource_type in ("虚拟人视频脚本", "自适应视频推荐"):
+        resource_type = "自适应推荐视频"
+        
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
     if not profile:
@@ -1270,11 +1531,18 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
             downstream_edges=(),
         )
         
+    # 清洗 query，避免将 "一键生成资源包: " 动作前缀和 "(知识点: ...)" 传入模型生成指令中
+    cleaned_query = query.strip()
+    if cleaned_query.startswith("一键生成资源包:"):
+        cleaned_query = cleaned_query[8:].strip()
+        import re
+        cleaned_query = re.sub(r"\((?:知识点|指定概念):\s*.+?\)|\[指定概念:\s*.+?\]", "", cleaned_query).strip()
+        
     forced_inst = overview or ""
     if pathway:
         from app.utils.recommendation_engine import evaluate_tactical_pathway
         try:
-            pathway_meta = evaluate_tactical_pathway(profile, query, pathway)
+            pathway_meta = evaluate_tactical_pathway(profile, cleaned_query, pathway)
             pathway_instructions = {
                 "ICE_BREAKER": (
                     "【战术指令：破冰路线】此资源应突出前置背景连接。请特别增加对前置依赖概念的梳理，"
@@ -1307,7 +1575,7 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
         result = await swarm.async_generator.generate(
             role=role,
             resource_type=resource_type,
-            query=query,
+            query=cleaned_query,
             graph_context=graph_context,
             evidence=evidence,
             profile=profile,
@@ -1337,14 +1605,28 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
                 DBNote.student_id == student_id,
             ).all()
             
+            concepts_list = []
+            if "与" in query:
+                concepts_list = [sub.strip() for sub in query.split("与") if sub.strip()]
+            elif "和" in query:
+                concepts_list = [sub.strip() for sub in query.split("和") if sub.strip()]
+            else:
+                concepts_list = [query]
+
             target_note = None
             for n in existing:
-                if query in (n.concepts or []) and db_tag in (n.tags or []):
+                if any(c in (n.concepts or []) for c in concepts_list) and db_tag in (n.tags or []):
                     target_note = n
                     break
             
             if target_note:
                 target_note.content = content
+                # 增量合并新概念
+                current_concepts = list(target_note.concepts or [])
+                for c in concepts_list:
+                    if c not in current_concepts:
+                        current_concepts.append(c)
+                target_note.concepts = current_concepts
                 session.commit()
                 return target_note.id
             else:
@@ -1354,7 +1636,7 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
                     source="adaptive_hub",
                     content=content,
                     tags=[db_tag],
-                    concepts=[query]
+                    concepts=concepts_list
                 )
                 session.add(new_note)
                 session.commit()

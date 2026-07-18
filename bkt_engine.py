@@ -613,7 +613,7 @@ def _poincare_mds_live_optimization_worker(concepts: list[str], high_dim_vecs: l
         return final_X.numpy().tolist()
 
 
-def poincare_to_2d_coordinates(embeddings: dict[str, list[float]]) -> dict[str, list[float]]:
+def _get_raw_poincare_coordinates(embeddings: dict[str, list[float]]) -> dict[str, list[float]]:
     """使用双曲多维尺度变换 (Hyperbolic MDS) 并结合本地数据库缓存，将高维双曲向量动态投影至 2D 庞加莱圆盘"""
     concepts = list(embeddings.keys())
     M = len(concepts)
@@ -748,6 +748,47 @@ def poincare_to_2d_coordinates(embeddings: dict[str, list[float]]) -> dict[str, 
             y = hyperbolic_norm * math.sin(angle)
             coords[concept] = [x, y]
         return coords
+
+
+def poincare_to_2d_coordinates(embeddings: dict[str, list[float]]) -> dict[str, list[float]]:
+    """将专业领域概念映射至 2D 庞加莱圆盘中，采用同心环深度分布与角度等间距对齐算法，保障极致的排版与疏密排版均匀度"""
+    concepts = list(embeddings.keys())
+    M = len(concepts)
+    if M == 0:
+        return {}
+    if M == 1:
+        return {concepts[0]: [0.0, 0.0]}
+
+    from manifold_alignment import get_dag_depth
+    
+    # 1. 预先计算所有概念的层级深度并归类
+    concept_depths = {}
+    depth_groups = {}
+    
+    for c in concepts:
+        depth = get_dag_depth(c)
+        if depth == 0 and c != "机器学习":
+            # 语义层级离散化避让：若非最底层根概念，但深度算得为0，说明其在 DAG 外，利用 Hash 自动离散分布，避免在圆心堆叠
+            depth = (hash(c) % 4) + 1
+        concept_depths[c] = depth
+        depth_groups.setdefault(depth, []).append(c)
+
+    # 2. 对每个同心圆环（即相同深度组）内的节点，进行角度等间距均匀分布分配
+    final_coords = {}
+    for depth, group in depth_groups.items():
+        # 稳定排序，保障刷新或重算时坐标百分之百确定，不发生位置瞬移跳变
+        group.sort()
+        N = len(group)
+        target_r = min(0.92, 0.22 + 0.16 * depth)
+        
+        for idx, c in enumerate(group):
+            # 等分角度 + 基于深度层级的相位偏移量（staggered phase shift），防止不同圆环的节点在同一直线上重合，并达到极优的疏密均匀度
+            angle = (idx / N) * 2.0 * math.pi + (depth * 0.6)
+            x = target_r * math.cos(angle)
+            y = target_r * math.sin(angle)
+            final_coords[c] = [x, y]
+            
+    return final_coords
 
 
 def find_nearest_concept(

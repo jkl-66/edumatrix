@@ -332,7 +332,29 @@ def _get_fallback_quiz(concept: str, difficulty: str) -> dict[str, Any]:
             ]
         }
         
-    # 6. 默认兜底
+    # 6. 多概念/复合概念联合考察兜底
+    elif "与" in norm or "和" in norm:
+        return {
+            "question": f"请详细对比并阐述「{concept}」之间的区别与联系，并结合神经网络的实际应用说明它们各自发挥的作用。",
+            "reference_answer": (
+                f"关于「{concept}」这两个概念：它们既有独立的数学计算方式，"
+                "又在深度学习框架中紧密协作。我们需要阐明它们各自解决的痛点问题（例如空间特征降采样与长距离依赖关系抽取），"
+                "并说明在具体网络（如 CNN 或 Transformer）中如何进行组合或端到端传导。"
+            ),
+            "correct_answer": (
+                f"关于「{concept}」这两个概念：它们既有独立的数学计算方式，"
+                "又在深度学习框架中紧密协作。我们需要阐明它们各自解决的痛点问题（例如空间特征降采样与长距离依赖关系抽取），"
+                "并说明在具体网络（如 CNN 或 Transformer）中如何进行组合或端到端传导。"
+            ),
+            "concept": concept,
+            "difficulty": difficulty,
+            "hints": [
+                f"分别描述「{concept}」中每个单独概念的基本数学或逻辑定义。",
+                "这两个概念在解决什么不同的挑战？例如局部特征感知 vs 全局长程关联？",
+                "请用一个联合架构（如包含二者的组合网络）说明它们是如何进行交互和联合前向传播的。"
+            ]
+        }
+    # 7. 默认兜底
     else:
         return {
             "question": f"请结合实际例子，用你自己的话解释 {concept} 的核心原理与主要应用场景。",
@@ -506,9 +528,22 @@ async def generate_quiz(
         irt_gamma = selected_item["irt_params"]["gamma"]
     else:
         # 本地题库不足，降级调用大模型生成
+        # RAG 知识检索增强，消除考题内容脱离课件的幻觉
+        rag_context = ""
+        try:
+            from rag_engine import hybrid_rag
+            retrieval = hybrid_rag.retrieve(query=target_concept, target=target_concept, top_k=2, disable_external=True)
+            if retrieval and retrieval.evidence:
+                rag_context = "\n".join(
+                    f"【关联课件来源 {i+1}: {e.source}】\n{e.content}"
+                    for i, e in enumerate(retrieval.evidence)
+                )
+        except Exception as e:
+            print(f"  [quiz_api] RAG 检索出题增强失败: {e}")
+
         llm = await _get_llm(request)
         system_prompt = (
-            "你是一个智能出题考官。根据给定的知识点、难度和学生画像，生成高度定制化的简答题。\n"
+            "你是一个智能出题考官。根据给定的知识点、难度、课件参考和学生画像，生成高度定制化的简答题。\n"
             "请以JSON格式返回，包含以下字段：\n"
             "{\n"
             '  "question": "题目文本",\n'
@@ -518,6 +553,7 @@ async def generate_quiz(
             '  "hints": ["提示1（模糊引导）", "提示2（半具体）", "提示3（具体但非直接答案）"]\n'
             "}\n"
             "出题规则：\n"
+            "- 如果提供了【关联课件参考】，考题背景、考察逻辑必须与之契合，不要出课件中未涵盖的概念。\n"
             "- 低掌握度（<0.4）：用最简单直白的语言，考察基本概念理解，提示要多且友好\n"
             "- 中等掌握度（0.4~0.7）：考察概念应用和简单推理，提示逐步递进\n"
             "- 高掌握度（>0.7）：考察综合分析和批判性思考，提示少而精\n"
@@ -529,7 +565,11 @@ async def generate_quiz(
             f"掌握度：{mastery:.2f}\n"
             f"认知负荷：{cognitive_load:.2f}\n"
             f"挫败感：{frustration:.2f}\n"
-            f"学生画像全文：{profile.profile_prompt()}\n"
+        )
+        if rag_context:
+            user_prompt += f"\n【关联课件参考】：\n{rag_context}\n"
+        user_prompt += (
+            f"\n学生画像全文：{profile.profile_prompt()}\n"
             "请生成一道完全针对此学生定制的简答题，鼓励学生用自己的话回答。"
         )
         try:

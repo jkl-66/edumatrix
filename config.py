@@ -23,7 +23,7 @@ class EduMatrixConfig:
     llm_api_key: str = os.getenv("EDUMATRIX_LLM_API_KEY", "")
     llm_model: str = os.getenv("EDUMATRIX_LLM_MODEL", "deterministic")
     llm_temperature: float = float(os.getenv("EDUMATRIX_LLM_TEMPERATURE", "0.3"))
-    llm_max_tokens: int = int(os.getenv("EDUMATRIX_LLM_MAX_TOKENS", "4096"))
+    llm_max_tokens: int = int(os.getenv("EDUMATRIX_LLM_MAX_TOKENS", "8192"))
     llm_timeout: int = int(os.getenv("EDUMATRIX_LLM_TIMEOUT", "120"))
 
     # Configs for fallback multimodal LLM

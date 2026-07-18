@@ -188,7 +188,7 @@ _ALGO_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="EduMatrix
 
 
 def _run_offline_cognition_pipeline(profile: StudentProfile, event: QuizAttemptedEvent) -> StudentProfile:
-    """在后台线程中计算 DKT + BKT 状态，并保存至数据库（解决同步锁和高并发响应延迟）"""
+    """在后台线程中计算 DKT + BKT 状态，并保存至数据库（解决同步锁 and 高并发响应延迟）"""
     from app.database import SessionLocal, DBQuizRecord
     from app.crud import save_student_profile
     
@@ -205,7 +205,20 @@ def _run_offline_cognition_pipeline(profile: StudentProfile, event: QuizAttempte
             .limit(50)
             .all()
         )
-        dkt_history = [(r.target_concept, r.accuracy_score >= 0.6) for r in records if r.target_concept]
+        dkt_history = []
+        for r in records:
+            if not r.target_concept:
+                continue
+            if "与" in r.target_concept:
+                for sub in r.target_concept.split("与"):
+                    if sub.strip():
+                        dkt_history.append((sub.strip(), r.accuracy_score >= 0.6))
+            elif "和" in r.target_concept:
+                for sub in r.target_concept.split("和"):
+                    if sub.strip():
+                        dkt_history.append((sub.strip(), r.accuracy_score >= 0.6))
+            else:
+                dkt_history.append((r.target_concept, r.accuracy_score >= 0.6))
         
         # 运行 DKT 推理与增量微调
         dkt_service = DktService()
@@ -236,27 +249,36 @@ def _run_offline_cognition_pipeline(profile: StudentProfile, event: QuizAttempte
         elif any(k in question_text for k in ("迁移", "类比", "比喻", "场景", "应用", "transfer", "analogy")):
             dimension = "transfer"
             
-        bkt.update(
-            event.concept,
-            correct=event.accuracy >= 0.6,
-            cognitive_load=getattr(profile, "cognitive_load", 0.45),
-            frustration=getattr(profile, "frustration_index", 0.0),
-            profile_bkt_states=profile.bkt_states,
-            dimension=dimension,
-            duration_seconds=event.duration_seconds,
-        )
-        
-        snapshot = bkt.snapshot()
-        if event.concept in snapshot:
-            profile.bkt_states[event.concept] = snapshot[event.concept]
-            layers_snap = snapshot[event.concept].get("layers", {})
-            if layers_snap:
-                if not getattr(profile, "concept_layers", None):
-                    profile.concept_layers = {}
-                profile.concept_layers[event.concept] = {
-                    l: round(layers_snap[l].get("smoothed_mastery", 0.3), 4)
-                    for l in layers_snap
-                }
+        concepts = []
+        if "与" in event.concept:
+            concepts = [sub.strip() for sub in event.concept.split("与") if sub.strip()]
+        elif "和" in event.concept:
+            concepts = [sub.strip() for sub in event.concept.split("和") if sub.strip()]
+        else:
+            concepts = [event.concept]
+
+        for c in concepts:
+            bkt.update(
+                c,
+                correct=event.accuracy >= 0.6,
+                cognitive_load=getattr(profile, "cognitive_load", 0.45),
+                frustration=getattr(profile, "frustration_index", 0.0),
+                profile_bkt_states=profile.bkt_states,
+                dimension=dimension,
+                duration_seconds=event.duration_seconds,
+            )
+            
+            snapshot = bkt.snapshot()
+            if c in snapshot:
+                profile.bkt_states[c] = snapshot[c]
+                layers_snap = snapshot[c].get("layers", {})
+                if layers_snap:
+                    if not getattr(profile, "concept_layers", None):
+                        profile.concept_layers = {}
+                    profile.concept_layers[c] = {
+                        l: round(layers_snap[l].get("smoothed_mastery", 0.3), 4)
+                        for l in layers_snap
+                    }
 
         # C. 持久化写入 SQLite (WAL) - 使用全局线程锁规避 SQLite 并发写入冲突
         with _DB_WRITE_LOCK:
@@ -270,6 +292,11 @@ def _run_offline_cognition_pipeline(profile: StudentProfile, event: QuizAttempte
             finally:
                 session.close()
             
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error(f"Offline cognition pipeline failed: {exc}")
+        
+        
     except Exception as exc:
         import logging
         logging.getLogger(__name__).error(f"Offline cognition pipeline failed: {exc}")
@@ -293,13 +320,20 @@ async def _on_quiz_attempted(event: QuizAttemptedEvent) -> None:
     log_entry = event.to_profile_log()
     profile.history.append(log_entry)
 
-    if event.concept not in profile.recent_quiz_accuracy:
-        profile.recent_quiz_accuracy[event.concept] = []
-    profile.recent_quiz_accuracy[event.concept].append(event.accuracy)
-    if len(profile.recent_quiz_accuracy[event.concept]) > 3:
-        profile.recent_quiz_accuracy[event.concept] = (
-            profile.recent_quiz_accuracy[event.concept][-3:]
-        )
+    concepts = []
+    if "与" in event.concept:
+        concepts = [sub.strip() for sub in event.concept.split("与") if sub.strip()]
+    elif "和" in event.concept:
+        concepts = [sub.strip() for sub in event.concept.split("和") if sub.strip()]
+    else:
+        concepts = [event.concept]
+
+    for c in concepts:
+        if c not in profile.recent_quiz_accuracy:
+            profile.recent_quiz_accuracy[c] = []
+        profile.recent_quiz_accuracy[c].append(event.accuracy)
+        if len(profile.recent_quiz_accuracy[c]) > 3:
+            profile.recent_quiz_accuracy[c] = profile.recent_quiz_accuracy[c][-3:]
 
     # 2. 拷贝一份副本并在异步线程池中运行 DKT/BKT 算法以保证内存一致性 (Copy-on-Write)
     import copy

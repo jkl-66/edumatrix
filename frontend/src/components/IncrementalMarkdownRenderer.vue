@@ -204,6 +204,34 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
 }
 
+// KaTeX 行内/行间公式同步流式渲染器
+function renderMath(math, display) {
+  // 解码可能被转义的 HTML 字符，防止 KaTeX 解析失败
+  const cleanMath = math
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+
+  if (window.katex) {
+    try {
+      return window.katex.renderToString(cleanMath, {
+        displayMode: display,
+        throwOnError: false,
+        trust: true
+      })
+    } catch (err) {
+      console.error('KaTeX streaming render error:', err)
+    }
+  }
+  
+  // Fallback if KaTeX is not loaded
+  return display 
+    ? `<div class="my-3.5 p-4 bg-gray-50/75 border border-gray-100 rounded-xl text-center font-serif text-sm overflow-x-auto select-all shadow-inner text-gray-800">${escapeHtml(cleanMath)}</div>`
+    : `<span class="font-serif italic bg-gray-50/75 px-1.5 py-0.5 rounded text-xs select-all text-gray-800 border border-gray-100/50">${escapeHtml(cleanMath)}</span>`
+}
+
 // 渲染普通文本（支持行内公式 $...$）
 function renderTextBlock(content) {
   if (!content) return ''
@@ -212,7 +240,7 @@ function renderTextBlock(content) {
   
   // 行内公式 $...$
   html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => {
-    return `<span class="katex math inline" data-math="${escapeHtml(math.trim())}">${escapeHtml(math.trim())}</span>`
+    return renderMath(math.trim(), false)
   })
   
   // 段落、换行等基本 Markdown
@@ -240,7 +268,7 @@ function renderCodeBlock(content, lang) {
 function renderMathBlock(content) {
   const math = content.replace(/^\$\$/, '').replace(/\$\$$/, '').trim()
   return `<div class="math-block my-3 py-3 px-4 bg-gray-50/60 rounded-xl border border-gray-100 overflow-x-auto flex justify-center">
-    <span class="katex math block" data-math="${escapeHtml(math)}"></span>
+    ${renderMath(math, true)}
   </div>`
 }
 

@@ -638,7 +638,7 @@ def get_smart_recommendations(
             ("mindmap", "逻辑画师", "思维导图", "思维导图", mindmap_overview),
             ("code", "极客助教", "代码实操案例", "代码案例", code_overview),
             ("quiz", "考官智能体", "练习题", "练习题", quiz_overview),
-            ("video", "虚拟导演", "虚拟人视频脚本", "视频脚本", video_overview)
+            ("video", "视频推荐官", "自适应推荐视频", "视频脚本", video_overview)
         ]
 
         for key, role, res_type, db_tag, compiled_overview in DIMENSIONS:

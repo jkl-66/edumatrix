@@ -1,10 +1,11 @@
 import { api, buildHeaders } from './common'
 
 // --- Web Search API ---
-export async function webSearch(query, studentId = 'default') {
+export async function webSearch(query, studentId = 'default', category = 'all') {
   const r = await api.post('/web/search', {
     query,
     student_id: studentId,
+    category
   }, { headers: buildHeaders() })
   return r.data
 }

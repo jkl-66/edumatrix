@@ -15,6 +15,12 @@ export async function createReviewPlan(studentId, data) {
   return r.data
 }
 
+export async function deleteReviewPlan(planId) {
+  const r = await api.delete(`/review/${planId}`, { headers: buildHeaders() })
+  return r.data
+}
+
+
 export async function checkinReview(studentId, concept = '', durationMinutes = 10) {
   const r = await api.post(`/quiz/checkin/${studentId}`, {
     concept,

@@ -352,7 +352,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
             session.close()
 
     def test_learning_event_bus_subscribe_publish(self):
-        from learning_event_bus import LearningEventBus
+        from learning_event_bus import LearningEventBus, ProfileUpdatedEvent
         bus = LearningEventBus.get_instance()
         received = []
         async def handler(e):
@@ -362,6 +362,24 @@ class EduMatrixPipelineTests(unittest.TestCase):
         bus.subscribe('test_evt2', handler)
         bus.unsubscribe('test_evt2', handler)
         self.assertEqual(len(received), 0)
+
+        # Test ProfileUpdatedEvent publishing flow
+        async def test_publish():
+            received_profile_evts = []
+            async def profile_handler(evt):
+                received_profile_evts.append(evt)
+            bus.subscribe('profile_updated', profile_handler)
+            try:
+                evt = ProfileUpdatedEvent(student_id="test_student", field="major", new_value="Computer Science")
+                await bus.publish(evt)
+                self.assertEqual(len(received_profile_evts), 1)
+                self.assertEqual(received_profile_evts[0].field, "major")
+                self.assertEqual(received_profile_evts[0].new_value, "Computer Science")
+            finally:
+                bus.unsubscribe('profile_updated', profile_handler)
+
+        import asyncio
+        asyncio.run(test_publish())
 
     def test_circuit_breaker_opens_after_failures(self):
         from concurrency import CircuitBreaker, CircuitState
@@ -626,6 +644,25 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertIn("x = torch.randn(1, 1, 4, 4)", res_code)
         self.assertIn("pool = nn.MaxPool2d(2, 2)", res_code)
 
+    def test_export_note_pdf_endpoint(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        client = TestClient(app)
+        r = client.post(
+            "/api/export-notes-pdf",
+            json={
+                "title": "测试池化层笔记",
+                "content": "### 池化层概念\n池化层是 CNN 的核心结构。",
+                "subtitle": "来源: 测试",
+                "tags": "CNN, 池化层",
+                "source": "手动测试",
+                "concepts": ["池化层"],
+            },
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers.get("content-type"), "application/pdf")
+        self.assertGreater(len(r.content), 1000)
+
     def test_sandbox_resource_limits_and_timeout(self):
         import asyncio
         from code_exec_api import SANDBOX_RUNNER
@@ -883,6 +920,45 @@ print("Val:", s.val)
             session.delete(plan)
             session.delete(prof_now)
             session.commit()
+        finally:
+            session.close()
+
+    def test_delete_student_concept_endpoint(self):
+        """验证删除垃圾知识点 API 能够精准清理画像和复习计划表中的条目"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal, DBReviewPlan, DBStudentProfile
+        from app.crud import load_student_profile, save_student_profile, upsert_review_plan
+        import uuid
+
+        student_id = f"test-del-concept-{uuid.uuid4().hex[:8]}"
+        concept_junk = "1"
+
+        session = SessionLocal()
+        try:
+            profile = load_student_profile(session, student_id)
+            profile.concept_mastery[concept_junk] = 0.5
+            save_student_profile(session, profile)
+            upsert_review_plan(session, student_id, concept_junk, 0.5, 1)
+        finally:
+            session.close()
+
+        client = TestClient(app)
+        res = client.delete(f"/api/profile/{student_id}/concept/{concept_junk}")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["deleted_concept"], concept_junk)
+
+        session = SessionLocal()
+        try:
+            p_check = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
+            self.assertNotIn(concept_junk, p_check.concept_mastery)
+
+            plan_check = session.query(DBReviewPlan).filter_by(student_id=student_id, concept=concept_junk).first()
+            self.assertIsNone(plan_check)
+
+            if p_check:
+                session.delete(p_check)
+                session.commit()
         finally:
             session.close()
 
@@ -1233,6 +1309,46 @@ print("Val:", s.val)
                     cleanup.commit()
             finally:
                 cleanup.close()
+
+    def test_composite_concept_prerequisite_inference(self):
+        """验证复合知识点（如卷积核与注意力机制的数学统一性）不会因缺少静态条目而跌落至 Tier 0，而是会自动识别其子概念作为前置"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal, DBStudentProfile
+        from app.crud import load_student_profile, save_student_profile
+        import uuid
+
+        student_id = f"test-composite-{uuid.uuid4().hex[:8]}"
+        composite_concept = "卷积核与注意力机制的数学统一性及等价条件"
+
+        session = SessionLocal()
+        try:
+            profile = load_student_profile(session, student_id)
+            profile.concept_mastery["卷积核"] = 0.2
+            profile.concept_mastery["注意力机制"] = 0.2
+            profile.concept_mastery[composite_concept] = 0.1
+            save_student_profile(session, profile)
+        finally:
+            session.close()
+
+        client = TestClient(app)
+        res = client.get(f"/api/profile/{student_id}/learning-path")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+
+        learning_chain = data.get("learning_chain", [])
+        composite_item = None
+        for item in learning_chain:
+            if item["concept"] == composite_concept:
+                composite_item = item
+                break
+
+        self.assertIsNotNone(composite_item)
+        self.assertGreater(composite_item["tier"], 0)
+        self.assertIn("卷积核", composite_item["prerequisites"])
+        self.assertIn("注意力机制", composite_item["prerequisites"])
+        self.assertFalse(composite_item["prereqs_ready"])
+        self.assertEqual(composite_item["status"], "前置未完成")
 
     def test_note_matrix_closed_loop(self):
         """验证矩阵闭环学习流：笔记更新、AI 润色解析以及错题反思追加这套完整链路的正确性"""
@@ -2642,6 +2758,7 @@ print("Val:", s.val)
             data = response.json()
             self.assertEqual(data["status"], "success")
             self.assertIn("[网页] IBM 神经网络教程.txt", data["filename"])
+            self.assertEqual(data["doc_guide_status"], "pending")
             self.assertTrue(data["chunk_count"] > 0)
 
             # 验证数据库中确实写入了记录
@@ -2651,6 +2768,7 @@ print("Val:", s.val)
                 self.assertIsNotNone(db_doc)
                 self.assertEqual(db_doc.student_id, student_id)
                 self.assertEqual(db_doc.file_type, "txt")
+                self.assertEqual(db_doc.multimodal_metadata.get("url"), "https://www.ibm.com/topics/neural-networks")
                 
                 # 删除数据并提交
                 session.delete(db_doc)
@@ -2716,6 +2834,7 @@ print("Val:", s.val)
                 session.close()
         finally:
             # 清理 student profile
+            session.close()
             session = SessionLocal()
             try:
                 db_profile = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
@@ -2724,6 +2843,19 @@ print("Val:", s.val)
                     session.commit()
             finally:
                 session.close()
+
+    def test_web_search_query_normalization_and_relevance(self):
+        """测试 Web 搜索对类似 '深度学习卷积' 模糊词的 Query 规范化与相关度防错防护"""
+        from web_search_api import _get_optimized_query_candidates, _is_result_relevant
+        
+        # 1. 验证候选 Query 生成
+        candidates = _get_optimized_query_candidates("深度学习卷积")
+        self.assertIn("CNN 卷积神经网络", candidates)
+        
+        # 2. 验证相关度校验防护
+        self.assertFalse(_is_result_relevant("深度学习卷积", "deepin - 基于Linux的开源操作系统", "深度操作系统社区"))
+        self.assertTrue(_is_result_relevant("深度学习卷积", "一文搞懂卷积神经网络(CNN)原理", "详细解释卷积层与池化层"))
+
 
     def test_download_web_file_pipeline(self):
         """测试在线文档流式下载与本地 RAG 深度导入管道 (Mock 下载和解析)"""

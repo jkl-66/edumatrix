@@ -409,6 +409,17 @@ class StudentProfile:
             )
         )
         if accuracy is not None:
+            # 情感自适应：基于答题正确率和提示次数动态调整挫败感
+            if accuracy < 0.65:
+                # 答题得分低，挫败感上升
+                delta = 0.15 * (1.0 - accuracy) + 0.05 * hint_count
+                self.frustration_index = min(1.0, self.frustration_index + delta)
+                self.consecutive_errors += 1
+            else:
+                # 答题正确，挫败感下降，且连续错误清零
+                self.frustration_index = max(0.0, self.frustration_index - 0.18)
+                self.consecutive_errors = 0
+
             update_points = [concept] if concept else list(self.weak_points)
             for point in update_points:
                 if not point:
@@ -704,7 +715,6 @@ class StudentProfile:
             self.engagement_level = min(1.0, self.engagement_level + 0.08)
         else:
             self.frustration_index = max(0.0, self.frustration_index - 0.03)
-            self.consecutive_errors = 0
 
         if self.consecutive_errors >= 3:
             self.frustration_index = min(1.0, self.frustration_index + 0.08)
@@ -811,7 +821,7 @@ class StudentProfile:
                 LearningStateCause.MISCONCEPTION.value,
                 ("总混", "混淆", "分不清", "老是错", "错题", "误区", "最大池化平均池化", "套公式",
                  "相似概念", "区别是什么", "差异在哪", "这两个有什么不同", "等价吗",
-                 "是不是一样的", "混为一谈", "容易搞混"),
+                 "是不是一样的", "混为一谈", "容易搞混", "混得", "概念混", "一塌糊涂"),
             ),
             (
                 LearningStateCause.COGNITIVE_LOAD.value,
@@ -954,67 +964,187 @@ class StudentProfile:
         strategy_gap = self.learning_state_causes.get(LearningStateCause.STRATEGY_GAP.value)
         metacognition_gap = self.learning_state_causes.get(LearningStateCause.METACOGNITIVE_MISMATCH.value)
         affect_gap = self.learning_state_causes.get(LearningStateCause.AFFECTIVE_BARRIER.value)
+        misconception_gap = self.learning_state_causes.get(LearningStateCause.MISCONCEPTION.value)
+        cognitive_gap = self.learning_state_causes.get(LearningStateCause.COGNITIVE_LOAD.value)
 
         # === P1-1 情感增强 ===
         _affect_penalty = (self.frustration_index * 0.25) + (self.consecutive_errors * 0.03)
         _engagement_bonus = self.engagement_level * 0.12
 
+        # 融合客观数据与文本证据的多维特征评估
+        misconception_evidence_strength = (misconception_gap.percentage if misconception_gap else 0.0) / 100
+        combined_misconception = _clamp(max(misconception_strength, misconception_evidence_strength * 1.5))
+
+        cognitive_evidence_load = (cognitive_gap.percentage if cognitive_gap else 0.0) / 100
+        combined_cognitive_load = _clamp(max(self.cognitive_load, cognitive_evidence_load))
+
+        # 动态编译各维度的个性化改进建议
+        # 1. 知识基础
+        mastery_weak = [p for p in self.weak_points if self.concept_mastery.get(p, 1.0) < 0.55] if getattr(self, "weak_points", None) else []
+        if mastery_weak:
+            intv_km = [
+                f"优先补习【{', '.join(mastery_weak[:2])}】的前置依赖概念，打牢基础",
+                f"利用自适应微诊断题（CAT）验证【{', '.join(mastery_weak[:2])}】的掌握边界"
+            ]
+        else:
+            intv_km = ["针对后续高难度概念，提前预习并补齐相关的前置数学储备", "用 2-3 个微诊断题验证新概念的预备基础"]
+
+        # 2. 易错点与误概念
+        mis_weak = [p for p in self.weak_points if self.misconception_patterns.get(p, 0.0) > 0.15] if getattr(self, "weak_points", None) else []
+        if mis_weak:
+            intv_mp = [
+                f"针对【{', '.join(mis_weak[:2])}】的高频易混错题，加入反例对比与概念辨析",
+                f"让学生阐述为什么【{', '.join(mis_weak[:2])}】的错误推导看似合理，实现概念重构"
+            ]
+        else:
+            intv_mp = ["加入概念对照表，预先辨析相似算法概念的适用边界", "要求学生解释典型错误案例的诱因以防范未然"]
+
+        # 3. 理解-熟练-迁移
+        if getattr(self, "weak_points", None):
+            intv_uft = [
+                f"提供【{self.weak_points[0]}】的Worked Example后，立即推送相似结构变式题以巩固迁移",
+                f"要求学生复述【{self.weak_points[0]}】在算法场景中的触发和适用条件"
+            ]
+        else:
+            intv_uft = ["使用‘Worked Example + 变式练习’提升程序迁移能力", "要求学生用白话复述复杂算子的核心触发机制"]
+
+        # 4. 认知加工与负荷
+        pref_visual = "图示/脑图" if any(any(k in pref for k in ("图", "动画", "视觉")) for pref in self.interaction_preferences) else "逐步拆解"
+        intv_cp = [
+            "把当前高负荷任务拆分为不超过 3 步的渐进小块",
+            f"利用系统右侧的【{pref_visual}】辅助表达，减轻工作记忆负担"
+        ]
+
+        # 5. 学习策略
+        intv_ls = [
+            "实施‘间隔复习法’，对于易忘点在艾宾浩斯周期临界点进行精准推送",
+            "建议开启检索式问答练习，避免‘看过即学会’的元认知幻觉"
+        ]
+
+        # 6. 元认知
+        intv_mc = [
+            "在每道测试题作答前要求自评信心值，做完后进行置信度自动对齐校准",
+            "建议将做错的概念标记为‘待深化复习’，强制区分‘听懂’与‘独立会做’"
+        ]
+
+        # 7. 动机与目标
+        course_context = self.target_course or "当前课题"
+        intv_mop = [
+            f"将抽象的数学推导连接到您的【{self.major or '人工智能'}】专业及【{course_context}】实际应用中",
+            "提供多样化学情路径选择以激发内在学习驱动力"
+        ]
+
+        # 8. 情绪信心韧性
+        intv_ar = [
+            "当连续答错或挫败感偏高时，自动降低首题难度，提供小步子的成功体验来修补信心",
+            "反馈仅指向任务本身的改善方案与下一步具体行动，不做抽象评价"
+        ]
+
+        # 9. 互动偏好
+        pref_name = self.interaction_preferences[0] if self.interaction_preferences else "互动偏好"
+        intv_ip = [
+            f"优先适配【{pref_name}】教学风格，保留符合个人表达倾向的教学媒介",
+            "支持学生对画像雷达图进行手动微调，确认主观状态"
+        ]
+
+        # 10. 学习情境
+        intv_lc = [
+            f"结合【{self.major or '专业背景'}】及本周可用备考时间，动态调度自适应学习路径",
+            "按学生的当前设备及网络边界，灵活组织多模态 VisRAG 与纯文本 fallback 格式"
+        ]
+
         dimension_inputs = {
             "knowledge_mastery": (
                 avg_mastery,
                 "前置概念需补强" if avg_mastery < 0.45 else "基础可支撑下一步学习",
-                ["先补前置知识", "用微诊断验证掌握边界"],
+                intv_km,
             ),
             "misconception_profile": (
-                _clamp(1.0 - misconception_strength),
-                "存在高频易混点" if misconception_strength >= 0.22 else "未发现稳定误概念",
-                ["加入反例辨析题", "对比相似概念的适用条件"],
+                _clamp(1.0 - combined_misconception),
+                "存在高频易混点" if combined_misconception >= 0.22 else "未发现稳定误概念",
+                intv_mp,
             ),
             "understanding_fluency_transfer": (
-                _clamp(avg_mastery - (misconception_strength * 0.18)),
-                "迁移表现待验证" if avg_mastery < 0.62 or misconception_strength else "理解与迁移较稳定",
-                ["worked example 后接变式题", "要求学生复述解题触发条件"],
+                _clamp(avg_mastery - (combined_misconception * 0.18)),
+                "迁移表现待验证" if avg_mastery < 0.62 or combined_misconception >= 0.22 else "理解与迁移较稳定",
+                intv_uft,
             ),
             "cognitive_processing": (
-                _clamp(1.0 - self.cognitive_load),
-                "认知负荷偏高" if self.cognitive_load >= 0.62 else "负荷处于可教学区间",
-                ["拆分步骤", "使用图示和条件清单"],
+                _clamp(1.0 - combined_cognitive_load),
+                "认知负荷偏高" if combined_cognitive_load >= 0.62 else "负荷处于可教学区间",
+                intv_cp,
             ),
             "learning_strategy": (
                 _clamp(1.0 - ((strategy_gap.percentage if strategy_gap else 0.0) / 100)),
                 "学习策略需要显式训练" if strategy_gap else "暂未发现明显策略缺口",
-                ["检索练习", "错因复盘", "间隔复习"],
+                intv_ls,
             ),
             "metacognition": (
                 _clamp(1.0 - ((metacognition_gap.percentage if metacognition_gap else 0.0) / 100)),
                 "自我判断需要校准" if metacognition_gap else "自评校准待继续观察",
-                ["题前自评", "题后校准", "区分看懂与会做"],
+                intv_mc,
             ),
             "motivation_and_purpose": (
                 _clamp((0.72 if self.learning_goals else 0.54) + _engagement_bonus),
                 "目标明确" if self.learning_goals else "目标意义仍需澄清",
-                ["把知识连接到专业/考试/项目目标", "让学生选择学习路径"],
+                intv_mop,
             ),
             "affect_resilience": (
                 _clamp(self.focus_level - ((affect_gap.percentage if affect_gap else 0.0) / 180) - _affect_penalty),
                 "信心或情绪有阻滞迹象" if (affect_gap or self.frustration_index > 0.3) else "情绪风险暂未升高",
-                ["小步成功体验", "反馈只指向任务和下一步"],
+                intv_ar,
             ),
             "interaction_preference": (
                 0.78 if self.interaction_preferences else 0.56,
                 "已捕捉到有效互动偏好" if self.interaction_preferences else "互动偏好待确认",
-                ["按偏好切换图示/代码/例子/追问", "让学生确认画像是否准确"],
+                intv_ip,
             ),
             "learning_context": (
                 0.72 if self.major or self.learning_goals else 0.48,
                 "学习情境已部分明确" if self.major or self.learning_goals else "学习情境信息不足",
-                ["追问可用时间、课程要求和评价方式", "按现实时间重排学习计划"],
+                intv_lc,
             ),
         }
         self.dimension_states = {}
-        evidence_count = len(self.profile_evidence)
-        fragments = [item.text[:80] for item in self.profile_evidence[-3:]]
+        global_evidence_count = len(self.profile_evidence)
+        global_fragments = [item.text[:80] for item in self.profile_evidence[-3:]]
+
+        # Mapping dimension keys to their associated causes/features
+        dimension_feature_map = {
+            "knowledge_mastery": {LearningStateCause.PREREQUISITE_GAP.value, LearningStateCause.MISCONCEPTION.value},
+            "misconception_profile": {LearningStateCause.MISCONCEPTION.value},
+            "understanding_fluency_transfer": {LearningStateCause.PREREQUISITE_GAP.value, LearningStateCause.MISCONCEPTION.value},
+            "cognitive_processing": {LearningStateCause.COGNITIVE_LOAD.value},
+            "learning_strategy": {LearningStateCause.STRATEGY_GAP.value},
+            "metacognition": {LearningStateCause.METACOGNITIVE_MISMATCH.value},
+            "motivation_and_purpose": set(),
+            "affect_resilience": {LearningStateCause.AFFECTIVE_BARRIER.value},
+            "interaction_preference": {LearningStateCause.INTERACTION_MISMATCH.value},
+            "learning_context": set(),
+        }
+
         for key, (score, status, interventions) in dimension_inputs.items():
+            relevant_features = dimension_feature_map.get(key, set())
+            matched_evs = []
+            for ev in self.profile_evidence:
+                is_match = False
+                if relevant_features and any(f in relevant_features for f in ev.features):
+                    is_match = True
+                elif key == "motivation_and_purpose" and any(w in ev.text for w in ("学", "目标", "兴趣", "考试", "期末", "项目")):
+                    is_match = True
+                elif key == "learning_context" and any(w in ev.text for w in ("专业", "主修", "就读", "方向", "大二", "大三")):
+                    is_match = True
+
+                if is_match:
+                    matched_evs.append(ev)
+
+            if matched_evs:
+                fragments = [ev.text[:80] for ev in matched_evs[-3:]]
+                evidence_count = len(matched_evs)
+            else:
+                fragments = global_fragments
+                evidence_count = global_evidence_count
+
             self.dimension_states[key] = DimensionState(
                 key=key,
                 label=DIMENSION_LABELS[key],

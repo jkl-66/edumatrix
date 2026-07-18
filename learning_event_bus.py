@@ -191,6 +191,28 @@ def _run_offline_cognition_pipeline(profile: StudentProfile, event: QuizAttempte
     """在后台线程中计算 DKT + BKT 状态，并保存至数据库（解决同步锁 and 高并发响应延迟）"""
     from app.database import SessionLocal, DBQuizRecord
     from app.crud import save_student_profile
+    from models import ProfileEvidence, ProfileEvidenceSource, LearningStateCause
+    
+    # 动态追加答题行为特征至 10 维画像证据链中
+    features = {event.concept}
+    if event.accuracy < 0.55:
+        features.add(LearningStateCause.PREREQUISITE_GAP.value)
+    if event.duration_seconds and event.duration_seconds > 45:
+        features.add(LearningStateCause.COGNITIVE_LOAD.value)
+    if abs(event.student_confidence - event.accuracy) >= 0.28:
+        features.add(LearningStateCause.METACOGNITIVE_MISMATCH.value)
+        
+    evidence = ProfileEvidence(
+        source=ProfileEvidenceSource.STUDENT_FEEDBACK,
+        text=f"自适应评测 [{event.concept}]: 得分={event.accuracy:.2f}, 耗时={event.duration_seconds or 0:.1f}s",
+        features=tuple(sorted(features)),
+        weight=0.82,
+        confidence=event.ai_confidence,
+        timestamp=event.timestamp
+    )
+    if not hasattr(profile, "profile_evidence") or profile.profile_evidence is None:
+        profile.profile_evidence = []
+    profile.profile_evidence.append(evidence)
     
     session = SessionLocal()
     try:
@@ -280,6 +302,9 @@ def _run_offline_cognition_pipeline(profile: StudentProfile, event: QuizAttempte
                         for l in layers_snap
                     }
 
+        # D. 刷新 10 维动力画像与不会成因
+        profile._refresh_dynamic_profile()
+
         # C. 持久化写入 SQLite (WAL) - 使用全局线程锁规避 SQLite 并发写入冲突
         with _DB_WRITE_LOCK:
             try:
@@ -296,11 +321,6 @@ def _run_offline_cognition_pipeline(profile: StudentProfile, event: QuizAttempte
         import logging
         logging.getLogger(__name__).error(f"Offline cognition pipeline failed: {exc}")
         
-        
-    except Exception as exc:
-        import logging
-        logging.getLogger(__name__).error(f"Offline cognition pipeline failed: {exc}")
-        
     return profile
 
 
@@ -309,35 +329,56 @@ async def _on_quiz_attempted(event: QuizAttemptedEvent) -> None:
     
     采用异步线程池隔离 heavy 算法（DKT/BKT）与 DB IO，保障接口响应时间不超过 1ms。
     """
-    from swarm_factory import build_swarm_from_headers
+    from swarm_factory import build_swarm_from_headers, _swarm_cache
+    from app.crud import load_student_profile
+    from app.database import SessionLocal
 
-    swarm = build_swarm_from_headers({})
-    profile = swarm.profile_store.get(event.student_id)
-    if profile is None:
+    # 1. 找到所有缓存了该学生 profile 的 swarm 实例，保证多实例内存一致性
+    profiles_to_update = []
+    for sw in _swarm_cache.values():
+        p = sw.profile_store.get(event.student_id)
+        if p is not None:
+            profiles_to_update.append(p)
+            
+    # 如果内存缓存中没有任何该学生的 profile，从 DB 加载一个临时的
+    db_loaded = False
+    if not profiles_to_update:
+        session = SessionLocal()
+        try:
+            p = load_student_profile(session, event.student_id)
+            if p:
+                profiles_to_update.append(p)
+                db_loaded = True
+        finally:
+            session.close()
+
+    if not profiles_to_update:
         return
 
-    # 1. 快速写入内存画像历史与近 3 次答题正确率，保证同步读请求一致性
-    log_entry = event.to_profile_log()
-    profile.history.append(log_entry)
+    # 2. 快速写入内存画像历史与近 3 次答题正确率，保证同步读请求一致性
+    for profile in profiles_to_update:
+        log_entry = event.to_profile_log()
+        profile.history.append(log_entry)
 
-    concepts = []
-    if "与" in event.concept:
-        concepts = [sub.strip() for sub in event.concept.split("与") if sub.strip()]
-    elif "和" in event.concept:
-        concepts = [sub.strip() for sub in event.concept.split("和") if sub.strip()]
-    else:
-        concepts = [event.concept]
+        concepts = []
+        if "与" in event.concept:
+            concepts = [sub.strip() for sub in event.concept.split("与") if sub.strip()]
+        elif "和" in event.concept:
+            concepts = [sub.strip() for sub in event.concept.split("和") if sub.strip()]
+        else:
+            concepts = [event.concept]
 
-    for c in concepts:
-        if c not in profile.recent_quiz_accuracy:
-            profile.recent_quiz_accuracy[c] = []
-        profile.recent_quiz_accuracy[c].append(event.accuracy)
-        if len(profile.recent_quiz_accuracy[c]) > 3:
-            profile.recent_quiz_accuracy[c] = profile.recent_quiz_accuracy[c][-3:]
+        for c in concepts:
+            if c not in profile.recent_quiz_accuracy:
+                profile.recent_quiz_accuracy[c] = []
+            profile.recent_quiz_accuracy[c].append(event.accuracy)
+            if len(profile.recent_quiz_accuracy[c]) > 3:
+                profile.recent_quiz_accuracy[c] = profile.recent_quiz_accuracy[c][-3:]
 
-    # 2. 拷贝一份副本并在异步线程池中运行 DKT/BKT 算法以保证内存一致性 (Copy-on-Write)
+    # 3. 拷贝一份副本并在异步线程池中运行 DKT/BKT 算法以保证内存一致性 (Copy-on-Write)
+    primary_profile = profiles_to_update[0]
     import copy
-    profile_copy = copy.deepcopy(profile)
+    profile_copy = copy.deepcopy(primary_profile)
 
     import sys
     is_testing = "pytest" in sys.modules or "unittest" in sys.modules
@@ -345,23 +386,92 @@ async def _on_quiz_attempted(event: QuizAttemptedEvent) -> None:
     if is_testing:
         updated = _run_offline_cognition_pipeline(profile_copy, event)
         if updated:
-            profile.concept_mastery.update(updated.concept_mastery)
-            profile.bkt_states.update(updated.bkt_states)
-            profile.concept_layers.update(updated.concept_layers)
-            if hasattr(updated, "dkt_bias"):
-                profile.dkt_bias = updated.dkt_bias
+            for p in profiles_to_update:
+                p.concept_mastery.update(updated.concept_mastery)
+                p.bkt_states.update(updated.bkt_states)
+                p.concept_layers.update(updated.concept_layers)
+                p.profile_evidence = list(updated.profile_evidence)
+                p.dimension_states = dict(updated.dimension_states)
+                p.learning_state_causes = dict(updated.learning_state_causes)
+                if hasattr(updated, "dkt_bias"):
+                    p.dkt_bias = updated.dkt_bias
     else:
         async def run_bg():
             loop = asyncio.get_running_loop()
             updated = await loop.run_in_executor(_ALGO_EXECUTOR, _run_offline_cognition_pipeline, profile_copy, event)
             # 在主协程线程中安全合并画像状态更新，规避字典多线程写冲突
             if updated:
-                profile.concept_mastery.update(updated.concept_mastery)
-                profile.bkt_states.update(updated.bkt_states)
-                profile.concept_layers.update(updated.concept_layers)
-                if hasattr(updated, "dkt_bias"):
-                    profile.dkt_bias = updated.dkt_bias
+                for p in profiles_to_update:
+                    p.concept_mastery.update(updated.concept_mastery)
+                    p.bkt_states.update(updated.bkt_states)
+                    p.concept_layers.update(updated.concept_layers)
+                    p.profile_evidence = list(updated.profile_evidence)
+                    p.dimension_states = dict(updated.dimension_states)
+                    p.learning_state_causes = dict(updated.learning_state_causes)
+                    if hasattr(updated, "dkt_bias"):
+                        p.dkt_bias = updated.dkt_bias
         asyncio.create_task(run_bg())
+
+
+async def _on_profile_updated(event: ProfileUpdatedEvent) -> None:
+    """画像更新事件订阅器：当学生画像手动/增量更新时，自动追加历史变动记录到 profile.history，保持多端内存和物理库的一致性。"""
+    from swarm_factory import _swarm_cache
+    from app.crud import load_student_profile, save_student_profile
+    from app.database import SessionLocal
+
+    # 1. 找到所有缓存了该学生 profile 的 swarm 实例，保证多实例内存一致性
+    profiles_to_update = []
+    for sw in _swarm_cache.values():
+        p = sw.profile_store.get(event.student_id)
+        if p is not None:
+            profiles_to_update.append(p)
+            
+    # 如果内存缓存中没有任何该学生的 profile，从 DB 加载一个临时的
+    if not profiles_to_update:
+        session = SessionLocal()
+        try:
+            p = load_student_profile(session, event.student_id)
+            if p:
+                profiles_to_update.append(p)
+        finally:
+            session.close()
+
+    if not profiles_to_update:
+        return
+
+    # 2. 格式化画像修改的痕迹日志
+    log_entry = f"[ProfileUpdate:{event.field}] 新值={event.new_value} 时间={event.timestamp}"
+    
+    # 规避重复写入
+    for profile in profiles_to_update:
+        if log_entry not in profile.history:
+            profile.history.append(log_entry)
+            if len(profile.history) > 500:
+                profile.history = profile.history[-300:]
+
+    # 3. 异步/同步写回至 DB 存储，保证持久化一致性
+    primary_profile = profiles_to_update[0]
+    import sys
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+
+    def save_history():
+        session = SessionLocal()
+        try:
+            with _DB_WRITE_LOCK:
+                save_student_profile(session, primary_profile)
+                session.commit()
+        except Exception as db_err:
+            session.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Async DB writeback failed for ProfileUpdatedEvent: {db_err}")
+        finally:
+            session.close()
+
+    if is_testing:
+        save_history()
+    else:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(_ALGO_EXECUTOR, save_history)
 
 
 def register_default_subscribers(bus: LearningEventBus | None = None) -> LearningEventBus:
@@ -373,6 +483,7 @@ def register_default_subscribers(bus: LearningEventBus | None = None) -> Learnin
         bus = LearningEventBus.get_instance()
 
     bus.subscribe("quiz_attempted", _on_quiz_attempted)
+    bus.subscribe("profile_updated", _on_profile_updated)
     return bus
 
 

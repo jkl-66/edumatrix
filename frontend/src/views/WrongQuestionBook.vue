@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { 
   getWrongQuestions, getWrongConcepts, 
@@ -145,9 +145,11 @@ async function submitSimilarAnswer(q) {
 
 function getCategoryLabel(cat) {
   const labels = {
-    review: '需复习',
-    practice: '需练习',
-    advance: '可进阶',
+    review: '概念未掌握',
+    practice: '熟练度不足',
+    advance: '粗心/笔误',
+    misconception: '概念误解',
+    unknown: '未分类',
   }
   return labels[cat] || cat || '未分类'
 }
@@ -157,6 +159,7 @@ function getCategoryColor(cat) {
     review: 'bg-red-50 text-red-600',
     practice: 'bg-amber-50 text-amber-600',
     advance: 'bg-emerald-50 text-emerald-600',
+    misconception: 'bg-purple-50 text-purple-600',
   }
   return colors[cat] || 'bg-gray-50 text-gray-600'
 }
@@ -190,7 +193,7 @@ async function togglePin(q) {
   const id = q.id
   pinLoading.value[id] = true
   try {
-    const res = await togglePinWrongQuestion(id)
+    const res = await togglePinWrongQuestion(id, props.studentId)
     // 刷新列表以按新排序展示
     await loadData()
   } catch (e) {
@@ -206,7 +209,7 @@ async function deleteQuestion(q) {
   if (!confirm(`确定删除「${q.concept_name}」的这条错题记录吗？`)) return
   deleteLoading.value[id] = true
   try {
-    await deleteWrongQuestion(id)
+    await deleteWrongQuestion(id, props.studentId)
     await loadData()
   } catch (e) {
     console.error('删除错题失败:', e)
@@ -234,7 +237,7 @@ function cancelEditNotes(q) {
 async function saveNotes(q) {
   const id = q.id
   try {
-    await updateWrongQuestionNotes(id, notesText.value[id] || '')
+    await updateWrongQuestionNotes(id, notesText.value[id] || '', props.studentId)
     q.notes = notesText.value[id] || ''
     editingNotes.value[id] = false
   } catch (e) {
@@ -322,6 +325,7 @@ const clusterColors = {
   review: { bg: 'bg-red-50', text: 'text-red-600', bar: 'bg-red-400', border: 'border-red-200' },
   practice: { bg: 'bg-amber-50', text: 'text-amber-600', bar: 'bg-amber-400', border: 'border-amber-200' },
   advance: { bg: 'bg-emerald-50', text: 'text-emerald-600', bar: 'bg-emerald-400', border: 'border-emerald-200' },
+  misconception: { bg: 'bg-purple-50', text: 'text-purple-600', bar: 'bg-purple-400', border: 'border-purple-200' },
   unknown: { bg: 'bg-gray-50', text: 'text-gray-500', bar: 'bg-gray-300', border: 'border-gray-200' },
 }
 
@@ -330,10 +334,9 @@ const chartRef = ref(null)
 let chartInstance = null
 
 function initOrUpdateChart() {
-  if (!showDiagnosisDashboard.value || !chartRef.value) return
+  if (!showDiagnosisDashboard.value) return
   
-  setTimeout(() => {
-    // 安全性双重检查
+  nextTick(() => {
     if (!showDiagnosisDashboard.value || !chartRef.value) return
     try {
       const isDark = document.documentElement.classList.contains('dark') || document.body.classList.contains('dark')
@@ -343,9 +346,18 @@ function initOrUpdateChart() {
       }
       chartInstance = echarts.init(chartRef.value, isDark ? 'dark' : null, { backgroundColor: 'transparent' })
       
-      const reviewCount = diagnosisSummary.value?.reviewCount || 0
-      const practiceCount = diagnosisSummary.value?.practiceCount || 0
-      const advanceCount = diagnosisSummary.value?.advanceCount || 0
+      const colorMap = {
+        review: '#f87171',
+        practice: '#fbbf24',
+        advance: '#34d399',
+        misconception: '#a78bfa',
+      }
+      
+      const pieData = diagnosisClusters.value.map(c => ({
+        value: c.count,
+        name: c.label,
+        itemStyle: { color: colorMap[c.key] || '#94a3b8' }
+      }))
       
       const option = {
         tooltip: {
@@ -382,11 +394,7 @@ function initOrUpdateChart() {
             labelLine: {
               show: false
             },
-            data: [
-              { value: reviewCount, name: '需复习', itemStyle: { color: '#f87171' } },
-              { value: practiceCount, name: '需练习', itemStyle: { color: '#fbbf24' } },
-              { value: advanceCount, name: '可进阶', itemStyle: { color: '#34d399' } }
-            ]
+            data: pieData
           }
         ]
       }
@@ -394,7 +402,7 @@ function initOrUpdateChart() {
     } catch (err) {
       console.error('ECharts init error:', err)
     }
-  }, 50)
+  })
 }
 
 watch([showDiagnosisDashboard, wrongQuestions], () => {
@@ -491,15 +499,15 @@ onUnmounted(() => {
             <div class="grid grid-cols-3 gap-2">
               <div class="bg-red-50/60 rounded-xl p-2.5 text-center border border-red-100">
                 <p class="text-xl font-bold text-red-600">{{ diagnosisSummary.reviewCount }}</p>
-                <p class="text-[9px] text-red-500 font-medium">需复习</p>
+                <p class="text-[9px] text-red-500 font-medium">概念未掌握</p>
               </div>
               <div class="bg-amber-50/60 rounded-xl p-2.5 text-center border border-amber-100">
                 <p class="text-xl font-bold text-amber-600">{{ diagnosisSummary.practiceCount }}</p>
-                <p class="text-[9px] text-amber-500 font-medium">需练习</p>
+                <p class="text-[9px] text-amber-500 font-medium">熟练度不足</p>
               </div>
               <div class="bg-emerald-50/60 rounded-xl p-2.5 text-center border border-emerald-100">
                 <p class="text-xl font-bold text-emerald-600">{{ diagnosisSummary.advanceCount }}</p>
-                <p class="text-[9px] text-emerald-500 font-medium">可进阶</p>
+                <p class="text-[9px] text-emerald-500 font-medium">粗心/笔误</p>
               </div>
             </div>
             
@@ -552,9 +560,9 @@ onUnmounted(() => {
               <span class="text-xs text-gray-700 flex-1 truncate">{{ item.concept }}</span>
               <span class="text-[10px] font-semibold text-gray-500">{{ item.count }} 题</span>
               <div class="flex gap-0.5">
-                <span v-if="item.categories.review" class="w-2 h-2 rounded-full bg-red-400" title="需复习"></span>
-                <span v-if="item.categories.practice" class="w-2 h-2 rounded-full bg-amber-400" title="需练习"></span>
-                <span v-if="item.categories.advance" class="w-2 h-2 rounded-full bg-emerald-400" title="可进阶"></span>
+                <span v-if="item.categories.review" class="w-2 h-2 rounded-full bg-red-400" title="概念未掌握"></span>
+                <span v-if="item.categories.practice" class="w-2 h-2 rounded-full bg-amber-400" title="熟练度不足"></span>
+                <span v-if="item.categories.advance" class="w-2 h-2 rounded-full bg-emerald-400" title="粗心/笔误"></span>
               </div>
             </div>
           </div>

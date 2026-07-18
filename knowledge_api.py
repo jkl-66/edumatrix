@@ -338,12 +338,12 @@ async def _generate_doc_guide_for_document(doc_id: str, student_id: str, text_co
     except Exception as e:
         print(f"  [DocGuide] 文档 {doc_id} 导读生成失败: {e}")
 
-
 @router.post("/add-web-source")
 async def add_web_source(
     request: Request,
+    background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
-    """将网页搜索结果显式拉取加入知识库，利用 LLM 智能脱水总结为 Markdown。"""
+    """将网页搜索结果显式拉取加入知识库，利用 LLM 智能脱水总结为包含富媒体与原文链接的 Markdown。"""
     import re
     from swarm_factory import build_swarm_from_headers
     payload = await request.json()
@@ -356,24 +356,26 @@ async def add_web_source(
     if not title or not snippet:
         raise HTTPException(status_code=400, detail="标题和摘要内容不能为空")
 
-    # 1. 采用 LLM 智能总结脱水
+    # 1. 采用 LLM 智能总结脱水（保留富媒体、配图与 Markdown 格式）
     try:
         swarm = build_swarm_from_headers(request.headers)
         llm = swarm.llm
         system_prompt = (
-            "你是一个顶级的学术与教育内容整理专家。你的任务是将给定的网页搜索标题 and 摘要片段进行“脱水总结”，"
+            "你是一个顶级的学术与教育内容整理专家。你的任务是将给定的网页搜索标题和摘要片段进行“高保真脱水总结”，"
             "提炼整理成一篇逻辑严密、排版美观的结构化 Markdown 读书要点笔记。\n"
             "要求：\n"
             "1. 概括该网页所涉知识的核心定义与原理，剔除广告、杂音等不相干文本。\n"
             "2. 以 Markdown 格式排版，必须包含 # 标题、## 核心概念定义、## 核心推导/要点概括、## 拓展/知识拓扑。\n"
-            "3. 保持中立学术风格，全中文回复。"
+            "3. 必须保留原文中包含的所有配图链接 ![图片描述](URL)、视频直链与 LaTeX 数学公式 $...$ ，不可盲目删减图像与公式。\n"
+            "4. 在文首显著标注网页来源 URL 直连卡片。\n"
+            "5. 保持中立学术风格，全中文回复。"
         )
         user_prompt = (
             f"网页标题: {title}\n"
             f"网页来源URL: {url}\n"
             f"关联搜索词: {query}\n\n"
             f"网页内容摘要:\n{snippet}\n\n"
-            "请开始生成脱水 Markdown 笔记："
+            "请开始生成富媒体脱水 Markdown 笔记："
         )
         text_content = await llm.generate(system_prompt, user_prompt, role="极客助教")
     except Exception as e:
@@ -396,6 +398,11 @@ async def add_web_source(
     evidence_chunks = chunk_document(text_content, source=filename)
     
     # 4. 创建并写入数据库记录
+    doc_tags = {tag for chunk in evidence_chunks for tag in chunk.tags}
+    if query:
+        doc_tags.add(query)
+    doc_tags.discard("网页检索")
+
     db_doc = DBKnowledgeDocument(
         id=doc_id,
         student_id=student_id,
@@ -404,7 +411,7 @@ async def add_web_source(
         file_size=file_size,
         title=title,
         content=text_content,
-        tags=["网页检索", query],
+        tags=list(doc_tags),
         chunk_count=len(evidence_chunks),
         is_multimodal=False,
         multimodal_metadata={"url": url, "query": query},
@@ -432,11 +439,21 @@ async def add_web_source(
     except Exception:
         pass
 
+    # 调度异步文档导读生成（NotebookLM 风格）
+    if text_content.strip():
+        background_tasks.add_task(
+            _generate_doc_guide_for_document,
+            doc_id=doc_id,
+            student_id=student_id,
+            text_content=text_content[:12000],
+        )
+
     return {
         "status": "success",
         "id": doc_id,
         "filename": filename,
         "chunk_count": len(evidence_chunks),
+        "doc_guide_status": "pending",
         "content_preview": text_content[:300]
     }
 
@@ -444,6 +461,7 @@ async def add_web_source(
 @router.post("/download-web-file")
 async def download_web_file(
     request: Request,
+    background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
     """通过 URL 直链流式下载网页文档，并调用本地解析器进行深度导入。"""
     import re
@@ -560,6 +578,15 @@ async def download_web_file(
         invalidate_graph_cache()
     except Exception:
         pass
+
+    # 调度异步文档导读生成（NotebookLM 风格）
+    if text_content.strip():
+        background_tasks.add_task(
+            _generate_doc_guide_for_document,
+            doc_id=doc_id,
+            student_id=student_id,
+            text_content=text_content[:12000],
+        )
 
     return {
         "status": "success",

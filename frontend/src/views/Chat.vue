@@ -1166,6 +1166,13 @@ onMounted(async () => {
     console.error('加载学生画像失败:', e)
   }
 
+  // 检查是否有从仪表盘等其他页面挂载的代码
+  const mountedCode = localStorage.getItem('edumatrix_sandbox_mount_code')
+  if (mountedCode) {
+    localStorage.removeItem('edumatrix_sandbox_mount_code')
+    mountToSandbox(mountedCode)
+  }
+
   // 时空回溯与跳转触发
   if (route.query.quiz) {
     activeTab.value = 'quiz'
@@ -1904,11 +1911,82 @@ function renderMarkdown(text, type = '', conceptName = '') {
     return `@@SVGBLOCKTOKEN${idx}@@`
   })
 
+  const layoutBlocks = []
+  function protectLayout(htmlTag) {
+    const idx = layoutBlocks.length
+    layoutBlocks.push(htmlTag)
+    return `@@LAYOUTTOKEN${idx}@@`
+  }
+
+  function buildThreeLevelHintLadderHtml(rawContent) {
+    if (!rawContent) return ''
+
+    let text = rawContent
+      .replace(/<details[\s\S]*?>/gi, '')
+      .replace(/<\/details>/gi, '')
+      .replace(/<summary>[\s\S]*?<\/summary>/gi, '')
+      .replace(/^[#*\s]*💡?\s*提示阶梯[（(]点击展开[）)]?[#*\s]*\n+/gim, '')
+      .trim()
+
+    // 匹配 第1层/第2层/第3层 (支持数字与中文一二三, 兼容 **双星号, 冒号在内外等各种LLM输出变体)
+    const layer1Match = text.match(/(?:[-*+\s]*)\*?\*?第\s*[1一]\s*层[（(]([^）)]+)[）)]\*?\*?\s*[：:]\s*([\s\S]*?)(?=(?:[-*+\s]*)\*?\*?第\s*[2二]\s*层|$)/i)
+    const layer2Match = text.match(/(?:[-*+\s]*)\*?\*?第\s*[2二]\s*层[（(]([^）)]+)[）)]\*?\*?\s*[：:]\s*([\s\S]*?)(?=(?:[-*+\s]*)\*?\*?第\s*[3三]\s*层|$)/i)
+    const layer3Match = text.match(/(?:[-*+\s]*)\*?\*?第\s*[3三]\s*层[（(]([^）)]+)[）)]\*?\*?\s*[：:]\s*([\s\S]*?)(?=$)/i)
+
+    const layers = []
+    if (layer1Match) layers.push({ num: 1, name: layer1Match[1].trim(), content: layer1Match[2].trim() })
+    if (layer2Match) layers.push({ num: 2, name: layer2Match[1].trim(), content: layer2Match[2].trim() })
+    if (layer3Match) layers.push({ num: 3, name: layer3Match[1].trim(), content: layer3Match[2].trim() })
+
+    // 如果未成功按 3 层切分，则退化为单卡片输出
+    if (layers.length === 0) {
+      const cardStart = protectLayout(`<div class="edumatrix-accordion-card border border-slate-200/80 dark:border-slate-800/80 rounded-xl my-3 overflow-hidden shadow-sm bg-slate-50/40 dark:bg-slate-900/40 transition-all duration-300">
+  <div onclick="const body=this.nextElementSibling; const icon=this.querySelector('.accordion-icon'); if(body.style.display==='none'||!body.style.display){ body.style.display='block'; if(icon) icon.textContent='▼'; }else{ body.style.display='none'; if(icon) icon.textContent='▶'; }" class="px-4 py-3 font-semibold text-slate-800 dark:text-slate-200 cursor-pointer bg-slate-100/60 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between select-none text-xs">
+    <span class="flex items-center gap-1.5">💡 提示阶梯（点击展开）</span>
+    <span class="accordion-icon text-[10px] text-slate-400 font-mono">▶</span>
+  </div>
+  <div class="accordion-body px-5 py-4 border-t border-slate-100 dark:border-slate-800/60 text-slate-700 dark:text-slate-300 leading-relaxed text-xs" style="display: none;">`)
+      const cardEnd = protectLayout(`</div></div>`)
+      return `\n\n${cardStart}\n\n${text}\n\n${cardEnd}\n\n`
+    }
+
+    const itemsHtml = layers.map(l => {
+      const cardStart = protectLayout(`<div class="edumatrix-accordion-card border border-sky-200/80 dark:border-sky-900/50 rounded-xl my-2 overflow-hidden shadow-sm bg-sky-50/20 dark:bg-slate-900/40 transition-all duration-300">
+  <div onclick="const body=this.nextElementSibling; const icon=this.querySelector('.accordion-icon'); if(body.style.display==='none'||!body.style.display){ body.style.display='block'; if(icon) icon.textContent='▼'; }else{ body.style.display='none'; if(icon) icon.textContent='▶'; }" class="px-4 py-2.5 font-semibold text-sky-900 dark:text-sky-200 cursor-pointer bg-sky-50/80 dark:bg-sky-950/40 hover:bg-sky-100/80 dark:hover:bg-sky-900/60 transition-colors flex items-center justify-between select-none text-xs">
+    <span class="flex items-center gap-1.5">💡 <strong class="text-sky-800 dark:text-sky-300">第 ${l.num} 层提示</strong> · ${l.name}（点击展开）</span>
+    <span class="accordion-icon text-[10px] text-sky-600 dark:text-sky-400 font-mono">▶</span>
+  </div>
+  <div class="accordion-body px-5 py-3.5 border-t border-sky-100 dark:border-sky-900/50 text-slate-700 dark:text-slate-300 leading-relaxed text-xs bg-white/40 dark:bg-slate-900/20" style="display: none;">`)
+      const cardEnd = protectLayout(`</div></div>`)
+      return `\n\n${cardStart}\n\n${l.content}\n\n${cardEnd}\n\n`
+    }).join('\n')
+
+    const wrapperStart = protectLayout(`<div class="edumatrix-hint-ladder-wrapper my-3.5 p-3.5 bg-gradient-to-br from-sky-50/70 via-blue-50/40 to-slate-50/60 dark:from-slate-900/80 dark:via-sky-950/30 dark:to-slate-900/90 rounded-2xl border border-sky-200/80 dark:border-sky-900/50 shadow-sm">
+  <div class="text-xs font-bold text-sky-900 dark:text-sky-300 mb-2 flex items-center gap-1.5 px-1">
+    <span>🪜</span>
+    <span>三层递进提示阶梯（点击各层按需展开查看）：</span>
+  </div>`)
+    const wrapperEnd = protectLayout(`</div>`)
+
+    return `\n\n${wrapperStart}\n${itemsHtml}\n${wrapperEnd}\n\n`
+  }
+
+  // 1. Match <details> blocks from LLM output
+  cleaned = cleaned.replace(/(?:^|\n)\s*[-*+]*\s*(?:[#*\s]*提示阶梯[：:]*\s*\n+)?<details[\s\S]*?>([\s\S]*?)<\/details>/gi, (match, bodyContent) => {
+    return buildThreeLevelHintLadderHtml(bodyContent)
+  })
+
+  // 2. If no <details> tag exists, auto-wrap un-folded "提示阶梯" plain markdown list into 3-level cards
+  if (!cleaned.includes('@@LAYOUTTOKEN')) {
+    cleaned = cleaned.replace(
+      /(?:[#*]*\s*提示阶梯[：:]?\s*[#*]*\s*\n+)?((?:[-*]\s*\*?第[123一二三]层[\s\S]*?)(?=\n\s*\n(?![-\s]*\*?第[123一二三]层)|\n[#*]{1,3}\s+|<div|$))/gi,
+      (match, hintsContent) => {
+        return buildThreeLevelHintLadderHtml(hintsContent)
+      }
+    )
+  }
+
   let html = cleaned
-    .replace(/<details(\s+open)?>/gi, (_, open) => open ? '@@DETAILSTOKEN_OPEN@@' : '@@DETAILSTOKEN@@')
-    .replace(/<\/details>/gi, '@@ENDDETAILSTOKEN@@')
-    .replace(/<summary>/gi, '@@SUMMARYTOKEN@@')
-    .replace(/<\/summary>/gi, '@@ENDSUMMARYTOKEN@@')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -2214,7 +2292,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
       return `${base}<sup>${displayExp}</sup>`
     })
 
-  // 5. Restore block and inline math, code blocks, and SVG blocks
+  // 5. Restore layout blocks, math, code, and SVG blocks
+  layoutBlocks.forEach((block, idx) => {
+    html = html.split(`@@LAYOUTTOKEN${idx}@@`).join(block)
+  })
+
   blockMath.forEach((item, idx) => {
     html = html.split(`@@BLOCKMATHTOKEN${idx}@@`).join(renderMath(item.math, true))
   })
@@ -2227,17 +2309,6 @@ function renderMarkdown(text, type = '', conceptName = '') {
   svgBlocks.forEach((block, idx) => {
     html = html.split(`@@SVGBLOCKTOKEN${idx}@@`).join(block)
   })
-
-  const detailsClass = 'class="border border-slate-200/80 dark:border-slate-800/80 rounded-xl my-3 overflow-hidden shadow-sm bg-slate-50/40 dark:bg-slate-900/40 hover:bg-slate-50 dark:hover:bg-slate-900/60 transition-all duration-300"'
-  const summaryClass = 'class="px-4 py-3 font-semibold text-slate-800 dark:text-slate-200 cursor-pointer bg-slate-100/60 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors flex items-center select-none outline-none text-xs"'
-  const contentClass = 'class="px-5 py-4 border-t border-slate-100 dark:border-slate-800/60 text-slate-700 dark:text-slate-300 leading-relaxed text-xs"'
-
-  html = html
-    .split('@@DETAILSTOKEN_OPEN@@').join(`<details open ${detailsClass}>`)
-    .split('@@DETAILSTOKEN@@').join(`<details ${detailsClass}>`)
-    .split('@@ENDDETAILSTOKEN@@').join('</div></details>')
-    .split('@@SUMMARYTOKEN@@').join(`<summary ${summaryClass}>`)
-    .split('@@ENDSUMMARYTOKEN@@').join(`</summary><div ${contentClass}>`)
 
   // 6. Append quiz CAT link button for assessor agent or Video button for director agent
   const normalizedType = type.toLowerCase()
@@ -3203,9 +3274,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
                   <BrainCircuit :size="14" class="text-blue-500" />
                   <span>能力掌握度雷达图</span>
                 </h3>
-                <div class="flex-1 flex items-center justify-center">
+                <div class="flex-1 flex items-center justify-center min-h-[290px] w-full overflow-visible">
                   <MasteryRadar 
-                    class="w-full h-full"
+                    class="w-full h-full min-h-[290px]"
                     :concepts="radarConcepts" 
                     :show-comparison="showComparison"
                     :student-id="props.studentId" 

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import { listKnowledgeDocuments, uploadKnowledgeDocument, deleteKnowledgeDocument, getGraphStats, crossModalSearch } from '../api'
-import { BookOpen, Upload, Trash2, FileText, File, FileImage, FileVideo, Presentation, Tag, Clock, AlertCircle, CheckCircle, Image, Film, ArrowRight, GitBranch, Sparkles, Search, X, Zap } from '@lucide/vue'
+import { listKnowledgeDocuments, uploadKnowledgeDocument, deleteKnowledgeDocument, getKnowledgeDocument, getGraphStats, crossModalSearch } from '../api'
+import { BookOpen, Upload, Trash2, FileText, File, FileImage, FileVideo, Presentation, Tag, Clock, AlertCircle, CheckCircle, Image, Film, ArrowRight, GitBranch, Sparkles, Search, X, Zap, ExternalLink } from '@lucide/vue'
 import KnowledgeGraphExplorer from '../components/KnowledgeGraphExplorer.vue'
 
 const props = defineProps({ studentId: String })
@@ -19,6 +19,45 @@ const fileInput = ref(null)
 // 文档预览 & 导读
 const showDocModal = ref(false)
 const selectedDoc = ref(null)
+let pollTimer = null
+
+async function openDocModal(doc) {
+  selectedDoc.value = doc
+  showDocModal.value = true
+  if (pollTimer) clearInterval(pollTimer)
+
+  try {
+    const full = await getKnowledgeDocument(doc.id, props.studentId || 'default')
+    selectedDoc.value = full
+
+    if (!full.multimodal_metadata?.doc_guide) {
+      let attempts = 0
+      pollTimer = setInterval(async () => {
+        attempts++
+        if (attempts > 6 || !showDocModal.value) {
+          if (pollTimer) clearInterval(pollTimer)
+          return
+        }
+        try {
+          const updated = await getKnowledgeDocument(doc.id, props.studentId || 'default')
+          if (updated.multimodal_metadata?.doc_guide) {
+            selectedDoc.value = updated
+            if (pollTimer) clearInterval(pollTimer)
+            const idx = docs.value.findIndex(d => d.id === doc.id)
+            if (idx !== -1) docs.value[idx] = updated
+          }
+        } catch (e) {}
+      }, 2500)
+    }
+  } catch (e) {
+    console.error('Failed to load full document:', e)
+  }
+}
+
+function closeDocModal() {
+  showDocModal.value = false
+  if (pollTimer) clearInterval(pollTimer)
+}
 
 function triggerSelect() {
   if (fileInput.value) fileInput.value.click()
@@ -306,7 +345,7 @@ async function doCrossModalSearch() {
 
     <!-- 文档卡片网格：玻璃态暗色风格 -->
     <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div v-for="doc in docs" :key="doc.id" class="bg-[#131926]/70 backdrop-blur-md border border-white/[0.06] rounded-xl p-4 hover:border-white/[0.12] hover:shadow-lg hover:shadow-black/20 transition-all duration-300 group cursor-pointer" @click="selectedDoc = doc; showDocModal = true">
+      <div v-for="doc in docs" :key="doc.id" class="bg-[#131926]/70 backdrop-blur-md border border-white/[0.06] rounded-xl p-4 hover:border-white/[0.12] hover:shadow-lg hover:shadow-black/20 transition-all duration-300 group cursor-pointer" @click="openDocModal(doc)">
         <div class="flex items-start gap-3">
           <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" :class="fileColor(doc.file_type)">
             <component :is="fileIcon(doc.file_type)" :size="20" />
@@ -330,7 +369,7 @@ async function doCrossModalSearch() {
               <span v-if="doc.tags.length > 4" class="text-[10px] text-[#475569]">+{{ doc.tags.length - 4 }}</span>
             </div>
           </div>
-          <button class="p-1.5 shrink-0 text-[#475569] hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100" @click="remove(doc.id, doc.filename)">
+          <button class="p-1.5 shrink-0 text-[#475569] hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100" @click.stop="remove(doc.id, doc.filename)">
             <Trash2 :size="14" />
           </button>
         </div>
@@ -397,11 +436,10 @@ async function doCrossModalSearch() {
         ]"
       />
     </div>
-  </div>
 
   <!-- 文档预览 Modal（含 NotbookLM 风格导读） -->
   <Teleport to="body">
-    <div v-if="showDocModal && selectedDoc" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="showDocModal = false">
+    <div v-if="showDocModal && selectedDoc" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="closeDocModal">
       <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <div class="relative bg-[#0b0f19] border border-white/[0.08] rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
         <!-- 头部 -->
@@ -415,9 +453,19 @@ async function doCrossModalSearch() {
               <p class="text-[10px] text-[#64748b]">{{ formatSize(selectedDoc.file_size) }} · {{ selectedDoc.chunk_count }} 知识块</p>
             </div>
           </div>
-          <button class="p-1.5 text-[#475569] hover:text-[#cbd5e1] hover:bg-white/[0.06] rounded-lg transition-colors" @click="showDocModal = false">
-            <X :size="18" />
-          </button>
+          <div class="flex items-center gap-2">
+            <a v-if="selectedDoc.multimodal_metadata?.url"
+               :href="selectedDoc.multimodal_metadata.url"
+               target="_blank"
+               rel="noopener noreferrer"
+               class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-semibold shadow-sm hover:shadow-cyan-500/20 transition-all shrink-0"
+               title="在新标签页中打开网页原文">
+              <ExternalLink :size="12" /> 访问网页原文
+            </a>
+            <button class="p-1.5 text-[#475569] hover:text-[#cbd5e1] hover:bg-white/[0.06] rounded-lg transition-colors" @click="closeDocModal">
+              <X :size="18" />
+            </button>
+          </div>
         </div>
         
         <div class="px-6 py-5 space-y-5">
@@ -466,15 +514,26 @@ async function doCrossModalSearch() {
           
           <!-- 导读未就绪 -->
           <div v-else class="bg-white/[0.02] border border-white/[0.04] rounded-xl p-5 text-center">
-            <Sparkles :size="24" class="mx-auto mb-2 text-[#475569]" />
-            <p class="text-sm text-[#64748b]">导读生成中...</p>
-            <p class="text-xs text-[#475569] mt-1">上传后后台自动生成文档摘要和 FAQs</p>
+            <Sparkles :size="24" class="mx-auto mb-2 text-[#0ea5e9] animate-pulse" />
+            <p class="text-sm text-[#64748b]">智能导读解析中...</p>
+            <p class="text-xs text-[#475569] mt-1">AI 正在提炼核心概述、看点与 FAQs 问答，请稍候 2~3 秒</p>
           </div>
           
-          <!-- 内容预览 -->
+          <!-- 内容预览与完整 Markdown -->
           <div class="bg-white/[0.02] border border-white/[0.04] rounded-xl p-4">
-            <p class="text-xs text-[#64748b] mb-2">📄 内容预览</p>
-            <p class="text-xs text-[#94a3b8] leading-relaxed whitespace-pre-wrap line-clamp-10">{{ selectedDoc.content_preview }}</p>
+            <div class="flex items-center justify-between mb-2">
+              <p class="text-xs text-[#64748b]">📄 内容详情 / 富媒体 Markdown</p>
+              <a v-if="selectedDoc.multimodal_metadata?.url"
+                 :href="selectedDoc.multimodal_metadata.url"
+                 target="_blank"
+                 rel="noopener noreferrer"
+                 class="text-[10px] text-cyan-400 hover:underline flex items-center gap-1">
+                <ExternalLink :size="10" /> {{ selectedDoc.multimodal_metadata.url }}
+              </a>
+            </div>
+            <div class="text-xs text-[#94a3b8] leading-relaxed whitespace-pre-wrap max-h-96 overflow-y-auto font-mono text-[11px] bg-[#070a12] p-3 rounded-lg border border-white/[0.03] select-text">
+              {{ selectedDoc.content || selectedDoc.content_preview }}
+            </div>
           </div>
           
           <!-- 标签 -->
@@ -487,4 +546,5 @@ async function doCrossModalSearch() {
       </div>
     </div>
   </Teleport>
+  </div>
 </template>

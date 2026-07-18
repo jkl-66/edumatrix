@@ -29,20 +29,29 @@ from reportlab.pdfbase.ttfonts import TTFont
 # 1. 中文字体注册
 # ============================================================
 
-# Windows 常见中文字体路径
+# Windows / System 常见中文字体路径
 _FONT_CANDIDATES = [
+    # SimHei (黑体 - 单文件 TTF，ReportLab 零乱码兼容性最高)
+    ("SimHei", r"C:\Windows\Fonts\simhei.ttf"),
     # SimSun (宋体)
     ("SimSun", r"C:\Windows\Fonts\simsun.ttc"),
     ("SimSun", r"C:\Windows\Fonts\SIMFANG.TTF"),
     # Microsoft YaHei (微软雅黑)
     ("MicrosoftYaHei", r"C:\Windows\Fonts\msyh.ttc"),
     ("MicrosoftYaHei", r"C:\Windows\Fonts\msyhbd.ttc"),
-    # SimHei (黑体)
-    ("SimHei", r"C:\Windows\Fonts\simhei.ttf"),
 ]
 
 CN_FONT = "Helvetica"  # 默认 fallback
 CN_FONT_BOLD = "Helvetica-Bold"
+
+# 优先支持 ReportLab 内置的 CJK 统一中文字体库
+try:
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+    CN_FONT = "STSong-Light"
+    CN_FONT_BOLD = "STSong-Light"
+except Exception:
+    pass
 
 for name, path in _FONT_CANDIDATES:
     if os.path.exists(path):
@@ -105,8 +114,8 @@ def _make_styles():
         spaceBefore=2, spaceAfter=4,
     )
     styles['code'] = ParagraphStyle(
-        'Code', fontName='Courier', fontSize=8,
-        leading=12, textColor=HexColor('#2d3436'),
+        'Code', fontName=CN_FONT, fontSize=8.5,
+        leading=13, textColor=HexColor('#2d3436'),
         leftIndent=8, spaceBefore=4, spaceAfter=4,
     )
     styles['bullet'] = ParagraphStyle(
@@ -119,6 +128,11 @@ def _make_styles():
         leading=10, alignment=TA_CENTER, textColor=HexColor('#aaaaaa'),
         spaceBefore=30,
     )
+    styles['h4'] = ParagraphStyle(
+        'H4', fontName=CN_FONT_BOLD, fontSize=11,
+        leading=16, textColor=HexColor('#555555'),
+        spaceBefore=8, spaceAfter=3,
+    )
     return styles
 
 
@@ -130,6 +144,121 @@ def _escape_pdf(text: str) -> str:
     return text
 
 
+_SIMHEI_CHAR_MAP = None
+
+def _get_simhei_char_map():
+    global _SIMHEI_CHAR_MAP
+    if _SIMHEI_CHAR_MAP is None:
+        try:
+            from reportlab.pdfbase import pdfmetrics
+            font = pdfmetrics.getFont(CN_FONT)
+            _SIMHEI_CHAR_MAP = font.face.charToGlyph
+        except Exception:
+            _SIMHEI_CHAR_MAP = {}
+    return _SIMHEI_CHAR_MAP
+
+
+def _sanitize_simhei_glyphs(text: str) -> str:
+    """过滤掉 SimHei 字体中不存在的缺失字符，彻底杜绝 PDF 中的缺字方框 □。"""
+    if not text:
+        return ""
+    
+    cmap = _get_simhei_char_map()
+    if not cmap:
+        return text
+
+    res = []
+    for ch in text:
+        code = ord(ch)
+        # ASCII 字符 / 换行符 / 空格 始终保留
+        if code < 128 or ch in ('\n', '\r', '\t'):
+            res.append(ch)
+            continue
+        # 如果字符 code 存在于 SimHei 字形映射表且字形 ID 不为 0
+        if code in cmap and cmap[code] != 0:
+            res.append(ch)
+        else:
+            # 常见不可见/缺失字符的降级/过滤
+            pass
+    return ''.join(res)
+
+
+def _clean_latex_to_reportlab_html(math_str: str) -> str:
+    """将 LaTeX 数学公式表达式转换为带有 ReportLab <sub>/<sup> 标签的优雅 HTML，防止 CJK 字体缺字方框 □。"""
+    if not math_str:
+        return ""
+    
+    import re
+    text = math_str.strip()
+    
+    # 1. 清理 \begin{aligned} ... \end{aligned} 环境标记
+    text = re.sub(r'\\begin\s*\{[a-zA-Z0-9_*]+\}', '', text)
+    text = re.sub(r'\\end\s*\{[a-zA-Z0-9_*]+\}', '', text)
+    text = text.replace('&=', '=').replace('&amp;=', '=').replace('\\\\', ' ')
+    
+    # 2. 提取 \mathbf{x}, \boldsymbol{x} 中的纯文本并加粗
+    text = re.sub(r'\\(?:mathbf|boldsymbol)\s*\{([^}]+)\}', r'<b>\1</b>', text)
+    text = re.sub(r'\\(?:mathfrak|mathcal|mathbb|text|mathrm)\s*\{([^}]+)\}', r'\1', text)
+
+    # 3. 替换 \hat{y} -> y<sup>^</sup>, \bar{y} -> y<sup>¯</sup>
+    text = re.sub(r'\\hat\s*\{([^}]+)\}', r'\1<sup>^</sup>', text)
+    text = re.sub(r'\\bar\s*\{([^}]+)\}', r'\1<sup>¯</sup>', text)
+    text = re.sub(r'\\hat\s+([a-zA-Z0-9])', r'\1<sup>^</sup>', text)
+    text = re.sub(r'\\bar\s+([a-zA-Z0-9])', r'\1<sup>¯</sup>', text)
+
+    # 4. 分式 \frac{a}{b} -> (a / b)
+    text = re.sub(r'\\frac\s*\{([^}]+)\}\s*\{([^}]+)\}', r'(\1 / \2)', text)
+    # 根号 \sqrt{a} -> √(a)
+    text = re.sub(r'\\sqrt\s*\{([^}]+)\}', r'√(\1)', text)
+
+    # 5. 算子与希腊字母映射 (使用 SimHei / CJK 标准全兼容字符)
+    latex_symbols = [
+        (r'\alpha', 'α'), (r'\beta', 'β'), (r'\gamma', 'γ'), (r'\delta', 'δ'),
+        (r'\epsilon', 'ε'), (r'\varepsilon', 'ε'), (r'\zeta', 'ζ'), (r'\eta', 'η'), (r'\theta', 'θ'),
+        (r'\lambda', 'λ'), (r'\mu', 'μ'), (r'\nu', 'ν'), (r'\pi', 'π'),
+        (r'\rho', 'ρ'), (r'\sigma', 'σ'), (r'\tau', 'τ'), (r'\phi', 'φ'),
+        (r'\varphi', 'φ'), (r'\chi', 'χ'), (r'\psi', 'ψ'), (r'\omega', 'omega'),
+        (r'\Gamma', 'Γ'), (r'\Delta', 'Δ'), (r'\Theta', 'Θ'), (r'\Lambda', 'Λ'),
+        (r'\Sigma', 'Σ'), (r'\Phi', 'Φ'), (r'\Psi', 'Ψ'), (r'\Omega', 'Ω'),
+        (r'\sin', 'sin'), (r'\cos', 'cos'), (r'\tan', 'tan'), (r'\log', 'log'),
+        (r'\ln', 'ln'), (r'\exp', 'exp'), (r'\max', 'max'), (r'\min', 'min'),
+        (r'\sum', '∑'), (r'\prod', '∏'), (r'\int', '∫'), (r'\partial', '∂'),
+        (r'\infty', '∞'), (r'\approx', '≈'), (r'\neq', '≠'), (r'\leqslant', '≤'), (r'\leq', '≤'), (r'\le', '≤'),
+        (r'\geqslant', '≥'), (r'\geq', '≥'), (r'\ge', '≥'), (r'\pm', '±'), (r'\times', '×'), (r'\div', '÷'),
+        (r'\cdot', '·'), (r'\in', '∈'), (r'\notin', '∉'), (r'\subset', '⊂'),
+        (r'\subseteq', '⊆'), (r'\cup', '∪'), (r'\cap', '∩'), (r'\forall', '∀'),
+        (r'\exists', '∃'), (r'\to', '→'), (r'\mapsto', '→'), (r'\Rightarrow', '⇒'), (r'\Leftrightarrow', '⇔'),
+        (r'\leftarrow', '←'), (r'\nabla', '∇'),
+        (r'\underbrace', ''), (r'\overbrace', ''), (r'\left\|', '||'), (r'\right\|', '||'),
+        (r'\left|', '|'), (r'\right|', '|'), (r'\left', ''), (r'\right', ''), (r'\mid', '|'),
+        (r'\quad', ' '), (r'\qquad', '  '), (r'\dots', '…'), (r'\cdots', '…'),
+    ]
+    
+    for k, v in latex_symbols:
+        text = text.replace(k, v)
+
+    # 6. 转换下标: _j, _{j=0}, _{\text{LS}} -> <sub>...</sub>
+    text = re.sub(r'_\{?([0-9a-zA-Z+\-=\/\\, ]+)\}?', r'<sub>\1</sub>', text)
+
+    # 7. 转换上标: ^j, ^{M}, ^T, ^{-1} -> <sup>...</sup>
+    text = re.sub(r'\^\{?([0-9a-zA-Z+\-=\/\\, ]+)\}?', r'<sup>\1</sup>', text)
+
+    # 8. 清理残留大括号与反斜杠
+    text = text.replace('{', '').replace('}', '').replace('\\', '')
+    
+    # 9. 安全转义，随后还原有效的 HTML 标签，并过滤掉 SimHei 不支持的缺字字符
+    safe = _escape_pdf(text.strip())
+    html = (
+        safe.replace('&lt;sub&gt;', '<sub>')
+        .replace('&lt;/sub&gt;', '</sub>')
+        .replace('&lt;sup&gt;', '<sup>')
+        .replace('&lt;/sup&gt;', '</sup>')
+        .replace('&lt;b&gt;', '<b>')
+        .replace('&lt;/b&gt;', '</b>')
+    )
+    return _sanitize_simhei_glyphs(html)
+
+
 def _inline_to_pdf(text: str) -> str:
     """将行内 Markdown 标记转换为 ReportLab XML 格式。"""
     # 保护行内公式
@@ -139,6 +268,9 @@ def _inline_to_pdf(text: str) -> str:
         return f'@@INLINEMATH{len(math_spans)-1}@@'
     text = re.sub(r'(?<!\\)\$([^$]+?)(?<!\\)\$', _save_math, text)
     
+    # 清理非包裹在 $ ... $ 中的散装 LaTeX 算子 (如 \lambda_i)
+    text = re.sub(r'\\(lambda|alpha|beta|gamma|delta|epsilon|theta|mu|pi|sigma|phi|omega|sum|int|partial|leq|geq|to|in|hat|bar)(_\{?[a-zA-Z0-9+]+\}?)?', lambda m: _clean_latex_to_reportlab_html(m.group(0)), text)
+
     # 转义
     text = _escape_pdf(text)
     
@@ -146,15 +278,16 @@ def _inline_to_pdf(text: str) -> str:
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     # 斜体 *text*
     text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
-    # 行内代码 `code`
-    text = re.sub(r'`([^`]+?)`', r'<font face="Courier" size="8"><b>\1</b></font>', text)
+    # 行内代码 `code` （使用支持中文字符的 CN_FONT 字体）
+    text = re.sub(r'`([^`]+?)`', rf'<font face="{CN_FONT}" size="8"><b>\1</b></font>', text)
     
-    # 恢复行内公式（用斜体表示）
+    # 恢复行内公式（转换成干净优雅的 ReportLab XML <sub>/<sup> 数学表达）
     for i, ms in enumerate(math_spans):
         math_content = ms.strip('$').strip()
-        text = text.replace(f'@@INLINEMATH{i}@@', f'<i>{_escape_pdf(math_content)}</i>')
+        clean_math = _clean_latex_to_reportlab_html(math_content)
+        text = text.replace(f'@@INLINEMATH{i}@@', f'<i><b>{clean_math}</b></i>')
     
-    return text
+    return _sanitize_simhei_glyphs(text)
 
 
 def md_to_flowables(md_text: str, styles: dict) -> list:
@@ -171,41 +304,92 @@ def md_to_flowables(md_text: str, styles: dict) -> list:
             i += 1
             continue
         
-        # 代码块
+        # 代码块 / Mermaid 图谱块
         if stripped.startswith('```'):
-            lang = stripped[3:].strip()
+            lang = stripped[3:].strip().lower()
             code_lines = []
             i += 1
             while i < len(lines) and not lines[i].strip().startswith('```'):
                 code_lines.append(lines[i])
                 i += 1
             i += 1  # skip closing ```
-            code_text = '\n'.join(code_lines)
+            
+            # 自动按 18 行分块构建 Table，防止超长代码/图谱块单 cell 超过单页高度导致 ReportLab LayoutError
+            max_chunk_size = 18
             flowables.append(Spacer(1, 4))
-            # Preformatted ä¸æ¯æŒè¾¹æ¡åæ°ï¼ç¨è¡¨æ ¼åè£æ¨¡æè¾¹æ¡
-            code_table = Table(
-                [[Preformatted(code_text, styles['code'])]],
-                colWidths=460,
-            )
-            code_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f8f9fa')),
-                ('BOX', (0, 0), (-1, -1), 0.5, HexColor('#d0d0d0')),
-                ('LEFTPADDING', (0, 0), (-1, -1), 8),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ]))
-            flowables.append(code_table)
+            
+            if not code_lines:
+                code_lines = [""]
+                
+            for chunk_idx in range(0, len(code_lines), max_chunk_size):
+                chunk = code_lines[chunk_idx : chunk_idx + max_chunk_size]
+                chunk_text = '\n'.join(chunk)
+                code_table = Table(
+                    [[Preformatted(chunk_text, styles['code'])]],
+                    colWidths=460,
+                )
+                code_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f8f9fa')),
+                    ('BOX', (0, 0), (-1, -1), 0.5, HexColor('#d0d0d0')),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                    ('TOPPADDING', (0, 0), (-1, -1), 4),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ]))
+                flowables.append(code_table)
+                if chunk_idx + max_chunk_size < len(code_lines):
+                    flowables.append(Spacer(1, 2))
+                    
             flowables.append(Spacer(1, 4))
             continue
+
+        # 块级 LaTeX 公式 ($$ ... $$ 或 \[ ... \])
+        if stripped.startswith('$$') or stripped.startswith('\\['):
+            math_lines = []
+            if stripped.startswith('$$') and stripped.endswith('$$') and len(stripped) > 2:
+                math_lines.append(stripped[2:-2])
+                i += 1
+            else:
+                i += 1
+                while i < len(lines) and not (lines[i].strip().endswith('$$') or lines[i].strip().endswith('\\]')):
+                    math_lines.append(lines[i])
+                    i += 1
+                if i < len(lines):
+                    i += 1  # skip closing $$ or \]
+            
+            raw_math = '\n'.join(math_lines).strip()
+            clean_math = _clean_latex_to_reportlab_html(raw_math)
+            
+            if clean_math:
+                math_style = ParagraphStyle(
+                    'BlockMath', parent=styles['body'],
+                    alignment=TA_CENTER, fontName=CN_FONT, fontSize=10,
+                    textColor=HexColor('#1e293b'), spaceBefore=4, spaceAfter=4,
+                )
+                flowables.append(Spacer(1, 4))
+                math_table = Table(
+                    [[Paragraph(f'<i><b>{clean_math}</b></i>', math_style)]],
+                    colWidths=460,
+                )
+                math_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f1f5f9')),
+                    ('BOX', (0, 0), (-1, -1), 0.5, HexColor('#cbd5e1')),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 10),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+                    ('TOPPADDING', (0, 0), (-1, -1), 6),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ]))
+                flowables.append(math_table)
+                flowables.append(Spacer(1, 4))
+            continue
         
-        # 标题
-        if stripped.startswith('### '):
-            flowables.append(Paragraph(_inline_to_pdf(stripped[4:]), styles['h3']))
-        elif stripped.startswith('## '):
-            flowables.append(Paragraph(_inline_to_pdf(stripped[3:]), styles['h2']))
-        elif stripped.startswith('# '):
-            flowables.append(Paragraph(_inline_to_pdf(stripped[2:]), styles['h1']))
+        # 标题 (支持 # 至 ######)
+        elif re.match(r'^#{1,6}\s+', stripped):
+            h_match = re.match(r'^(#{1,6})\s+(.*)$', stripped)
+            level = len(h_match.group(1))
+            h_text = h_match.group(2)
+            style_key = f'h{level}' if level <= 4 else 'h4'
+            flowables.append(Paragraph(_inline_to_pdf(h_text), styles[style_key]))
         
         # 水平线
         elif re.match(r'^---+\s*$', stripped):

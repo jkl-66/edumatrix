@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
-import { getReviewPlans, checkinReview, getCheckinStreak, getCheckinHistory } from '../api'
-import { Calendar, CheckCircle2, Clock, TrendingUp, Flame, BookOpen, Loader2, XCircle, ChevronDown, Search } from '@lucide/vue'
+import { getReviewPlans, checkinReview, getCheckinStreak, getCheckinHistory, deleteReviewPlan } from '../api'
+import { Calendar, CheckCircle2, Clock, TrendingUp, Flame, BookOpen, Loader2, XCircle, ChevronDown, Search, Trash2 } from '@lucide/vue'
 import * as echarts from 'echarts'
 
 const props = defineProps({ studentId: String })
@@ -101,6 +101,17 @@ async function doCheckin() {
     checkinLoading.value = false
   }
 }
+
+async function removePlan(planId) {
+  if (!confirm('确定要删除该复习计划吗？')) return
+  try {
+    await deleteReviewPlan(planId)
+    await loadData()
+  } catch (e) {
+    console.error('删除复习计划失败:', e)
+  }
+}
+
 
 function getMasteryColor(m) {
   if (m >= 0.8) return 'bg-emerald-500'
@@ -394,6 +405,14 @@ onUnmounted(() => {
                 下次复习: {{ new Date(plan.next_review_at).toLocaleDateString() }}
               </p>
             </div>
+            <button
+              type="button"
+              class="p-1.5 rounded-lg border border-red-100 text-red-500 hover:bg-red-50 hover:border-red-200 transition-colors shrink-0"
+              title="删除复习计划"
+              @click.stop="removePlan(plan.id)"
+            >
+              <Trash2 :size="13" />
+            </button>
           </div>
         </div>
       </div>
@@ -424,6 +443,14 @@ onUnmounted(() => {
                 下次复习: {{ new Date(plan.next_review_at).toLocaleDateString() }}
               </p>
             </div>
+            <button
+              type="button"
+              class="p-1.5 rounded-lg border border-red-100 text-red-500 hover:bg-red-50 hover:border-red-200 transition-colors shrink-0"
+              title="删除复习计划"
+              @click.stop="removePlan(plan.id)"
+            >
+              <Trash2 :size="13" />
+            </button>
           </div>
         </div>
       </div>

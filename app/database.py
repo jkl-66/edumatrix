@@ -39,8 +39,22 @@ def on_connection_checkin(dbapi_connection, connection_record):
             pass
 
 # 锁定本地 SQLite 单文件物理路径
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "edumatrix.db")
+import sys
+TESTING = (
+    os.getenv("TESTING", "false") == "true"
+    or "pytest" in sys.modules
+    or "unittest" in sys.modules
+    or "test_edumatrix" in sys.modules
+    or os.getenv("EDUMATRIX_ENV") == "test"
+)
+
+if TESTING:
+    DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "edumatrix_test.db")
+else:
+    DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "edumatrix.db")
+
 DATABASE_URL = f"sqlite:///{DB_PATH}"
+
 
 # 初始化引擎并锁定 WAL 模式提高并发性能
 engine = create_engine(

@@ -15,9 +15,10 @@ const props = defineProps({
 const chartRef = ref(null)
 let chartInstance = null
 
-function buildOption() {
+function buildOption(useZeroValues = false) {
   const names = props.concepts.map(c => c.name)
-  const currentValues = props.concepts.map(c => (c.mastery || 0) * 100)
+  const realCurrent = props.concepts.map(c => (c.mastery || 0) * 100)
+  const currentValues = useZeroValues ? realCurrent.map(() => 0) : realCurrent
   
   // 计算基于卡尔曼协方差 P_k 的置信环带宽度 (p_err 范围一般为 0.01~1.0)
   const confidenceMargins = props.concepts.map(c => {
@@ -25,11 +26,13 @@ function buildOption() {
     return Math.max(2, Math.min(22, err * 20))
   })
   
-  const upperBounds = currentValues.map((val, idx) => Math.min(100, val + confidenceMargins[idx]))
-  const lowerBounds = currentValues.map((val, idx) => Math.max(0, val - confidenceMargins[idx]))
+  const realUpper = realCurrent.map((val, idx) => Math.min(100, val + confidenceMargins[idx]))
+  const realLower = realCurrent.map((val, idx) => Math.max(0, val - confidenceMargins[idx]))
+  const realInitial = realCurrent.map(val => Math.max(20, Math.min(val, val - 25 + Math.sin(val) * 5)))
 
-  // 模拟初始掌握度状态
-  const initialValues = currentValues.map(val => Math.max(20, Math.min(val, val - 25 + Math.sin(val) * 5)))
+  const upperBounds = useZeroValues ? realUpper.map(() => 0) : realUpper
+  const lowerBounds = useZeroValues ? realLower.map(() => 0) : realLower
+  const initialValues = useZeroValues ? realInitial.map(() => 0) : realInitial
 
   const seriesData = []
 
@@ -82,8 +85,15 @@ function buildOption() {
     radar: {
       indicator: names.map(n => ({ name: n, max: 100 })),
       shape: 'polygon',
+      radius: '55%',
+      center: ['50%', '52%'],
       splitNumber: 4,
-      axisName: { color: '#94a3b8', fontSize: 10 },
+      axisName: {
+        color: '#64748b',
+        fontSize: 10,
+        padding: [2, 4],
+      },
+      axisNameGap: 5,
       splitArea: {
         areaStyle: { color: ['rgba(30,41,59,0.02)', 'rgba(30,41,59,0.05)'] },
       },
@@ -104,23 +114,30 @@ function buildOption() {
     }],
     tooltip: {
       trigger: 'item',
-      backgroundColor: 'rgba(15, 23, 42, 0.9)',
+      confine: true,
+      enterable: true,
+      hideDelay: 400,
+      backgroundColor: 'rgba(15, 23, 42, 0.95)',
       borderWidth: 0,
       textStyle: { color: '#fff' },
       formatter: (params) => {
-        return `<div style="padding: 8px; font-size: 11px; font-family: sans-serif;">
-          <div style="font-weight: 600; margin-bottom: 4px; color: #cbd5e1;">${props.showComparison ? '掌握度对比' : '当前能力状态'}</div>
-          ${props.concepts.map((c, i) => {
-            const curVal = currentValues[i].toFixed(0)
-            const initVal = initialValues[i].toFixed(0)
-            return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 4px;">
-              <span style="color: #94a3b8;">${c.name}</span>
-              ${props.showComparison 
-                ? `<span style="font-weight: 500;">${initVal}% → <span style="color: #60a5fa; font-weight: 700;">${curVal}%</span></span>`
-                : `<span style="font-weight: 700; color: #60a5fa;">${curVal}%</span>`
-              }
-            </div>`
-          }).join('')}
+        return `<div style="padding: 6px; font-size: 10px; font-family: sans-serif; max-width: 280px;">
+          <div style="font-weight: 600; margin-bottom: 6px; color: #cbd5e1; border-b: 1px solid rgba(255,255,255,0.15); padding-bottom: 4px;">
+            ${props.showComparison ? '掌握度对比' : '当前能力状态'}
+          </div>
+          <div style="max-height: 130px; overflow-y: auto; display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 12px; padding-right: 4px;">
+            ${props.concepts.map((c, i) => {
+              const curVal = currentValues[i].toFixed(0)
+              const initVal = initialValues[i].toFixed(0)
+              return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px dashed rgba(255,255,255,0.05); padding-bottom: 2px;">
+                <span style="color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70px;" title="${c.name}">${c.name}</span>
+                ${props.showComparison 
+                  ? `<span style="font-weight: 500; font-size: 9px; white-space: nowrap;">${initVal}%→<span style="color: #60a5fa; font-weight: 700;">${curVal}%</span></span>`
+                  : `<span style="font-weight: 700; color: #60a5fa; white-space: nowrap;">${curVal}%</span>`
+                }
+              </div>`
+            }).join('')}
+          </div>
         </div>`
       },
     },
@@ -140,7 +157,12 @@ function initChart() {
     chartInstance = null
   }
   chartInstance = echarts.init(chartRef.value)
-  chartInstance.setOption(buildOption())
+  chartInstance.setOption(buildOption(true))
+  setTimeout(() => {
+    if (chartInstance) {
+      chartInstance.setOption(buildOption(false))
+    }
+  }, 100)
 }
 
 // 任务 8.2: 使用具名 resize 函数，确保 onUnmounted 能解绑

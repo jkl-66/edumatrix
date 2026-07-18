@@ -6,7 +6,8 @@ import * as echarts from 'echarts'
 import {
   BookOpen, BrainCircuit, Target, TrendingUp, ChevronRight,
   ArrowRight, AlertTriangle, CheckCircle2, Layers, Sparkles,
-  Clock, Zap, ChevronLeft, Play, Activity, Unlock, RefreshCw, Search
+  Clock, Zap, ChevronLeft, Play, Activity, Unlock, RefreshCw, Search,
+  Maximize2, Minimize2
 } from '@lucide/vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 
@@ -24,6 +25,12 @@ const semanticQuery = ref('')
 const showSimilarityLog = ref(false)
 const semanticChartRef = ref(null)
 let semanticChart = null
+const isSemanticFullscreen = ref(false)
+function toggleSemanticFullscreen() {
+  isSemanticFullscreen.value = !isSemanticFullscreen.value
+}
+let breathingTimer = null
+let breathingStep = 0
 
 const showVideoPanel = ref(false)
 const videoPanelUrl = ref('')
@@ -47,6 +54,7 @@ const routeResourceNodes = computed(() =>
 )
 const routeStageTarget = computed(() => adaptiveRoute.value?.stage_target_concept || adaptiveRoute.value?.target_concept || '')
 const routeFinalTarget = computed(() => adaptiveRoute.value?.final_goal_concept || adaptiveRoute.value?.target_concept || '')
+const activeLearningTarget = computed(() => pathData.value?.active_learning_target || '')
 const remainingRoute = computed(() => adaptiveRoute.value?.candidate_draft?.remaining_path || [])
 const graphEdgeCount = computed(() => pathData.value?.micro_concept_graph?.metadata?.edge_count || routeEdges.value.length)
 const crossGraph = computed(() => pathData.value?.cross_domain_micro_graph || null)
@@ -164,7 +172,16 @@ async function loadData() {
     pathData.value = path
     recommendations.value = recs || []
     if (!semanticQuery.value && path?.adaptive_route?.final_goal_concept) {
-      semanticQuery.value = path.adaptive_route.final_goal_concept
+      const finalGoal = path.adaptive_route.final_goal_concept
+      const allNodeNames = new Set([
+        ...(path.micro_concept_graph?.nodes?.map(n => n.concept) || []),
+        ...(path.cross_domain_micro_graph?.nodes?.map(n => n.concept) || [])
+      ])
+      if (allNodeNames.has(finalGoal)) {
+        semanticQuery.value = finalGoal
+      } else if (path.adaptive_route.stage_target_concept) {
+        semanticQuery.value = path.adaptive_route.stage_target_concept
+      }
     }
   } catch (e) {
     error.value = e.response?.data?.detail || e.message || '加载失败'
@@ -201,8 +218,35 @@ function renderSemanticGraph() {
   }).slice(0, 42)
   const nodeSet = new Set(rawNodes.map(node => node.concept))
   const categories = Array.from(new Set(rawNodes.map(node => node.domain_label || '课程图谱'))).map(name => ({ name }))
+  
+  const legendColor = '#64748b'
+  const labelColor = '#475569'
+
   const nodes = rawNodes.map(node => {
     const active = routeSet.has(node.concept) || (query && String(node.concept).includes(query))
+    const isCompleted = node.mastered || (node.mastery && node.mastery >= 0.9)
+    
+    // Choose beautiful gradient based on category or active state
+    let colorStart, colorEnd, shadowColor
+    if (active) {
+      colorStart = 'rgba(99, 102, 241, 0.95)' // Indigo
+      colorEnd = 'rgba(129, 140, 248, 0.4)'
+      shadowColor = 'rgba(99, 102, 241, 0.7)'
+    } else if (isCompleted) {
+      colorStart = 'rgba(16, 185, 129, 0.9)' // Emerald
+      colorEnd = 'rgba(52, 211, 153, 0.35)'
+      shadowColor = 'rgba(16, 185, 129, 0.45)'
+    } else {
+      colorStart = 'rgba(14, 165, 233, 0.85)' // Sky Blue
+      colorEnd = 'rgba(56, 189, 248, 0.3)'
+      shadowColor = 'rgba(14, 165, 233, 0.3)'
+    }
+    
+    const nodeColor = new echarts.graphic.RadialGradient(0.4, 0.3, 0.8, [
+      { offset: 0, color: colorStart },
+      { offset: 1, color: colorEnd }
+    ])
+
     return {
       id: node.concept,
       name: node.concept,
@@ -210,32 +254,72 @@ function renderSemanticGraph() {
       category: node.domain_label || '课程图谱',
       symbolSize: active ? 42 : (node.resource?.has_animation ? 34 : 26),
       itemStyle: {
-        shadowBlur: active ? 18 : 6,
-        shadowColor: active ? '#6366f1' : '#cbd5e1',
+        color: nodeColor,
+        borderColor: active ? 'rgba(99, 102, 241, 0.8)' : 'rgba(226, 232, 240, 0.5)',
+        borderWidth: active ? 2 : 1.2,
+        shadowBlur: active ? 16 : 8,
+        shadowColor: shadowColor,
+        shadowOffsetX: 0,
+        shadowOffsetY: 0
       },
-      label: { show: active, fontSize: 10 },
+      label: { 
+        show: true, 
+        fontSize: active ? 11 : 9,
+        fontWeight: active ? 'bold' : 'normal',
+        color: labelColor,
+        position: 'bottom',
+        distance: 5
+      },
     }
   })
+
   const links = (crossGraph.value.edges || [])
     .filter(edge => nodeSet.has(edge.from) && nodeSet.has(edge.to))
     .slice(0, 80)
-    .map(edge => ({
-      source: edge.from,
-      target: edge.to,
-      value: edge.similarity || 0.5,
-      lineStyle: {
-        opacity: edge.type === 'cross_domain_prerequisite' ? 0.55 : 0.28,
-        width: edge.type === 'cross_domain_prerequisite' ? 1.6 : 1,
-      },
-    }))
+    .map(edge => {
+      const isCross = edge.type === 'cross_domain_prerequisite'
+      return {
+        source: edge.from,
+        target: edge.to,
+        value: edge.similarity || 0.5,
+        lineStyle: {
+          color: 'source',
+          opacity: 0.6,
+          width: isCross ? 2.5 : 1.2
+        },
+      }
+    })
+
   semanticChart.setOption({
     tooltip: {
+      trigger: 'item',
+      backgroundColor: 'rgba(15, 23, 42, 0.95)',
+      borderWidth: 1,
+      borderColor: 'rgba(51, 65, 85, 0.5)',
+      textStyle: { color: '#f8fafc', fontSize: 10, fontFamily: 'system-ui, sans-serif' },
+      padding: [8, 12],
+      borderRadius: 10,
+      shadowBlur: 10,
+      shadowColor: 'rgba(0, 0, 0, 0.5)',
       formatter: params => {
-        if (params.dataType === 'edge') return `${params.data.source} -> ${params.data.target}`
-        return `${params.name}<br/>掌握度 ${params.value || 0}%`
+        if (params.dataType === 'edge') {
+          return `<div style="display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:8px; color:#94a3b8;">依赖关联</span>
+            <span style="font-weight:600;">${params.data.source} ➔ ${params.data.target}</span>
+            <span style="font-size:8px; color:#818cf8; font-family:monospace; margin-top:2px;">相关度: ${(params.data.value * 100).toFixed(0)}%</span>
+          </div>`
+        }
+        const stateColor = params.value >= 60 ? '#10b981' : (params.value >= 30 ? '#f59e0b' : '#ef4444')
+        return `<div style="display:flex; flex-direction:column; gap:4px;">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${stateColor};"></span>
+            <span style="font-weight:700; color:#e2e8f0;">${params.name}</span>
+          </div>
+          <span style="font-size:8px; color:#94a3b8;">掌握度: <b style="color:#818cf8; font-family:monospace;">${params.value}%</b></span>
+        </div>`
       },
     },
-    legend: [{ type: 'scroll', top: 0, textStyle: { fontSize: 10 } }],
+    legend: [{ type: 'scroll', top: 0, textStyle: { fontSize: 10, color: legendColor } }],
     series: [{
       type: 'graph',
       layout: 'force',
@@ -243,21 +327,82 @@ function renderSemanticGraph() {
       categories,
       data: nodes,
       links,
-      edgeSymbol: ['none', 'arrow'],
-      edgeSymbolSize: 6,
-      force: { repulsion: 110, edgeLength: 80, gravity: 0.08 },
-      emphasis: { focus: 'adjacency' },
-      label: { color: '#334155' },
+      edgeSymbol: ['circle', 'arrow'],
+      edgeSymbolSize: [4, 6],
+      force: { repulsion: 380, edgeLength: 160, gravity: 0.05, layoutAnimation: false },
+      emphasis: { 
+        focus: 'adjacency',
+        lineStyle: {
+          width: 3.5,
+          color: '#818cf8',
+          shadowBlur: 10,
+          shadowColor: 'rgba(129, 140, 248, 0.8)'
+        },
+        itemStyle: {
+          shadowBlur: 25,
+          shadowColor: 'rgba(99, 102, 241, 0.95)'
+        }
+      },
+      label: { color: labelColor },
     }],
   })
+
+  // Start breathing animation
+  if (breathingTimer) {
+    clearInterval(breathingTimer)
+    breathingTimer = null
+  }
+  breathingTimer = setInterval(() => {
+    if (!semanticChart) return
+    breathingStep = (breathingStep + 0.08) % (Math.PI * 2)
+    const pulse = Math.sin(breathingStep)
+    
+    const currentOption = semanticChart.getOption()
+    if (currentOption && currentOption.series && currentOption.series[0]) {
+      const seriesData = currentOption.series[0].data
+      if (seriesData) {
+        let changed = false
+        seriesData.forEach(node => {
+          if (node.x !== undefined && node.y !== undefined) {
+            node.fixed = true
+          }
+          const active = routeSet.has(node.name) || (query && String(node.name).includes(query))
+          if (active && node.itemStyle) {
+            node.itemStyle.shadowBlur = Math.round(16 + pulse * 5)
+            changed = true
+          }
+        })
+        if (changed) {
+          semanticChart.setOption({
+            series: [{
+              data: seriesData
+            }]
+          }, { notMerge: false, lazyUpdate: true })
+        }
+      }
+    }
+  }, 35)
 }
 
 watch([crossGraph, routeNodes, semanticQuery], () => nextTick(renderSemanticGraph), { deep: true })
+watch(isSemanticFullscreen, () => {
+  if (semanticChart) {
+    semanticChart.dispose()
+    semanticChart = null
+  }
+  nextTick(() => {
+    renderSemanticGraph()
+  })
+})
 onMounted(loadData)
 onUnmounted(() => {
   if (semanticChart) {
     semanticChart.dispose()
     semanticChart = null
+  }
+  if (breathingTimer) {
+    clearInterval(breathingTimer)
+    breathingTimer = null
   }
 })
 </script>
@@ -353,15 +498,22 @@ onUnmounted(() => {
       <div class="flex flex-wrap items-stretch gap-2">
         <template v-for="(node, idx) in routeNodes" :key="node.concept">
           <div
-            class="min-w-[118px] flex-1 rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-3 text-left hover:border-indigo-200 hover:bg-indigo-50/50 transition-all"
+            class="min-w-[118px] flex-1 rounded-xl border px-3 py-3 text-left transition-all duration-300"
+            :class="node.concept === activeLearningTarget 
+              ? 'border-amber-400/80 bg-amber-500/5 shadow-[0_0_15px_rgba(245,158,11,0.12)] ring-2 ring-amber-400/30 ring-offset-1 scale-[1.01] animate-pulse'
+              : 'border-gray-100 bg-gray-50/70 hover:border-indigo-200 hover:bg-indigo-50/50'"
             role="button"
             tabindex="0"
             @click="goLearn(node.concept)"
             @keydown.enter="goLearn(node.concept)"
           >
             <div class="flex items-center justify-between gap-2">
-              <span class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold shrink-0">{{ node.step }}</span>
-              <span class="text-[9px] px-1.5 py-0.5 rounded border" :class="routeActionColor(node.action)">{{ node.action }}</span>
+              <span class="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+                :class="node.concept === activeLearningTarget ? 'bg-amber-500 text-white' : 'bg-indigo-100 text-indigo-700'">
+                {{ node.step }}
+              </span>
+              <span v-if="node.concept === activeLearningTarget" class="text-[8px] font-extrabold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 animate-pulse">🔥 当前主攻</span>
+              <span v-else class="text-[9px] px-1.5 py-0.5 rounded border" :class="routeActionColor(node.action)">{{ node.action }}</span>
             </div>
             <p class="text-xs font-semibold text-gray-800 mt-2 truncate">{{ node.concept }}</p>
             <div class="mt-2 h-1.5 bg-white rounded-full overflow-hidden">
@@ -449,57 +601,89 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div v-if="crossGraph" class="mt-3 rounded-xl bg-white border border-slate-100 p-3">
-        <div class="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-3">
-          <div>
-            <p class="text-[10px] font-bold text-slate-700">语义图谱匹配</p>
-            <p class="text-[9px] text-slate-400 mt-0.5">节点来自当前图谱、RAG 和本地动画资源</p>
-          </div>
-          <div class="flex items-center gap-2">
-            <label class="flex items-center gap-1.5 rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5">
-              <Search :size="11" class="text-slate-400" />
-              <input
-                v-model="semanticQuery"
-                class="w-28 bg-transparent text-[10px] text-slate-600 outline-none"
-                placeholder="检索概念"
-              />
-            </label>
-            <button
-              type="button"
-              class="rounded-lg border border-slate-100 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
-              @click="showSimilarityLog = !showSimilarityLog"
-            >
-              {{ showSimilarityLog ? '收起日志' : '相似度日志' }}
-            </button>
-          </div>
-        </div>
-        <div ref="semanticChartRef" class="semantic-graph h-64 rounded-xl bg-slate-50/60 border border-slate-100" />
-        <div v-if="topSemanticLog.length" class="mt-3 flex flex-wrap gap-2">
-          <div
-            v-for="item in topSemanticLog"
-            :key="`pulse-${item.source}-${item.target}`"
-            class="ripple-chip rounded-lg border border-indigo-100 bg-indigo-50/70 px-2.5 py-1.5 text-[9px] text-indigo-700"
+      <Teleport to="body" :disabled="!isSemanticFullscreen">
+        <div 
+          v-if="crossGraph"
+          :class="[
+            isSemanticFullscreen 
+              ? 'fixed inset-0 z-[999] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 select-none' 
+              : 'mt-3 w-full'
+          ]"
+          @click.self="isSemanticFullscreen ? toggleSemanticFullscreen() : null"
+        >
+          <div 
+            :class="[
+              'border p-4 transition-all duration-300 relative flex flex-col bg-white border-slate-200',
+              isSemanticFullscreen 
+                ? 'w-[90vw] max-w-5xl h-[80vh] shadow-2xl rounded-2xl' 
+                : 'rounded-xl shadow-sm'
+            ]"
           >
-            <span class="ripple-dot" />
-            {{ item.source }} ↔ {{ item.target }} · {{ Math.round((item.similarity || 0) * 100) }}%
-          </div>
-        </div>
-        <div v-if="showSimilarityLog" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
-          <div
-            v-for="item in semanticLog"
-            :key="`${item.source}-${item.target}`"
-            class="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2"
-          >
-            <div class="flex items-center justify-between gap-2">
-              <p class="text-[10px] font-semibold text-slate-700 truncate">{{ item.source }} → {{ item.target }}</p>
-              <span class="text-[9px] font-mono text-indigo-600">{{ Math.round((item.similarity || 0) * 100) }}%</span>
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-3">
+              <div>
+                <p class="text-xs font-bold text-slate-700">语义图谱匹配</p>
+                <p class="text-[10px] text-slate-400 mt-0.5">节点来自当前图谱、RAG 和本地动画资源</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <label class="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                  <Search :size="11" class="text-slate-400" />
+                  <input
+                    v-model="semanticQuery"
+                    class="w-28 bg-transparent text-[10px] text-slate-600 outline-none"
+                    placeholder="检索概念"
+                  />
+                </label>
+                <button
+                  type="button"
+                  class="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                  @click="showSimilarityLog = !showSimilarityLog"
+                >
+                  {{ showSimilarityLog ? '收起日志' : '相似度日志' }}
+                </button>
+                <button
+                  type="button"
+                  class="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 transition-colors flex items-center gap-1 cursor-pointer"
+                  @click="toggleSemanticFullscreen"
+                >
+                  <Maximize2 v-if="!isSemanticFullscreen" :size="11" />
+                  <Minimize2 v-else :size="11" />
+                  {{ isSemanticFullscreen ? '退出' : '全屏探索' }}
+                </button>
+              </div>
             </div>
-            <p class="text-[9px] text-slate-500 mt-1">
-              {{ item.source_domain_label }} / {{ item.target_domain_label }} · {{ item.evidence }}
-            </p>
+            <div 
+              ref="semanticChartRef" 
+              class="semantic-graph rounded-xl w-full flex-1" 
+              :class="isSemanticFullscreen ? 'h-full bg-white border border-slate-100' : 'h-64 bg-slate-50/60 border border-slate-100'" 
+            />
+            <div v-if="topSemanticLog.length" class="mt-3 flex flex-wrap gap-2">
+              <div
+                v-for="item in topSemanticLog"
+                :key="`pulse-${item.source}-${item.target}`"
+                class="ripple-chip rounded-lg border border-indigo-100 bg-indigo-50/70 px-2.5 py-1.5 text-[9px] text-indigo-700"
+              >
+                <span class="ripple-dot" />
+                {{ item.source }} ↔ {{ item.target }} · {{ Math.round((item.similarity || 0) * 100) }}%
+              </div>
+            </div>
+            <div v-if="showSimilarityLog" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 overflow-y-auto max-h-[25vh]">
+              <div
+                v-for="item in semanticLog"
+                :key="`${item.source}-${item.target}`"
+                class="rounded-lg border px-3 py-2 bg-slate-50 border-slate-100 text-slate-600"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <p class="text-[10px] font-semibold truncate text-slate-700">{{ item.source }} → {{ item.target }}</p>
+                  <span class="text-[9px] font-mono text-indigo-600">{{ Math.round((item.similarity || 0) * 100) }}%</span>
+                </div>
+                <p class="text-[9px] text-slate-500 mt-1">
+                  {{ item.source_domain_label }} / {{ item.target_domain_label }} · {{ item.evidence }}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </Teleport>
 
       <div v-if="plannerTrace.length" class="mt-3 swarm-terminal rounded-xl border border-slate-800 bg-slate-950 p-3">
         <div class="flex items-center justify-between mb-2">

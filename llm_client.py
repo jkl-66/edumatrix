@@ -510,6 +510,8 @@ class DeterministicEducationLLM:
             return _video_script(topic)
         if "视频推荐官" in role:
             return _video_recommendations(topic)
+        if "概念可视化导师" in role or "Visualizer Agent" in role:
+            return _simplified_explanation(topic, user_prompt)
         if "路径规划师" in role:
             return f"学习路径建议：先补齐前置概念，再学习 {topic} 的定义、计算流程、代码实现和易错点。"
         return f"{role} 已基于检索证据处理主题：{topic}。"
@@ -877,3 +879,382 @@ def _video_recommendations(topic: str) -> str:
             "recommendation": f"系统为您量身定制的{topic}本地推导演示动画，分步剖析其底层数学运算逻辑。"
         }
     ], ensure_ascii=False)
+
+
+def get_concept_rich_adaptation(concept: str, mastery_score: float = 0.4) -> dict:
+    """Return high-fidelity concept-specific simplified explanation and detailed Mermaid mindmap."""
+    mastery_pct = round(max(0.0, min(1.0, mastery_score)) * 100)
+    c = concept.strip()
+    
+    knowledge_map = {
+        "池化层": {
+            "explanation": (
+                f"💡 降维直觉：池化层就像给高清大图生成缩略图！它用固定大小的滑动窗口（如 2x2）在特征图上扫描，"
+                f"只抽取局部最显著的特征（最大池化 MaxPool）或求平均（平均池化 AvgPool）。"
+                f"这样既降低了数据尺寸和后续计算量，又赋予了模型平移不变性。\n\n"
+                f"🎯 避坑提醒：当前掌握度 {mastery_pct}%。请注意：池化层没有任何需要训练更新的权重参数，"
+                f"且输入与输出的通道数 (Channel) 保持完全一致！"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("池化层 (Pooling)"))\n'
+                "    生活化类比\n"
+                "      像压缩照片生成缩略图\n"
+                "      只保留最显著的局部特征\n"
+                "    两大主流计算\n"
+                "      MaxPool (最大池化: 提取最强响应)\n"
+                "      AvgPool (平均池化: 保留背景均值)\n"
+                "    核心参数约束\n"
+                "      kernel_size 2x2 (采样窗口大小)\n"
+                "      stride 2 (滑动步长)\n"
+                "    避坑红线防错\n"
+                "      无可学习参数 (不进行反向传播更新)\n"
+                "      通道数 Channel 保持完全不变\n"
+            )
+        },
+        "卷积神经网络": {
+            "explanation": (
+                f"💡 降维直觉：CNN 就像探长用放大镜逐区域扫描现场！低层卷积核提取直线、边缘等基础线条；"
+                f"高层卷积核把基础线条拼装成眼睛、轮廓等完整零件。通过权值共享与局部感受野，参数量大幅降低。\n\n"
+                f"🎯 最小演练：当前掌握度 {mastery_pct}%。尝试算一算：4x4 特征图用 3x3 卷积核无 padding 卷积，"
+                f"输出尺寸为 (4-3+1) = 2x2。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("卷积神经网络 (CNN)"))\n'
+                "    生活化类比\n"
+                "      像放大镜逐区域扫描探案\n"
+                "      从局部边缘拼装出高层概念\n"
+                "    三大核心结构\n"
+                "      卷积层 (滑动窗口点乘提取特征)\n"
+                "      池化层 (降维缩放与平移不变)\n"
+                "      全连接层 (整合全局特征做分类)\n"
+                "    尺寸计算公式\n"
+                "      N_out = (W - K + 2P)/S + 1\n"
+                "    三大工程优势\n"
+                "      局部感受野 + 权值共享 + 平移不变\n"
+            )
+        },
+        "逻辑回归": {
+            "explanation": (
+                f"💡 降维直觉：逻辑回归就像打分裁判！它先计算线性的综合得分 z = w1*x1 + w2*x2 + b，"
+                f"再用 S 型的 Sigmoid 函数把得分压缩到 (0, 1) 区间表示概率。概率 > 0.5 判定为正类。\n\n"
+                f"🎯 避坑提醒：当前掌握度 {mastery_pct}%。注意！逻辑回归名字叫“回归”，但它实际上是解决二分类问题的经典分类模型！"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("逻辑回归 (Logistic Regression)"))\n'
+                "    生活化类比\n"
+                "      像裁判将连续打分转化为通过或淘汰\n"
+                "    核心计算管道\n"
+                "      1. 线性加权得分 z = w^T x + b\n"
+                "      2. Sigmoid 激活 sigma(z) = 1/(1+e^-z)\n"
+                "      3. 概率判决 (默认阈值 0.5)\n"
+                "    损失函数与优化\n"
+                "      对数损失 (Cross-Entropy Loss)\n"
+                "      梯度下降更新权重 w\n"
+                "    经典误区辨析\n"
+                "      名字叫回归，本质是分类模型！\n"
+            )
+        },
+        "过拟合": {
+            "explanation": (
+                f"💡 降维直觉：过拟合就像考生死记硬背了模拟题原题答案！在做过的卷子上拿了 100 分，"
+                f"可遇到高考新题就手足无措。根源在于模型太复杂、参数太多，把训练集里的细节噪声也当规律学进去了。\n\n"
+                f"🎯 破局行动：当前掌握度 {mastery_pct}%。建议给模型降温：用 L1/L2 正则化惩罚大权重，或用 Dropout 随机截断部分神经元。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("过拟合 (Overfitting)"))\n'
+                "    生活化类比\n"
+                "      考生死记硬背模拟题原题答案\n"
+                "      训练集满分，测试集大跌\n"
+                "    核心触发原因\n"
+                "      模型参数量过大 / 复杂度过高\n"
+                "      训练数据太少 / 混入噪声\n"
+                "    四大解毒处方\n"
+                "      L1/L2 正则化 (限制权重过大)\n"
+                "      Dropout (随机暂停神经元)\n"
+                "      数据增强 (Data Augmentation)\n"
+                "      早停机制 (Early Stopping)\n"
+            )
+        },
+        "正则化": {
+            "explanation": (
+                f"💡 降维直觉：正则化就像给过于骄傲的模型戴上“紧箍咒”！在原本的损失函数后面加上权重惩罚项，"
+                f"强迫模型保持简单，防止某个特征的权重过于膨胀。\n\n"
+                f"🎯 常用对比：掌握度 {mastery_pct}%。L1 正则 (Lasso) 让不重要的权重变为 0（做特征筛选）；"
+                f"L2 正则 (Ridge) 让权重均匀收缩变小。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("正则化 (Regularization)"))\n'
+                "    生活化类比\n"
+                "      给模型戴上紧箍咒，防止任意妄为\n"
+                "    两大主流类型\n"
+                "      L1 正则 (Lasso): 产生稀疏权重，做特征选择\n"
+                "      L2 正则 (Ridge): 抑制大权重，平滑预测曲线\n"
+                "    目标函数构成\n"
+                "      Total Loss = Data Loss + lambda * Penalty\n"
+                "    超参数 lambda 调节\n"
+                "      lambda 过大 -> 欠拟合; lambda 过小 -> 过拟合\n"
+            )
+        },
+        "交叉验证": {
+            "explanation": (
+                f"💡 降维直觉：交叉验证就像轮流当监考老师！把数据分成 K 份（如 K=5），每次用 1 份当测试集，"
+                f"剩下的 4 份当训练集，做 5 次并取平均得分。这样确保每块数据都被评估过，结果比单次划分更真实。\n\n"
+                f"🎯 最小建议：当前掌握度 {mastery_pct}%。类别不均衡时，务必使用分层 K 折交叉验证 (Stratified K-Fold)。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("交叉验证 (Cross Validation)"))\n'
+                "    生活化类比\n"
+                "      轮流当考官，评估模型的真实泛化水平\n"
+                "    主流 K-Fold 流程\n"
+                "      1. 数据切分成 K 等份\n"
+                "      2. 循环 K 次：1份验证 + K-1份训练\n"
+                "      3. 计算 K 次指标的算术平均值\n"
+                "    常用变体应用\n"
+                "      Stratified K-Fold (分层保持类别比例)\n"
+                "      Leave-One-Out (留一法，适用于小样本)\n"
+            )
+        },
+        "注意力机制": {
+            "explanation": (
+                f"💡 降维直觉：注意力机制就像阅读长文时的眼神聚焦！我们看书时不会平均对待每个字，"
+                f"而是重点扫描关键词。模型通过 Query（想找什么）、Key（标签）、Value（内容）计算相关度，把计算资源集中在关键输入上。\n\n"
+                f"🎯 核心公式：Attention(Q,K,V) = Softmax( Q K^T / sqrt(d_k) ) V。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("注意力机制 (Attention)"))\n'
+                "    生活化类比\n"
+                "      看文章时眼神自动聚焦高亮关键词\n"
+                "    Q_K_V 三元组角色\n"
+                "      Query (查询: 当前关注的目标)\n"
+                "      Key (键: 序列中各元素的索引标签)\n"
+                "      Value (值: 对应元素的丰富信息表示)\n"
+                "    计算四步曲\n"
+                "      1. 点积匹配 -> 2. 缩放 sqrt(d_k) -> 3. Softmax 归一化 -> 4. 加权求和 V\n"
+                "    缩放因子作用\n"
+                "      防止点积数值过大导致 Softmax 梯度消失\n"
+            )
+        },
+        "Transformer": {
+            "explanation": (
+                f"💡 降维直觉：Transformer 就像拥有全局视野的同声传译！传统 RNN 必须逐字顺序读取，"
+                f"而 Transformer 抛弃循环结构，利用自注意力机制 (Self-Attention) 一次性全局处理整句话，并能高度并行训练。\n\n"
+                f"🎯 核心结构：Encoder 负责全局特征编码，Decoder 配合 Cross-Attention 逐字生成文本。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("Transformer 架构"))\n'
+                "    生活化类比\n"
+                "      突破时间限制、拥有全局视野的同传专家\n"
+                "    两大核心组件\n"
+                "      Encoder (编码器: 提取全局多头特征)\n"
+                "      Decoder (解码器: 自回归生成目标序列)\n"
+                "    三大关键技术\n"
+                "      Multi-Head Attention (多头注意力)\n"
+                "      Positional Encoding (位置编码注入顺序)\n"
+                "      Feed Forward & LayerNorm (前馈与残差归一化)\n"
+            )
+        },
+        "梯度下降": {
+            "explanation": (
+                f"💡 降维直觉：梯度下降就像盲人蒙眼下山！茫茫大雾中看不见山脚，盲人通过脚尖感应坡度最陡的方向（负梯度方向），"
+                f"向下迈出一小步（学习率 alpha），反复寻找最低处的谷底（Loss 最小值）。\n\n"
+                f"🎯 避坑提醒：当前掌握度 {mastery_pct}%。学习率 alpha 太大容易跨过谷底发散，太小会导致下山极其缓慢！"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("梯度下降 (Gradient Descent)"))\n'
+                "    生活化类比\n"
+                "      大雾中蒙眼试探最陡坡度一步步下山\n"
+                "    核心更新公式\n"
+                "      w_new = w_old - alpha * grad(Loss)\n"
+                "    三大常见算法\n"
+                "      BGD (批量梯度下降: 准确但慢)\n"
+                "      SGD (随机梯度下降: 快但抖动)\n"
+                "      MBGD / Adam (小批量自适应动量下降)\n"
+                "    学习率 alpha 影响\n"
+                "      太大 -> 震荡发散; 太小 -> 收敛龟速\n"
+            )
+        },
+        "支持向量机": {
+            "explanation": (
+                f"💡 降维直觉：SVM 就像在两组棋子之间画一条最宽的隔离河！它不仅要把两类棋子分开，"
+                f"还要让离隔离河最近的关键棋子（支持向量 Support Vectors）距离河岸越远越好（最大化 Margin）。\n\n"
+                f"🎯 核技巧 Kernel Trick：当平面上分不开时，用核函数把数据映射到高维空间变线性可分！"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("支持向量机 (SVM)"))\n'
+                "    生活化类比\n"
+                "      在两类棋子间修建一条最宽的护城河\n"
+                "    核心数学目标\n"
+                "      最大化分类间隔 (Maximize Margin = 2/||w||)\n"
+                "    支持向量定义\n"
+                "      决定超平面位置的那些临界边缘样本点\n"
+                "    核技巧 Kernel Trick\n"
+                "      RBF / 高斯核: 高维投影解决非线性分类\n"
+            )
+        },
+        "决策树": {
+            "explanation": (
+                f"💡 降维直觉：决策树就像做“二十个问题”提问猜谜游戏！从根节点开始，每次挑一个最能区分物种的特征做二叉提问，"
+                f"沿着条件分支向下剖析，直到末端的叶子节点做出最终分类。\n\n"
+                f"🎯 分裂标准：ID3 用信息增益，C4.5 用信息增益比，CART 用基尼系数 (Gini Impurity)。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("决策树 (Decision Tree)"))\n'
+                "    生活化类比\n"
+                "      按条件一步步提问分流的流程图猜谜游戏\n"
+                "    三大节点构成\n"
+                "      根节点 (起点) -> 内部节点 (特征提问) -> 叶子节点 (分类结果)\n"
+                "    特征选择指标\n"
+                "      信息增益 (Information Gain - ID3)\n"
+                "      基尼系数 (Gini Impurity - CART)\n"
+                "    防过拟合策略\n"
+                "      预剪枝 (限制树深) / 后剪枝 (合并节点)\n"
+            )
+        },
+        "混淆矩阵": {
+            "explanation": (
+                f"💡 降维直觉：混淆矩阵就像安检防爆的四宫格检验表！把预测和真实情况分为：真正 TP（抓对坏人）、"
+                f"假正 FP（误伤好人）、假负 FN（漏抓坏人）、真负 TN（放行好人）。\n\n"
+                f"🎯 指标辨析：精确率 Precision 看抓出的坏人里有多少真的坏人；召回率 Recall 看所有坏人里漏抓了多少。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("混淆矩阵 (Confusion Matrix)"))\n'
+                "    生活化类比\n"
+                "      安检站拦截坏人与放行好人的四宫格账本\n"
+                "    四宫格单元\n"
+                "      TP (真正: 预测为1，真实为1)\n"
+                "      FP (假正: 预测为1，真实为0 - 误报)\n"
+                "      FN (假负: 预测为0，真实为1 - 漏报)\n"
+                "      TN (真负: 预测为0，真实为0)\n"
+                "    三大衍生指标\n"
+                "      Precision = TP / (TP + FP)\n"
+                "      Recall = TP / (TP + FN)\n"
+                "      F1-Score = 2*P*R / (P + R)\n"
+            )
+        },
+        "激活函数": {
+            "explanation": (
+                f"💡 降维直觉：激活函数就像神经元的电信号门槛阀门！没有激活函数，多层网络叠再高也只是简单线性乘法；"
+                f"加入非线性激活函数（如 ReLU、Sigmoid），网络才能弯曲拟合复杂曲面。\n\n"
+                f"🎯 常用首选：隐层首选 ReLU (f(x)=max(0,x))，计算快且缓解梯度消失；输出层二分类用 Sigmoid，多分类用 Softmax。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("激活函数 (Activation)"))\n'
+                "    生活化类比\n"
+                "      神经元的非线性闸门，赋予网络拟合复杂曲面的能力\n"
+                "    三大常用函数\n"
+                "      ReLU: max(0,x) 简单高效，主流首选\n"
+                "      Sigmoid: 1/(1+e^-x) 压缩至(0,1)，易梯度消失\n"
+                "      Softmax: 归一化为多分类概率分布\n"
+                "    核心作用原理\n"
+                "      打破线性层叠加，引入非线性表达力\n"
+            )
+        },
+        "损失函数": {
+            "explanation": (
+                f"💡 降维直觉：损失函数就是打靶比赛里的离靶心距离！它测量模型预测值与真实标准答案的差距。"
+                f"Loss 算出的得分越小，预测越精准；模型训练的过程就是想方设法最小化损失函数。\n\n"
+                f"🎯 任务匹配：回归问题用均方误差 (MSE)；分类问题用交叉熵损失 (Cross-Entropy)。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("损失函数 (Loss Function)"))\n'
+                "    生活化类比\n"
+                "      打靶比赛中测量弹孔偏离靶心距离的尺子\n"
+                "    两大任务标准\n"
+                "      回归任务: MSE (均方误差) / MAE (绝对误差)\n"
+                "      分类任务: Cross-Entropy (交叉熵损失)\n"
+                "    优化目标\n"
+                "      通过反向传播求梯度，引导参数朝 Loss 最小方向更新\n"
+            )
+        },
+        "前向传播": {
+            "explanation": (
+                f"💡 降维直觉：前向传播就是工厂流水线从原料加工出成品的过程！数据从输入层进入，"
+                f"经过各层权重加权与激活函数过滤，一步步向右传递，最后在输出层算出预测结果。\n\n"
+                f"🎯 对应关系：前向传播计算预测值 y_hat；反向传播拿预测误差倒查更新各层机器参数。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("前向传播 (Forward Pass)"))\n'
+                "    生活化类比\n"
+                "      工厂流水线从原材料一步步加工生成最终产品\n"
+                "    单层计算链条\n"
+                "      1. 线性变换 z = W * x + b\n"
+                "      2. 非线性激活 a = activation(z)\n"
+                "      3. 传递给下一层作为输入\n"
+                "    核心输出目的\n"
+                "      计算最终预测值 y_hat 并评估 Loss\n"
+            )
+        },
+        "反向传播": {
+            "explanation": (
+                f"💡 降维直觉：反向传播就像项目出差错后的倒查责任制！当最后的效果 Loss 不好时，"
+                f"从输出层开始向左追溯，运用链式法则 (Chain Rule) 计算各层权重 w 应对误差负多大责任（梯度），从而精准更新参数。\n\n"
+                f"🎯 数学核心：逐层求导 dL/dw = dL/dy * dy/dz * dz/dw。"
+            ),
+            "mermaid": (
+                "mindmap\n"
+                '  root(("反向传播 (Backpropagation)"))\n'
+                "    生活化类比\n"
+                "      项目出差错后沿工序倒查责任人的链式追责\n"
+                "    数学基石\n"
+                "      微积分链式法则 (Chain Rule 逐层求导)\n"
+                "    三大核心步骤\n"
+                "      1. 计算输出层 Loss 梯度\n"
+                "      2. 从右向左反向链式传递梯度\n"
+                "      3. 配合优化器更新权重 w = w - alpha * grad\n"
+            )
+        }
+    }
+    
+    # Check for direct match or partial match in knowledge map
+    for key, val in knowledge_map.items():
+        if key in c or c in key:
+            return val
+            
+    # Dynamic fallback generator for unknown/custom concepts
+    clean_c = c.replace('"', '').replace("'", '').replace("(", '').replace(")", '')
+    return {
+        "explanation": (
+            f"💡 降维直觉：理解「{clean_c}」的核心在于理清它的输入、输出与解决痛点！"
+            f"先确认它要替代的旧方法，观察它如何将复杂数据一步步转换，最后回到代码实现。\n\n"
+            f"🎯 最小行动：当前掌握度约 {mastery_pct}%。建议结合具体数据例子跑一遍前向流程，重点辨析边界条件。"
+        ),
+        "mermaid": (
+            "mindmap\n"
+            f'  root(("{clean_c} 核心知识"))\n'
+            "    生活化直觉\n"
+            f"      理解 {clean_c} 要解决的关键痛点\n"
+            "      用已知生活现象做对比抽象\n"
+            "    核心变换流程\n"
+            "      1. 确认输入数据格式\n"
+            "      2. 逐步计算与特征变换\n"
+            "      3. 导出最终预测/分类输出\n"
+            "    关键要素与变量\n"
+            "      关键超参数配置\n"
+            "      数学约束与假设条件\n"
+            "    避坑与最小复盘\n"
+            "      识别常见易错边界误区\n"
+            "      完成一次最小动手实操\n"
+        )
+    }
+
+
+def _simplified_explanation(topic: str, prompt: str) -> str:
+    import json
+    data = get_concept_rich_adaptation(topic, 0.4)
+    return json.dumps(data, ensure_ascii=False)
+

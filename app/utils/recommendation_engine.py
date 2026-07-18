@@ -354,25 +354,108 @@ def get_smart_recommendations(
     if concept:
         target_concepts = [concept]
     else:
-        target_concepts = []
-        # 优先选择掌握度较低且属于薄弱点/学习目标的概念
+        # 当未指定概念时，智能提取当前的 A* 唯一主攻锚点（Active Learning Target）
+        from learning_strategy import PathPlanner, build_resource_aware_dag, compute_concept_tiers
+        from profile_api import KNOWLEDGE_DAG
+        
+        all_concepts = set(mastery.keys()) | set(KNOWLEDGE_DAG.keys())
+        for prereqs in KNOWLEDGE_DAG.values():
+            all_concepts.update(prereqs or [])
+        all_concepts.discard("")
+        all_concepts.discard(None)
+        
+        # 1. 最终目标智能定位（三级解析）
+        real_goals = [g for g in goals if g in all_concepts]
+        resolved_goals = []
+        if real_goals:
+            resolved_goals = real_goals
+        else:
+            # 第二级：课件提取
+            docs = db.query(DBKnowledgeDocument).filter(DBKnowledgeDocument.student_id == student_id).all()
+            doc_concepts = set()
+            for doc in docs:
+                if doc.tags:
+                    tags_list = doc.tags if isinstance(doc.tags, list) else []
+                    if not tags_list and isinstance(doc.tags, str):
+                        try:
+                            import json
+                            tags_list = json.loads(doc.tags)
+                        except Exception:
+                            pass
+                    doc_concepts.update([t for t in tags_list if t in all_concepts])
+            if doc_concepts:
+                sorted_doc_concepts = sorted(doc_concepts, key=lambda c: (mastery.get(c, 0.0), -len(KNOWLEDGE_DAG.get(c, []) or [])))
+                resolved_goals = [sorted_doc_concepts[0]]
+            else:
+                # 第三级：当前课程骨干兜底
+                core_backbones = sorted(all_concepts, key=lambda c: (-len(KNOWLEDGE_DAG.get(c, []) or []), c))
+                resolved_goals = [core_backbones[0]] if core_backbones else ["机器学习"]
+                
+        # 2. 运行 A* 路径规划
+        planner = PathPlanner(KNOWLEDGE_DAG)
+        active_dag, _ = build_resource_aware_dag(KNOWLEDGE_DAG)
+        concept_tier = compute_concept_tiers(active_dag, all_concepts)
+        
+        load_val = getattr(profile, "cognitive_load", 0.45) or 0.45
+        frustration_val = getattr(profile, "frustration_index", 0.0) or 0.0
+        
+        adaptive_route = planner.plan(
+            mastery,
+            learning_goals=resolved_goals,
+            weak_points=weak_points,
+            concept_tier=concept_tier,
+            cognitive_load=load_val,
+            frustration=frustration_val,
+            max_steps=8,
+        )
+        
+        # 3. 确定当前主攻点
+        active_target = None
+        if adaptive_route and "nodes" in adaptive_route:
+            for node in adaptive_route["nodes"]:
+                c_name = node.get("concept")
+                if c_name and mastery.get(c_name, 0.0) < 0.70:
+                    active_target = c_name
+                    break
+                    
+        if not active_target:
+            # 拓扑排序备选
+            tiers = {}
+            for c, t in concept_tier.items():
+                tiers.setdefault(t, []).append(c)
+            learning_chain = []
+            for t in sorted(tiers.keys()):
+                for c in tiers[t]:
+                    prereqs = active_dag.get(c, [])
+                    prereqs_ready = all(mastery.get(p, 0.0) >= 0.4 for p in prereqs)
+                    learning_chain.append({"concept": c, "mastery": mastery.get(c, 0.0), "prereqs_ready": prereqs_ready})
+            next_steps = [n for n in learning_chain if n["mastery"] < 0.70 and n["prereqs_ready"]]
+            if next_steps:
+                active_target = next_steps[0]["concept"]
+                
+        if not active_target and mastery:
+            active_target = min(mastery.items(), key=lambda x: x[1])[0]
+            
+        if not active_target:
+            active_target = "机器学习"
+            
+        # 4. 辅助添加其它薄弱点/目标，供卡片流备用且确保不破坏既有单测
+        other_candidates = []
         for c, score in sorted(mastery.items(), key=lambda item: item[1]):
             if score < 0.60:
-                target_concepts.append(c)
-
-        # 辅以 weak_points 和 goals
+                other_candidates.append(c)
         for wp in weak_points:
-            if wp not in target_concepts:
-                target_concepts.append(wp)
+            if wp not in other_candidates:
+                other_candidates.append(wp)
         for g in goals:
-            if g not in target_concepts:
-                target_concepts.append(g)
-
-        # 如果都没有，给默认机器学习经典入门概念
-        if not target_concepts:
-            target_concepts = ["机器学习", "线性回归", "逻辑回归", "梯度下降"]
-
-        # 限制待推荐概念上限
+            if g not in other_candidates:
+                other_candidates.append(g)
+                
+        target_concepts = [active_target]
+        for c in other_candidates:
+            if c not in target_concepts:
+                target_concepts.append(c)
+                
         target_concepts = target_concepts[:limit]
 
     # 3. 加载该学生所有的笔记缓存，用于判断 5 维资源是否已生成

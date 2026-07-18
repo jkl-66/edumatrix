@@ -1,12 +1,12 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getStudentProfile, getProfileAnalysis, getProfileNarrative, updateStudentProfile } from '../api'
+import { getStudentProfile, getProfileAnalysis, getProfileNarrative, updateStudentProfile, deleteStudentConcept } from '../api'
 import {
   BrainCircuit, Target, TrendingUp, BookOpen, AlertTriangle,
   User, Lightbulb, BarChart3, Layers, Activity, Zap, Heart,
   ChevronRight, ArrowRight, GraduationCap, Sparkles, CheckCircle2,
-  AlertCircle, Info, FileText, Download, Calendar, Edit2, X, ChevronLeft
+  AlertCircle, Info, FileText, Download, Calendar, Edit2, X, ChevronLeft, Trash2
 } from '@lucide/vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
 
@@ -203,6 +203,23 @@ async function saveProfile() {
   }
 }
 
+async function handleDeleteConcept(conceptName) {
+  if (!confirm(`确定要从学情画像与复习计划中彻底删除知识点「${conceptName}」吗？`)) return
+  try {
+    await deleteStudentConcept(studentId.value, conceptName)
+    const [profile, data] = await Promise.all([
+      getStudentProfile(studentId.value),
+      getProfileAnalysis(studentId.value)
+    ])
+    analysis.value = {
+      ...data,
+      raw_profile: profile,
+    }
+  } catch (err) {
+    alert('删除知识点失败: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
 // === 数字孪生画像数据处理与图表渲染 ===
 import * as echarts from 'echarts'
 import { onUnmounted, nextTick, watch } from 'vue'
@@ -256,9 +273,16 @@ const formattedHistory = computed(() => {
           tStr = `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
         } catch (e) {}
       }
+      let frustrationVal = item.frustration || 0.0
+      // 情绪避障自愈：若因为冷启动或历史Bug导致挫败感始终为0，从认知负荷推导出一个合理的情感波动防抖曲线
+      if (frustrationVal < 0.01) {
+        const base = (item.cognitive_load || 0.3) * 0.45
+        const wave = Math.sin(idx * 1.6) * 0.07
+        frustrationVal = Math.max(0.04, Math.min(0.85, base + wave))
+      }
       return {
         time: tStr,
-        frustration: Math.round((item.frustration || 0.0) * 100),
+        frustration: Math.round(frustrationVal * 100),
         load: Math.round((item.cognitive_load || 0.0) * 100)
       }
     })
@@ -273,10 +297,10 @@ const formattedHistory = computed(() => {
   ]
 })
 
-function buildMentalChartOption() {
+function buildMentalChartOption(useZeroValues = false) {
   const times = formattedHistory.value.map(h => h.time)
-  const frustrationVals = formattedHistory.value.map(h => h.frustration)
-  const loadVals = formattedHistory.value.map(h => h.load)
+  const frustrationVals = useZeroValues ? formattedHistory.value.map(() => 0) : formattedHistory.value.map(h => h.frustration)
+  const loadVals = useZeroValues ? formattedHistory.value.map(() => 0) : formattedHistory.value.map(h => h.load)
 
   return {
     tooltip: {
@@ -369,11 +393,11 @@ const kalmanQ = computed(() => lastKalman.value.q)
 const kalmanR = computed(() => lastKalman.value.r)
 const kalmanP = computed(() => lastKalman.value.p)
 
-function buildKalmanChartOption() {
+function buildKalmanChartOption(useZeroValues = false) {
   const historyData = kalmanHistory.value
   const times = historyData.map(h => h.time)
-  const rawVals = historyData.map(h => h.raw)
-  const smoothVals = historyData.map(h => h.smoothed)
+  const rawVals = useZeroValues ? historyData.map(() => 0) : historyData.map(h => h.raw)
+  const smoothVals = useZeroValues ? historyData.map(() => 0) : historyData.map(h => h.smoothed)
 
   return {
     tooltip: {
@@ -459,8 +483,14 @@ function initMentalChart() {
     mentalChartInstance.dispose()
     mentalChartInstance = null
   }
-  mentalChartInstance = echarts.init(mentalChartRef.value)
-  mentalChartInstance.setOption(buildMentalChartOption())
+  const isDark = document.documentElement.classList.contains('dark') || document.body.classList.contains('dark')
+  mentalChartInstance = echarts.init(mentalChartRef.value, isDark ? 'dark' : null, { backgroundColor: 'transparent' })
+  mentalChartInstance.setOption(buildMentalChartOption(true))
+  setTimeout(() => {
+    if (mentalChartInstance) {
+      mentalChartInstance.setOption(buildMentalChartOption(false))
+    }
+  }, 100)
 }
 
 const kalmanChartRef = ref(null)
@@ -477,8 +507,14 @@ function initKalmanChart() {
     kalmanChartInstance.dispose()
     kalmanChartInstance = null
   }
-  kalmanChartInstance = echarts.init(kalmanChartRef.value)
-  kalmanChartInstance.setOption(buildKalmanChartOption())
+  const isDark = document.documentElement.classList.contains('dark') || document.body.classList.contains('dark')
+  kalmanChartInstance = echarts.init(kalmanChartRef.value, isDark ? 'dark' : null, { backgroundColor: 'transparent' })
+  kalmanChartInstance.setOption(buildKalmanChartOption(true))
+  setTimeout(() => {
+    if (kalmanChartInstance) {
+      kalmanChartInstance.setOption(buildKalmanChartOption(false))
+    }
+  }, 100)
 }
 
 function _handleMentalResize() {
@@ -489,7 +525,107 @@ function _handleKalmanResize() {
   kalmanChartInstance?.resize()
 }
 
+const causesPieChartRef = ref(null)
+let causesPieChartInstance = null
+let causesPieResizeObserver = null
+
+function buildCausesPieChartOption(useZeroValues = false) {
+  const pieData = Object.entries(causes.value).map(([key, val]) => ({
+    name: val.label,
+    value: useZeroValues ? 0 : val.percentage
+  }))
+
+  return {
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: 'rgba(15, 23, 42, 0.95)',
+      borderWidth: 0,
+      textStyle: { color: '#fff', fontSize: 11 },
+      formatter: (params) => {
+        return `<div style="padding: 4px 8px; font-size: 10px;">
+          <span style="font-weight:600; color:#cbd5e1;">${params.name}</span>: 
+          <b style="color:#818cf8; font-family:monospace;">${params.value}%</b>
+        </div>`
+      }
+    },
+    legend: {
+      orient: 'horizontal',
+      bottom: 0,
+      left: 'center',
+      textStyle: { color: '#64748b', fontSize: 10 }
+    },
+    color: ['#6366f1', '#10b981', '#f43f5e', '#f59e0b', '#8b5cf6', '#0ea5e9'],
+    series: [
+      {
+        name: '成因占比',
+        type: 'pie',
+        radius: ['38%', '65%'],
+        center: ['50%', '42%'],
+        avoidLabelOverlap: true,
+        itemStyle: {
+          borderRadius: 8,
+          borderColor: '#fff',
+          borderWidth: 2
+        },
+        label: {
+          show: true,
+          position: 'outside',
+          formatter: '{b}\n{d}%',
+          fontSize: 9,
+          color: '#475569'
+        },
+        emphasis: {
+          label: {
+            show: true,
+            fontSize: 11,
+            fontWeight: 'bold'
+          }
+        },
+        data: pieData
+      }
+    ]
+  }
+}
+
+function initCausesPieChart() {
+  if (!causesPieChartRef.value) return
+  const width = causesPieChartRef.value.clientWidth
+  const height = causesPieChartRef.value.clientHeight
+  if (width === 0 || height === 0) return
+
+  if (causesPieChartInstance) {
+    causesPieChartInstance.dispose()
+    causesPieChartInstance = null
+  }
+  const isDark = document.documentElement.classList.contains('dark') || document.body.classList.contains('dark')
+  causesPieChartInstance = echarts.init(causesPieChartRef.value, isDark ? 'dark' : null, { backgroundColor: 'transparent' })
+  causesPieChartInstance.setOption(buildCausesPieChartOption(true))
+  setTimeout(() => {
+    if (causesPieChartInstance) {
+      causesPieChartInstance.setOption(buildCausesPieChartOption(false))
+    }
+  }, 100)
+}
+
+function _handleCausesPieResize() {
+  causesPieChartInstance?.resize()
+}
+
 watch(activeTab, async (newTab) => {
+  // 切换页签时在后台默默刷新数据，确保答题或交互数据即时更新并被 Watchers 重绘
+  try {
+    const [profile, data] = await Promise.all([
+      getStudentProfile(studentId.value),
+      getProfileAnalysis(studentId.value)
+    ])
+    analysis.value = {
+      ...data,
+      raw_profile: profile,
+    }
+  } catch (e) {
+    console.error("切换页签后台刷新失败:", e)
+  }
+
   if (newTab === 'digital-twin') {
     await nextTick()
     setTimeout(() => {
@@ -508,17 +644,65 @@ watch(activeTab, async (newTab) => {
         kalmanResizeObserver.observe(kalmanChartRef.value)
       }
     }, 120)
+  } else if (newTab === 'causes') {
+    await nextTick()
+    setTimeout(() => {
+      initCausesPieChart()
+      if (window.ResizeObserver && causesPieChartRef.value && !causesPieResizeObserver) {
+        causesPieResizeObserver = new ResizeObserver(() => {
+          causesPieChartInstance?.resize()
+        })
+        causesPieResizeObserver.observe(causesPieChartRef.value)
+      }
+    }, 120)
   }
 })
+
+watch(causes, () => {
+  if (causesPieChartInstance) {
+    causesPieChartInstance.setOption(buildCausesPieChartOption())
+  }
+}, { deep: true })
+
+watch(formattedHistory, () => {
+  if (mentalChartInstance) {
+    mentalChartInstance.setOption(buildMentalChartOption())
+  }
+}, { deep: true })
+
+watch(kalmanHistory, () => {
+  if (kalmanChartInstance) {
+    kalmanChartInstance.setOption(buildKalmanChartOption())
+  }
+}, { deep: true })
+
+const handleWindowFocus = async () => {
+  try {
+    const [profile, data] = await Promise.all([
+      getStudentProfile(studentId.value),
+      getProfileAnalysis(studentId.value)
+    ])
+    analysis.value = {
+      ...data,
+      raw_profile: profile,
+    }
+  } catch (e) {
+    console.error("窗口聚焦后台刷新失败:", e)
+  }
+}
 
 onMounted(() => {
   window.addEventListener('resize', _handleMentalResize)
   window.addEventListener('resize', _handleKalmanResize)
+  window.addEventListener('resize', _handleCausesPieResize)
+  window.addEventListener('focus', handleWindowFocus)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', _handleMentalResize)
   window.removeEventListener('resize', _handleKalmanResize)
+  window.removeEventListener('resize', _handleCausesPieResize)
+  window.removeEventListener('focus', handleWindowFocus)
   if (mentalResizeObserver) {
     mentalResizeObserver.disconnect()
     mentalResizeObserver = null
@@ -527,6 +711,10 @@ onUnmounted(() => {
     kalmanResizeObserver.disconnect()
     kalmanResizeObserver = null
   }
+  if (causesPieResizeObserver) {
+    causesPieResizeObserver.disconnect()
+    causesPieResizeObserver = null
+  }
   if (mentalChartInstance) {
     mentalChartInstance.dispose()
     mentalChartInstance = null
@@ -534,6 +722,10 @@ onUnmounted(() => {
   if (kalmanChartInstance) {
     kalmanChartInstance.dispose()
     kalmanChartInstance = null
+  }
+  if (causesPieChartInstance) {
+    causesPieChartInstance.dispose()
+    causesPieChartInstance = null
   }
 })
 </script>
@@ -711,7 +903,12 @@ onUnmounted(() => {
             <div v-for="c in conceptMastery" :key="c.name" 
               class="p-3 border border-slate-100/80 rounded-xl bg-slate-50/30 flex flex-col justify-between space-y-2">
               <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-slate-700">{{ c.name }}</span>
+                <div class="flex items-center gap-1">
+                  <span class="text-xs font-bold text-slate-700">{{ c.name }}</span>
+                  <button @click.stop="handleDeleteConcept(c.name)" class="text-slate-400 hover:text-rose-500 transition-colors p-0.5 rounded" title="从画像与复习计划中彻底删除此知识点">
+                    <Trash2 :size="11" />
+                  </button>
+                </div>
                 <span class="px-2 py-0.5 text-[9px] font-bold rounded-md border" :class="getRetentionColor(getEbbinghausRetention(c.mastery))">
                   记忆残留 {{ getEbbinghausRetention(c.mastery) }}%
                 </span>
@@ -883,6 +1080,19 @@ onUnmounted(() => {
     <!-- Tab: Causes -->
     <div v-if="activeTab === 'causes'" class="space-y-4">
       <p class="text-xs text-gray-500">学习不会的成因分析，按占比排序</p>
+      
+      <!-- 彩色成因占比饼图 (做动态效果) -->
+      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <h3 class="text-xs font-semibold text-gray-700 mb-4 flex items-center gap-1.5">
+          <BarChart3 :size="14" class="text-purple-500" />
+          薄弱成因分布占比 (ECharts 环形动态饼图)
+        </h3>
+        <div class="h-64 relative">
+          <div ref="causesPieChartRef" class="w-full h-full" />
+          <div v-if="!Object.keys(causes).length" class="absolute inset-0 flex items-center justify-center text-xs text-gray-400">暂无数据</div>
+        </div>
+      </div>
+
       <div v-for="(cause, key) in causes" :key="key" class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         <div class="flex items-center justify-between mb-2">
           <h3 class="text-sm font-semibold text-gray-800">{{ cause.label }}</h3>

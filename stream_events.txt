@@ -1,0 +1,1146 @@
+event: progress
+data: {"step": "rag", "message": "正在检索知识库...", "progress": 50}
+event: progress
+data: {"step": "generating", "message": "自适应考官正在组织回复...", "progress": 65}
+event: chat_chunk
+data: {"content": "你"}
+event: chat_chunk
+data: {"content": "提出了"}
+event: chat_chunk
+data: {"content": "一个"}
+event: chat_chunk
+data: {"content": "看似"}
+event: chat_chunk
+data: {"content": "基础"}
+event: chat_chunk
+data: {"content": "却"}
+event: chat_chunk
+data: {"content": "极具"}
+event: chat_chunk
+data: {"content": "深度"}
+event: chat_chunk
+data: {"content": "的问题"}
+event: chat_chunk
+data: {"content": "。"}
+event: chat_chunk
+data: {"content": "既然"}
+event: chat_chunk
+data: {"content": "你已经"}
+event: chat_chunk
+data: {"content": "掌握"}
+event: chat_chunk
+data: {"content": "神经网络"}
+event: chat_chunk
+data: {"content": "的基本"}
+event: chat_chunk
+data: {"content": "概念"}
+event: chat_chunk
+data: {"content": "（"}
+event: chat_chunk
+data: {"content": "根据"}
+event: chat_chunk
+data: {"content": "路由"}
+event: chat_chunk
+data: {"content": "指令"}
+event: chat_chunk
+data: {"content": "推测"}
+event: chat_chunk
+data: {"content": "），"}
+event: chat_chunk
+data: {"content": "我们"}
+event: chat_chunk
+data: {"content": "不妨"}
+event: chat_chunk
+data: {"content": "直接从"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "层"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "这一"}
+event: chat_chunk
+data: {"content": "典型"}
+event: chat_chunk
+data: {"content": "模块"}
+event: chat_chunk
+data: {"content": "切入"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "反"}
+event: chat_chunk
+data: {"content": "推"}
+event: chat_chunk
+data: {"content": "神经网络"}
+event: chat_chunk
+data: {"content": "的核心"}
+event: chat_chunk
+data: {"content": "设计"}
+event: chat_chunk
+data: {"content": "哲学"}
+event: chat_chunk
+data: {"content": "。"}
+event: chat_chunk
+data: {"content": "请"}
+event: chat_chunk
+data: {"content": "观察"}
+event: chat_chunk
+data: {"content": "以下"}
+event: chat_chunk
+data: {"content": "数学"}
+event: chat_chunk
+data: {"content": "定义"}
+event: chat_chunk
+data: {"content": "：\n\n"}
+event: chat_chunk
+data: {"content": "给定"}
+event: chat_chunk
+data: {"content": "输入"}
+event: chat_chunk
+data: {"content": "特征"}
+event: chat_chunk
+data: {"content": "图"}
+event: chat_chunk
+data: {"content": " \\("}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "mathbf"}
+event: chat_chunk
+data: {"content": "{X"}
+event: chat_chunk
+data: {"content": "}"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "in"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "mathbb"}
+event: chat_chunk
+data: {"content": "{R"}
+event: chat_chunk
+data: {"content": "}^{"}
+event: chat_chunk
+data: {"content": "H"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "times"}
+event: chat_chunk
+data: {"content": " W"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "times"}
+event: chat_chunk
+data: {"content": " C"}
+event: chat_chunk
+data: {"content": "}"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": ")，"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "窗口"}
+event: chat_chunk
+data: {"content": "大小为"}
+event: chat_chunk
+data: {"content": " \\("}
+event: chat_chunk
+data: {"content": " p"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "times"}
+event: chat_chunk
+data: {"content": " p"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": ")，"}
+event: chat_chunk
+data: {"content": "步"}
+event: chat_chunk
+data: {"content": "长"}
+event: chat_chunk
+data: {"content": " \\("}
+event: chat_chunk
+data: {"content": " s"}
+event: chat_chunk
+data: {"content": " \\)"}
+event: chat_chunk
+data: {"content": "（"}
+event: chat_chunk
+data: {"content": "通常"}
+event: chat_chunk
+data: {"content": " \\("}
+event: chat_chunk
+data: {"content": " s"}
+event: chat_chunk
+data: {"content": " ="}
+event: chat_chunk
+data: {"content": " p"}
+event: chat_chunk
+data: {"content": " \\)"}
+event: chat_chunk
+data: {"content": "），"}
+event: chat_chunk
+data: {"content": "则"}
+event: chat_chunk
+data: {"content": "最大"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "输出"}
+event: chat_chunk
+data: {"content": "为"}
+event: chat_chunk
+data: {"content": "：\n\n"}
+event: chat_chunk
+data: {"content": "\\["}
+event: chat_chunk
+data: {"content": "\n"}
+event: chat_chunk
+data: {"content": "\\mathbf"}
+event: chat_chunk
+data: {"content": "{Y"}
+event: chat_chunk
+data: {"content": "}_{"}
+event: chat_chunk
+data: {"content": "i"}
+event: chat_chunk
+data: {"content": ",j"}
+event: chat_chunk
+data: {"content": ",k"}
+event: chat_chunk
+data: {"content": "}"}
+event: chat_chunk
+data: {"content": " ="}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "max"}
+event: chat_chunk
+data: {"content": "_{"}
+event: chat_chunk
+data: {"content": "m"}
+event: chat_chunk
+data: {"content": "="}
+event: chat_chunk
+data: {"content": "0"}
+event: chat_chunk
+data: {"content": "}^{"}
+event: chat_chunk
+data: {"content": "p"}
+event: chat_chunk
+data: {"content": "-"}
+event: chat_chunk
+data: {"content": "1"}
+event: chat_chunk
+data: {"content": "}"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "max"}
+event: chat_chunk
+data: {"content": "_{"}
+event: chat_chunk
+data: {"content": "n"}
+event: chat_chunk
+data: {"content": "="}
+event: chat_chunk
+data: {"content": "0"}
+event: chat_chunk
+data: {"content": "}^{"}
+event: chat_chunk
+data: {"content": "p"}
+event: chat_chunk
+data: {"content": "-"}
+event: chat_chunk
+data: {"content": "1"}
+event: chat_chunk
+data: {"content": "}"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "mathbf"}
+event: chat_chunk
+data: {"content": "{X"}
+event: chat_chunk
+data: {"content": "}_{"}
+event: chat_chunk
+data: {"content": "i"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "cdot"}
+event: chat_chunk
+data: {"content": " s"}
+event: chat_chunk
+data: {"content": " +"}
+event: chat_chunk
+data: {"content": " m"}
+event: chat_chunk
+data: {"content": ","}
+event: chat_chunk
+data: {"content": " \\,"}
+event: chat_chunk
+data: {"content": " j"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "cdot"}
+event: chat_chunk
+data: {"content": " s"}
+event: chat_chunk
+data: {"content": " +"}
+event: chat_chunk
+data: {"content": " n"}
+event: chat_chunk
+data: {"content": ","}
+event: chat_chunk
+data: {"content": " \\,"}
+event: chat_chunk
+data: {"content": " k"}
+event: chat_chunk
+data: {"content": "}\n"}
+event: chat_chunk
+data: {"content": "\\]\n\n"}
+event: chat_chunk
+data: {"content": "平均"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "则为"}
+event: chat_chunk
+data: {"content": "：\n\n"}
+event: chat_chunk
+data: {"content": "\\["}
+event: chat_chunk
+data: {"content": "\n"}
+event: chat_chunk
+data: {"content": "\\mathbf"}
+event: chat_chunk
+data: {"content": "{Y"}
+event: chat_chunk
+data: {"content": "}_{"}
+event: chat_chunk
+data: {"content": "i"}
+event: chat_chunk
+data: {"content": ",j"}
+event: chat_chunk
+data: {"content": ",k"}
+event: chat_chunk
+data: {"content": "}"}
+event: chat_chunk
+data: {"content": " ="}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "frac"}
+event: chat_chunk
+data: {"content": "{"}
+event: chat_chunk
+data: {"content": "1"}
+event: chat_chunk
+data: {"content": "}{"}
+event: chat_chunk
+data: {"content": "p"}
+event: chat_chunk
+data: {"content": "^"}
+event: chat_chunk
+data: {"content": "2"}
+event: chat_chunk
+data: {"content": "}"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "sum"}
+event: chat_chunk
+data: {"content": "_{"}
+event: chat_chunk
+data: {"content": "m"}
+event: chat_chunk
+data: {"content": "="}
+event: chat_chunk
+data: {"content": "0"}
+event: chat_chunk
+data: {"content": "}^{"}
+event: chat_chunk
+data: {"content": "p"}
+event: chat_chunk
+data: {"content": "-"}
+event: chat_chunk
+data: {"content": "1"}
+event: chat_chunk
+data: {"content": "}"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "sum"}
+event: chat_chunk
+data: {"content": "_{"}
+event: chat_chunk
+data: {"content": "n"}
+event: chat_chunk
+data: {"content": "="}
+event: chat_chunk
+data: {"content": "0"}
+event: chat_chunk
+data: {"content": "}^{"}
+event: chat_chunk
+data: {"content": "p"}
+event: chat_chunk
+data: {"content": "-"}
+event: chat_chunk
+data: {"content": "1"}
+event: chat_chunk
+data: {"content": "}"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "mathbf"}
+event: chat_chunk
+data: {"content": "{X"}
+event: chat_chunk
+data: {"content": "}_{"}
+event: chat_chunk
+data: {"content": "i"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "cdot"}
+event: chat_chunk
+data: {"content": " s"}
+event: chat_chunk
+data: {"content": " +"}
+event: chat_chunk
+data: {"content": " m"}
+event: chat_chunk
+data: {"content": ","}
+event: chat_chunk
+data: {"content": " \\,"}
+event: chat_chunk
+data: {"content": " j"}
+event: chat_chunk
+data: {"content": " \\"}
+event: chat_chunk
+data: {"content": "cdot"}
+event: chat_chunk
+data: {"content": " s"}
+event: chat_chunk
+data: {"content": " +"}
+event: chat_chunk
+data: {"content": " n"}
+event: chat_chunk
+data: {"content": ","}
+event: chat_chunk
+data: {"content": " \\,"}
+event: chat_chunk
+data: {"content": " k"}
+event: chat_chunk
+data: {"content": "}\n"}
+event: chat_chunk
+data: {"content": "\\]\n\n"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "关键"}
+event: chat_chunk
+data: {"content": "点"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "："}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "层"}
+event: chat_chunk
+data: {"content": "本身"}
+event: chat_chunk
+data: {"content": "没有"}
+event: chat_chunk
+data: {"content": "可"}
+event: chat_chunk
+data: {"content": "学习"}
+event: chat_chunk
+data: {"content": "参数"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "但它"}
+event: chat_chunk
+data: {"content": "通过"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "局部"}
+event: chat_chunk
+data: {"content": "聚合"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "引入了"}
+event: chat_chunk
+data: {"content": "强"}
+event: chat_chunk
+data: {"content": "归纳"}
+event: chat_chunk
+data: {"content": "偏"}
+event: chat_chunk
+data: {"content": "置"}
+event: chat_chunk
+data: {"content": "（"}
+event: chat_chunk
+data: {"content": "inv"}
+event: chat_chunk
+data: {"content": "ariant"}
+event: chat_chunk
+data: {"content": " local"}
+event: chat_chunk
+data: {"content": " translation"}
+event: chat_chunk
+data: {"content": "）。"}
+event: chat_chunk
+data: {"content": "这正是"}
+event: chat_chunk
+data: {"content": "神经网络"}
+event: chat_chunk
+data: {"content": "的一个"}
+event: chat_chunk
+data: {"content": "核心"}
+event: chat_chunk
+data: {"content": "能力"}
+event: chat_chunk
+data: {"content": "——"}
+event: chat_chunk
+data: {"content": "用"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "层次"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "、"}
+event: chat_chunk
+data: {"content": "非"}
+event: chat_chunk
+data: {"content": "线"}
+event: chat_chunk
+data: {"content": "性的"}
+event: chat_chunk
+data: {"content": "可"}
+event: chat_chunk
+data: {"content": "学习"}
+event: chat_chunk
+data: {"content": "变换"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "来"}
+event: chat_chunk
+data: {"content": "提取"}
+event: chat_chunk
+data: {"content": "层级"}
+event: chat_chunk
+data: {"content": "特征"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "而"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "加深"}
+event: chat_chunk
+data: {"content": "了"}
+event: chat_chunk
+data: {"content": "这种"}
+event: chat_chunk
+data: {"content": "层次"}
+event: chat_chunk
+data: {"content": "性"}
+event: chat_chunk
+data: {"content": "："}
+event: chat_chunk
+data: {"content": "低"}
+event: chat_chunk
+data: {"content": "层"}
+event: chat_chunk
+data: {"content": "捕捉"}
+event: chat_chunk
+data: {"content": "边缘"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "高层"}
+event: chat_chunk
+data: {"content": "通过"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "获得"}
+event: chat_chunk
+data: {"content": "更大"}
+event: chat_chunk
+data: {"content": "感受"}
+event: chat_chunk
+data: {"content": "野"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "捕捉"}
+event: chat_chunk
+data: {"content": "语义"}
+event: chat_chunk
+data: {"content": "。\n\n"}
+event: chat_chunk
+data: {"content": "如果想"}
+event: chat_chunk
+data: {"content": "深入"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "不妨"}
+event: chat_chunk
+data: {"content": "思考"}
+event: chat_chunk
+data: {"content": "一个"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "高阶"}
+event: chat_chunk
+data: {"content": "理论"}
+event: chat_chunk
+data: {"content": "问题"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "："}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "操作"}
+event: chat_chunk
+data: {"content": "在"}
+event: chat_chunk
+data: {"content": "数学"}
+event: chat_chunk
+data: {"content": "上"}
+event: chat_chunk
+data: {"content": "等价"}
+event: chat_chunk
+data: {"content": "于"}
+event: chat_chunk
+data: {"content": "对"}
+event: chat_chunk
+data: {"content": "局部"}
+event: chat_chunk
+data: {"content": "区域"}
+event: chat_chunk
+data: {"content": "施加"}
+event: chat_chunk
+data: {"content": "一个"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "硬"}
+event: chat_chunk
+data: {"content": "性"}
+event: chat_chunk
+data: {"content": "约束"}
+event: chat_chunk
+data: {"content": "的"}
+event: chat_chunk
+data: {"content": "滤波器"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "（"}
+event: chat_chunk
+data: {"content": "类似"}
+event: chat_chunk
+data: {"content": "形态"}
+event: chat_chunk
+data: {"content": "学"}
+event: chat_chunk
+data: {"content": "中的"}
+event: chat_chunk
+data: {"content": "最大"}
+event: chat_chunk
+data: {"content": "/"}
+event: chat_chunk
+data: {"content": "平均"}
+event: chat_chunk
+data: {"content": "滤波器"}
+event: chat_chunk
+data: {"content": "）。"}
+event: chat_chunk
+data: {"content": "近年来"}
+event: chat_chunk
+data: {"content": "研究表明"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "使用"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "可"}
+event: chat_chunk
+data: {"content": "学习的"}
+event: chat_chunk
+data: {"content": "注意力"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "（"}
+event: chat_chunk
+data: {"content": "如"}
+event: chat_chunk
+data: {"content": " Set"}
+event: chat_chunk
+data: {"content": " Transformer"}
+event: chat_chunk
+data: {"content": " "}
+event: chat_chunk
+data: {"content": "中的"}
+event: chat_chunk
+data: {"content": " pooling"}
+event: chat_chunk
+data: {"content": " by"}
+event: chat_chunk
+data: {"content": " multi"}
+event: chat_chunk
+data: {"content": "-head"}
+event: chat_chunk
+data: {"content": " attention"}
+event: chat_chunk
+data: {"content": "）"}
+event: chat_chunk
+data: {"content": "能够"}
+event: chat_chunk
+data: {"content": "动态"}
+event: chat_chunk
+data: {"content": "加权"}
+event: chat_chunk
+data: {"content": "局部"}
+event: chat_chunk
+data: {"content": "区域"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "提升"}
+event: chat_chunk
+data: {"content": "灵活性"}
+event: chat_chunk
+data: {"content": "。"}
+event: chat_chunk
+data: {"content": "前沿"}
+event: chat_chunk
+data: {"content": "方向"}
+event: chat_chunk
+data: {"content": "甚至"}
+event: chat_chunk
+data: {"content": "将"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "视为"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "图"}
+event: chat_chunk
+data: {"content": "神经网络"}
+event: chat_chunk
+data: {"content": "中的"}
+event: chat_chunk
+data: {"content": "读出"}
+event: chat_chunk
+data: {"content": "函数"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "（"}
+event: chat_chunk
+data: {"content": "read"}
+event: chat_chunk
+data: {"content": "out"}
+event: chat_chunk
+data: {"content": "），"}
+event: chat_chunk
+data: {"content": "将"}
+event: chat_chunk
+data: {"content": "空间"}
+event: chat_chunk
+data: {"content": "结构"}
+event: chat_chunk
+data: {"content": "映射"}
+event: chat_chunk
+data: {"content": "为"}
+event: chat_chunk
+data: {"content": "全局"}
+event: chat_chunk
+data: {"content": "表示"}
+event: chat_chunk
+data: {"content": "。\n\n"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "启发"}
+event: chat_chunk
+data: {"content": "式"}
+event: chat_chunk
+data: {"content": "引导"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "："}
+event: chat_chunk
+data: {"content": "既然"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "通过"}
+event: chat_chunk
+data: {"content": "“"}
+event: chat_chunk
+data: {"content": "局部"}
+event: chat_chunk
+data: {"content": "极"}
+event: chat_chunk
+data: {"content": "值"}
+event: chat_chunk
+data: {"content": "”"}
+event: chat_chunk
+data: {"content": "或"}
+event: chat_chunk
+data: {"content": "“"}
+event: chat_chunk
+data: {"content": "全局"}
+event: chat_chunk
+data: {"content": "均值"}
+event: chat_chunk
+data: {"content": "”"}
+event: chat_chunk
+data: {"content": "来"}
+event: chat_chunk
+data: {"content": "降"}
+event: chat_chunk
+data: {"content": "维"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "你认为"}
+event: chat_chunk
+data: {"content": "这种"}
+event: chat_chunk
+data: {"content": " **"}
+event: chat_chunk
+data: {"content": "“"}
+event: chat_chunk
+data: {"content": "舍弃"}
+event: chat_chunk
+data: {"content": "局部"}
+event: chat_chunk
+data: {"content": "信息"}
+event: chat_chunk
+data: {"content": "”"}
+event: chat_chunk
+data: {"content": "的方式"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "与"}
+event: chat_chunk
+data: {"content": "卷积"}
+event: chat_chunk
+data: {"content": "层的"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "参数"}
+event: chat_chunk
+data: {"content": "学习"}
+event: chat_chunk
+data: {"content": "机制"}
+event: chat_chunk
+data: {"content": "**"}
+event: chat_chunk
+data: {"content": "在"}
+event: chat_chunk
+data: {"content": "信息"}
+event: chat_chunk
+data: {"content": "保留"}
+event: chat_chunk
+data: {"content": "策略"}
+event: chat_chunk
+data: {"content": "上"}
+event: chat_chunk
+data: {"content": "有什么"}
+event: chat_chunk
+data: {"content": "本质"}
+event: chat_chunk
+data: {"content": "矛盾"}
+event: chat_chunk
+data: {"content": "？"}
+event: chat_chunk
+data: {"content": "如何"}
+event: chat_chunk
+data: {"content": "权衡"}
+event: chat_chunk
+data: {"content": "利弊"}
+event: chat_chunk
+data: {"content": "？\n\n"}
+event: chat_chunk
+data: {"content": "=="}
+event: chat_chunk
+data: {"content": "=\n"}
+event: chat_chunk
+data: {"content": "==="}
+event: chat_chunk
+data: {"content": "SU"}
+event: chat_chunk
+data: {"content": "GG"}
+event: chat_chunk
+data: {"content": "EST"}
+event: chat_chunk
+data: {"content": "ED"}
+event: chat_chunk
+data: {"content": "_"}
+event: chat_chunk
+data: {"content": "QUEST"}
+event: chat_chunk
+data: {"content": "IONS"}
+event: chat_chunk
+data: {"content": "=="}
+event: chat_chunk
+data: {"content": "=\n"}
+event: chat_chunk
+data: {"content": "["}
+event: chat_chunk
+data: {"content": "建议"}
+event: chat_chunk
+data: {"content": "追问"}
+event: chat_chunk
+data: {"content": "]\n"}
+event: chat_chunk
+data: {"content": "1"}
+event: chat_chunk
+data: {"content": "."}
+event: chat_chunk
+data: {"content": " "}
+event: chat_chunk
+data: {"content": "在"}
+event: chat_chunk
+data: {"content": "残"}
+event: chat_chunk
+data: {"content": "差"}
+event: chat_chunk
+data: {"content": "网络中"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "层"}
+event: chat_chunk
+data: {"content": "的位置"}
+event: chat_chunk
+data: {"content": "是否"}
+event: chat_chunk
+data: {"content": "会影响"}
+event: chat_chunk
+data: {"content": "梯度"}
+event: chat_chunk
+data: {"content": "回"}
+event: chat_chunk
+data: {"content": "传"}
+event: chat_chunk
+data: {"content": "的"}
+event: chat_chunk
+data: {"content": "稳定"}
+event: chat_chunk
+data: {"content": "性和"}
+event: chat_chunk
+data: {"content": "特征"}
+event: chat_chunk
+data: {"content": "图"}
+event: chat_chunk
+data: {"content": "分辨率"}
+event: chat_chunk
+data: {"content": "？\n"}
+event: chat_chunk
+data: {"content": "2"}
+event: chat_chunk
+data: {"content": "."}
+event: chat_chunk
+data: {"content": " "}
+event: chat_chunk
+data: {"content": "如果"}
+event: chat_chunk
+data: {"content": "让"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "层"}
+event: chat_chunk
+data: {"content": "也"}
+event: chat_chunk
+data: {"content": "学习"}
+event: chat_chunk
+data: {"content": "参数"}
+event: chat_chunk
+data: {"content": "（"}
+event: chat_chunk
+data: {"content": "如"}
+event: chat_chunk
+data: {"content": " Spatial"}
+event: chat_chunk
+data: {"content": " Py"}
+event: chat_chunk
+data: {"content": "ram"}
+event: chat_chunk
+data: {"content": "iding"}
+event: chat_chunk
+data: {"content": " Pool"}
+event: chat_chunk
+data: {"content": "ing"}
+event: chat_chunk
+data: {"content": " "}
+event: chat_chunk
+data: {"content": "中的"}
+event: chat_chunk
+data: {"content": "自适应"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "），"}
+event: chat_chunk
+data: {"content": "它"}
+event: chat_chunk
+data: {"content": "还能"}
+event: chat_chunk
+data: {"content": "保持"}
+event: chat_chunk
+data: {"content": "平移"}
+event: chat_chunk
+data: {"content": "鲁"}
+event: chat_chunk
+data: {"content": "棒"}
+event: chat_chunk
+data: {"content": "性"}
+event: chat_chunk
+data: {"content": "吗"}
+event: chat_chunk
+data: {"content": "？\n"}
+event: chat_chunk
+data: {"content": "3"}
+event: chat_chunk
+data: {"content": "."}
+event: chat_chunk
+data: {"content": " "}
+event: chat_chunk
+data: {"content": "当前"}
+event: chat_chunk
+data: {"content": " Vision"}
+event: chat_chunk
+data: {"content": " Transformer"}
+event: chat_chunk
+data: {"content": " "}
+event: chat_chunk
+data: {"content": "中"}
+event: chat_chunk
+data: {"content": "通常"}
+event: chat_chunk
+data: {"content": "用"}
+event: chat_chunk
+data: {"content": " Patch"}
+event: chat_chunk
+data: {"content": " Merg"}
+event: chat_chunk
+data: {"content": "ing"}
+event: chat_chunk
+data: {"content": " "}
+event: chat_chunk
+data: {"content": "替代"}
+event: chat_chunk
+data: {"content": "池"}
+event: chat_chunk
+data: {"content": "化"}
+event: chat_chunk
+data: {"content": "，"}
+event: chat_chunk
+data: {"content": "这两"}
+event: chat_chunk
+data: {"content": "者在"}
+event: chat_chunk
+data: {"content": "信息"}
+event: chat_chunk
+data: {"content": "聚合"}
+event: chat_chunk
+data: {"content": "效率"}
+event: chat_chunk
+data: {"content": "上"}
+event: chat_chunk
+data: {"content": "孰"}
+event: chat_chunk
+data: {"content": "优"}
+event: chat_chunk
+data: {"content": "孰"}
+event: chat_chunk
+data: {"content": "劣"}
+event: chat_chunk
+data: {"content": "？\n"}
+event: chat_chunk
+data: {"content": "========================"}
+event: chat_chunk
+data: {"content": ""}
+event: progress
+data: {"step": "complete", "message": "生成完成！", "progress": 100}
+event: complete
+data: {"target": "卷积神经网络", "content": "你提出了一个看似基础却极具深度的问题。既然你已经掌握神经网络的基本概念（根据路由指令推测），我们不妨直接从**池化层**这一典型模块切入，反推神经网络的核心设计哲学。请观察以下数学定义：\n\n给定输入特征图 \\( \\mathbf{X} \\in \\mathbb{R}^{H \\times W \\times C} \\)，池化窗口大小为 \\( p \\times p \\)，步长 \\( s \\)（通常 \\( s = p \\)），则最大池化输出为：\n\n\\[\n\\mathbf{Y}_{i,j,k} = \\max_{m=0}^{p-1} \\max_{n=0}^{p-1} \\mathbf{X}_{i \\cdot s + m, \\, j \\cdot s + n, \\, k}\n\\]\n\n平均池化则为：\n\n\\[\n\\mathbf{Y}_{i,j,k} = \\frac{1}{p^2} \\sum_{m=0}^{p-1} \\sum_{n=0}^{p-1} \\mathbf{X}_{i \\cdot s + m, \\, j \\cdot s + n, \\, k}\n\\]\n\n**关键点**：池化层本身没有可学习参数，但它通过**局部聚合**引入了强归纳偏置（invariant local translation）。这正是神经网络的一个核心能力——用**层次化、非线性的可学习变换**来提取层级特征，而池化加深了这种层次性：低层捕捉边缘，高层通过池化获得更大感受野，捕捉语义。\n\n如果想深入，不妨思考一个**高阶理论问题**：池化操作在数学上等价于对局部区域施加一个**硬性约束的滤波器**（类似形态学中的最大/平均滤波器）。近年来研究表明，使用**可学习的注意力池化**（如 Set Transformer 中的 pooling by multi-head attention）能够动态加权局部区域，提升灵活性。前沿方向甚至将池化视为**图神经网络中的读出函数**（readout），将空间结构映射为全局表示。\n\n**启发式引导**：既然池化通过“局部极值”或“全局均值”来降维，你认为这种 **“舍弃局部信息”的方式**，与卷积层的**参数学习机制**在信息保留策略上有什么本质矛盾？如何权衡利弊？\n\n===", "suggested_questions": ["在残差网络中，池化层的位置是否会影响梯度回传的稳定性和特征图分辨率？", "如果让池化层也学习参数（如 Spatial Pyramiding Pooling 中的自适应池化），它还能保持平移鲁棒性吗？", "当前 Vision Transformer 中通常用 Patch Merging 替代池化，这两者在信息聚合效率上孰优孰劣？"], "resources": [{"agent": "逻辑画师", "type": "slide_reference", "content": "data/patches/conv_stride.png"}, {"agent": "逻辑画师", "type": "slide_reference", "content": "data/patches/pooling_2x2.png"}], "safety": {"passed": true, "issues_count": 0}, "profile": {"weak_points": ["神经网络", "卷积神经网络", "池化层", "最大池化", "平均池化"], "concept_mastery": {"神经网络": 0.5, "卷积神经网络": 0.6}, "coordinate_map": {"卷积神经网络": [-0.14597943425178528, 0.5555011034011841], "神经网络": [0.0008275402360595763, -0.002635751850903034]}, "fsm_mode": "advanced_mode"}, "alignment": {"passed": true, "distance": 0.0, "conflicts": []}, "rdi": {"score": 0.01, "category": "极低风险", "explanation": "生成的学术术语与检索到的知识库文献高度一致且语义契合，内容极具可信度。", "details": {"matched_entities": ["池化层", "神经网络"], "unmatched_entities": ["最大池化", "平均池化", "卷积层", "Transformer"]}}, "strategy_plan": null, "metrics": {"rtt_ms": 30515, "tokens_used": 709, "cost_cny": 0.0106, "model": "EduMatrix Swarm 1+3+5", "circuit_breaker": "CLOSED"}}

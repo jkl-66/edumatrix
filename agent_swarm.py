@@ -963,16 +963,19 @@ class AsyncResourceFactory:
                     f"确保代码可以直接复制运行，不得留空。"
                 ).strip()
 
-            # HINT_LADDER → 注入到考官智能体，强制分层提示禁止直接答案
+            # HINT_LADDER → 注入到考官智能体，强制分层提示禁止直接答案，并使用可折叠 HTML 结构
             if stype == StrategyType.HINT_LADDER:
                 prev = injections.get("quiz", "")
                 injections["quiz"] = (
                     f"{prev}\n"
                     f"【系统强制指令: HINT_LADDER】{action.description}\n"
-                    f"设计题目时，必须附带 3 层递进提示阶梯：\n"
-                    f"  第1层：提示题目条件或关键概念（模糊暗示）\n"
-                    f"  第2层：提示适用公式或方法（半具体）\n"
-                    f"  第3层：仅给出局部步骤或伪代码框架（限制性）\n"
+                    f"设计题目时，必须使用以下可折叠手风琴格式（<details><summary>）附带 3 层递进提示阶梯（⚠️注意：直接输出<details>，禁止在<details>前加'- '列表符号或'提示阶梯'标题，也不要在<details>内部重复书写'💡 提示阶梯'标题）：\n"
+                    f"<details>\n"
+                    f"<summary>💡 提示阶梯（点击展开）</summary>\n\n"
+                    f"- **第1层（模糊暗示）**：提示题目条件或关键概念\n"
+                    f"- **第2层（适用方法）**：提示适用公式或解题思路\n"
+                    f"- **第3层（局部步骤）**：仅给出局部关键步骤或伪代码框架\n\n"
+                    f"</details>\n"
                     f"禁止在任何层级直接泄露完整答案。"
                 ).strip()
                 # 同时注入到理论教授

@@ -552,6 +552,16 @@ def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: floa
     return existing
 
 
+def delete_review_plan(db: Session, plan_id: int) -> bool:
+    plan = db.query(DBReviewPlan).filter(DBReviewPlan.id == plan_id).first()
+    if not plan:
+        return False
+    db.delete(plan)
+    db.commit()
+    return True
+
+
+
 def apply_review_feedback(db: Session, student_id: str, concept: str, quality: float) -> DBReviewPlan:
     if quality not in (2, 4, 5):
         raise ValueError("quality must be one of 2, 4, 5")
@@ -661,18 +671,16 @@ async def build_review_adaptation_payload(concept: str, quality: int, mastery: f
             "stream_chunks": [],
         }
 
-    fallback_simplified = (
-        f"检测到「{concept}」仍然吃力，先把它拆成三步："
-        f"第一步只确认它要解决什么问题；第二步看输入怎样一步步变成输出；"
-        f"第三步再回到公式或代码细节。当前掌握度约 {round(mastery_score * 100)}%，"
-        "建议先看一遍可视化例子，再做一道最小变式题。"
-    )
-    llm_backend = "deterministic-fallback"
-    simplified = fallback_simplified
-    try:
-        from llm_client import DEFAULT_LLM
-        import asyncio
+    from llm_client import DEFAULT_LLM, get_concept_rich_adaptation
+    import json
+    import asyncio
 
+    rich_data = get_concept_rich_adaptation(concept, mastery_score)
+    simplified = rich_data["explanation"]
+    mermaid = rich_data["mermaid"]
+    llm_backend = "VisualizerAgent"
+
+    try:
         llm_backend = getattr(DEFAULT_LLM, "__class__", type(DEFAULT_LLM)).__name__
         generated = await asyncio.to_thread(
             DEFAULT_LLM.generate,
@@ -685,18 +693,17 @@ async def build_review_adaptation_payload(concept: str, quality: int, mastery: f
             role="概念可视化导师",
         )
         if generated and len(generated.strip()) >= 12 and "已基于检索证据处理主题" not in generated:
-            simplified = generated.strip()
+            try:
+                parsed = json.loads(generated.strip())
+                if isinstance(parsed, dict) and "explanation" in parsed and "mermaid" in parsed:
+                    simplified = parsed["explanation"]
+                    mermaid = parsed["mermaid"]
+                else:
+                    simplified = generated.strip()
+            except Exception:
+                simplified = generated.strip()
     except Exception:
-        simplified = fallback_simplified
-
-    mermaid = (
-        "mindmap\n"
-        f'    root(("直觉问题: {concept}"))\n'
-        '        生活化类比\n'
-        '        关键变量\n'
-        '        最小例题\n'
-        '        重新复述\n'
-    )
+        pass
     card_back = simplified + "\n\n" + mermaid
     stream_chunks = [card_back[i : i + 28] for i in range(0, len(card_back), 28)]
     return {

@@ -392,6 +392,7 @@ class BKTEngine:
                 "p_err": round(getattr(state, "p_err", 0.1), 4),
                 "attempts": len(state.history),
                 "accuracy": sum(state.history) / max(len(state.history), 1),
+                "history": list(state.history),
                 "layers": getattr(state, "layers", {})
             }
             for concept, state in self.states.items()

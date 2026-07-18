@@ -131,7 +131,7 @@ function toggleMode() {
               <input 
                 v-model="username" 
                 class="w-full pl-9 pr-3 py-2.5 text-sm rounded-xl border border-white/[0.08] bg-[#0d121f] text-white focus:border-[#0ea5e9] focus:ring-2 focus:ring-[#0ea5e9]/10 outline-none transition-all" 
-                placeholder="设置用户名" 
+                :placeholder="isRegister ? '设置用户名' : '请输入用户名'" 
                 @keydown.enter="handleAction" 
               />
             </div>
@@ -159,7 +159,7 @@ function toggleMode() {
                 v-model="password" 
                 :type="showPwd ? 'text' : 'password'" 
                 class="w-full pl-9 pr-9 py-2.5 text-sm rounded-xl border border-white/[0.08] bg-[#0d121f] text-white focus:border-[#0ea5e9] focus:ring-2 focus:ring-[#0ea5e9]/10 outline-none transition-all" 
-                placeholder="设置登录密码" 
+                :placeholder="isRegister ? '设置登录密码' : '请输入密码'" 
                 @keydown.enter="handleAction" 
               />
               <button class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300" @click="showPwd = !showPwd">

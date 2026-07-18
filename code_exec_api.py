@@ -392,7 +392,7 @@ def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     allowed = {
         "math", "json", "random", "statistics", "collections", "itertools",
         "datetime", "re", "numpy", "pandas", "matplotlib", "sklearn",
-        "torch", "nn", "np", "pd", "plt", "time"
+        "torch", "nn", "np", "pd", "plt", "time", "mpl_toolkits"
     }
     root_name = name.split('.')[0]
     if root_name not in allowed:

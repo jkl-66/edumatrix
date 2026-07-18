@@ -40,18 +40,32 @@ export async function appendWrongQuestionReflection(data) {
 }
 
 export async function exportNotePdf(data) {
-  const r = await api.post('/export-notes-pdf', data, {
-    headers: buildHeaders(),
-    responseType: 'blob',
-  })
-  // 触发浏览器下载
-  const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `edumatrix-${(data.title || '笔记').slice(0, 30)}.pdf`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-  return true
+  try {
+    const r = await api.post('/export-notes-pdf', data, {
+      headers: buildHeaders(),
+      responseType: 'blob',
+    })
+    const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }))
+    const a = document.createElement('a')
+    a.href = url
+    const rawTitle = data.title || '笔记'
+    const safeTitle = rawTitle.replace(/[/\\?%*:|"<>]/g, '_').slice(0, 30)
+    a.download = `edumatrix-${safeTitle}.pdf`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    return true
+  } catch (err) {
+    if (err.response && err.response.data instanceof Blob) {
+      const errorText = await err.response.data.text()
+      try {
+        const errorJson = JSON.parse(errorText)
+        throw new Error(errorJson.detail || errorText)
+      } catch {
+        throw new Error(errorText || err.message)
+      }
+    }
+    throw err
+  }
 }

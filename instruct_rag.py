@@ -110,7 +110,15 @@ def _build_instruction_plan(
         role_rules = (
             f"1. 请基于当前学习目标，从多个角度（概念、计算、应用）出题。\n"
             f"2. 每道题都提供一个明确的评分标准。\n"
-            f"3. {difficulty_prompt}\n"
+            f"3. ⚠️【提示阶梯折叠排版格式要求】：当包含“提示阶梯”或“解题提示”时，必须使用 HTML <details><summary> 标签包裹成可折叠手风琴结构（⚠️注意：直接输出<details>，禁止在<details>前加'- '列表符号或'提示阶梯'标题，也不要在<details>内部重复书写'💡 提示阶梯'标题）：\n"
+            f"   <details>\n"
+            f"   <summary>💡 提示阶梯（点击展开）</summary>\n\n"
+            f"   - **第1层（模糊暗示）**：...\n"
+            f"   - **第2层（适用方法）**：...\n"
+            f"   - **第3层（局部步骤）**：...\n\n"
+            f"   </details>\n"
+            f"   绝对禁止写成传统的普通平铺列表！\n"
+            f"4. {difficulty_prompt}\n"
         )
 
     elif role == "逻辑画师":

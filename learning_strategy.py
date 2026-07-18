@@ -1018,12 +1018,23 @@ def build_adaptive_astar_route(
     affect = _clamp_score(frustration, 0.0)
     goal_set = {g for g in (learning_goals or []) if g}
     weak_set = {w for w in (weak_points or []) if w}
-    primary_goal = sorted(goal_set)[0] if goal_set else ""
+    
+    # 过滤出存在于课程图谱中的真实目标概念，供 A* 寻路进行精确终点匹配
+    real_goals = {g for g in goal_set if g in concepts}
+    primary_goal = sorted(real_goals)[0] if real_goals else (sorted(goal_set)[0] if goal_set else "")
+    
     goal_related = set(goal_set)
     for goal in goal_set:
-        goal_related.update(_ancestors_for_target(dag, goal))
+        if goal in concepts:
+            goal_related.update(_ancestors_for_target(dag, goal))
     for weak in weak_set:
-        goal_related.update(_ancestors_for_target(dag, weak))
+        if weak in concepts:
+            goal_related.update(_ancestors_for_target(dag, weak))
+            
+    # 如果目标集合不为空，但全是非物理概念（广泛诉求，如期末复习冲刺），则自动关联度数最高的核心骨干节点，维持路线连续性
+    if goal_set and not real_goals:
+        core_backbones = sorted(concepts, key=lambda c: (-len(dag.get(c, []) or []), c))
+        goal_related.update(core_backbones[:3])
 
     base_concepts = set(graph_metadata.get("base_concepts") or concepts)
     explicit_concepts = set(mastery.keys()) | goal_set | weak_set

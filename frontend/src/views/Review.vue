@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import { getReviewPlans, createReviewPlan, reviewFlashcard } from '../api'
-import { Calendar, Plus, CheckCircle2, Clock, Brain } from '@lucide/vue'
+import { getReviewPlans, createReviewPlan, reviewFlashcard, deleteReviewPlan } from '../api'
+import { Calendar, Plus, CheckCircle2, Clock, Brain, Trash2 } from '@lucide/vue'
 import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 
 const props = defineProps({ studentId: String })
@@ -120,6 +120,18 @@ async function submitReview(plan, quality) {
     reviewingKey.value = ''
   }
 }
+
+async function removePlan(planId) {
+  if (!confirm('确定要删除该复习计划吗？')) return
+  try {
+    await deleteReviewPlan(planId)
+    setAction('✅ 复习计划已删除')
+    await load()
+  } catch (e) {
+    setAction(`❌ 删除失败: ${e.response?.data?.detail || e.message}`)
+  }
+}
+
 
 const intervals = [1, 3, 7, 14, 30]
 
@@ -278,6 +290,14 @@ onUnmounted(clearMorphTimers)
               @click.prevent="submitReview(plan, action.quality)"
             >
               {{ reviewingKey === `${plan.id || plan.concept}:${action.quality}` ? '提交中' : action.label }}
+            </button>
+            <button
+              type="button"
+              class="px-2 py-1.5 rounded-lg border border-red-200 text-red-550 hover:bg-red-50 text-[11px] font-medium transition-colors flex items-center justify-center shrink-0"
+              title="删除复习计划"
+              @click.prevent="removePlan(plan.id)"
+            >
+              <Trash2 :size="12" />
             </button>
           </div>
         </div>

@@ -834,15 +834,9 @@ def check_arxiv_cache(query: str) -> list[dict] | None:
         缓存结果列表（若命中），否则 None
     """
     try:
-        from app.database import DBArxivCache
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import sessionmaker
-        import os
+        from app.database import DBArxivCache, SessionLocal
+        session = SessionLocal()
 
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "edumatrix.db")
-        engine = create_engine(f"sqlite:///{db_path}")
-        Session = sessionmaker(bind=engine)
-        session = Session()
 
         qh = _query_hash(query)
         cached = session.query(DBArxivCache).filter(
@@ -876,16 +870,9 @@ def save_arxiv_cache(query: str, results: list[dict]) -> None:
         results: arXiv API 返回的论文列表
     """
     try:
-        from app.database import DBArxivCache
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import sessionmaker
-        from datetime import datetime
-        import os
+        from app.database import DBArxivCache, SessionLocal
+        session = SessionLocal()
 
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "edumatrix.db")
-        engine = create_engine(f"sqlite:///{db_path}")
-        Session = sessionmaker(bind=engine)
-        session = Session()
 
         qh = _query_hash(query)
 

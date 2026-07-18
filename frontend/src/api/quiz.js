@@ -78,17 +78,20 @@ export async function generateSimilarQuiz(studentId, sourceQuizId, concept = '')
 }
 
 // === 错题管理 API ===
-export async function deleteWrongQuestion(wrongId) {
-  const r = await api.delete(`/quiz/wrong-questions/${wrongId}`, { headers: buildHeaders() })
+export async function deleteWrongQuestion(wrongId, studentId = '') {
+  const sid = studentId || localStorage.getItem('edumatrix_student_id') || 'default'
+  const r = await api.delete(`/quiz/wrong-questions/${wrongId}?student_id=${sid}`, { headers: buildHeaders() })
   return r.data
 }
 
-export async function togglePinWrongQuestion(wrongId) {
-  const r = await api.patch(`/quiz/wrong-questions/${wrongId}/pin`, {}, { headers: buildHeaders() })
+export async function togglePinWrongQuestion(wrongId, studentId = '') {
+  const sid = studentId || localStorage.getItem('edumatrix_student_id') || 'default'
+  const r = await api.patch(`/quiz/wrong-questions/${wrongId}/pin?student_id=${sid}`, {}, { headers: buildHeaders() })
   return r.data
 }
 
-export async function updateWrongQuestionNotes(wrongId, notes) {
-  const r = await api.patch(`/quiz/wrong-questions/${wrongId}/notes`, { notes }, { headers: buildHeaders() })
+export async function updateWrongQuestionNotes(wrongId, notes, studentId = '') {
+  const sid = studentId || localStorage.getItem('edumatrix_student_id') || 'default'
+  const r = await api.patch(`/quiz/wrong-questions/${wrongId}/notes`, { notes, student_id: sid }, { headers: buildHeaders() })
   return r.data
 }

@@ -23,6 +23,7 @@ const loading = ref(true)
 const selectedNoteId = ref(null)
 const isEditing = ref(false)
 const polishLoading = ref(false)
+const pdfExporting = ref(false)
 
 // 过滤和搜索状态
 const searchQuery = ref('')
@@ -313,19 +314,20 @@ function exportMarkdown(note) {
   URL.revokeObjectURL(url)
 }
 
-// 导出为 PDF（任务 2）
-const pdfExporting = ref(false)
+// 导出为 PDF（正常后台导出，触发 PDF 文件下载）
 async function exportPdf(note) {
   if (!note || pdfExporting.value) return
   pdfExporting.value = true
   try {
+    const noteContent = note.content || note.content_markdown || note.text || editForm.value?.content || ''
+    const noteTitle = note.title || (note.concepts && note.concepts[0]) || '学习笔记'
     await exportNotePdf({
-      title: note.concepts?.[0] || '学习笔记',
-      content: note.content || '',
+      title: noteTitle,
+      content: noteContent,
       subtitle: `来源: ${note.source || '手动记录'}`,
-      tags: (note.tags || []).join(', '),
+      tags: Array.isArray(note.tags) ? note.tags.join(', ') : (note.tags || ''),
       source: note.source || '学习笔记',
-      concepts: note.concepts || [],
+      concepts: Array.isArray(note.concepts) ? note.concepts : [],
     })
   } catch (e) {
     alert('PDF 导出失败: ' + (e.message || e))
@@ -779,7 +781,7 @@ onMounted(async () => {
             <button @click="exportMarkdown(selectedNote)" class="p-2 bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 rounded-xl transition-all" title="导出为 Markdown">
               <Download :size="13" />
             </button>
-            <button @click="exportPdf(selectedNote)" :disabled="pdfExporting" class="p-2 bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 rounded-xl transition-all" title="导出为 PDF">
+            <button @click="exportPdf(selectedNote)" :disabled="pdfExporting" class="p-2 bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 rounded-xl transition-all disabled:opacity-50" title="导出为 PDF">
               <FileText :size="13" />
             </button>
             <button @click="removeNote(selectedNote.id)" class="p-2 bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-600 rounded-xl border border-red-100 transition-all" title="删除笔记">

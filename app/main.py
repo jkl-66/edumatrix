@@ -27,6 +27,7 @@ from app.crud import (
     delete_note,
     get_review_plan,
     upsert_review_plan,
+    delete_review_plan,
     review_plan_to_dict,
     record_conversation,
     get_conversation_history,
@@ -993,35 +994,50 @@ async def export_note_pdf(request: Request):
     from io import BytesIO
     import asyncio
     
-    payload = await request.json()
-    title = str(payload.get("title", "学习笔记")).strip()
-    content = str(payload.get("content", "")).strip()
-    subtitle = str(payload.get("subtitle", "")).strip()
-    tags = str(payload.get("tags", "")).strip()
-    source = str(payload.get("source", "学习笔记")).strip()
-    concepts = payload.get("concepts")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+        
+    title = str(payload.get("title") or "学习笔记").strip()
+    content = str(payload.get("content") or "").strip()
+    subtitle = str(payload.get("subtitle") or "").strip()
+    tags = str(payload.get("tags") or "").strip()
+    source = str(payload.get("source") or "学习笔记").strip()
+    concepts = payload.get("concepts") or []
+    if not isinstance(concepts, list):
+        concepts = [str(concepts)]
     
     if not content:
-        raise HTTPException(status_code=400, detail="content is required")
+        raise HTTPException(status_code=400, detail="笔记内容不能为空，请先在编辑器中输入或保存笔记内容。")
     
     try:
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+            
         pdf_bytes = await loop.run_in_executor(
             None, generate_note_pdf,
             title, content, subtitle, tags, source, concepts, None,
         )
         
-        filename = f"edumatrix-{title[:30]}.pdf".replace('/', '_').replace('\\', '_').replace(' ', '_')
+        import re
+        safe_title = re.sub(r'[/\\?%*:|"<> ]', '_', title[:30])
+        import urllib.parse
+        encoded_filename = urllib.parse.quote(safe_title)
         
         return StreamingResponse(
             BytesIO(pdf_bytes),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Disposition": f"attachment; filename=\"edumatrix-note.pdf\"; filename*=utf-8''{encoded_filename}.pdf",
                 "Content-Length": str(len(pdf_bytes)),
             },
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"PDF 生成失败: {str(e)[:200]}")
 
 
@@ -1091,6 +1107,15 @@ async def update_review(student_id: str, request: Request):
         raise HTTPException(status_code=400, detail="concept is required")
     plan = await run_db_op(upsert_review_plan, student_id, concept, mastery, interval_days)
     return review_plan_to_dict(plan)
+
+
+@app.delete("/api/review/{plan_id}")
+async def remove_review_plan(plan_id: int):
+    success = await run_db_op(delete_review_plan, plan_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Review plan not found")
+    return {"status": "ok", "deleted": True}
+
 
 
 # ============================================================

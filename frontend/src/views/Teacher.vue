@@ -7,6 +7,8 @@ import {
   GraduationCap, ChevronRight, Clock, Sparkles, User, BookOpen,
   AlertCircle, CheckCircle, ArrowRight, Calendar,
 } from '@lucide/vue'
+import DashboardWidget from '../components/ui/DashboardWidget.vue'
+import UiCard from '../components/ui/UiCard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -67,22 +69,30 @@ onMounted(async () => {
 <template>
   <div v-if="loading" class="flex items-center justify-center h-64"><div class="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" /></div>
   <div v-else-if="error" class="text-center py-12 text-red-500 text-sm">{{ error }}</div>
-  <div v-else class="max-w-7xl mx-auto">
-    <!-- Tabs -->
-    <div class="flex gap-1 border-b border-gray-100 pb-1 mb-5 overflow-x-auto">
-      <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap" :class="activeTab==='overview'?'text-purple-700 bg-purple-50 border-b-2 border-purple-500':'text-gray-500 hover:text-gray-700'" @click="setTab('overview')">📊 教学看板</button>
-      <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap" :class="activeTab==='students'?'text-purple-700 bg-purple-50 border-b-2 border-purple-500':'text-gray-500 hover:text-gray-700'" @click="setTab('students')">👨‍🎓 学生管理</button>
-      <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap" :class="activeTab==='reviews'?'text-purple-700 bg-purple-50 border-b-2 border-purple-500':'text-gray-500 hover:text-gray-700'" @click="setTab('reviews')">📚 复习监控</button>
-      <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap" :class="activeTab==='reports'?'text-purple-700 bg-purple-50 border-b-2 border-purple-500':'text-gray-500 hover:text-gray-700'" @click="setTab('reports')">📋 学习报告</button>
-    </div>
+  <div v-else class="teacher-page max-w-[1380px] mx-auto">
+    <UiCard class="teacher-intro" tone="dark">
+      <div>
+        <span class="teacher-intro__eyebrow"><Sparkles :size="13" /> Teaching intelligence</span>
+        <h1>把每一次教学判断，建立在更清晰的学习证据上。</h1>
+        <p>聚合班级掌握度、活跃趋势和风险预测，优先发现真正需要干预的学生与知识点。</p>
+      </div>
+      <div class="teacher-intro__pulse"><span />{{ classSummary.alert_count || 0 }} 个关注信号</div>
+    </UiCard>
+
+    <nav class="teacher-tabs" aria-label="教师工作台导航">
+      <button :class="{ active: activeTab==='overview' }" @click="setTab('overview')"><BarChart3 :size="14" />教学总览</button>
+      <button :class="{ active: activeTab==='students' }" @click="setTab('students')"><Users :size="14" />学生画像</button>
+      <button :class="{ active: activeTab==='reviews' }" @click="setTab('reviews')"><Calendar :size="14" />复习监控</button>
+      <button :class="{ active: activeTab==='reports' }" @click="setTab('reports')"><BookOpen :size="14" />学习报告</button>
+    </nav>
 
     <!-- TAB: 教学看板 -->
     <div v-if="activeTab==='overview'" class="space-y-5">
-      <div class="grid grid-cols-4 gap-3">
-        <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4"><p class="text-[10px] text-gray-500 font-medium flex items-center gap-1"><Users :size="11"/> 学生总数</p><p class="text-2xl font-bold text-gray-800 mt-1">{{ classSummary.total_students || 0 }}</p></div>
-        <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4"><p class="text-[10px] text-gray-500 font-medium">📈 平均掌握度</p><p class="text-2xl font-bold mt-1" :class="scoreColor(classSummary.avg_mastery)">{{ pct(classSummary.avg_mastery) }}%</p></div>
-        <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4"><p class="text-[10px] text-gray-500 font-medium flex items-center gap-1"><AlertTriangle :size="11" class="text-amber-500"/> 需关注</p><p class="text-2xl font-bold text-amber-600 mt-1">{{ classSummary.alert_count || 0 }}</p></div>
-        <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4"><p class="text-[10px] text-gray-500 font-medium">🔻 掌握度偏低</p><p class="text-2xl font-bold text-red-600 mt-1">{{ classSummary.low_mastery_count || 0 }}</p></div>
+      <div class="teacher-metrics">
+        <DashboardWidget label="班级学生" :value="classSummary.total_students || 0" detail="当前课程空间" tone="sage"><template #icon><Users :size="16" /></template><template #signal>班级规模</template></DashboardWidget>
+        <DashboardWidget label="平均掌握度" :value="`${pct(classSummary.avg_mastery)}%`" detail="全班知识点综合均值" tone="violet"><template #icon><TrendingUp :size="16" /></template><template #signal>学习质量</template></DashboardWidget>
+        <DashboardWidget label="需要关注" :value="classSummary.alert_count || 0" detail="由风险模型实时识别" tone="sand"><template #icon><AlertTriangle :size="16" /></template><template #signal>待干预</template></DashboardWidget>
+        <DashboardWidget label="低掌握学生" :value="classSummary.low_mastery_count || 0" detail="低于课程掌握阈值" tone="rose"><template #icon><Target :size="16" /></template><template #signal>风险预测</template></DashboardWidget>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
@@ -195,3 +205,31 @@ onMounted(async () => {
 
   </div>
 </template>
+
+<style scoped>
+.teacher-page { padding-bottom: 32px; }
+.teacher-intro {
+  display: flex;
+  min-height: 230px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 30px;
+  padding: clamp(26px, 4vw, 44px);
+  overflow: hidden;
+  background: radial-gradient(circle at 92% 8%, rgba(207,218,210,.16), transparent 34%), #28322c;
+}
+.teacher-intro__eyebrow { display: inline-flex; align-items: center; gap: 6px; color: #c8d4cb; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.teacher-intro h1 { max-width: 750px; margin: 16px 0 10px; color: #fafcf9; font-size: clamp(25px, 3.4vw, 42px); font-weight: 610; letter-spacing: -.055em; line-height: 1.12; }
+.teacher-intro p { max-width: 680px; margin: 0; color: rgba(237,243,238,.58); font-size: 12px; line-height: 1.7; }
+.teacher-intro__pulse { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; padding: 10px 13px; color: #d6ddd7; border: 1px solid rgba(255,255,255,.09); border-radius: 13px; background: rgba(255,255,255,.045); font-size: 10px; }
+.teacher-intro__pulse span { width: 6px; height: 6px; border-radius: 50%; background: #c99378; box-shadow: 0 0 0 5px rgba(201,147,120,.12); }
+.teacher-tabs { display: flex; gap: 5px; width: max-content; max-width: 100%; margin: 18px 0; padding: 5px; overflow-x: auto; border: 1px solid rgba(42,54,46,.07); border-radius: 16px; background: rgba(250,251,248,.72); }
+.teacher-tabs button { display: inline-flex; align-items: center; gap: 7px; padding: 9px 13px; color: #7b847d; border: 0; border-radius: 11px; background: transparent; font-size: 10px; font-weight: 620; white-space: nowrap; cursor: pointer; transition: .18s ease; }
+.teacher-tabs button:hover { color: #344038; background: #eef1ec; }
+.teacher-tabs button.active { color: #f8faf7; background: #344039; box-shadow: 0 7px 16px rgba(52,64,57,.15); }
+.teacher-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.teacher-page :deep(.bg-white.rounded-2xl), .teacher-page :deep(.bg-white.rounded-xl) { border-color: rgba(42,54,46,.075); background: rgba(253,254,251,.86); box-shadow: 0 12px 32px rgba(45,56,49,.05); }
+.teacher-page :deep(input), .teacher-page :deep(select) { border-color: rgba(42,54,46,.1); background: rgba(253,254,251,.86); }
+@media (max-width: 900px) { .teacher-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); } .teacher-intro { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 560px) { .teacher-metrics { grid-template-columns: 1fr; } }
+</style>

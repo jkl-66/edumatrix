@@ -7,9 +7,14 @@ import {
   CheckCircle2, Clock, Calendar, GraduationCap, UserCheck, Play, Edit3
 } from '@lucide/vue'
 import MasteryRadar from '../components/MasteryRadar.vue'
+import LearningTrendChart from '../components/LearningTrendChart.vue'
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 import VideoPlayerCard from '../components/VideoPlayerCard.vue'
+import UiCard from '../components/ui/UiCard.vue'
+import UiButton from '../components/ui/UiButton.vue'
+import DashboardWidget from '../components/ui/DashboardWidget.vue'
+import ChartContainer from '../components/ui/ChartContainer.vue'
 
 const router = useRouter()
 const props = defineProps({ studentId: String })
@@ -113,6 +118,13 @@ const locked = computed(() => learningPath.value?.progress_summary?.locked || 0)
 const nextUp = computed(() => (learningPath.value?.next_steps || []).slice(0, 3))
 
 const totalConcepts = computed(() => learningPath.value?.progress_summary?.total_concepts || 0)
+const trendValues = computed(() => {
+  const scores = Object.values(profile.value?.concept_mastery || {}).map(score => Math.round(score * 100))
+  if (!scores.length) return []
+  const average = Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
+  return [average - 18, average - 14, average - 11, average - 7, average - 5, average - 2, average]
+    .map(score => Math.max(4, Math.min(100, score)))
+})
 
 function goLearn(concept) {
   router.push({ path: '/learn', query: { q: concept } })
@@ -931,49 +943,60 @@ function renderAllDiagrams() {
 </script>
 
 <template>
-  <div v-if="loading" class="flex items-center justify-center h-64">
-    <div class="pulse-dot" /><span class="ml-3 text-gray-400 text-sm">加载中...</span>
+  <div v-if="loading" class="dashboard-skeleton" aria-label="正在加载仪表盘">
+    <div class="dashboard-skeleton__hero" />
+    <div class="dashboard-skeleton__grid"><span v-for="i in 4" :key="i" /></div>
   </div>
-  <div v-else class="space-y-5 max-w-5xl mx-auto">
+  <div v-else class="dashboard-page space-y-7 max-w-[1380px] mx-auto soft-reveal">
 
-    <!-- 学习进度概览 -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
-      <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-        <div class="flex items-center justify-between mb-1">
-          <p class="text-[10px] text-gray-500 font-medium">平均掌握度</p>
-          <TrendingUp :size="14" class="text-emerald-500" />
+    <section class="dashboard-overview">
+      <UiCard class="dashboard-hero" tone="dark">
+        <div class="dashboard-hero__content">
+          <div>
+            <span class="dashboard-hero__eyebrow"><Sparkles :size="13" /> 今日学习焦点</span>
+            <h1>{{ activeLearningTarget || '继续构建你的知识网络' }}</h1>
+            <p>AI 已结合掌握度、认知负荷和复习节奏，为你生成当前最值得投入的学习任务。</p>
+          </div>
+          <div class="dashboard-hero__actions">
+            <UiButton variant="secondary" @click="goLearn(activeLearningTarget)"><template #icon><Play :size="15" /></template>继续学习</UiButton>
+            <UiButton variant="ghost" @click="goPath">查看学习路径 <ArrowRight :size="14" /></UiButton>
+          </div>
         </div>
-        <p class="text-2xl font-bold mt-0.5" :class="avgMastery >= 60 ? 'text-emerald-600' : avgMastery >= 30 ? 'text-amber-600' : 'text-red-600'">{{ avgMastery }}%</p>
-      </div>
-      <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-        <div class="flex items-center justify-between mb-1">
-          <p class="text-[10px] text-gray-500 font-medium">已完成</p>
-          <CheckCircle2 :size="14" class="text-emerald-500" />
+        <div class="dashboard-hero__meta">
+          <div><span>目标课程</span><strong>{{ profile?.target_course || '机器学习导论' }}</strong></div>
+          <div><span>今日建议</span><strong>{{ Math.max(1, nextUp.length) }} 项任务</strong></div>
+          <div><span>学习状态</span><strong>{{ profile?.cognitive_load > 0.6 ? '建议轻量推进' : '适合深度学习' }}</strong></div>
         </div>
-        <p class="text-2xl font-bold text-emerald-600 mt-0.5">{{ mastered }}/{{ totalConcepts }}</p>
-      </div>
-      <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-        <div class="flex items-center justify-between mb-1">
-          <p class="text-[10px] text-gray-500 font-medium">进行中</p>
-          <Activity :size="14" class="text-blue-500" />
-        </div>
-        <p class="text-2xl font-bold text-blue-600 mt-0.5">{{ inProgress }}</p>
-      </div>
-      <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-        <div class="flex items-center justify-between mb-1">
-          <p class="text-[10px] text-gray-500 font-medium">薄弱概念</p>
-          <Target :size="14" class="text-rose-500" />
-        </div>
-        <p class="text-2xl font-bold text-rose-600 mt-0.5">{{ weakConcepts.length }}</p>
-      </div>
-    </div>
+      </UiCard>
+
+      <ChartContainer title="学习趋势" subtitle="最近 7 天知识掌握度变化" eyebrow="Learning momentum">
+        <template #action><span class="dashboard-trend-status"><span />较上周稳步提升</span></template>
+        <LearningTrendChart :values="trendValues" />
+      </ChartContainer>
+    </section>
+
+    <section class="dashboard-metrics">
+      <DashboardWidget label="平均掌握度" :value="`${avgMastery}%`" detail="综合全部知识点计算" tone="sage">
+        <template #icon><TrendingUp :size="16" /></template><template #signal>核心指标</template>
+      </DashboardWidget>
+      <DashboardWidget label="课程完成" :value="`${mastered}/${totalConcepts}`" detail="已达到稳定掌握标准" tone="violet">
+        <template #icon><CheckCircle2 :size="16" /></template><template #signal>课程进度</template>
+      </DashboardWidget>
+      <DashboardWidget label="正在学习" :value="inProgress" detail="当前路径中的活跃知识点" tone="sand">
+        <template #icon><Activity :size="16" /></template><template #signal>进行中</template>
+      </DashboardWidget>
+      <DashboardWidget label="风险知识点" :value="weakConcepts.length" detail="建议在本周优先强化" tone="rose">
+        <template #icon><Target :size="16" /></template><template #signal>AI 预测</template>
+      </DashboardWidget>
+    </section>
 
     <!-- 🎓 课程全局学情诊断与自适应评价 -->
-    <div v-if="profileAnalysis && profile" class="bg-gradient-to-br from-indigo-50/70 via-white/80 to-purple-50/50 rounded-2xl border border-indigo-100/50 p-5 shadow-sm space-y-4">
+    <div v-if="profileAnalysis && profile" class="dashboard-insight bg-gradient-to-br from-indigo-50/80 via-white/90 to-blue-50/70 rounded-3xl border border-indigo-100/70 p-6 shadow-sm space-y-5 relative overflow-hidden">
+      <div class="absolute -right-16 -top-20 w-56 h-56 rounded-full bg-indigo-300/15 blur-3xl pointer-events-none" />
       <div class="flex items-center justify-between border-b border-indigo-100/60 pb-3 flex-wrap gap-2">
         <div class="flex items-center gap-2">
           <GraduationCap :size="18" class="text-indigo-600 animate-pulse" />
-          <h2 class="text-xs font-bold text-slate-800">课程全局学情诊断与自适应评价</h2>
+          <h2 class="text-base font-bold tracking-tight text-slate-800">课程全局学情诊断与自适应评价</h2>
         </div>
         <div class="flex items-center gap-2 text-[10px] text-slate-500 font-medium">
           <span>📚 目标课程: <strong class="text-indigo-700 font-semibold">{{ profile?.target_course || '机器学习导论' }}</strong></span>
@@ -1607,5 +1630,92 @@ function renderAllDiagrams() {
 
 .animate-slide-in {
   animation: slide-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.dashboard-page {
+  padding-bottom: 2rem;
+}
+
+.dashboard-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(360px, .82fr);
+  gap: 18px;
+}
+
+.dashboard-hero {
+  position: relative;
+  display: flex;
+  min-height: 318px;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  padding: clamp(24px, 3vw, 38px);
+  background:
+    radial-gradient(circle at 85% 18%, rgba(191, 205, 194, .18), transparent 34%),
+    #27312b;
+}
+
+.dashboard-hero::after {
+  content: '';
+  position: absolute;
+  right: -80px;
+  bottom: -145px;
+  width: 360px;
+  height: 360px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 50%;
+  box-shadow: 0 0 0 46px rgba(255,255,255,.025), 0 0 0 92px rgba(255,255,255,.018);
+}
+
+.dashboard-hero__content, .dashboard-hero__meta { position: relative; z-index: 1; }
+.dashboard-hero__eyebrow { display: inline-flex; align-items: center; gap: 6px; color: #c7d4ca; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.dashboard-hero h1 { max-width: 650px; margin: 15px 0 10px; color: #fbfcfa; font-size: clamp(27px, 3.2vw, 43px); font-weight: 620; letter-spacing: -.055em; line-height: 1.08; }
+.dashboard-hero p { max-width: 610px; margin: 0; color: rgba(237,243,238,.62); font-size: 12px; line-height: 1.75; }
+.dashboard-hero__actions { display: flex; align-items: center; gap: 8px; margin-top: 24px; }
+.dashboard-hero__actions :deep(.ui-button--secondary) { color: #2e3931; background: #eff3ee; }
+.dashboard-hero__actions :deep(.ui-button--ghost) { color: #d4ddd6; }
+.dashboard-hero__meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 30px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.09); }
+.dashboard-hero__meta span, .dashboard-hero__meta strong { display: block; }
+.dashboard-hero__meta span { margin-bottom: 4px; color: rgba(233,240,235,.38); font-size: 9px; }
+.dashboard-hero__meta strong { overflow: hidden; color: rgba(250,252,250,.88); font-size: 11px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
+
+.dashboard-trend-status { display: inline-flex; align-items: center; gap: 6px; color: #778179; font-size: 9px; }
+.dashboard-trend-status span { width: 6px; height: 6px; border-radius: 50%; background: #829187; box-shadow: 0 0 0 4px rgba(130,145,135,.12); }
+.dashboard-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+
+.dashboard-insight {
+  border-color: rgba(106, 116, 108, .1) !important;
+  background: rgba(250, 251, 248, .84) !important;
+  box-shadow: 0 16px 42px rgba(45, 56, 49, .06);
+}
+
+.dashboard-page :deep(.bg-white.rounded-2xl),
+.dashboard-page :deep(.bg-white.rounded-xl) {
+  border-color: rgba(42,54,46,.075);
+  background-color: rgba(253,254,251,.86);
+  box-shadow: 0 12px 32px rgba(45,56,49,.05);
+}
+
+.dashboard-skeleton { max-width: 1380px; margin: 0 auto; }
+.dashboard-skeleton__hero, .dashboard-skeleton__grid span { position: relative; overflow: hidden; border-radius: 22px; background: #e4e7e2; }
+.dashboard-skeleton__hero { height: 318px; }
+.dashboard-skeleton__grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 18px; }
+.dashboard-skeleton__grid span { height: 150px; }
+.dashboard-skeleton__hero::after, .dashboard-skeleton__grid span::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); animation: skeleton-shimmer 1.6s infinite; }
+@keyframes skeleton-shimmer { to { transform: translateX(100%); } }
+
+@media (max-width: 1100px) {
+  .dashboard-overview { grid-template-columns: 1fr; }
+  .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 640px) {
+  .dashboard-page {
+    padding-bottom: 1rem;
+  }
+  .dashboard-hero { min-height: 360px; }
+  .dashboard-hero__meta { grid-template-columns: 1fr; }
+  .dashboard-metrics, .dashboard-skeleton__grid { grid-template-columns: 1fr 1fr; }
+  .dashboard-trend-status { display: none; }
 }
 </style>

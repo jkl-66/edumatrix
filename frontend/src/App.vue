@@ -5,8 +5,11 @@ import {
   BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar,
   Presentation, Clock, GraduationCap, Library, Settings, UserCheck,
   GitBranch, BarChart3, TrendingUp, LogOut, Users, Flame,
+  PanelLeftClose, PanelLeftOpen, Search, Bell, Plus, Sparkles,
 } from '@lucide/vue'
 import { abortAllStreams } from './api'
+import SidebarItem from './components/ui/SidebarItem.vue'
+import UiButton from './components/ui/UiButton.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -52,26 +55,26 @@ watch(() => route.path, () => {
 
 // 学生导航 — 只展示学习相关内容
 const studentNav = [
-  { path: '/', label: '学习仪表盘', icon: LayoutDashboard },
-  { path: '/learn', label: '智能对话', icon: MessageSquare },
-  { path: '/student-analysis', label: '学习画像', icon: UserCheck },
-  { path: '/learning-path', label: '学习路径', icon: GitBranch },
-  { path: '/notes', label: '学习笔记', icon: StickyNote },
-  { path: '/review', label: '复习计划', icon: Calendar },
-  { path: '/revision-calendar', label: '复习打卡', icon: Flame },
-  { path: '/wrong-questions', label: '错题本', icon: BookOpen },
-  { path: '/history', label: '对话历史', icon: Clock },
-  { path: '/knowledge', label: '知识库', icon: Library },
-  { path: '/settings', label: '设置', icon: Settings },
+  { path: '/', label: '学习仪表盘', group: '总览', icon: LayoutDashboard },
+  { path: '/learn', label: '智能对话', group: '学习空间', icon: MessageSquare },
+  { path: '/student-analysis', label: '学习画像', group: '学习空间', icon: UserCheck },
+  { path: '/learning-path', label: '学习路径', group: '学习空间', icon: GitBranch },
+  { path: '/notes', label: '学习笔记', group: '知识管理', icon: StickyNote },
+  { path: '/knowledge', label: '知识库', group: '知识管理', icon: Library },
+  { path: '/review', label: '复习计划', group: '复习提升', icon: Calendar },
+  { path: '/revision-calendar', label: '复习打卡', group: '复习提升', icon: Flame },
+  { path: '/wrong-questions', label: '错题本', group: '复习提升', icon: BookOpen },
+  { path: '/history', label: '对话历史', group: '复习提升', icon: Clock },
+  { path: '/settings', label: '设置', group: '系统', icon: Settings },
 ]
 
 // 教师导航 — 分层清晰（独立路由）
 const teacherNav = [
-  { path: '/teacher', label: '教学看板', icon: Presentation },
-  { path: '/teacher/students', label: '学生管理', icon: Users },
-  { path: '/teacher/reviews', label: '复习监控', icon: Calendar },
-  { path: '/teacher/reports', label: '学习报告', icon: BarChart3 },
-  { path: '/settings', label: '设置', icon: Settings },
+  { path: '/teacher', label: '教学看板', group: '总览', icon: Presentation },
+  { path: '/teacher/students', label: '学生管理', group: '教学空间', icon: Users },
+  { path: '/teacher/reviews', label: '复习监控', group: '教学空间', icon: Calendar },
+  { path: '/teacher/reports', label: '学习报告', group: '教学空间', icon: BarChart3 },
+  { path: '/settings', label: '设置', group: '系统', icon: Settings },
 ]
 
 const navItems = computed(() => role.value === 'teacher' ? teacherNav : studentNav)
@@ -109,99 +112,74 @@ function handleCaptureError(e) {
       <router-view :key="route.fullPath" :student-id="studentId" />
     </div>
   </div>
-  <div v-else class="flex h-screen overflow-hidden bg-gray-50">
+  <div v-else class="app-shell flex h-screen overflow-hidden">
 
-    <!-- Sidebar — 玻璃拟态侧边栏 -->
+    <!-- Sidebar -->
     <aside
-      class="flex flex-col shrink-0 relative border-r border-white/5 backdrop-blur-xl"
-      style="transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);"
-      :style="{
-        width: sidebarCollapsed ? '64px' : '224px',
-        background: role === 'teacher' ? 'rgba(26, 26, 46, 0.75)' : 'rgba(15, 23, 42, 0.75)'
-      }"
+      class="app-sidebar flex flex-col shrink-0"
+      :class="{ 'app-sidebar--collapsed': sidebarCollapsed }"
     >
-      <!-- 玻璃光晕装饰 -->
-      <div class="pointer-events-none absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-white/[0.04] to-transparent rounded-t-none" />
-
-      <!-- Logo -->
-      <div class="flex items-center gap-2.5 px-4 h-14 border-b border-white/10 shrink-0">
-        <div
-          class="w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer shrink-0 transition-transform duration-200 hover:scale-110 active:scale-95"
-          :class="role === 'teacher' ? 'bg-gradient-to-br from-amber-400 to-orange-600' : 'bg-gradient-to-br from-blue-500 to-purple-600'"
-          @click="sidebarCollapsed = !sidebarCollapsed"
-        >
-          <GraduationCap :size="18" class="text-white" />
-        </div>
+      <div class="app-brand" @click="sidebarCollapsed = !sidebarCollapsed">
+        <div class="app-brand__mark"><GraduationCap :size="19" /></div>
         <Transition name="sidebar-label">
-          <span v-if="!sidebarCollapsed" class="text-white font-semibold text-sm truncate">
-            {{ role === 'teacher' ? '教师端' : 'EduMatrix' }}
-          </span>
+          <div v-if="!sidebarCollapsed" class="app-brand__copy">
+            <span>{{ role === 'teacher' ? 'EduMatrix 教学端' : 'EduMatrix' }}</span>
+            <small>Adaptive learning OS</small>
+          </div>
         </Transition>
       </div>
 
-      <!-- Nav -->
-      <nav class="flex-1 p-2.5 space-y-0.5 overflow-y-auto scrollbar-thin">
-        <router-link v-for="item in navItems" :key="item.path + item.label"
-          :to="item.path"
-          class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 relative overflow-hidden group"
-          :class="route.path === item.path
-            ? 'bg-white/15 text-white shadow-sm'
-            : 'text-white/60 hover:text-white hover:bg-white/8'"
-        >
-          <!-- 激活状态左侧发光边条 -->
-          <span v-if="route.path === item.path"
-                class="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full"
-                :class="role === 'teacher' ? 'bg-amber-400 shadow-[0_0_8px_2px_rgba(251,191,36,0.5)]' : 'bg-blue-400 shadow-[0_0_8px_2px_rgba(96,165,250,0.5)]'"
-          />
-          <component :is="item.icon" :size="17" class="shrink-0 transition-transform duration-200 group-hover:scale-110" />
-          <Transition name="sidebar-label">
-            <span v-if="!sidebarCollapsed">{{ item.label }}</span>
-          </Transition>
-        </router-link>
+      <nav class="app-nav scrollbar-thin">
+        <template v-for="(item, index) in navItems" :key="item.path + item.label">
+          <p v-if="!sidebarCollapsed && (index === 0 || navItems[index - 1].group !== item.group)" class="app-nav__group">{{ item.group }}</p>
+          <SidebarItem :item="item" :collapsed="sidebarCollapsed" :active="route.path === item.path" />
+        </template>
       </nav>
 
-      <!-- User footer -->
-      <div class="p-2.5 border-t border-white/10 shrink-0">
-        <div class="flex items-center gap-2 px-2 py-1.5">
-          <div class="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0 ring-1 ring-white/20"
-               :class="role === 'teacher' ? 'bg-gradient-to-br from-amber-400 to-orange-500' : 'bg-gradient-to-br from-emerald-400 to-cyan-500'">
-            {{ role === 'teacher' ? 'T' : 'S' }}
-          </div>
+      <div class="app-sidebar__footer">
+        <div class="app-user">
+          <div class="app-user__avatar">{{ role === 'teacher' ? 'T' : 'S' }}</div>
           <Transition name="sidebar-label">
-            <div v-if="!sidebarCollapsed" class="min-w-0 flex-1">
-              <div class="text-white text-[11px] font-medium truncate">{{ role === 'teacher' ? '教师' : '学生' }}</div>
-              <div class="text-white/40 text-[9px] truncate">{{ displayName }}</div>
+            <div v-if="!sidebarCollapsed" class="app-user__copy">
+              <strong>{{ displayName }}</strong>
+              <span>{{ role === 'teacher' ? '教师工作空间' : '个人学习空间' }}</span>
             </div>
           </Transition>
         </div>
-        <button @click="logout" class="w-full mt-1 flex items-center gap-2 px-2 py-1.5 rounded-lg text-[10px] text-white/40 hover:text-white/70 hover:bg-white/8 transition-colors">
+        <button @click="logout" class="app-logout" :title="sidebarCollapsed ? '退出登录' : undefined">
           <LogOut :size="12" />
-          <Transition name="sidebar-label">
-            <span v-if="!sidebarCollapsed">退出登录</span>
-          </Transition>
+          <span v-if="!sidebarCollapsed">退出登录</span>
         </button>
       </div>
     </aside>
 
     <!-- Main -->
-    <div class="flex-1 flex flex-col min-w-0">
-      <!-- Top bar -->
-      <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-5 shrink-0">
-        <div class="flex items-center gap-2.5">
-          <h1 class="text-base font-semibold text-gray-800">{{ pageTitle }}</h1>
-          <span class="px-2 py-0.5 text-[9px] font-semibold rounded-full"
-            :class="role === 'teacher' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'">
-            {{ role === 'teacher' ? '教师' : '学生' }}
-          </span>
+    <div class="app-main flex-1 flex flex-col min-w-0">
+      <header class="app-header">
+        <div class="app-header__title">
+          <button class="app-sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed" :aria-label="sidebarCollapsed ? '展开导航' : '收起导航'">
+            <PanelLeftOpen v-if="sidebarCollapsed" :size="17" />
+            <PanelLeftClose v-else :size="17" />
+          </button>
+          <div>
+            <p class="app-header__eyebrow">{{ role === 'teacher' ? '教学工作台' : '学习工作台' }}</p>
+            <h1>{{ pageTitle }}</h1>
+          </div>
         </div>
-        <button class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors" @click="goHome">
-          <LayoutDashboard :size="13" />
-          <span>{{ role === 'teacher' ? '看板' : '首页' }}</span>
-        </button>
+        <div class="app-header__tools">
+          <button class="app-search" @click="router.push('/learn')"><Search :size="15" /><span>搜索课程、笔记或知识点</span><kbd>⌘ K</kbd></button>
+          <button class="app-icon-button" aria-label="通知"><Bell :size="16" /><span class="app-icon-button__badge" /></button>
+          <UiButton variant="primary" size="sm" @click="router.push('/learn')"><template #icon><Plus :size="15" /></template>{{ role === 'teacher' ? '新建课程' : '开始学习' }}</UiButton>
+        </div>
       </header>
 
+      <div class="app-contextbar">
+        <div><Sparkles :size="13" /><span>AI 正在根据你的学习状态实时调整内容</span></div>
+        <button @click="goHome"><LayoutDashboard :size="13" />返回总览</button>
+      </div>
+
       <!-- Page content — 300ms 页面切换平滑动效 -->
-      <main class="flex-1 overflow-y-auto p-5">
+      <main class="app-content flex-1 overflow-y-auto">
         <div @error.capture="handleCaptureError">
           <router-view v-slot="{ Component, route: r }" :student-id="studentId">
             <Transition name="page" mode="out-in">
@@ -238,5 +216,127 @@ function handleCaptureError(e) {
 .sidebar-label-leave-to {
   opacity: 0;
   transform: translateX(-4px);
+}
+
+.app-shell {
+  padding: 12px;
+  gap: 12px;
+  background: #eef0ec;
+}
+
+.app-sidebar {
+  width: 248px;
+  height: calc(100vh - 24px);
+  overflow: hidden;
+  border: 1px solid rgba(30, 40, 34, 0.08);
+  border-radius: 24px;
+  background: rgba(250, 251, 248, 0.88);
+  box-shadow: 0 20px 60px rgba(33, 43, 36, 0.08);
+  backdrop-filter: blur(24px);
+  transition: width 280ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.app-sidebar--collapsed { width: 72px; }
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 76px;
+  padding: 16px;
+  cursor: pointer;
+}
+
+.app-brand__mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  color: #f8faf7;
+  border-radius: 14px;
+  background: #27312b;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 8px 20px rgba(39,49,43,.18);
+}
+
+.app-brand__copy { min-width: 0; }
+.app-brand__copy span { display: block; color: #202823; font-size: 14px; font-weight: 720; letter-spacing: -.02em; white-space: nowrap; }
+.app-brand__copy small { display: block; margin-top: 2px; color: #98a098; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+
+.app-nav { flex: 1; overflow-y: auto; padding: 6px 10px 14px; }
+.app-nav__group { margin: 18px 10px 7px; color: #69766d; font-size: 9px; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
+
+.app-sidebar__footer { padding: 12px; border-top: 1px solid rgba(38,49,42,.07); }
+.app-user { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 15px; background: rgba(235,238,233,.72); }
+.app-user__avatar { display: grid; width: 32px; height: 32px; flex: 0 0 32px; place-items: center; color: #f7f8f6; background: #66736a; border-radius: 11px; font-size: 11px; font-weight: 700; }
+.app-user__copy { min-width: 0; }
+.app-user__copy strong, .app-user__copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-user__copy strong { color: #39423c; font-size: 11px; font-weight: 650; }
+.app-user__copy span { margin-top: 2px; color: #989f99; font-size: 9px; }
+.app-logout { display: flex; width: 100%; align-items: center; gap: 8px; margin-top: 6px; padding: 8px 10px; color: #9a716d; border: 0; border-radius: 12px; background: transparent; font-size: 10px; cursor: pointer; }
+.app-logout:hover { color: #815650; background: #f3e9e7; }
+
+.app-main {
+  min-width: 0;
+  height: calc(100vh - 24px);
+  overflow: hidden;
+  border: 1px solid rgba(30, 40, 34, 0.07);
+  border-radius: 24px;
+  background: rgba(248, 249, 246, 0.82);
+  box-shadow: 0 20px 60px rgba(33, 43, 36, 0.06);
+}
+
+.app-header {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 24px;
+  border-bottom: 1px solid rgba(37, 48, 41, 0.07);
+  background: rgba(252, 253, 250, 0.76);
+  backdrop-filter: blur(20px);
+}
+
+.app-header__title { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.app-header__title h1 { margin: 0; color: #212923; font-size: 18px; font-weight: 680; letter-spacing: -.035em; }
+.app-header__eyebrow { margin: 0 0 1px; color: #9aa19b; font-size: 9px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.app-sidebar-toggle, .app-icon-button { display: grid; width: 36px; height: 36px; place-items: center; color: #69736c; border: 1px solid rgba(53,65,57,.09); border-radius: 12px; background: rgba(255,255,255,.64); cursor: pointer; transition: .2s ease; }
+.app-sidebar-toggle:hover, .app-icon-button:hover { color: #27312b; background: #fff; transform: translateY(-1px); }
+.app-header__tools { display: flex; align-items: center; gap: 9px; }
+.app-search { display: flex; width: min(30vw, 330px); align-items: center; gap: 9px; padding: 9px 11px; color: #9aa19b; border: 1px solid rgba(53,65,57,.09); border-radius: 13px; background: rgba(240,242,238,.75); font-size: 11px; cursor: pointer; }
+.app-search span { flex: 1; text-align: left; }
+.app-search kbd { padding: 2px 5px; color: #8b938d; border: 1px solid rgba(53,65,57,.1); border-radius: 6px; background: rgba(255,255,255,.7); font-family: inherit; font-size: 9px; }
+.app-icon-button { position: relative; }
+.app-icon-button__badge { position: absolute; top: 8px; right: 8px; width: 5px; height: 5px; border: 1px solid #fff; border-radius: 50%; background: #bc756e; }
+
+.app-contextbar {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  color: #747e76;
+  border-bottom: 1px solid rgba(37,48,41,.06);
+  background: rgba(239,241,237,.65);
+  font-size: 10px;
+}
+.app-contextbar div, .app-contextbar button { display: flex; align-items: center; gap: 6px; }
+.app-contextbar button { color: #68746b; border: 0; background: none; font-size: 10px; cursor: pointer; }
+.app-content { padding: 28px clamp(20px, 3vw, 42px) 42px; }
+
+@media (max-width: 1024px) {
+  .app-search { width: 42px; }
+  .app-search span, .app-search kbd { display: none; }
+}
+
+@media (max-width: 767px) {
+  .app-shell { padding: 0; gap: 0; }
+  .app-sidebar { width: 68px; height: 100vh; border-width: 0 1px 0 0; border-radius: 0; }
+  .app-main { height: 100vh; border: 0; border-radius: 0; }
+  .app-header { min-height: 68px; padding: 10px 14px; }
+  .app-header__eyebrow, .app-icon-button, .app-contextbar { display: none; }
+  .app-header__title h1 { font-size: 16px; }
+  .app-content { padding: 18px 14px 30px; }
 }
 </style>

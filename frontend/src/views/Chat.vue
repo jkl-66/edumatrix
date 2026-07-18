@@ -2338,11 +2338,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
 </script>
 
 <template>
-  <div class="flex gap-4 h-full">
+  <div class="chat-workspace flex gap-5 h-full soft-reveal">
     <!-- Left panel: NotebookLM-style Checked Sources -->
     <div
       v-if="activeTab === 'chat'"
-      class="shrink-0 border border-gray-100 rounded-2xl bg-white shadow-sm flex flex-col p-4 transition-all duration-300"
+      class="chat-source-panel shrink-0 border border-gray-100 rounded-2xl bg-white shadow-sm flex flex-col p-4 transition-all duration-300"
       :class="leftPanelCollapsed ? 'w-0 border-r-0 overflow-hidden px-0 py-0 opacity-0' : 'w-[260px] opacity-100'"
     >
       <div class="flex items-center justify-between mb-4 border-b border-gray-100 pb-2 shrink-0">
@@ -2387,8 +2387,8 @@ function renderMarkdown(text, type = '', conceptName = '') {
     <!-- Main content area -->
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Premium Tabs -->
-      <div class="flex items-center justify-between mb-5 border-b border-gray-100 pb-0">
-        <div class="flex gap-0.5 bg-gray-50/80 backdrop-blur-sm rounded-xl p-0.5 shadow-sm">
+      <div class="chat-toolbar flex items-center justify-between mb-5 border-b border-gray-100 pb-3 gap-3">
+        <div class="flex gap-1 bg-white/80 backdrop-blur-sm rounded-2xl p-1.5 shadow-sm border border-slate-200/80">
           <button class="tab-btn" :class="{ active: activeTab === 'chat' }" @click="activeTab = 'chat'">
             <MessageSquare :size="14" /> 对话
           </button>
@@ -2422,7 +2422,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
       </div>
 
       <!-- CHAT TAB -->
-      <div v-if="activeTab === 'chat'" class="relative flex flex-col flex-1 min-h-0 max-w-4xl mb-6">
+      <div v-if="activeTab === 'chat'" class="chat-reading-column relative flex flex-col flex-1 min-h-0 max-w-[880px] mb-6">
         <div class="flex flex-wrap gap-2 mb-4">
           <button v-for="preset in presets" :key="preset" class="btn btn-outline text-xs py-1.5" @click="usePreset(preset)">
             {{ preset.slice(0, 20) }}{{ preset.length > 20 ? '...' : '' }}
@@ -3364,7 +3364,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
     <!-- ========== 任务 8.4: 双栏阻尼自适应排版（右侧画板） ========== -->
     <div v-if="activeTab === 'chat'"
-      class="sticky top-6 self-start transition-all duration-300 overflow-hidden shrink-0 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl"
+      class="chat-tool-panel sticky top-6 self-start transition-all duration-300 overflow-hidden shrink-0 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl"
       :class="shouldShowRightPanel ? 'w-[360px] lg:w-[420px]' : 'w-0 border-l-0'">
       <div v-if="shouldShowRightPanel" class="h-[calc(100vh-120px)] flex flex-col p-3">
         <!-- 面板切换栏 -->
@@ -3486,9 +3486,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
       @close="socraticPopup.visible = false" />
 
     <!-- 可视化分析悬浮按钮 -->
-    <div v-if="activeTab === 'chat'" class="fixed bottom-[152px] right-6 z-50 group">
+    <div v-if="activeTab === 'chat'" class="chat-fab fixed bottom-[140px] right-6 z-50 group">
       <button
-        class="w-12 h-12 rounded-full bg-gradient-to-br from-green-500 to-teal-600 text-white shadow-lg hover:scale-110 transition-all flex items-center justify-center cursor-pointer"
+        class="w-11 h-11 rounded-2xl bg-gradient-to-br from-emerald-400 to-cyan-500 text-white shadow-lg hover:scale-105 transition-all flex items-center justify-center cursor-pointer"
         @click="rightPanelActiveTab = 'visualizer'; rightPanelCollapsed = false"
       >
         <span class="text-xl">📊</span>
@@ -3500,9 +3500,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
     </div>
 
     <!-- 任务 8.5: 视频渲染面板 -->
-    <div v-if="activeTab === 'chat'" class="fixed bottom-[88px] right-6 z-50 group">
+    <div v-if="activeTab === 'chat'" class="chat-fab fixed bottom-[84px] right-6 z-50 group">
       <button
-        class="w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 hover:scale-110 transition-all flex items-center justify-center cursor-pointer"
+        class="w-11 h-11 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg hover:scale-105 transition-all flex items-center justify-center cursor-pointer"
         @click="toggleVideoPanel"
       >
         <Film :size="20" />
@@ -3514,9 +3514,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
     </div>
 
     <!-- 知识点速览悬浮按钮 -->
-    <div v-if="activeTab === 'chat'" class="fixed bottom-6 right-6 z-50 group">
+    <div v-if="activeTab === 'chat'" class="chat-fab fixed bottom-7 right-6 z-50 group">
       <button
-        class="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 shadow-lg flex items-center justify-center cursor-pointer hover:scale-110 transition-all hover:shadow-xl"
+        class="w-11 h-11 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 shadow-lg flex items-center justify-center cursor-pointer hover:scale-105 transition-all hover:shadow-xl"
         @click="rightPanelActiveTab = 'knowledge'; rightPanelCollapsed = false"
       >
         <BookOpen :size="22" class="text-white" />
@@ -3663,24 +3663,65 @@ function renderMarkdown(text, type = '', conceptName = '') {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.375rem 0.875rem;
-  border-radius: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 500;
+  padding: 0.5rem 1rem;
+  border-radius: 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
   color: #64748b;
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 180ms ease, background-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 .tab-btn:hover {
-  background: #f1f5f9;
+  background: #f4f7fb;
   color: #334155;
+  transform: translateY(-1px);
 }
 .tab-btn.active {
-  background: #eff6ff;
-  color: #2563eb;
-  font-weight: 600;
+  background: linear-gradient(135deg, #edf6ff, #f0efff);
+  color: #245fc8;
+  box-shadow: 0 6px 16px rgba(50, 127, 242, 0.11);
+}
+
+.chat-workspace {
+  position: relative;
+  isolation: isolate;
+}
+
+.chat-source-panel {
+  background: rgba(255, 255, 255, 0.86);
+  border-color: rgba(220, 228, 239, 0.9);
+  box-shadow: 0 14px 40px rgba(38, 61, 101, 0.065);
+  backdrop-filter: blur(18px);
+}
+
+.chat-toolbar {
+  position: relative;
+  z-index: 5;
+}
+
+.chat-reading-column {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.chat-tool-panel {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(59, 130, 246, 0.16), transparent 16rem),
+    linear-gradient(180deg, #111b2d, #0d1728);
+  border-color: rgba(71, 85, 105, 0.72);
+  box-shadow: 0 22px 58px rgba(15, 23, 42, 0.2);
+}
+
+.chat-fab button {
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 12px 28px rgba(44, 62, 110, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(12px);
+}
+
+.chat-fab button:hover {
+  box-shadow: 0 16px 34px rgba(44, 62, 110, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 .scroll-fab-container {
   position: fixed;
@@ -3702,6 +3743,54 @@ function renderMarkdown(text, type = '', conceptName = '') {
 @media (max-width: 1023px) {
   .scroll-fab-container.has-right-panel {
     right: 380px;
+  }
+
+  .chat-workspace {
+    gap: 0.75rem;
+  }
+
+  .chat-tool-panel {
+    position: fixed;
+    top: 84px;
+    right: 16px;
+    bottom: 16px;
+    z-index: 40;
+    max-width: calc(100vw - 32px);
+  }
+}
+
+@media (max-width: 767px) {
+  .chat-source-panel {
+    position: fixed;
+    top: 84px;
+    left: 16px;
+    bottom: 16px;
+    z-index: 45;
+    max-width: calc(100vw - 32px);
+  }
+
+  .chat-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .chat-toolbar > div:first-child {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .tab-btn {
+    flex: 1;
+    justify-content: center;
+    min-width: 74px;
+  }
+
+  .chat-reading-column {
+    max-width: 100%;
+  }
+
+  .chat-fab {
+    right: 1rem;
   }
 }
 

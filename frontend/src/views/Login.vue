@@ -96,18 +96,18 @@ function toggleMode() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#0b0f19] text-[#f3f4f6] flex items-center justify-center p-4 relative overflow-hidden font-sans">
+  <div class="min-h-screen bg-[#0b1220] text-[#f3f7ff] flex items-center justify-center p-4 relative overflow-hidden font-sans">
     <!-- Fine grain overlay -->
     <div class="absolute inset-0 bg-noise opacity-[0.02] pointer-events-none"></div>
     
     <!-- Glow spots -->
-    <div class="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] bg-[#0ea5e9] opacity-[0.04] blur-[180px] rounded-full pointer-events-none"></div>
-    <div class="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] bg-[#10b981] opacity-[0.04] blur-[180px] rounded-full pointer-events-none"></div>
+    <div class="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] bg-[#38bdf8] opacity-[0.08] blur-[180px] rounded-full pointer-events-none ambient-float"></div>
+    <div class="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] bg-[#6366f1] opacity-[0.08] blur-[180px] rounded-full pointer-events-none ambient-float"></div>
 
     <div class="w-full max-w-md z-10 relative">
       <!-- Logo -->
       <div class="text-center mb-8">
-        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0ea5e9] to-[#10b981] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-cyan-500/10">
+        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#67e8f9] via-[#60a5fa] to-[#6366f1] flex items-center justify-center mx-auto mb-4 shadow-xl shadow-blue-500/20">
           <BrainCircuit :size="28" class="text-[#0b0f19]" />
         </div>
         <h1 class="text-2xl font-bold tracking-tight text-white">EduMatrix 智教矩阵</h1>
@@ -115,7 +115,7 @@ function toggleMode() {
       </div>
 
       <!-- Login/Register Card -->
-      <div class="bg-[#131926]/70 backdrop-blur-md rounded-2xl border border-white/[0.06] p-8 shadow-2xl shadow-black/30">
+      <div class="bg-[#131c2d]/78 backdrop-blur-xl rounded-3xl border border-white/[0.08] p-8 shadow-2xl shadow-black/30">
         <div class="space-y-5">
           <div class="flex items-center justify-between border-b border-white/[0.04] pb-3 mb-2">
             <span class="text-sm font-bold text-white">{{ isRegister ? '新用户注册' : '账号登录' }}</span>
@@ -189,7 +189,7 @@ function toggleMode() {
           </div>
           
           <button 
-            class="w-full py-3 text-sm font-semibold rounded-xl bg-gradient-to-r from-[#0ea5e9] to-[#10b981] text-[#0b0f19] hover:brightness-110 shadow-lg shadow-cyan-500/10 transition-all flex items-center justify-center gap-2 disabled:opacity-50" 
+            class="w-full py-3 text-sm font-semibold rounded-xl bg-gradient-to-r from-[#67e8f9] via-[#60a5fa] to-[#818cf8] text-[#0b1220] hover:brightness-110 hover:-translate-y-0.5 shadow-lg shadow-blue-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
             :disabled="loading || !username.trim() || !password.trim() || (isRegister && !confirmPassword.trim())" 
             @click="handleAction"
           >

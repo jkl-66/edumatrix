@@ -577,6 +577,8 @@ const socraticPopup = ref({
   contextAfter: '',
   lineIndex: 0,
   messageIndex: -1,
+  anchorX: null,
+  anchorY: null,
 })
 
 const textSelection = ref({
@@ -1034,6 +1036,8 @@ async function copyCode() {
 // ======================== 任务 8.1: 行级/公式点击答疑 ========================
 
 function openSocraticPopup(targetText, contextBefore = '', contextAfter = '', lineIndex = 0, messageIndex = -1) {
+  const anchorX = textSelection.value.visible ? textSelection.value.x : null
+  const anchorY = textSelection.value.visible ? textSelection.value.y : null
   socraticPopup.value = {
     visible: true,
     targetText: targetText ? targetText.slice(0, 30000) : '',
@@ -1041,6 +1045,8 @@ function openSocraticPopup(targetText, contextBefore = '', contextAfter = '', li
     contextAfter: contextAfter ? contextAfter.slice(0, 10000) : '',
     lineIndex,
     messageIndex,
+    anchorX,
+    anchorY,
   }
   textSelection.value.visible = false
 }
@@ -2800,14 +2806,16 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
 
         <!-- 一键回到顶端/底端悬浮按钮 -->
-        <div v-if="messages.length > 0" class="scroll-fab-container" :class="{ 'has-right-panel': shouldShowRightPanel }">
-          <button @click="scrollToTop" class="w-8 h-8 rounded-xl bg-white/95 hover:bg-blue-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-blue-500/10 transition-all duration-200 hover:scale-115 active:scale-90 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最顶端">
-            <ChevronUp :size="16" />
-          </button>
-          <button @click="scrollToBottom" class="w-8 h-8 rounded-xl bg-white/95 hover:bg-blue-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-blue-500/10 transition-all duration-200 hover:scale-115 active:scale-90 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最底端">
-            <ChevronDown :size="16" />
-          </button>
-        </div>
+        <Teleport to="body">
+          <div v-if="messages.length > 0" class="scroll-fab-container" :class="{ 'has-right-panel': shouldShowRightPanel }">
+            <button @click="scrollToTop" class="w-8 h-8 rounded-xl bg-white/95 hover:bg-blue-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-blue-500/10 transition-all duration-200 hover:scale-115 active:scale-90 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最顶端">
+              <ChevronUp :size="16" />
+            </button>
+            <button @click="scrollToBottom" class="w-8 h-8 rounded-xl bg-white/95 hover:bg-blue-600 text-gray-500 hover:text-white border border-gray-200/80 shadow-md hover:shadow-blue-500/10 transition-all duration-200 hover:scale-115 active:scale-90 flex items-center justify-center backdrop-blur-md cursor-pointer" title="回到最底端">
+              <ChevronDown :size="16" />
+            </button>
+          </div>
+        </Teleport>
 
         <!-- 输入区域容器 -->
         <div class="relative mt-2 shrink-0">
@@ -3480,6 +3488,8 @@ function renderMarkdown(text, type = '', conceptName = '') {
       :contextAfter="socraticPopup.contextAfter"
       :lineIndex="socraticPopup.lineIndex"
       :messageIndex="socraticPopup.messageIndex"
+      :anchorX="socraticPopup.anchorX"
+      :anchorY="socraticPopup.anchorY"
       :activeTab="activeTab"
       :studentId="props.studentId"
       :rightPanelCollapsed="rightPanelCollapsed"

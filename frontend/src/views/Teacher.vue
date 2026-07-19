@@ -219,7 +219,7 @@ onMounted(async () => {
   background: radial-gradient(circle at 92% 8%, rgba(207,218,210,.16), transparent 34%), #28322c;
 }
 .teacher-intro__eyebrow { display: inline-flex; align-items: center; gap: 6px; color: #c8d4cb; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-.teacher-intro h1 { max-width: 750px; margin: 16px 0 10px; color: #fafcf9; font-size: clamp(25px, 3.4vw, 42px); font-weight: 610; letter-spacing: -.055em; line-height: 1.12; }
+.teacher-intro h1 { max-width: none; margin: 16px 0 10px; color: #fafcf9; font-size: clamp(25px, 3.4vw, 42px); font-weight: 610; letter-spacing: -.055em; line-height: 1.12; white-space: nowrap; }
 .teacher-intro p { max-width: 680px; margin: 0; color: rgba(237,243,238,.58); font-size: 12px; line-height: 1.7; }
 .teacher-intro__pulse { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; padding: 10px 13px; color: #d6ddd7; border: 1px solid rgba(255,255,255,.09); border-radius: 13px; background: rgba(255,255,255,.045); font-size: 10px; }
 .teacher-intro__pulse span { width: 6px; height: 6px; border-radius: 50%; background: #c99378; box-shadow: 0 0 0 5px rgba(201,147,120,.12); }

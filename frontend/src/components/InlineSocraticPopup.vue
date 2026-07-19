@@ -18,6 +18,8 @@ const props = defineProps({
   studentId: { type: String, default: 'demo-student' },
   activeTab: { type: String, default: 'chat' },
   rightPanelCollapsed: { type: Boolean, default: true },
+  anchorX: { type: Number, default: null },
+  anchorY: { type: Number, default: null },
 })
 
 const visible = ref(false)
@@ -30,7 +32,39 @@ const sendingFollowUp = ref(false)
 const popupRef = ref(null)
 const conversationHistory = ref('')
 
+const POPUP_WIDTH = 450
+const POPUP_HEIGHT = 580
+const VIEWPORT_GAP = 16
+
+function clampPopupPosition(x, y) {
+  const popupWidth = Math.min(POPUP_WIDTH, window.innerWidth * 0.92)
+  const popupHeight = Math.min(POPUP_HEIGHT, window.innerHeight * 0.72)
+  const maxX = Math.max(VIEWPORT_GAP, window.innerWidth - popupWidth - VIEWPORT_GAP)
+  const maxY = Math.max(VIEWPORT_GAP, window.innerHeight - popupHeight - VIEWPORT_GAP)
+  return {
+    x: Math.min(Math.max(VIEWPORT_GAP + window.scrollX, x), maxX + window.scrollX),
+    y: Math.min(Math.max(VIEWPORT_GAP + window.scrollY, y), maxY + window.scrollY),
+  }
+}
+
+function getInitialPopupPosition() {
+  const anchorX = props.anchorX
+  const anchorY = props.anchorY
+  const popupX = anchorX == null
+    ? window.scrollX + window.innerWidth - POPUP_WIDTH - VIEWPORT_GAP
+    : window.scrollX + anchorX - POPUP_WIDTH / 2
+  const belowY = anchorY == null
+    ? window.scrollY + 100
+    : window.scrollY + anchorY + 24
+  const popupHeight = Math.min(POPUP_HEIGHT, window.innerHeight * 0.72)
+  const popupY = anchorY != null && anchorY + 24 + popupHeight > window.innerHeight
+    ? window.scrollY + anchorY - popupHeight - 16
+    : belowY
+  return clampPopupPosition(popupX, popupY)
+}
+
 onMounted(async () => {
+  popupPosition.value = getInitialPopupPosition()
   visible.value = true
 })
 
@@ -56,12 +90,12 @@ function startDrag(e) {
   const el = e.currentTarget.closest('.inline-socratic-popup')
   if (el) {
     const rect = el.getBoundingClientRect()
-    popupPosition.value.x = rect.left
-    popupPosition.value.y = rect.top
+    popupPosition.value.x = rect.left + window.scrollX
+    popupPosition.value.y = rect.top + window.scrollY
   }
   
-  dragStart.x = e.clientX - (popupPosition.value.x || 0)
-  dragStart.y = e.clientY - (popupPosition.value.y || 0)
+  dragStart.x = e.clientX + window.scrollX - (popupPosition.value.x || 0)
+  dragStart.y = e.clientY + window.scrollY - (popupPosition.value.y || 0)
   
   document.addEventListener('mousemove', onDrag)
   document.addEventListener('mouseup', stopDrag)
@@ -69,8 +103,8 @@ function startDrag(e) {
 
 function onDrag(e) {
   if (!isDragging.value) return
-  popupPosition.value.x = e.clientX - dragStart.x
-  popupPosition.value.y = e.clientY - dragStart.y
+  popupPosition.value.x = e.clientX + window.scrollX - dragStart.x
+  popupPosition.value.y = e.clientY + window.scrollY - dragStart.y
 }
 
 function stopDrag() {
@@ -324,8 +358,8 @@ function renderMarkdown(text) {
     <!-- 主弹窗悬浮舱 (毛玻璃设计系统，取消背景遮罩，支持 Header 拖拽) -->
     <div 
       v-if="visible && !minimized && activeTab === 'chat'" 
-      class="fixed z-50 inline-socratic-popup bg-white/90 dark:bg-slate-950/90 backdrop-blur-md border border-slate-200/60 dark:border-slate-850 rounded-2xl shadow-2xl w-[92vw] md:w-[450px] h-[72vh] max-h-[580px] flex flex-col overflow-hidden select-none"
-      :style="popupPosition.x !== null ? { left: popupPosition.x + 'px', top: popupPosition.y + 'px', right: 'auto', bottom: 'auto' } : { right: '24px', top: '100px' }"
+      class="absolute z-50 inline-socratic-popup bg-white/90 dark:bg-slate-950/90 backdrop-blur-md border border-slate-200/60 dark:border-slate-850 rounded-2xl shadow-2xl w-[92vw] md:w-[450px] h-[72vh] max-h-[580px] flex flex-col overflow-hidden select-none"
+      :style="{ left: (popupPosition.x ?? 16) + 'px', top: (popupPosition.y ?? 16) + 'px' }"
     >
       <!-- 头部 Header (按住拖拽) -->
       <div 

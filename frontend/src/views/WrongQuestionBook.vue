@@ -145,37 +145,21 @@ async function submitSimilarAnswer(q) {
 
 function getCategoryLabel(cat) {
   const labels = {
-    prerequisite_gap: '前置知识漏洞',
-    misconception: '概念理解误区',
-    cognitive_load: '高认知负荷',
-    strategy_gap: '解题策略缺失',
-    metacognitive_mismatch: '元认知偏差',
-    affective_barrier: '学习焦虑障碍',
-    interaction_mismatch: '交互偏好不匹配',
     review: '概念未掌握',
     practice: '熟练度不足',
     advance: '粗心/笔误',
-    calculation_error: '计算错误',
-    carelessness: '粗心大意',
+    misconception: '概念未掌握',
     unknown: '未分类',
   }
-  return labels[cat] || cat || '未分类'
+  return labels[cat] || '未分类'
 }
 
 function getCategoryColor(cat) {
   const colors = {
-    prerequisite_gap: 'bg-rose-50 text-rose-600 border border-rose-100',
-    misconception: 'bg-purple-50 text-purple-600 border border-purple-100',
-    cognitive_load: 'bg-blue-50 text-blue-600 border border-blue-100',
-    strategy_gap: 'bg-indigo-50 text-indigo-600 border border-indigo-100',
-    metacognitive_mismatch: 'bg-amber-50 text-amber-600 border border-amber-100',
-    affective_barrier: 'bg-orange-50 text-orange-600 border border-orange-100',
-    interaction_mismatch: 'bg-teal-50 text-teal-600 border border-teal-100',
     review: 'bg-red-50 text-red-600 border border-red-100',
     practice: 'bg-amber-50 text-amber-600 border border-amber-100',
     advance: 'bg-emerald-50 text-emerald-600 border border-emerald-100',
-    calculation_error: 'bg-cyan-50 text-cyan-600 border border-cyan-100',
-    carelessness: 'bg-emerald-50 text-emerald-600 border border-emerald-100',
+    misconception: 'bg-red-50 text-red-600 border border-red-100',
   }
   return colors[cat] || 'bg-gray-50 text-gray-600 border border-gray-100'
 }
@@ -338,18 +322,9 @@ const diagnosisSummary = computed(() => {
 })
 
 const clusterColors = {
-  prerequisite_gap: { bg: 'bg-rose-50', text: 'text-rose-600', bar: 'bg-rose-400', border: 'border-rose-200' },
-  misconception: { bg: 'bg-purple-50', text: 'text-purple-600', bar: 'bg-purple-400', border: 'border-purple-200' },
-  cognitive_load: { bg: 'bg-blue-50', text: 'text-blue-600', bar: 'bg-blue-400', border: 'border-blue-200' },
-  strategy_gap: { bg: 'bg-indigo-50', text: 'text-indigo-600', bar: 'bg-indigo-400', border: 'border-indigo-200' },
-  metacognitive_mismatch: { bg: 'bg-amber-50', text: 'text-amber-600', bar: 'bg-amber-400', border: 'border-amber-200' },
-  affective_barrier: { bg: 'bg-orange-50', text: 'text-orange-600', bar: 'bg-orange-400', border: 'border-orange-200' },
-  interaction_mismatch: { bg: 'bg-teal-50', text: 'text-teal-600', bar: 'bg-teal-400', border: 'border-teal-200' },
   review: { bg: 'bg-red-50', text: 'text-red-600', bar: 'bg-red-400', border: 'border-red-200' },
   practice: { bg: 'bg-amber-50', text: 'text-amber-600', bar: 'bg-amber-400', border: 'border-amber-200' },
   advance: { bg: 'bg-emerald-50', text: 'text-emerald-600', bar: 'bg-emerald-400', border: 'border-emerald-200' },
-  calculation_error: { bg: 'bg-cyan-50', text: 'text-cyan-600', bar: 'bg-cyan-400', border: 'border-cyan-200' },
-  carelessness: { bg: 'bg-emerald-50', text: 'text-emerald-600', bar: 'bg-emerald-400', border: 'border-emerald-200' },
   unknown: { bg: 'bg-gray-50', text: 'text-gray-500', bar: 'bg-gray-300', border: 'border-gray-200' },
 }
 
@@ -371,18 +346,9 @@ function initOrUpdateChart() {
       chartInstance = echarts.init(chartRef.value, isDark ? 'dark' : null, { backgroundColor: 'transparent' })
       
       const colorMap = {
-        prerequisite_gap: '#f43f5e',
-        misconception: '#a855f7',
-        cognitive_load: '#3b82f6',
-        strategy_gap: '#6366f1',
-        metacognitive_mismatch: '#f59e0b',
-        affective_barrier: '#f97316',
-        interaction_mismatch: '#14b8a6',
         review: '#ef4444',
         practice: '#fbbf24',
         advance: '#10b981',
-        calculation_error: '#06b6d4',
-        carelessness: '#10b981',
       }
       
       const pieData = diagnosisClusters.value.map(c => ({

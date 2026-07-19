@@ -272,11 +272,8 @@ async def get_profile(
 ) -> dict[str, Any]:
     student_id = enforce_student_access(student_id, current_user)
     swarm = build_swarm_from_headers(request.headers)
-    profile = swarm.profile_store.get(student_id)
-
-    if not profile:
-        profile = await run_db_op(load_student_profile, student_id)
-        swarm.profile_store[student_id] = profile
+    profile = await run_db_op(load_student_profile, student_id)
+    swarm.profile_store[student_id] = profile
 
     display_name = await run_db_op(load_display_name, student_id)
 
@@ -571,11 +568,8 @@ async def get_profile_analysis(
     """获取学生画像的多维度文本分析报告"""
     student_id = enforce_student_access(student_id, current_user)
     swarm = build_swarm_from_headers(request.headers)
-    profile = swarm.profile_store.get(student_id)
-
-    if not profile:
-        profile = await run_db_op(load_student_profile, student_id)
-        swarm.profile_store[student_id] = profile
+    profile = await run_db_op(load_student_profile, student_id)
+    swarm.profile_store[student_id] = profile
 
     display_name = await run_db_op(load_display_name, student_id)
 

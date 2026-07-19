@@ -399,10 +399,6 @@ async function loadDocuments() {
   try {
     const data = await listKnowledgeDocuments(props.studentId || 'default')
     docs.value = Array.isArray(data) ? data : []
-    // 首次加载时，默认全部勾选
-    if (selectedDocIds.value.length === 0) {
-      selectedDocIds.value = docs.value.map(d => d.id)
-    }
   } catch (e) {
     console.error('Failed to load documents:', e)
   }

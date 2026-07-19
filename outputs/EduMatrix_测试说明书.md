@@ -24,8 +24,8 @@
 | PyTorch | 已安装；BKT/DKT 目标测试通过 |
 | python-docx/OpenAI/Instructor | 已安装；目标测试通过 |
 | Node/Vite 前端构建 | 成功 |
-| Docker 后端运行 | 未完成 |
-| Playwright 浏览器 | 未验证 |
+| Docker 后端运行 | 本轮未执行真实容器；Docker 仅为可选代码执行增强，不是核心验收前提 |
+| Playwright 浏览器 | 当前机器已用于无 Docker 浏览器 E2E 并通过；PDF 导出和目标评委机仍需单独复核 |
 
 已执行：
 
@@ -49,7 +49,15 @@ python -m unittest scripts.test_member6_all_tasks -v
 python -m unittest test_edumatrix -v
 ```
 
-结果：此前基线为 22 个 failure、20 个 error；本轮补齐认证测试主体、核心依赖、FAISS 可选导入和 Docker 离线测试契约后，按 4 组执行 80 个用例，80/80 通过。联网搜索、arXiv、视频搜索和外部 LLM 在测试中出现超时/降级日志，但对应测试仍通过；Docker daemon 和 Playwright Chromium 仍需在目标评委机器单独验收。
+结果：此前基线为 22 个 failure、20 个 error；本轮补齐认证测试主体、核心依赖、FAISS 可选导入和 Docker 离线测试契约后，按 4 组执行的完整集成回归为 80/80 通过。另有安全契约测试 12/12、成员专项测试 62/62、运行时安全矩阵 47/47 通过。联网搜索、arXiv、视频搜索和外部 LLM 在测试中出现超时/降级日志，但对应测试仍通过；本结果不等于真实 Docker 代码执行、PDF 导出、生产并发或外部服务已完成验收。
+
+已执行无 Docker 浏览器 E2E：
+
+```text
+python scripts/e2e_no_docker.py
+```
+
+结果：`outputs/e2e_no_docker/report.json` 标记为 `passed`，覆盖临时注册/登录、初始化、仪表盘、对话、学习路径和沙箱禁用状态，并生成 6 张截图。该证据证明默认核心路径可运行，不证明 Docker 代码执行或 PDF 导出。
 
 因此不能写成“全量测试 100% 通过”。
 
@@ -74,7 +82,7 @@ python -m unittest test_edumatrix -v
 - 缺 Token 返回 401；
 - 用户 A 的 Token 不能访问 B 的画像、笔记、题目、代码历史和知识文档；
 - 教师只能访问授权学生；
-- Docker 不可用时 `/api/code/run` 明确拒绝执行，不回退宿主进程；HTTP 状态契约仍需统一；
+- Docker 不可用时 `/api/code/run` 明确拒绝执行，不回退宿主进程；默认无 Docker 路径返回 503 属于可选能力未启用；
 - 文档上传有大小、类型、解析和超时限制；
 - SSE 断开后后台任务被取消；
 - PDF 导出失败时返回可识别错误，不泄露内部堆栈。
@@ -93,28 +101,28 @@ python -m unittest test_edumatrix -v
 
 | ID | 用例 | 预期 | 当前状态 |
 |---|---|---|---|
-| AUTH-01 | 正确账号登录 | 返回 JWT | 代码存在，需在干净环境复核 |
+| AUTH-01 | 正确账号登录 | 返回 JWT | 无 Docker E2E 已通过；目标评委机仍需复核 |
 | AUTH-02 | 错误密码 | 返回 401 | 代码存在，需在干净环境复核 |
 | AUTH-03 | 缺 Token 调用保护接口 | 返回 401 | 默认已修复；仅显式 Demo 模式允许匿名演示 |
-| AUTH-04 | A 读取 B 画像 | 403/404 | 主要路由已加入范围校验，完整矩阵待补 |
-| AUTH-05 | A 删除 B 错题 | 403/404 | 需完整 API 验证 |
-| RAG-01 | A 上传私有文档，B 搜索关键词 | B 不命中 A | owner 过滤已加入，需跨用户实测 |
+| AUTH-04 | A 读取 B 画像 | 403/404 | 运行时安全矩阵覆盖并通过；矩阵是选定高风险路由，不等于所有 API |
+| AUTH-05 | A 删除 B 错题 | 403/404 | 运行时矩阵覆盖主要跨用户边界；持久化数据删除场景仍需专项复核 |
+| RAG-01 | A 上传私有文档，B 搜索关键词 | B 不命中 A | owner 过滤契约与运行时范围矩阵已通过；持久化索引边界仍需专项复核 |
 | RAG-02 | 删除文档后搜索 | 不返回已删除证据 | 需补测试 |
 | AGENT-01 | 画像探针更新弱点 | 保存证据和置信度 | 代码存在 |
-| AGENT-02 | 同问题三组画像 | 路径/资源不同 | 需固定样例实测 |
+| AGENT-02 | 同问题三组画像 | 路径/资源不同 | 三组合成画像、固定知识集和结构性对比证据已生成；不等于真实用户效果实验 |
 | AGENT-03 | LLM 辩论 | 使用注入的 LLM | 需按真实 provider 与 deterministic 两种模式实测 |
-| AGENT-04 | LLM 关闭 | 明确 deterministic fallback | 需运行验证 |
+| AGENT-04 | LLM 关闭 | 明确 deterministic fallback | 固定本地 deterministic 流程已运行并纳入创新证据 |
 | RAG-03 | 低置信度检索 | 拒答或降级 | 需人工评测 |
 | QUIZ-01 | MCQ 正确 | 快速判分 | 专项结构测试通过 |
 | QUIZ-02 | 主观题异常 JSON | fallback 完整 | 目标代码存在，需完整 API 回归 |
-| CODE-01 | 合法代码 | 返回 stdout/耗时 | Docker 可用时实测；Docker 不可用明确拒绝 |
+| CODE-01 | 合法代码 | 返回 stdout/耗时 | Docker 实时代码执行本轮未验证；默认无 Docker 模式明确拒绝执行 |
 | CODE-02 | `os.system` | AST 拦截 | 结构代码存在 |
 | CODE-03 | 超过 50 KB | 400 拒绝 | 代码确认 |
-| CODE-04 | Docker 离线 | 拒绝执行宿主代码 | 已修复；契约测试和本地目标测试通过 |
+| CODE-04 | Docker 离线 | 拒绝执行宿主代码 | 已修复；安全契约、集成测试和运行时状态证据通过 |
 | CODE-05 | 死循环 | 超时并杀死任务 | 有逻辑，需 Docker 实测 |
 | DOC-01 | PDF/PPTX/Markdown 上传 | 解析、分块、索引 | 依赖已补齐；PDF/PPTX/DOCX 目标测试通过 |
 | DOC-02 | 超大文件 | 400/413 | 本地上传与远程文件下载已有 20 MB 上限；URL HTML 摄入待补 |
-| REPORT-01 | PDF 导出 | 返回 PDF | Playwright 未验证 |
+| REPORT-01 | PDF 导出 | 返回 PDF | 浏览器运行能力已由无 Docker E2E 间接确认；PDF 导出本身仍未单独验证 |
 | FRONT-01 | 生产构建 | 资源可加载 | 构建成功，有警告 |
 
 ## 5. 比赛量化指标测试

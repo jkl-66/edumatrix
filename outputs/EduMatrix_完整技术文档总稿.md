@@ -44,10 +44,10 @@ flowchart LR
 但当前版本不能直接被描述为“已经达到比赛全部量化指标的生产系统”。必须明确以下事实边界：
 
 1. `agent_swarm.py:34-44` 定义了 9 个职责明确的 Agent 规格，满足“至少 3 个 Agent”的结构性要求；但 `agent_swarm.py:1323` 创建 `DebateAugmentedRAG()` 时没有把 LLM 注入辩论引擎，因此 Prover-Challenger-Judge 的真实 LLM 辩论路径不是当前默认主流程。
-2. 本轮已为主要 API 接入当前用户和学生范围校验；旧客户端兼容路径与完整 A/B 跨用户矩阵仍需继续回归，不能把“主要接口已修复”写成“所有接口均已完成多租户认证”。
-3. 用户知识文档摄入、检索和删除已加入 owner 过滤；仍需在真实 A/B 用户和持久化索引条件下复测隔离。
+2. 本轮已为主要 API 接入当前用户和学生范围校验；选定的 A/B/教师运行时安全矩阵 47/47 通过，但矩阵不是全部 API、持久化边界和删除场景的穷尽证明，不能把“选定关键路由已修复”写成“所有接口均已完成多租户认证”。
+3. 用户知识文档摄入、检索和删除已加入 owner 过滤，并通过专项契约与选定运行时矩阵；真实持久化索引清理、删除后检索和全部边界仍需复测。
 4. Docker 不可用时，代码执行会明确拒绝，不再回退宿主 Python 子进程；生产环境仍建议拆分独立 sandbox worker。
-5. 当前工作区已安装核心 Python 依赖并通过专项测试；核心无 Docker 模式已完成主要测试，代码执行、PDF 导出、外部网络和 LLM 仍按可选环境能力单独验收，不能把专项测试写成“全量系统安全认证”。
+5. 当前工作区已安装核心 Python 依赖并通过专项测试；默认无 Docker 模式已完成浏览器 E2E 和主要回归，代码执行、PDF 导出、外部网络和真实 LLM 仍按可选环境能力单独验收，不能把专项测试写成“全量系统安全认证”。
 6. 当前软件杯 A3 赛题重点是基于大模型的个性化资源生成与学习多智能体系统。旧挑战杯材料中的“幻觉率 <5%、适配率 ≥85%、知识点覆盖率 ≥90%”不应当作本赛题硬性门槛；本项目仍将三项指标作为可选的效果评测设计，并明确标注尚无真实标注集结论。
 
 ---
@@ -70,7 +70,7 @@ flowchart LR
 | 个人学情与资源匹配可视化 | Dashboard、画像雷达、知识图谱、学习路径、流形可视化 | `frontend/src/views/Dashboard.vue`、`StudentAnalysis.vue`、`ManifoldVisualizer.vue` | **已证实（前端实现）**，后端完整链路待验证 |
 | 防幻觉与知识溯源 | 混合 RAG、证据评分、DRAG 清洗、引用字段、对齐检查 | `rag_engine.py`、`drag_debate.py`、`manifold_alignment.py` | **部分实现**。默认辩论链路未接入 LLM |
 | 幻觉率/适配率/覆盖率 | 代码有门限、证据清洗、画像资源匹配和知识图谱设计 | 当前无完整真实标注评测数据 | **可选评测项，不得冒充本赛题硬性达标结论** |
-| 可部署、可运行、可复现 | Dockerfile、docker-compose、前端构建、启动脚本、环境备忘录 | 无 Docker 核心路径已具备；Docker/Chromium 仅在对应可选能力需要时复核 | **部分实现** |
+| 可部署、可运行、可复现 | Dockerfile、docker-compose、前端构建、启动脚本、环境备忘录 | 无 Docker 核心路径已由浏览器 E2E 复现；Docker 实时代码执行、PDF 导出和目标评委机仍需复核 | **部分实现（默认路径已证实）** |
 
 ### 2.2 对比赛评分维度的解释
 
@@ -514,26 +514,24 @@ erDiagram
 
 完整 API 表见附件 `EduMatrix_API与数据字典.md`。这里列出最重要的身份问题。
 
-### 10.1 已绑定认证的接口示例
+### 10.1 当前认证与范围策略
 
-- `app/main.py:381` 教师仪表盘通过 `get_current_teacher`；
-- `app/main.py:587` 旧版处理接口通过 `get_current_user`；
-- `flashcard_api.py`、`behavior_api.py`、`report_api.py` 部分接口具有依赖参数，但需要额外校验请求中的学生 ID 是否等于当前用户；
-- 登录和注册是公开接口，这是合理的，但需要限流、账号策略和审计日志。
+- `app/auth.py` 提供当前用户解析、显式 Demo 模式和学生范围约束；生产环境无 Token 默认返回 401。
+- 主要画像、知识库、流式对话、测验、闪卡、行为、代码、报告以及旧版笔记/复习接口已接入认证或 `enforce_student_access`。
+- 普通学生请求中的 `student_id` 不能覆盖认证身份；教师访问其他学生必须经过教师角色和目标范围策略。
+- 登录和注册是公开接口，这是合理的，但仍需要限流、账号策略和审计日志。
 
-### 10.2 未绑定当前用户的高风险接口
+### 10.2 首轮审计发现与整改边界
 
-以下接口由客户端传入或路径传入 `student_id`，当前函数签名没有 `Depends(get_current_user)`：
+首轮审计曾发现以下路径存在客户端 `student_id` 信任风险：
 
 - `/api/code/run`、`/api/code/history/{student_id}`；
 - `/api/stream/chat`、`/api/stream/regenerate`、`/api/stream/explain`；
 - `/api/profile/{student_id}` 及画像更新、分析、学习路径、推荐、回滚、删除概念等接口；
-- `/api/quiz/history/{student_id}`、错题、签到相关接口；
-- `/api/knowledge/upload`、文档列表、详情、删除；
-- `/api/web/history/{student_id}`；
+- `/api/quiz/history/{student_id}`、错题、签到、知识库和网页历史相关接口；
 - `app/main.py` 中笔记、历史、进度、复习计划等旧版接口。
 
-整改后接口设计应遵循：
+本轮已对上述主要路径补充认证/学生范围校验，并通过选定的 A/B/教师运行时安全矩阵 47/47。该矩阵证明选定高风险边界行为符合预期，不证明所有路由、持久化索引删除和异常分支均已穷尽验收。统一设计原则为：
 
 ```text
 current_user = Depends(get_current_user)
@@ -589,9 +587,9 @@ AST 黑名单/高风险属性拦截可以降低常见误用，但不是安全边
 | 静态语法/结构 | AST、关键字符串、路由和模板检查 | 部分可运行 |
 | 单元测试 | 算法、策略、题库、沙箱辅助逻辑 | 有专项脚本 |
 | 集成测试 | Agent、RAG、对齐、题目、沙箱 | `test_edumatrix.py` 可运行；核心结果可在无 Docker 模式复核，代码执行/PDF/联网功能再结合对应环境单独复核 |
-| API 测试 | FastAPI TestClient、鉴权、跨用户边界 | 核心目标测试已运行；完整 A/B 跨用户矩阵待补齐 |
+| API 测试 | FastAPI TestClient、鉴权、跨用户边界 | 选定关键路由运行时矩阵 47/47；仍需覆盖全部 API 和持久化边界 |
 | 前端构建 | Vite production build | 已成功 |
-| E2E | 浏览器登录到资源生成闭环 | 当前未完成可复现验证 |
+| E2E | 浏览器登录到核心学习闭环 | 无 Docker E2E 已通过，报告与 6 张截图位于 `outputs/e2e_no_docker/`；Docker/PDF/目标机仍需单独验证 |
 | 性能测试 | TTFT、TPS、并发、内存、锁竞争 | 当前缺少实测数据 |
 
 ### 12.2 复现结果
@@ -610,7 +608,9 @@ python -m unittest scripts.test_member6_all_tasks -v
 python -m unittest test_edumatrix -v
 ```
 
-结果：此前基线为 22 个 failure、20 个 error；本轮补齐认证测试主体、核心依赖、FAISS 可选导入和沙箱离线测试契约后，按 4 组执行 80 个用例，80/80 通过。联网搜索、arXiv、视频搜索和外部 LLM 出现超时/降级日志，但对应测试仍通过；默认无 Docker 核心模式已可验收，Docker 代码执行和 Playwright Chromium 仍需在需要对应能力时单独验收。
+结果：此前基线为 22 个 failure、20 个 error；本轮补齐认证测试主体、核心依赖、FAISS 可选导入和沙箱离线测试契约后，按 4 组执行的完整集成回归为 80/80 通过；另有成员专项 62/62、运行时安全矩阵 47/47 和无 Docker 浏览器 E2E 通过。联网搜索、arXiv、视频搜索和外部 LLM 出现超时/降级日志，但对应测试仍通过；Docker 实时代码执行、PDF 导出和目标机清洁复现仍需在需要对应能力时单独验收。
+
+无 Docker 浏览器 E2E 的直接证据为 `outputs/e2e_no_docker/report.json`，覆盖临时注册/登录、初始化、仪表盘、对话、学习路径和沙箱禁用状态，并生成 6 张截图。该证据证明默认核心路径可运行，不证明 Docker 代码执行、PDF 导出或生产并发能力。
 
 ### 12.3 需要补充的比赛评测
 

@@ -1,6 +1,8 @@
 # Python
 .reasonix/
 *.db
+!edumatrix.db
+!edumatrix_safe_backup.db
 *.db-shm
 *.db-wal
 !scripts/data/quiz_bank/

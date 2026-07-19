@@ -205,7 +205,7 @@ function initMonaco() {
   editorInstance = window.monaco.editor.create(monacoContainerRef.value, {
     value: code.value,
     language: 'python',
-    theme: 'vs',
+    theme: 'vs-dark',
     automaticLayout: true,
     minimap: { enabled: false },
     fontSize: 12,
@@ -380,7 +380,7 @@ selectChart('line')
             {{ running ? '⏳ 运行中...' : sandboxReady ? '▶ 运行' : '沙箱未启用' }}
           </button>
         </div>
-        <div class="p-2 bg-slate-100">
+        <div class="p-2 bg-slate-950">
           <div ref="monacoContainerRef" class="w-full h-48 rounded-lg overflow-hidden text-left"></div>
         </div>
       </div>

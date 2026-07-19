@@ -22,7 +22,7 @@ const selectedNode = ref(null)
 let chartInstance = null
 let highlightedNodes = new Set()
 
-const categoryColors = ['#3b82f6', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899', '#06b6d4']
+const categoryColors = ['#4f8a9a', '#c28b3c', '#4b9b7e', '#7b819c', '#b4778e', '#5c9eaa']
 
 function buildOption() {
   // 处理高亮
@@ -38,7 +38,7 @@ function buildOption() {
         show: true,
         fontSize: isHighlighted ? 13 : 10,
         fontWeight: isHighlighted ? 'bold' : 'normal',
-        color: isHighlighted ? '#fff' : '#94a3b8',
+        color: isHighlighted ? '#243128' : '#607267',
       },
     }
   })
@@ -49,14 +49,18 @@ function buildOption() {
       subtext: '拖拽探索 · 点击节点高亮两级关联',
       left: 'center',
       top: 8,
-      textStyle: { fontSize: 14, color: '#e2e8f0' },
-      subtextStyle: { fontSize: 10, color: '#64748b' },
+      textStyle: { fontSize: 14, color: '#243128' },
+      subtextStyle: { fontSize: 10, color: '#718076' },
     },
     tooltip: {
+      backgroundColor: '#ffffff',
+      borderColor: '#dbe5df',
+      borderWidth: 1,
+      textStyle: { color: '#35433a' },
       formatter: (params) => {
         if (params.dataType === 'node') {
-          return `<div style="font-size:12px;font-weight:bold;color:#e2e8f0">${params.name}</div>
-            <div style="font-size:10px;color:#94a3b8">类别: ${params.data.categoryName || params.data.category || '未知'}</div>`
+          return `<div style="font-size:12px;font-weight:bold;color:#243128">${params.name}</div>
+            <div style="font-size:10px;color:#718076">类别: ${params.data.categoryName || params.data.category || '未知'}</div>`
         }
         return `${params.data.source} → ${params.data.target}`
       },
@@ -65,7 +69,7 @@ function buildOption() {
       data: props.categories.length ? props.categories.map(c => c.name) : [],
       top: 50,
       left: 'center',
-      textStyle: { fontSize: 10, color: '#94a3b8' },
+      textStyle: { fontSize: 10, color: '#607267' },
     },
     animationDuration: 800,
     animationEasingUpdate: 'quinticInOut',
@@ -87,7 +91,7 @@ function buildOption() {
         show: true,
         position: 'bottom',
         fontSize: 10,
-        color: '#94a3b8',
+        color: '#607267',
       },
       edgeLabel: { show: false },
       lineStyle: {
@@ -189,30 +193,30 @@ watch(() => [props.nodes, props.edges], () => {
 </script>
 
 <template>
-  <div class="knowledge-graph bg-gray-950 rounded-lg border border-gray-800 overflow-hidden">
+  <div class="knowledge-graph bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm">
     <!-- 工具栏 -->
-    <div class="flex items-center gap-2 px-3 py-2 bg-gray-900 border-b border-gray-800">
+    <div class="flex items-center gap-2 px-3 py-2 bg-slate-50 border-b border-slate-200">
       <div class="flex-1 flex items-center gap-2">
-        <Search :size="14" class="text-gray-400 shrink-0" />
+        <Search :size="14" class="text-slate-500 shrink-0" />
         <input v-model="searchQuery" @input="doSearch" placeholder="检索知识点..."
-          class="flex-1 bg-gray-800 text-gray-200 text-xs px-2 py-1 rounded border border-gray-700 outline-none focus:border-purple-500" />
+          class="flex-1 bg-white text-slate-700 placeholder:text-slate-400 text-xs px-2 py-1 rounded border border-slate-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20" />
       </div>
-      <button @click="resetView" class="px-2 py-1 text-[10px] bg-gray-800 hover:bg-gray-700 text-gray-400 rounded transition-colors flex items-center gap-1">
+      <button @click="resetView" class="px-2 py-1 text-[10px] bg-white hover:bg-emerald-50 text-slate-600 rounded border border-slate-200 transition-colors flex items-center gap-1">
         <RotateCw :size="10" /> 重置
       </button>
     </div>
 
     <div class="flex">
       <!-- 图谱 -->
-      <div class="flex-1">
+      <div class="flex-1 bg-[#f8fbf9]">
         <div ref="chartRef" class="w-full h-[500px]" />
       </div>
 
       <!-- 选中节点详情 -->
-      <div v-if="selectedNode" class="w-52 border-l border-gray-800 p-3 bg-gray-900/50">
+      <div v-if="selectedNode" class="w-52 border-l border-slate-200 p-3 bg-white">
         <div class="flex items-center gap-2 mb-2">
-          <Info :size="14" class="text-purple-400" />
-          <span class="text-xs font-semibold text-gray-200">{{ selectedNode.name }}</span>
+          <Info :size="14" class="text-emerald-700" />
+          <span class="text-xs font-semibold text-slate-800">{{ selectedNode.name }}</span>
         </div>
         <div class="space-y-2 text-[10px]">
           <div class="flex justify-between">
@@ -232,3 +236,8 @@ watch(() => [props.nodes, props.edges], () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.knowledge-graph :deep(.text-gray-500) { color: #64756b !important; }
+.knowledge-graph :deep(.text-gray-300) { color: #405349 !important; }
+</style>

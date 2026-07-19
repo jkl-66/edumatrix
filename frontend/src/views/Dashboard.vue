@@ -48,6 +48,26 @@ const goalRecommendations = ref([])
 const showGoalModal = ref(false)
 const newGoalInput = ref('')
 const updatingGoal = ref(false)
+let resourceScrollLock = null
+
+function setResourceScrollLock(locked) {
+  const appContent = document.querySelector('.app-content')
+  if (!appContent) return
+
+  if (locked && !resourceScrollLock) {
+    resourceScrollLock = {
+      element: appContent,
+      overflow: appContent.style.overflow,
+      overscrollBehavior: appContent.style.overscrollBehavior,
+    }
+    appContent.style.overflow = 'hidden'
+    appContent.style.overscrollBehavior = 'none'
+  } else if (!locked && resourceScrollLock) {
+    resourceScrollLock.element.style.overflow = resourceScrollLock.overflow
+    resourceScrollLock.element.style.overscrollBehavior = resourceScrollLock.overscrollBehavior
+    resourceScrollLock = null
+  }
+}
 
 async function handleGoalUpdate(newGoal) {
   if (!newGoal) return
@@ -296,6 +316,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  setResourceScrollLock(false)
   window.startInteractiveQuiz = null
   window.startInteractiveVideo = null
   window.mountCodeToSandbox = null
@@ -308,6 +329,10 @@ watch([activeResource, activeResourceContent], () => {
       renderAllDiagrams()
     })
   }
+})
+
+watch(activeResource, (resource) => {
+  setResourceScrollLock(Boolean(resource))
 })
 
 function safeParseJson(str, fallback = []) {
@@ -1514,8 +1539,9 @@ function renderAllDiagrams() {
     />
 
     <!-- Drawer/Viewer for Resource Matrix -->
-    <div v-if="activeResource" class="fixed inset-0 z-50 flex justify-end bg-slate-900/50 backdrop-blur-sm transition-opacity" @click="closeResourceViewer">
-      <div class="w-full max-w-2xl bg-white h-full shadow-2xl flex flex-col justify-between overflow-hidden animate-slide-in" @click.stop>
+    <Teleport to="body">
+    <div v-if="activeResource" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm transition-opacity p-4 sm:p-6" @click="closeResourceViewer">
+      <div class="w-full max-w-2xl max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-slide-in" @click.stop>
         
         <!-- Drawer Header -->
         <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
@@ -1536,7 +1562,7 @@ function renderAllDiagrams() {
         </div>
 
         <!-- Drawer Content -->
-        <div class="flex-1 overflow-y-auto p-6 space-y-4">
+        <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain p-6 space-y-4">
           
           <!-- Case 1: NOT GENERATED -->
           <div v-if="activeResource.res.status === 'not_generated' && !isGenerating" class="flex flex-col items-center justify-center py-12 text-center space-y-4">
@@ -1616,6 +1642,7 @@ function renderAllDiagrams() {
 
       </div>
     </div>
+    </Teleport>
 
   </div>
 </template>

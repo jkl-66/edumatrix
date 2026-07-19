@@ -270,7 +270,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Check-in Form -->
-    <div class="card">
+    <div class="card relative z-[100]">
       <h3 class="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
         <CheckCircle2 :size="16" class="text-emerald-500" />
         今日打卡签到
@@ -296,7 +296,7 @@ onUnmounted(() => {
             <!-- Dropdown Menu -->
             <div
               v-if="isOpen"
-              class="absolute left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-2 space-y-2 h-[300px] max-h-[70vh] flex flex-col animate-in fade-in slide-in-from-top-2 duration-150"
+              class="absolute left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-xl z-[200] p-2 space-y-2 h-[300px] max-h-[70vh] flex flex-col animate-in fade-in slide-in-from-top-2 duration-150"
             >
               <!-- Search box inside dropdown -->
               <div class="relative">
@@ -305,7 +305,7 @@ onUnmounted(() => {
                   ref="searchInputRef"
                   v-model="conceptSearchQuery"
                   type="text"
-                  class="input text-sm pl-8 py-1.5 focus:border-blue-500"
+                  class="input text-sm pl-10 py-1.5 focus:border-blue-500"
                   placeholder="输入关键字搜索知识点..."
                   @click.stop
                   @keydown.esc="isOpen = false"

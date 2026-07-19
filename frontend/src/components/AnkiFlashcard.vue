@@ -103,7 +103,7 @@ watch(() => props.card, () => {
             {{ card.back }}
           </div>
 
-          <div class="pt-3 border-t border-slate-800 flex flex-col gap-2">
+          <div class="pt-3 border-t border-slate-200 flex flex-col gap-2">
             <!-- 成功提示 -->
             <div v-if="reviewMessage" class="text-center text-xs p-2 rounded-lg" :class="reviewMessage.includes('失败') ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'">
               {{ reviewMessage }}
@@ -167,7 +167,7 @@ watch(() => props.card, () => {
 .anki-card-front,
 .anki-card-back {
   backface-visibility: hidden;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 10px 25px -5px rgba(45, 67, 55, 0.12), 0 8px 10px -6px rgba(45, 67, 55, 0.08);
 }
 
 .anki-card-back {

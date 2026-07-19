@@ -169,6 +169,8 @@ function onDragOver(e) { e.preventDefault(); dragOver.value = true }
 function onDragLeave() { dragOver.value = false }
 function onDrop(e) { e.preventDefault(); dragOver.value = false; handleUpload(e) }
 
+const IGNORED_TAGS = new Set(['课程名称', '高校初始课程', '高校课程', '人工智能与机器学习导论', '网页检索'])
+
 // 任务 8.6: 从文档标签提取知识图谱数据
 const graphNodes = computed(() => {
   const nodes = []
@@ -176,29 +178,30 @@ const graphNodes = computed(() => {
 
   // 文件作为概念节点
   docs.value.forEach((doc, i) => {
+    const cleanDocTitle = doc.filename.replace(/\.md$/, '').replace(/^\[[^\]]+\]\s*/, '').slice(0, 20)
     if (!added.has(doc.filename)) {
       added.add(doc.filename)
       nodes.push({
         id: doc.filename,
-        name: doc.filename.slice(0, 20),
+        name: cleanDocTitle,
         category: doc.file_type === 'pptx' || doc.file_type === 'ppt' ? 1
           : ['mp4', 'avi', 'mov'].includes(doc.file_type) ? 2 : 0,
         categoryName: doc.file_type === 'pptx' ? '课件' : ['mp4', 'avi', 'mov'].includes(doc.file_type) ? '视频' : '文档',
-        symbolSize: 30 + (doc.chunk_count || 0) * 0.5,
+        symbolSize: 30 + Math.min((doc.chunk_count || 0) * 0.5, 20),
         itemStyle: {
           color: doc.file_type === 'pptx' ? '#f59e0b' : ['mp4', 'avi', 'mov'].includes(doc.file_type) ? '#8b5cf6' : '#3b82f6',
         },
       })
     }
     // tags 作为关联概念节点
-    ;(doc.tags || []).slice(0, 5).forEach(tag => {
+    ;(doc.tags || []).filter(t => t && !IGNORED_TAGS.has(t)).slice(0, 5).forEach(tag => {
       if (!added.has(tag)) {
         added.add(tag)
         nodes.push({
           id: tag,
           name: tag,
           category: 3,
-          categoryName: '标签',
+          categoryName: '核心知识点',
           symbolSize: 20,
           itemStyle: { color: '#10b981' },
         })
@@ -211,14 +214,14 @@ const graphNodes = computed(() => {
 const graphEdges = computed(() => {
   const edges = []
   docs.value.forEach(doc => {
-    ;(doc.tags || []).slice(0, 5).forEach(tag => {
+    ;(doc.tags || []).filter(t => t && !IGNORED_TAGS.has(t)).slice(0, 5).forEach(tag => {
       edges.push({ source: doc.filename, target: tag, label: '关联' })
     })
   })
   // 标签间共现关联
   const tagPairs = {}
   docs.value.forEach(doc => {
-    const tags = (doc.tags || []).slice(0, 5)
+    const tags = (doc.tags || []).filter(t => t && !IGNORED_TAGS.has(t)).slice(0, 5)
     for (let i = 0; i < tags.length; i++) {
       for (let j = i + 1; j < tags.length; j++) {
         const key = [tags[i], tags[j]].sort().join('::')
@@ -369,8 +372,10 @@ async function doCrossModalSearch() {
               <span v-if="doc.tags.length > 4" class="text-[10px] text-[#475569]">+{{ doc.tags.length - 4 }}</span>
             </div>
           </div>
-          <button class="p-1.5 shrink-0 text-[#64748b] hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" @click.stop="remove(doc.id, doc.filename)" :title="`删除 ${doc.filename}`" aria-label="删除知识库文件">
-            <Trash2 :size="14" />
+          <button class="inline-flex items-center gap-1 px-2.5 py-1 shrink-0 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-500/80 border border-red-500/20 rounded-lg transition-all" title="删除知识库文件" @click.stop="remove(doc.id, doc.filename)">
+            <Trash2 :size="12" />
+            <span>删除</span>
+          </button>
           </button>
         </div>
       </div>
@@ -462,6 +467,11 @@ async function doCrossModalSearch() {
                title="在新标签页中打开网页原文">
               <ExternalLink :size="12" /> 访问网页原文
             </a>
+            <button class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/80 text-red-400 hover:text-white border border-red-500/20 text-xs font-medium transition-all shrink-0"
+               @click="remove(selectedDoc.id, selectedDoc.filename); closeDocModal()"
+               title="删除此文档">
+              <Trash2 :size="12" /> 删除文档
+            </button>
             <button class="p-1.5 text-[#475569] hover:text-[#cbd5e1] hover:bg-white/[0.06] rounded-lg transition-colors" @click="closeDocModal">
               <X :size="18" />
             </button>

@@ -96,13 +96,13 @@ function toggleMode() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#0b1220] text-[#f3f7ff] flex items-center justify-center p-4 relative overflow-hidden font-sans">
+  <div class="login-page min-h-screen bg-[#f1f5f2] text-slate-800 flex items-center justify-center p-4 relative overflow-hidden font-sans">
     <!-- Fine grain overlay -->
     <div class="absolute inset-0 bg-noise opacity-[0.02] pointer-events-none"></div>
     
     <!-- Glow spots -->
-    <div class="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] bg-[#38bdf8] opacity-[0.08] blur-[180px] rounded-full pointer-events-none ambient-float"></div>
-    <div class="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] bg-[#6366f1] opacity-[0.08] blur-[180px] rounded-full pointer-events-none ambient-float"></div>
+    <div class="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] bg-emerald-200 opacity-[0.24] blur-[180px] rounded-full pointer-events-none ambient-float"></div>
+    <div class="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] bg-sky-200 opacity-[0.22] blur-[180px] rounded-full pointer-events-none ambient-float"></div>
 
     <div class="w-full max-w-md z-10 relative">
       <!-- Logo -->
@@ -208,6 +208,43 @@ function toggleMode() {
 </template>
 
 <style scoped>
+.login-page {
+  color: #243128;
+}
+
+.login-page [class*="bg-[#0b1220]"],
+.login-page [class*="bg-[#0d121f]"],
+.login-page [class*="bg-[#131c2d]"] {
+  background-color: rgba(255, 255, 255, 0.92) !important;
+}
+
+.login-page [class*="text-[#f3f7ff]"],
+.login-page [class*="text-white"] {
+  color: #243128 !important;
+}
+.login-page [class*="text-[#0b0f19]"] { color: #ffffff !important; }
+
+.login-page [class*="border-white"] {
+  border-color: #dbe5df !important;
+}
+
+.login-page [class*="text-gray-400"] { color: #64756b !important; }
+.login-page [class*="text-gray-500"] { color: #829188 !important; }
+.login-page [class*="text-gray-300"] { color: #52645a !important; }
+.login-page [class*="text-[#0ea5e9]"] { color: #147d68 !important; }
+.login-page [class*="focus:border-[#0ea5e9]"]:focus { border-color: #2d9b7d !important; }
+.login-page [class*="focus:ring-[#0ea5e9]"]:focus { --tw-ring-color: rgba(45, 155, 125, 0.16) !important; }
+.login-page [class*="text-red-400"] { color: #c2414f !important; }
+.login-page [class*="bg-red-950"] { background-color: #fff1f2 !important; }
+.login-page [class*="border-red-900"] { border-color: #fecdd3 !important; }
+.login-page [class*="border-t"] { border-color: #e8efea !important; }
+.login-page button[class*="bg-gradient-to-r"] {
+  color: #ffffff !important;
+  background: #258b70 !important;
+  box-shadow: 0 10px 24px rgba(37, 139, 112, 0.18) !important;
+}
+.login-page button[class*="bg-gradient-to-r"]:hover { background: #1f765f !important; }
+.login-page > div[class*="bg-[#131c2d]"] { border-color: #dbe5df !important; }
 .bg-noise {
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
 }

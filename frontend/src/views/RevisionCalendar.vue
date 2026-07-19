@@ -296,7 +296,7 @@ onUnmounted(() => {
             <!-- Dropdown Menu -->
             <div
               v-if="isOpen"
-              class="absolute left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-2 space-y-2 max-h-72 flex flex-col animate-in fade-in slide-in-from-top-2 duration-150"
+              class="absolute left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-2 space-y-2 h-[300px] max-h-[70vh] flex flex-col animate-in fade-in slide-in-from-top-2 duration-150"
             >
               <!-- Search box inside dropdown -->
               <div class="relative">
@@ -313,7 +313,7 @@ onUnmounted(() => {
               </div>
 
               <!-- Options List -->
-              <div class="overflow-y-auto flex-1 divide-y divide-gray-50 scrollbar-thin max-h-48">
+              <div class="overflow-y-auto flex-1 min-h-0 divide-y divide-gray-50 scrollbar-thin">
                 <button
                   v-for="plan in filteredReviewPlansForSelect"
                   :key="plan.concept"

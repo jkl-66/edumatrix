@@ -205,7 +205,7 @@ function initMonaco() {
   editorInstance = window.monaco.editor.create(monacoContainerRef.value, {
     value: code.value,
     language: 'python',
-    theme: 'vs-dark',
+    theme: 'vs',
     automaticLayout: true,
     minimap: { enabled: false },
     fontSize: 12,
@@ -340,28 +340,28 @@ selectChart('line')
 <template>
   <div v-if="inline || visible"
     :class="inline
-      ? 'w-full h-full flex flex-col bg-slate-950/40 rounded-2xl border border-slate-800/80 overflow-hidden'
-      : 'fixed top-20 right-6 z-50 w-[92vw] md:w-[560px] max-h-[80vh] bg-gray-900/95 backdrop-blur-md border border-gray-700/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-200'"
+      ? 'w-full h-full flex flex-col bg-white rounded-2xl border border-slate-200 overflow-hidden'
+      : 'fixed top-20 right-6 z-50 w-[92vw] md:w-[560px] max-h-[80vh] bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-200'"
   >
 
     <!-- Header -->
-    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700/50 shrink-0 bg-gray-800/80">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200 shrink-0 bg-slate-50">
       <div class="flex items-center gap-2">
         <div class="w-6 h-6 rounded-lg bg-gradient-to-br from-green-500 to-teal-600 flex items-center justify-center">
           <span class="text-white text-xs">📊</span>
         </div>
-        <span class="text-xs font-semibold text-gray-200">可视化分析</span>
+        <span class="text-xs font-semibold text-slate-800">可视化分析</span>
       </div>
-      <button v-if="!inline" @click="close" class="w-6 h-6 rounded-lg hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-gray-200 transition-all">
+      <button v-if="!inline" @click="close" class="w-6 h-6 rounded-lg hover:bg-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-all">
         <span class="text-sm leading-none">&times;</span>
       </button>
     </div>
 
     <!-- Chart type selector -->
-    <div class="flex gap-1.5 px-3 py-2.5 border-b border-gray-800 overflow-x-auto shrink-0 bg-gray-850">
+    <div class="flex gap-1.5 px-3 py-2.5 border-b border-slate-200 overflow-x-auto shrink-0 bg-white">
       <button v-for="ct in chartTypes" :key="ct.id"
         class="px-3 py-1.5 text-[10px] font-semibold rounded-lg transition-all whitespace-nowrap"
-        :class="activeChart === ct.id ? 'bg-teal-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'"
+        :class="activeChart === ct.id ? 'bg-teal-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-800'"
         @click="selectChart(ct.id)">
         {{ ct.icon }} {{ ct.label }}
       </button>
@@ -371,54 +371,54 @@ selectChart('line')
     <div class="flex-1 overflow-y-auto p-3 space-y-3 scrollbar-thin">
 
       <!-- Code preview -->
-      <div class="bg-gray-800/80 rounded-xl overflow-hidden border border-gray-700/50">
-        <div class="flex items-center justify-between px-3 py-1.5 bg-gray-800 border-b border-gray-700/50">
-          <span class="text-[9px] text-gray-500 font-mono">matplotlib 代码</span>
+      <div class="bg-white rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+        <div class="flex items-center justify-between px-3 py-1.5 bg-slate-50 border-b border-slate-200">
+          <span class="text-[9px] text-slate-500 font-mono">matplotlib 代码</span>
           <button class="px-3 py-1 text-[9px] font-semibold rounded-lg transition-all"
-            :class="running ? 'bg-gray-700 text-gray-400 cursor-wait' : sandboxReady ? 'bg-teal-600 text-white hover:bg-teal-500' : 'bg-gray-700 text-gray-400'"
+            :class="running ? 'bg-slate-100 text-slate-400 cursor-wait' : sandboxReady ? 'bg-teal-600 text-white hover:bg-teal-500' : 'bg-slate-100 text-slate-400'"
             :disabled="running || !sandboxReady" @click="runCode">
             {{ running ? '⏳ 运行中...' : sandboxReady ? '▶ 运行' : '沙箱未启用' }}
           </button>
         </div>
-        <div class="p-2 bg-gray-950">
+        <div class="p-2 bg-slate-100">
           <div ref="monacoContainerRef" class="w-full h-48 rounded-lg overflow-hidden text-left"></div>
         </div>
       </div>
 
       <!-- Result: image or output -->
-      <div v-if="imageUrl" class="bg-gray-800/80 rounded-xl overflow-hidden border border-gray-700/50">
-        <div class="flex items-center justify-between px-3 py-1.5 bg-gray-800 border-b border-gray-700/50">
-          <span class="text-[9px] text-gray-500">📊 生成图表</span>
+      <div v-if="imageUrl" class="bg-white rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+        <div class="flex items-center justify-between px-3 py-1.5 bg-slate-50 border-b border-slate-200">
+          <span class="text-[9px] text-slate-500">📊 生成图表</span>
           <button class="px-2 py-1 text-[9px] font-semibold rounded-lg bg-purple-600 text-white hover:bg-purple-500 transition-all"
             :disabled="explaining" @click="generateExplanation">
             {{ explaining ? '生成中...' : '💡 生成讲解' }}
           </button>
         </div>
-        <div class="p-2 flex justify-center bg-gray-900">
+        <div class="p-2 flex justify-center bg-slate-100">
           <img :src="imageUrl" alt="生成图表" class="max-w-full rounded-lg" />
         </div>
       </div>
 
       <!-- Text output -->
-      <div v-if="output && !imageUrl" class="bg-gray-800/80 rounded-xl p-3 border border-gray-700/50">
-        <p class="text-[9px] text-gray-500 mb-1">控制台输出</p>
-        <pre class="text-[10px] font-mono text-green-400 whitespace-pre-wrap text-left">{{ output }}</pre>
+      <div v-if="output && !imageUrl" class="bg-white rounded-xl p-3 border border-slate-200 shadow-sm">
+        <p class="text-[9px] text-slate-500 mb-1">控制台输出</p>
+        <pre class="text-[10px] font-mono text-slate-700 whitespace-pre-wrap text-left">{{ output }}</pre>
       </div>
 
       <!-- Error -->
-      <div v-if="error" class="bg-red-900/30 rounded-xl p-3 border border-red-700/30">
-        <p class="text-[10px] text-red-400 text-left">{{ error }}</p>
+      <div v-if="error" class="bg-red-50 rounded-xl p-3 border border-red-200">
+        <p class="text-[10px] text-red-600 text-left">{{ error }}</p>
       </div>
 
       <!-- Explanation -->
-      <div v-if="explanation" class="bg-purple-900/20 rounded-xl p-3 border border-purple-700/30">
-        <p class="text-[9px] text-purple-400 mb-1">💡 图表讲解</p>
-        <p class="text-[10px] text-gray-300 leading-relaxed text-left">{{ explanation }}</p>
+      <div v-if="explanation" class="bg-violet-50 rounded-xl p-3 border border-violet-200">
+        <p class="text-[9px] text-violet-600 mb-1">💡 图表讲解</p>
+        <p class="text-[10px] text-slate-700 leading-relaxed text-left">{{ explanation }}</p>
       </div>
 
     </div>
 
-    <div v-if="!sandboxReady" class="mx-3 mb-3 rounded-lg border border-amber-800/50 bg-amber-950/40 px-3 py-2 text-[10px] text-amber-300">
+    <div v-if="!sandboxReady" class="mx-3 mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] text-amber-700">
       {{ sandboxMessage }}。当前版本不执行宿主机代码。
     </div>
   </div>

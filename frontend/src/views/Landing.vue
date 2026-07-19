@@ -66,9 +66,9 @@ const initCanvas = () => {
     ctx.clearRect(0, 0, width, height)
 
     const halo = ctx.createRadialGradient(width * 0.52, height * 0.46, 0, width * 0.52, height * 0.46, Math.max(width, height) * 0.52)
-    halo.addColorStop(0, 'rgba(56, 189, 248, 0.09)')
-    halo.addColorStop(0.52, 'rgba(99, 102, 241, 0.025)')
-    halo.addColorStop(1, 'rgba(8, 15, 30, 0)')
+    halo.addColorStop(0, 'rgba(45, 155, 125, 0.12)')
+    halo.addColorStop(0.52, 'rgba(91, 155, 174, 0.045)')
+    halo.addColorStop(1, 'rgba(241, 245, 242, 0)')
     ctx.fillStyle = halo
     ctx.fillRect(0, 0, width, height)
 
@@ -78,8 +78,8 @@ const initCanvas = () => {
         if (distance < 180) {
           const opacity = 0.2 * (1 - distance / 180)
           const gradient = ctx.createLinearGradient(dots[i].x, dots[i].y, dots[j].x, dots[j].y)
-          gradient.addColorStop(0, `rgba(103, 232, 249, ${opacity})`)
-          gradient.addColorStop(1, `rgba(129, 140, 248, ${opacity * 0.55})`)
+          gradient.addColorStop(0, `rgba(45, 155, 125, ${opacity})`)
+          gradient.addColorStop(1, `rgba(91, 155, 174, ${opacity * 0.55})`)
           ctx.strokeStyle = gradient
           ctx.lineWidth = 0.8
           ctx.beginPath()
@@ -109,7 +109,7 @@ const initCanvas = () => {
       if (dot.x < 20 || dot.x > width - 20) dot.vx *= -1
       if (dot.y < 20 || dot.y > height - 20) dot.vy *= -1
 
-      const colors = ['#67e8f9', '#818cf8', '#5eead4']
+      const colors = ['#3aa184', '#6f9cad', '#70b7a2']
       const color = colors[dot.accent]
       ctx.shadowBlur = 18
       ctx.shadowColor = color
@@ -119,7 +119,7 @@ const initCanvas = () => {
       ctx.fill()
 
       ctx.shadowBlur = 0
-      ctx.fillStyle = 'rgba(219, 234, 254, 0.58)'
+      ctx.fillStyle = 'rgba(71, 91, 80, 0.72)'
       ctx.font = '500 10px Inter, system-ui, sans-serif'
       ctx.fillText(dot.label, dot.x + 10, dot.y + 4)
     })
@@ -301,7 +301,7 @@ function start() {
   bottom: -18rem;
   width: 38rem;
   height: 38rem;
-  background: #6366f1;
+  background: #8eb8aa;
 }
 
 .brand-mark {
@@ -612,4 +612,51 @@ function start() {
   .reveal { opacity: 1; transform: none; transition: none; }
   .scroll-cue, .orbit-ring, .metric-card, .scan-beam, .primary-entry-shine { animation: none !important; }
 }
+
+/* Keep the landing experience aligned with the light application workspace. */
+.landing-page {
+  background: #f1f5f2 !important;
+  color: #243128 !important;
+}
+.landing-header {
+  border-bottom-color: #dbe5df !important;
+  background: rgba(255, 255, 255, 0.9) !important;
+}
+.landing-brand strong, .hero-title, .section-heading h2, .method-sticky h2,
+.landing-cta h2, .signal-card h3, .method-step h3 { color: #243128 !important; }
+.landing-brand small, .landing-nav a, .hero-lede, .hero-proof,
+.section-heading p, .method-sticky p, .method-step p, .signal-card p,
+.landing-footer { color: #64756b !important; }
+.landing-nav a:hover { color: #147d68 !important; }
+.landing-grid { opacity: .5; background-image: linear-gradient(rgba(71, 104, 88, .07) 1px, transparent 1px), linear-gradient(90deg, rgba(71, 104, 88, .07) 1px, transparent 1px) !important; }
+.brand-mark, .ghost-entry, .secondary-entry, .hero-kicker, .status-pill, .metric-card,
+.signal-card, .method-step {
+  color: #405349 !important;
+  border-color: #dbe5df !important;
+  background: rgba(255, 255, 255, .86) !important;
+  box-shadow: 0 14px 34px rgba(50, 75, 61, .07) !important;
+}
+.brand-mark { color: #147d68 !important; background: #e5f3ed !important; }
+.ghost-entry, .secondary-entry { color: #365044 !important; }
+.ghost-entry:hover, .secondary-entry:hover { color: #147d68 !important; border-color: #9bcfbc !important; background: #f7fbf8 !important; }
+.hero-kicker { color: #33705b !important; }
+.hero-gradient { background: linear-gradient(105deg, #287d68 5%, #4f9f8c 55%, #648da0 95%) !important; background-clip: text !important; -webkit-background-clip: text !important; }
+.primary-entry { color: #fff !important; background: #258b70 !important; box-shadow: 0 14px 30px rgba(37, 139, 112, .18) !important; }
+.primary-entry:hover { background: #1f765f !important; filter: none !important; }
+.matrix-frame { border-color: #cbded5 !important; background: linear-gradient(145deg, #eaf4ef, #eaf2f5) !important; box-shadow: inset 0 1px 0 #fff, 0 24px 60px rgba(53, 83, 67, .12) !important; }
+.matrix-vignette { background: linear-gradient(115deg, rgba(255,255,255,.2), transparent 38%, transparent 72%, rgba(207,226,218,.24)) !important; }
+.visual-aura { background: linear-gradient(135deg, rgba(116, 196, 171, .3), rgba(143, 190, 204, .25)) !important; }
+.metric-card .text-white, .metric-card .text-slate-100 { color: #294337 !important; }
+.metric-card-bottom .bg-indigo-300\/10 { background: #e7eef1 !important; }
+.metric-card-bottom .text-indigo-200 { color: #5f8190 !important; }
+.signal-card--wide { background: #eef7f2 !important; }
+.method-section { background: #eaf2ed !important; }
+.section-heading h2 em, .method-sticky h2 em, .landing-cta h2 em { color: #328d75 !important; }
+.section-eyebrow, .method-link { color: #328d75 !important; }
+.signal-metrics { border-color: #d5e3da !important; }
+.signal-metrics > div { border-color: #d5e3da !important; }
+.signal-metrics strong { color: #328d75 !important; }
+.signal-metrics span { color: #405349 !important; }
+.landing-cta__inner { border-color: #bcd9cb !important; background: linear-gradient(120deg, #e0f1e9, #e5eff2) !important; box-shadow: 0 24px 60px rgba(53, 83, 67, .1) !important; }
+.landing-footer { border-top-color: #dbe5df !important; }
 </style>

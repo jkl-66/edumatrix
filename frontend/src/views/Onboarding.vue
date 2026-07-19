@@ -165,7 +165,7 @@ async function finish() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#0b0f19] text-[#f3f4f6] flex items-center justify-center p-4 relative overflow-hidden font-sans">
+  <div class="onboarding-page min-h-screen bg-[#f1f5f2] text-slate-800 flex items-center justify-center p-4 relative overflow-hidden font-sans">
     <!-- Fine grain overlay -->
     <div class="absolute inset-0 bg-noise opacity-[0.02] pointer-events-none"></div>
     
@@ -411,6 +411,19 @@ async function finish() {
 </template>
 
 <style scoped>
+.onboarding-page { color: #243128; }
+.onboarding-page [class*="bg-[#131926]"],
+.onboarding-page [class*="bg-[#0d121f]"],
+.onboarding-page [class*="bg-[#0b0f19]"] { background-color: rgba(255, 255, 255, 0.92) !important; }
+.onboarding-page [class*="text-white"],
+.onboarding-page [class*="text-[#f3f4f6]"] { color: #243128 !important; }
+.onboarding-page [class*="text-gray-400"] { color: #64756b !important; }
+.onboarding-page [class*="border-white"] { border-color: #dbe5df !important; }
+.onboarding-page [class*="border-[#0ea5e9]"] { border-color: #2d9b7d !important; }
+.onboarding-page [class*="bg-[#0ea5e9]"] { background-color: #2d9b7d !important; }
+.onboarding-page [class*="text-[#0ea5e9]"] { color: #258b70 !important; }
+.onboarding-page [class*="bg-gradient-to-r"] { background: #258b70 !important; color: white !important; }
+.onboarding-page [class*="text-[#0b0f19]"] { color: white !important; }
 .bg-noise {
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
 }

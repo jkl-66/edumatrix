@@ -170,12 +170,12 @@ function snapshotMastery(item) {
     </Transition>
 
     <!-- Header Controls -->
-    <div class="flex items-center justify-between mb-8">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
       <div>
         <h2 class="text-lg font-bold text-gray-900 dark:text-white">对话时空历史</h2>
         <p class="text-xs text-gray-500 mt-0.5">追溯您的自适应学习路径，随时进行时空回溯或自适应测试</p>
       </div>
-      <div class="relative w-64">
+      <div class="history-search relative w-full sm:w-72 shrink-0">
         <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
         <input v-model="searchFilter" class="input pl-8 py-1.5" placeholder="搜索问题、知识点或智能体..." />
       </div>
@@ -339,6 +339,24 @@ function snapshotMastery(item) {
 </template>
 
 <style scoped>
+.history-search :deep(.input) {
+  width: 100%;
+  min-height: 38px;
+  padding-left: 36px;
+  padding-right: 12px;
+  color: #1e293b;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(51, 65, 85, 0.06);
+}
+
+.history-search :deep(.input:focus) {
+  border-color: #a5b4fc;
+  box-shadow: 0 0 0 3px rgba(199, 210, 254, 0.45);
+  outline: none;
+}
+
 .toast-enter-active,
 .toast-leave-active {
   transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);

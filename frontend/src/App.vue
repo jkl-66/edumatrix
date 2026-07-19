@@ -107,7 +107,7 @@ function handleCaptureError(e) {
 </script>
 
 <template>
-  <div v-if="route.meta.layout === 'full'" class="h-screen w-screen overflow-hidden bg-[#0b0f19]">
+  <div v-if="route.meta.layout === 'full'" class="h-screen w-screen overflow-hidden bg-[#f1f5f2]">
     <div @error.capture="handleCaptureError">
       <router-view :key="route.fullPath" :student-id="studentId" />
     </div>

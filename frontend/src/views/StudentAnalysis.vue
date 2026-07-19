@@ -735,12 +735,12 @@ onUnmounted(() => {
     <div class="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
   </div>
   <div v-else-if="error" class="text-center py-12 text-red-500 text-sm">{{ error }}</div>
-  <div v-else class="max-w-6xl mx-auto space-y-6">
+  <div v-else class="profile-page max-w-6xl mx-auto space-y-6">
 
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-sm font-bold">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-sm font-bold shadow-sm">
           {{ (background.display_name || background.student_id || '?')[0] }}
         </div>
         <div>
@@ -761,32 +761,32 @@ onUnmounted(() => {
     <!-- Tab navigation -->
     <div class="flex gap-1 border-b border-gray-100 pb-1 overflow-x-auto">
       <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap"
-        :class="activeTab === 'overview' ? 'text-purple-700 bg-purple-50 border-b-2 border-purple-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+        :class="activeTab === 'overview' ? 'text-emerald-700 bg-emerald-50 border-b-2 border-emerald-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
         @click="activeTab = 'overview'">
         <User :size="12" class="inline mr-1" /> 概览
       </button>
       <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap"
-        :class="activeTab === 'digital-twin' ? 'text-purple-700 bg-purple-50 border-b-2 border-purple-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+        :class="activeTab === 'digital-twin' ? 'text-emerald-700 bg-emerald-50 border-b-2 border-emerald-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
         @click="activeTab = 'digital-twin'">
         <Activity :size="12" class="inline mr-1" /> 数字孪生画像
       </button>
       <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap"
-        :class="activeTab === 'dimensions' ? 'text-purple-700 bg-purple-50 border-b-2 border-purple-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+        :class="activeTab === 'dimensions' ? 'text-emerald-700 bg-emerald-50 border-b-2 border-emerald-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
         @click="activeTab = 'dimensions'">
         <BarChart3 :size="12" class="inline mr-1" /> 十维分析
       </button>
       <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap"
-        :class="activeTab === 'weakness' ? 'text-purple-700 bg-purple-50 border-b-2 border-purple-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+        :class="activeTab === 'weakness' ? 'text-emerald-700 bg-emerald-50 border-b-2 border-emerald-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
         @click="activeTab = 'weakness'">
         <AlertTriangle :size="12" class="inline mr-1" /> 薄弱点归因
       </button>
       <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap"
-        :class="activeTab === 'causes' ? 'text-purple-700 bg-purple-50 border-b-2 border-purple-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+        :class="activeTab === 'causes' ? 'text-emerald-700 bg-emerald-50 border-b-2 border-emerald-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
         @click="activeTab = 'causes'">
         <Info :size="12" class="inline mr-1" /> 成因分析
       </button>
       <button class="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap"
-        :class="activeTab === 'suggestions' ? 'text-purple-700 bg-purple-50 border-b-2 border-purple-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+        :class="activeTab === 'suggestions' ? 'text-emerald-700 bg-emerald-50 border-b-2 border-emerald-500' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
         @click="activeTab = 'suggestions'">
         <Sparkles :size="12" class="inline mr-1" /> 教学建议
       </button>
@@ -797,13 +797,13 @@ onUnmounted(() => {
       <!-- Student card -->
       <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
         <div class="flex items-center gap-4">
-          <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-lg font-bold">
+          <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-lg font-bold shadow-sm">
             {{ (background.display_name || background.student_id || '?')[0] }}
           </div>
           <div class="flex-1">
             <div class="flex items-center gap-2">
               <h2 class="text-lg font-bold text-gray-800">{{ background.display_name || background.student_id }}</h2>
-              <button @click="openEdit" class="text-purple-600 hover:text-purple-700 transition-colors p-1 rounded-lg hover:bg-purple-50 flex items-center gap-0.5 text-[10px] font-medium" title="编辑学情设置">
+              <button @click="openEdit" class="text-emerald-700 hover:text-emerald-800 transition-colors p-1 rounded-lg hover:bg-emerald-50 flex items-center gap-0.5 text-[10px] font-medium" title="编辑学情设置">
                 <Edit2 :size="10" />编辑画像
               </button>
             </div>
@@ -1192,12 +1192,12 @@ onUnmounted(() => {
     </div>
 
     <!-- Edit Profile Modal -->
-    <div v-if="showEditModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+    <div v-if="showEditModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm p-4">
       <div class="bg-white rounded-2xl border border-gray-100 shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
         <!-- Modal Header -->
-        <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-purple-50 to-indigo-50/50">
+        <div class="px-5 py-4 border-b border-emerald-100 flex items-center justify-between bg-gradient-to-r from-emerald-50 to-slate-50">
           <div class="flex items-center gap-2">
-            <Edit2 :size="16" class="text-purple-600" />
+            <Edit2 :size="16" class="text-emerald-600" />
             <h3 class="text-sm font-bold text-gray-800">自定义编辑学情画像</h3>
           </div>
           <button @click="showEditModal = false" class="text-gray-400 hover:text-gray-600 transition-colors">
@@ -1210,20 +1210,20 @@ onUnmounted(() => {
           <!-- Major -->
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">专业/方向</label>
-            <input v-model="editForm.major" type="text" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50" placeholder="例如：人工智能实践、计算机科学与技术" />
+            <input v-model="editForm.major" type="text" class="w-full px-3 py-2 text-xs text-slate-800 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 bg-white" placeholder="例如：人工智能实践、计算机科学与技术" />
             <p class="text-[10px] text-gray-400 mt-0.5">将影响教学案例领域的选择（例如金融、医疗等跨学科领域）</p>
           </div>
 
           <!-- Target Course -->
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">学习目标课程</label>
-            <input v-model="editForm.target_course" type="text" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50" placeholder="例如：机器学习导论、高等数学" />
+            <input v-model="editForm.target_course" type="text" class="w-full px-3 py-2 text-xs text-slate-800 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 bg-white" placeholder="例如：机器学习导论、高等数学" />
           </div>
 
           <!-- Cognitive Style -->
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">认知与学习风格</label>
-            <select v-model="editForm.cognitive_style" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50">
+            <select v-model="editForm.cognitive_style" class="w-full px-3 py-2 text-xs text-slate-800 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 bg-white">
               <option v-for="opt in styleOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
             <p class="text-[10px] text-gray-400 mt-0.5">更改此项将改变大模型回答时的排版优先级与可视化呈现策略</p>
@@ -1232,7 +1232,7 @@ onUnmounted(() => {
           <!-- Motivation Type -->
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">动机类型</label>
-            <select v-model="editForm.motivation_type" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50">
+            <select v-model="editForm.motivation_type" class="w-full px-3 py-2 text-xs text-slate-800 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 bg-white">
               <option v-for="opt in motivationOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
           </div>
@@ -1240,7 +1240,7 @@ onUnmounted(() => {
           <!-- Learning Goals -->
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">核心学习目标 / 诉求</label>
-            <input v-model="editForm.learning_goals" type="text" class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 bg-gray-50/50" placeholder="多个目标用英文或中文逗号隔开" />
+            <input v-model="editForm.learning_goals" type="text" class="w-full px-3 py-2 text-xs text-slate-800 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 bg-white" placeholder="多个目标用英文或中文逗号隔开" />
             <p class="text-[10px] text-gray-400 mt-0.5">例如：期末复习冲刺, 科研学术深造, 求职面试准备</p>
           </div>
 
@@ -1262,7 +1262,7 @@ onUnmounted(() => {
           <button @click="showEditModal = false" class="px-3 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 bg-white border border-gray-200 rounded-lg transition-all">
             取消
           </button>
-          <button @click="saveProfile" :disabled="saving" class="px-4 py-1.5 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-700 rounded-lg shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-50">
+          <button @click="saveProfile" :disabled="saving" class="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-50">
             <div v-if="saving" class="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
             <span>{{ saving ? '正在保存...' : '确认保存' }}</span>
           </button>

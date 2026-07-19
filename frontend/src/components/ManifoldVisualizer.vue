@@ -151,8 +151,8 @@ function drawPoincareDisk() {
 
   // 背景
   const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius)
-  bg.addColorStop(0, '#0f172a')
-  bg.addColorStop(1, '#020617')
+  bg.addColorStop(0, '#162442')
+  bg.addColorStop(1, '#081426')
   ctx.fillStyle = bg
   ctx.fillRect(0, 0, w, h)
 
@@ -604,11 +604,11 @@ watch(isFullscreen, () => {
     ]" @click.self="isFullscreen ? toggleFullscreen() : null">
       
       <div :class="[
-        'bg-gray-950 border border-gray-800 overflow-hidden relative flex flex-col transition-all duration-300',
+        'bg-slate-900 border border-slate-700 overflow-hidden relative flex flex-col transition-all duration-300',
         isFullscreen ? 'w-[85vw] max-w-4xl h-[75vh] shadow-2xl rounded-2xl' : 'w-full h-full rounded-lg'
       ]">
         <!-- 标题栏 -->
-        <div class="flex items-center justify-between px-3 py-2 bg-gray-900 border-b border-gray-800 select-none">
+        <div class="flex items-center justify-between px-3 py-2 bg-slate-800 border-b border-slate-700 select-none">
           <div class="flex items-center gap-2">
             <span class="text-xs font-semibold text-purple-400">Poincaré 双曲圆盘</span>
             <span class="text-[10px] text-gray-500">知识拓扑流形对齐</span>
@@ -624,7 +624,7 @@ watch(isFullscreen, () => {
         </div>
 
         <!-- Canvas 与交互区 (方案一) -->
-        <div class="relative flex-1 bg-slate-950 flex items-center justify-center overflow-hidden">
+        <div class="relative flex-1 bg-slate-900 flex items-center justify-center overflow-hidden">
           <canvas 
             ref="canvasRef" 
             class="w-full cursor-grab active:cursor-grabbing" 
@@ -678,7 +678,7 @@ watch(isFullscreen, () => {
         </div>
 
         <!-- 图例 -->
-        <div class="flex gap-4 px-3 py-2 bg-gray-900 border-t border-gray-800 text-[10px] text-gray-400 flex-wrap select-none z-10 items-center">
+        <div class="flex gap-4 px-3 py-2 bg-slate-800 border-t border-slate-700 text-[10px] text-slate-300 flex-wrap select-none z-10 items-center">
           <span class="flex items-center gap-1.5" title="金色节点，代表标准学科大纲要求的标准概念位置">
             <span class="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_#f59e0b]" /> 
             标准知识点（大纲要求）
@@ -699,8 +699,8 @@ watch(isFullscreen, () => {
         </div>
 
         <!-- 帮助 Tips (全屏隐藏以扩充画布区域) -->
-        <div v-if="!isFullscreen" class="px-3 py-2 bg-gray-950 border-t border-gray-800 text-[9px] text-gray-500 space-y-1 leading-normal select-none z-10">
-          <div class="font-semibold text-gray-400 flex items-center gap-1">
+        <div v-if="!isFullscreen" class="px-3 py-2 bg-slate-900 border-t border-slate-700 text-[9px] text-slate-300 space-y-1 leading-normal select-none z-10">
+          <div class="font-semibold text-slate-200 flex items-center gap-1">
             <span>💡</span> 如何理解 Poincaré 双曲圆盘？
           </div>
           <p>

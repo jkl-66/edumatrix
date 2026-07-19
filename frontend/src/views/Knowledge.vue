@@ -263,7 +263,7 @@ async function doCrossModalSearch() {
 </script>
 
 <template>
-  <div class="max-w-4xl mx-auto text-[#f3f4f6]">
+  <div class="knowledge-page max-w-4xl mx-auto text-slate-800">
     <!-- 头部：标题 + 图谱状态 -->
     <div class="flex items-center justify-between mb-6">
       <h2 class="text-sm font-semibold text-[#f3f4f6]">
@@ -345,7 +345,7 @@ async function doCrossModalSearch() {
 
     <!-- 文档卡片网格：玻璃态暗色风格 -->
     <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div v-for="doc in docs" :key="doc.id" class="bg-[#131926]/70 backdrop-blur-md border border-white/[0.06] rounded-xl p-4 hover:border-white/[0.12] hover:shadow-lg hover:shadow-black/20 transition-all duration-300 group cursor-pointer" @click="openDocModal(doc)">
+      <div v-for="doc in docs" :key="doc.id" class="knowledge-card bg-white border border-slate-200 rounded-xl p-4 hover:border-cyan-300 hover:shadow-lg hover:shadow-slate-200/70 transition-all duration-300 group cursor-pointer" @click="openDocModal(doc)">
         <div class="flex items-start gap-3">
           <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" :class="fileColor(doc.file_type)">
             <component :is="fileIcon(doc.file_type)" :size="20" />
@@ -369,7 +369,7 @@ async function doCrossModalSearch() {
               <span v-if="doc.tags.length > 4" class="text-[10px] text-[#475569]">+{{ doc.tags.length - 4 }}</span>
             </div>
           </div>
-          <button class="p-1.5 shrink-0 text-[#475569] hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100" @click.stop="remove(doc.id, doc.filename)">
+          <button class="p-1.5 shrink-0 text-[#64748b] hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" @click.stop="remove(doc.id, doc.filename)" :title="`删除 ${doc.filename}`" aria-label="删除知识库文件">
             <Trash2 :size="14" />
           </button>
         </div>
@@ -441,7 +441,7 @@ async function doCrossModalSearch() {
   <Teleport to="body">
     <div v-if="showDocModal && selectedDoc" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="closeDocModal">
       <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div class="relative bg-[#0b0f19] border border-white/[0.08] rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+      <div class="knowledge-modal relative bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
         <!-- 头部 -->
         <div class="sticky top-0 bg-[#0b0f19]/95 backdrop-blur-md border-b border-white/[0.06] px-6 py-4 flex items-center justify-between rounded-t-2xl z-10">
           <div class="flex items-center gap-3 min-w-0">
@@ -548,3 +548,52 @@ async function doCrossModalSearch() {
   </Teleport>
   </div>
 </template>
+
+<style scoped>
+.knowledge-page {
+  --knowledge-ink: #1e293b;
+  --knowledge-muted: #64748b;
+}
+
+.knowledge-page :deep([class*="bg-[#131926]"]),
+.knowledge-page :deep([class*="bg-[#0b0f19]"]),
+.knowledge-page :deep([class*="bg-[#070a12]"]) {
+  background: #ffffff !important;
+}
+
+.knowledge-page :deep([class*="text-[#f3f4f6]"]),
+.knowledge-page :deep([class*="text-[#cbd5e1]"]),
+.knowledge-page :deep([class*="text-[#94a3b8]"]) {
+  color: var(--knowledge-ink) !important;
+}
+
+.knowledge-page :deep([class*="text-[#64748b]"]),
+.knowledge-page :deep([class*="text-[#475569]"]),
+.knowledge-page :deep([class*="text-[#334155]"]) {
+  color: var(--knowledge-muted) !important;
+}
+
+.knowledge-modal {
+  color: #1e293b;
+}
+
+.knowledge-modal :deep([class*="bg-white/[0.02]"]),
+.knowledge-modal :deep([class*="bg-white/[0.03]"]) {
+  background: #f8fafc !important;
+}
+
+.knowledge-modal :deep([class*="bg-[#070a12]"]) {
+  background: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+.knowledge-modal :deep([class*="text-[#f3f4f6]"]),
+.knowledge-modal :deep([class*="text-[#cbd5e1]"]) {
+  color: #1e293b !important;
+}
+
+.knowledge-modal :deep([class*="text-[#94a3b8]"]),
+.knowledge-modal :deep([class*="text-[#64748b]"]) {
+  color: #64748b !important;
+}
+</style>

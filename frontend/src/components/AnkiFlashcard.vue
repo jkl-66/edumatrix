@@ -63,49 +63,49 @@ watch(() => props.card, () => {
       >
         <!-- 正面 -->
         <div 
-          class="anki-card-front absolute inset-0 rounded-2xl p-6 flex flex-col justify-between border select-none transition-all shadow-md bg-gradient-to-br from-slate-900 to-slate-800 border-slate-700 text-white"
+          class="anki-card-front absolute inset-0 rounded-2xl p-6 flex flex-col justify-between border select-none transition-all shadow-md bg-gradient-to-br from-white to-indigo-50 border-indigo-100 text-slate-800"
           @click="flipCard"
         >
           <div class="flex items-center justify-between">
-            <span class="text-[10px] uppercase font-bold tracking-widest text-indigo-400 bg-indigo-950/60 px-2.5 py-1 rounded-full border border-indigo-900/50">
+            <span class="text-[10px] uppercase font-bold tracking-widest text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-full border border-indigo-100">
               记忆闪卡 · 正面
             </span>
-            <HelpCircle :size="16" class="text-indigo-400 animate-pulse" />
+            <HelpCircle :size="16" class="text-indigo-500 animate-pulse" />
           </div>
 
           <div class="my-auto text-center px-4 space-y-3">
-            <h3 class="text-xs text-slate-400 font-medium">需要召回的概念问题</h3>
-            <p class="text-lg font-semibold leading-relaxed tracking-wide text-indigo-100">{{ card.front || '加载中...' }}</p>
+            <h3 class="text-xs text-slate-500 font-medium">需要召回的概念问题</h3>
+            <p class="text-lg font-semibold leading-relaxed tracking-wide text-indigo-900">{{ card.front || '加载中...' }}</p>
           </div>
 
-          <div class="flex items-center justify-center gap-1.5 text-xs text-slate-400 font-medium">
-            <RotateCw :size="12" class="text-indigo-400" />
+          <div class="flex items-center justify-center gap-1.5 text-xs text-slate-500 font-medium">
+            <RotateCw :size="12" class="text-indigo-500" />
             点击卡片以翻面查看解析
           </div>
         </div>
 
         <!-- 反面 -->
         <div 
-          class="anki-card-back absolute inset-0 rounded-2xl p-6 flex flex-col justify-between border transition-all shadow-md bg-gradient-to-br from-slate-950 to-slate-900 border-slate-700 text-slate-100"
+          class="anki-card-back absolute inset-0 rounded-2xl p-6 flex flex-col justify-between border transition-all shadow-md bg-gradient-to-br from-white to-emerald-50 border-emerald-100 text-slate-800"
         >
           <div class="flex items-center justify-between" @click="flipCard">
-            <span class="text-[10px] uppercase font-bold tracking-widest text-emerald-400 bg-emerald-950/60 px-2.5 py-1 rounded-full border border-emerald-900/50">
+            <span class="text-[10px] uppercase font-bold tracking-widest text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
               记忆闪卡 · 诊断解析
             </span>
-            <div class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer hover:text-indigo-400 transition-colors">
+            <div class="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer hover:text-indigo-600 transition-colors">
               <RotateCw :size="12" />
               <span>翻回正面</span>
             </div>
           </div>
 
-          <div class="my-auto overflow-y-auto max-h-[160px] pr-1 scrollbar-thin text-slate-300 text-sm leading-relaxed space-y-2 whitespace-pre-line py-3">
+          <div class="my-auto overflow-y-auto max-h-[160px] pr-1 scrollbar-thin text-slate-700 text-sm leading-relaxed space-y-2 whitespace-pre-line py-3">
             <div class="text-xs font-bold text-slate-400">💡 记忆要点与微断点诊断：</div>
             {{ card.back }}
           </div>
 
           <div class="pt-3 border-t border-slate-800 flex flex-col gap-2">
             <!-- 成功提示 -->
-            <div v-if="reviewMessage" class="text-center text-xs p-2 rounded-lg" :class="reviewMessage.includes('失败') ? 'bg-red-950/30 text-red-400 border border-red-900/30' : 'bg-emerald-950/30 text-emerald-400 border border-emerald-900/30'">
+            <div v-if="reviewMessage" class="text-center text-xs p-2 rounded-lg" :class="reviewMessage.includes('失败') ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'">
               {{ reviewMessage }}
             </div>
 
@@ -120,19 +120,19 @@ watch(() => props.card, () => {
             <div v-if="!reviewMessage && !submitting" class="grid grid-cols-3 gap-2">
               <button 
                 @click.stop="submitQuality(2)"
-                class="py-2 text-xs font-semibold rounded-xl bg-red-950/40 hover:bg-red-900/40 text-red-400 border border-red-900/40 active:scale-[0.97] transition-all"
+                class="py-2 text-xs font-semibold rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 active:scale-[0.97] transition-all"
               >
                 困难
               </button>
               <button 
                 @click.stop="submitQuality(4)"
-                class="py-2 text-xs font-semibold rounded-xl bg-amber-950/40 hover:bg-amber-900/40 text-amber-400 border border-amber-900/40 active:scale-[0.97] transition-all"
+                class="py-2 text-xs font-semibold rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 active:scale-[0.97] transition-all"
               >
                 一般
               </button>
               <button 
                 @click.stop="submitQuality(5)"
-                class="py-2 text-xs font-semibold rounded-xl bg-emerald-950/40 hover:bg-emerald-900/40 text-emerald-400 border border-emerald-900/40 active:scale-[0.97] transition-all"
+                class="py-2 text-xs font-semibold rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 active:scale-[0.97] transition-all"
               >
                 简单
               </button>
@@ -141,7 +141,7 @@ watch(() => props.card, () => {
             <!-- 加载状态 -->
             <div v-else-if="submitting" class="flex items-center justify-center py-2">
               <Loader2 :size="16" class="text-indigo-400 animate-spin mr-2" />
-              <span class="text-xs text-slate-400">正在同步记忆状态...</span>
+              <span class="text-xs text-slate-500">正在同步记忆状态...</span>
             </div>
           </div>
         </div>

@@ -1139,7 +1139,8 @@ function renderAllDiagrams() {
     </div>
 
     <!-- Goal Resolver Select Modal -->
-    <div v-if="showGoalModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm transition-all" @click="showGoalModal = false">
+    <Teleport to="body">
+    <div v-if="showGoalModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm transition-all" @click="showGoalModal = false">
       <div class="w-full max-w-2xl bg-white rounded-2xl shadow-2xl p-5 space-y-4 border border-slate-100 animate-scale-up mx-4 max-h-[90vh] overflow-y-auto" @click.stop>
         <div class="flex items-center justify-between border-b border-slate-100 pb-3">
           <h3 class="text-xs font-bold text-slate-800 flex items-center gap-1.5">
@@ -1252,6 +1253,7 @@ function renderAllDiagrams() {
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- 备选解锁方向 -->
     <div v-if="nextUp.length" class="bg-blue-50/75 rounded-2xl border border-blue-100 p-4">

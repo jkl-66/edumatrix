@@ -59,6 +59,7 @@ const zoomModal = ref({
 })
 const zoomScale = ref(1.0)
 const panOffset = ref({ x: 0, y: 0 })
+const isZoomMindmap = computed(() => /^\s*mindmap\b/i.test(zoomModal.value.code || ''))
 let isPanning = false
 let startPanCoords = { x: 0, y: 0 }
 
@@ -102,7 +103,7 @@ window.zoomMindmap = (btn) => {
 }
 
 watch(() => zoomModal.value.code, (newVal) => {
-  if (newVal) {
+  if (newVal && !isZoomMindmap.value) {
     nextTick(() => {
       if (typeof window.mermaid !== 'undefined') {
         try {
@@ -2391,7 +2392,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
     </div>
 
     <!-- Main content area -->
-    <div class="flex-1 flex flex-col min-w-0">
+    <div class="chat-main-column flex-1 flex flex-col min-w-0 overflow-hidden">
       <!-- Premium Tabs -->
       <div class="chat-toolbar flex items-center justify-between mb-5 border-b border-gray-100 pb-3 gap-3">
         <div class="flex gap-1 bg-white/80 backdrop-blur-sm rounded-2xl p-1.5 shadow-sm border border-slate-200/80">
@@ -2837,33 +2838,33 @@ function renderMarkdown(text, type = '', conceptName = '') {
                      placeholder="搜索课件名称..." />
             </div>
             <!-- 课件列表 -->
-            <div class="max-h-48 overflow-y-auto flex flex-col gap-1 pr-1 custom-scrollbar">
+            <div class="max-h-56 overflow-y-auto flex flex-col gap-1.5 pr-1 custom-scrollbar">
               <div v-if="filteredDocSelectorList.length === 0" class="text-[10px] text-gray-400 py-6 text-center">
                 暂无匹配课件，请先在知识库页面上传
               </div>
               <button v-for="doc in filteredDocSelectorList" :key="doc.name"
                       @click="insertDocReference(doc.name)"
-                      class="w-full px-2.5 py-2 text-left rounded-xl hover:bg-indigo-50/50 transition-all border-none bg-transparent cursor-pointer flex items-center justify-between group">
-                <div class="flex flex-col min-w-0 pr-2">
-                  <span class="text-xs font-medium text-gray-700 truncate group-hover:text-indigo-600">{{ doc.desc }}</span>
-                  <span class="text-[9px] text-gray-400 truncate mt-0.5">{{ doc.name }}</span>
+                      class="w-full min-h-[42px] px-2.5 py-2 text-left rounded-xl hover:bg-indigo-50/50 transition-all border-none bg-transparent cursor-pointer flex items-center justify-between gap-2 group">
+                <div class="flex flex-col min-w-0 flex-1 pr-1 leading-snug">
+                  <span class="text-xs font-medium text-gray-700 truncate group-hover:text-indigo-600" :title="doc.desc">{{ doc.desc }}</span>
+                  <span class="text-[9px] text-gray-400 truncate mt-0.5" :title="doc.name">{{ doc.name }}</span>
                 </div>
-                <span class="text-[9px] px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-500 shrink-0 group-hover:bg-indigo-100 group-hover:text-indigo-600 transition-colors">{{ doc.label }}</span>
+                <span class="text-[9px] leading-none px-1.5 py-1 rounded-md bg-gray-100 text-gray-500 shrink-0 group-hover:bg-indigo-100 group-hover:text-indigo-600 transition-colors">{{ doc.label }}</span>
               </button>
             </div>
           </div>
 
           <!-- Autocomplete Suggestions Dropdown -->
-          <div v-if="showSuggest && filteredSuggestions.length > 0" class="absolute bottom-full mb-2 left-0 right-0 bg-gray-900 border border-gray-800 rounded-xl shadow-xl overflow-hidden z-50 max-h-48 overflow-y-auto border-purple-500/30">
+          <div v-if="showSuggest && filteredSuggestions.length > 0" class="absolute bottom-full mb-2 left-0 right-0 bg-white border border-indigo-100 rounded-xl shadow-xl overflow-hidden z-50 max-h-48 overflow-y-auto">
             <div v-for="(item, idx) in filteredSuggestions" :key="item.name" 
-                 class="flex items-center justify-between px-4 py-2 cursor-pointer text-xs transition-colors border-b border-gray-800 last:border-b-0 animate-fade-in"
-                 :class="idx === suggestIndex ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-800'"
+                 class="flex items-center justify-between px-4 py-2 cursor-pointer text-xs transition-colors border-b border-gray-100 last:border-b-0 animate-fade-in"
+                 :class="idx === suggestIndex ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-indigo-50'"
                  @click="selectSuggestion(item)">
               <div class="flex items-center gap-2">
-                <span class="font-bold text-indigo-400" :class="{'text-white': idx === suggestIndex}">{{ item.name }}</span>
-                <span class="text-gray-400 text-[10px]" :class="{'text-gray-200': idx === suggestIndex}">{{ item.desc }}</span>
+                <span class="font-bold text-indigo-600" :class="{'text-white': idx === suggestIndex}">{{ item.name }}</span>
+                <span class="text-slate-500 text-[10px]" :class="{'text-indigo-100': idx === suggestIndex}">{{ item.desc }}</span>
               </div>
-              <span class="px-1.5 py-0.5 rounded text-[10px] bg-gray-950 text-indigo-300" :class="{'bg-indigo-700 text-white': idx === suggestIndex}">{{ item.label }}</span>
+              <span class="px-1.5 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-600" :class="{'bg-indigo-700 text-white': idx === suggestIndex}">{{ item.label }}</span>
             </div>
           </div>
 
@@ -3084,22 +3085,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
         </div>
 
         <div class="flex-1 flex flex-col min-h-0">
-          <div class="flex-1 flex flex-col rounded-xl border border-gray-200 overflow-hidden shadow-sm">
-            <div class="bg-gray-900 text-gray-300 text-xs px-4 py-2 flex items-center justify-between">
+          <div class="flex-1 flex flex-col rounded-xl border border-slate-200 overflow-hidden shadow-sm bg-white">
+            <div class="bg-slate-50 text-slate-700 text-xs px-4 py-2 flex items-center justify-between border-b border-slate-200">
               <div class="flex items-center gap-2">
                 <span class="w-2.5 h-2.5 rounded-full bg-red-400" />
                 <span class="w-2.5 h-2.5 rounded-full bg-yellow-400" />
                 <span class="w-2.5 h-2.5 rounded-full bg-green-400" />
-                <span class="ml-2 font-mono text-gray-400">sandbox.py</span>
+                <span class="ml-2 font-mono text-slate-500">sandbox.py</span>
               </div>
               <button class="px-3 py-1 text-[10px] font-semibold rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white transition-all flex items-center gap-1.5" :disabled="!codeInput.trim() || codeRunning" @click="runUserCode">
                 <Play :size="10" /> {{ codeRunning ? '运行中...' : '运行' }}
               </button>
             </div>
-            <textarea v-model="codeInput" class="flex-1 bg-gray-900 text-emerald-300 font-mono text-xs p-4 resize-none outline-none leading-relaxed" placeholder="# 在这里输入 Python 代码..." spellcheck="false" />
+            <textarea v-model="codeInput" class="flex-1 bg-slate-50 text-slate-800 font-mono text-xs p-4 resize-none outline-none leading-relaxed placeholder:text-slate-400" placeholder="# 在这里输入 Python 代码..." spellcheck="false" />
             <!-- 行号和复制按钮 -->
             <div class="absolute top-9 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button class="p-1.5 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-all" title="复制代码" @click="copyCode">
+              <button class="p-1.5 rounded-md bg-white hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-all" title="复制代码" @click="copyCode">
                 <Copy :size="12" />
               </button>
             </div>
@@ -3372,7 +3373,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
     <!-- ========== 任务 8.4: 双栏阻尼自适应排版（右侧画板） ========== -->
     <div v-if="activeTab === 'chat'"
-      class="chat-tool-panel sticky top-6 self-start transition-all duration-300 overflow-hidden shrink-0 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl"
+      class="chat-tool-panel sticky top-6 self-start transition-all duration-300 overflow-hidden shrink-0 rounded-2xl shadow-xl"
       :class="shouldShowRightPanel ? 'w-[360px] lg:w-[420px]' : 'w-0 border-l-0'">
       <div v-if="shouldShowRightPanel" class="h-[calc(100vh-120px)] flex flex-col p-3">
         <!-- 面板切换栏 -->
@@ -3381,28 +3382,28 @@ function renderMarkdown(text, type = '', conceptName = '') {
             <button
               @click="rightPanelActiveTab = 'canvas'"
               class="px-2 py-1 rounded text-[10px] transition-all font-semibold"
-              :class="rightPanelActiveTab === 'canvas' ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+              :class="rightPanelActiveTab === 'canvas' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100'"
             >
               🎨 双曲圆盘
             </button>
             <button
               @click="rightPanelActiveTab = 'sandbox'"
               class="px-2 py-1 rounded text-[10px] transition-all font-semibold"
-              :class="rightPanelActiveTab === 'sandbox' ? 'bg-green-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+              :class="rightPanelActiveTab === 'sandbox' ? 'bg-green-600 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100'"
             >
               💻 沙箱
             </button>
             <button
               @click="rightPanelActiveTab = 'knowledge'"
               class="px-2 py-1 rounded text-[10px] transition-all font-semibold"
-              :class="rightPanelActiveTab === 'knowledge' ? 'bg-purple-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+              :class="rightPanelActiveTab === 'knowledge' ? 'bg-purple-600 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100'"
             >
               📖 知识点
             </button>
             <button
               @click="rightPanelActiveTab = 'visualizer'"
               class="px-2 py-1 rounded text-[10px] transition-all font-semibold"
-              :class="rightPanelActiveTab === 'visualizer' ? 'bg-teal-600 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+              :class="rightPanelActiveTab === 'visualizer' ? 'bg-teal-600 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100'"
             >
               📊 可视化
             </button>
@@ -3457,11 +3458,12 @@ function renderMarkdown(text, type = '', conceptName = '') {
     </div>
 
     <!-- 全局划词即时追问悬浮胶囊 -->
-    <div 
-      v-if="textSelection.visible" 
-      class="fixed z-[100] animate-fade-in flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 rounded-full px-3 py-1.5 shadow-xl border border-slate-200 dark:border-slate-800/80 backdrop-blur-md selection-capsule select-none"
-      :style="{ left: textSelection.x + 'px', top: textSelection.y + 'px', transform: 'translateX(-50%)' }"
-    >
+    <Teleport to="body">
+      <div
+        v-if="textSelection.visible"
+        class="fixed z-[100] animate-fade-in flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 rounded-full px-3 py-1.5 shadow-xl border border-slate-200 dark:border-slate-800/80 backdrop-blur-md selection-capsule select-none"
+        :style="{ left: textSelection.x + 'px', top: textSelection.y + 'px', transform: 'translateX(-50%)' }"
+      >
       <!-- Drag handle -->
       <div 
         @mousedown="startDrag" 
@@ -3478,7 +3480,8 @@ function renderMarkdown(text, type = '', conceptName = '') {
         <MessageSquare :size="12" class="text-blue-600 dark:text-blue-400 shrink-0" />
         <span>💬 追问</span>
       </button>
-    </div>
+      </div>
+    </Teleport>
 
     <!-- ========== 任务 8.1: 行级悬浮苏格拉底即时答疑弹窗 ========== -->
     <InlineSocraticPopup
@@ -3496,6 +3499,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
       @close="socraticPopup.visible = false" />
 
     <!-- 可视化分析悬浮按钮 -->
+    <Teleport to="body">
     <div v-if="activeTab === 'chat'" class="chat-fab fixed bottom-[140px] right-6 z-50 group">
       <button
         class="w-11 h-11 rounded-2xl bg-gradient-to-br from-emerald-400 to-cyan-500 text-white shadow-lg hover:scale-105 transition-all flex items-center justify-center cursor-pointer"
@@ -3536,6 +3540,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
         展开知识点速览
       </div>
     </div>
+    </Teleport>
     <VideoRenderPanel
       :visible="showVideoPanel"
       :studentId="props.studentId"
@@ -3572,10 +3577,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
           <div class="flex-1 overflow-auto bg-gray-50 flex items-center justify-center relative p-6 cursor-grab active:cursor-grabbing" @mousedown="startPan" @mousemove="doPan" @mouseup="endPan" @mouseleave="endPan">
             <div 
               :key="zoomModal.code" 
-              class="zoom-mermaid-target transition-transform duration-200 origin-center bg-white p-8 rounded-xl shadow-md border border-gray-100 flex items-center justify-center animate-fade-in"
+              class="zoom-mermaid-target transition-transform duration-200 origin-center bg-white p-4 rounded-xl shadow-md border border-gray-100 flex items-center justify-center animate-fade-in min-w-full min-h-full"
               :style="{ transform: `scale(${zoomScale}) translate(${panOffset.x}px, ${panOffset.y}px)` }"
             >
-              <div class="mermaid flex justify-center">{{ zoomModal.code }}</div>
+              <CollapsibleMindmap v-if="isZoomMindmap" :code="zoomModal.code" class="w-full" />
+              <div v-else class="mermaid flex justify-center">{{ zoomModal.code }}</div>
             </div>
           </div>
         </div>
@@ -3712,16 +3718,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
 }
 
 .chat-reading-column {
+  width: 100%;
   margin-left: auto;
   margin-right: auto;
+  max-width: none;
 }
 
 .chat-tool-panel {
   background:
-    radial-gradient(circle at 100% 0%, rgba(59, 130, 246, 0.16), transparent 16rem),
-    linear-gradient(180deg, #111b2d, #0d1728);
-  border-color: rgba(71, 85, 105, 0.72);
-  box-shadow: 0 22px 58px rgba(15, 23, 42, 0.2);
+    radial-gradient(circle at 100% 0%, rgba(96, 165, 250, 0.16), transparent 16rem),
+    linear-gradient(180deg, #f8fbff, #eef4fb);
+  border: 1px solid #d8e3ef;
+  box-shadow: 0 22px 58px rgba(54, 83, 121, 0.14);
+}
+
+.chat-main-column {
+  min-width: 0;
 }
 
 .chat-fab button {

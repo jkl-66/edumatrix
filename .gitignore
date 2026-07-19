@@ -1,6 +1,9 @@
 # Python
 .reasonix/
 *.db
+!edumatrix.db
+!edumatrix_safe_backup.db
+!data/backups/edumatrix_safe_backup.db
 *.db-shm
 *.db-wal
 !scripts/data/quiz_bank/
@@ -19,6 +22,8 @@ venv/
 # SQLite Database (local data, not to be committed)
 *.sqlite
 /data/
+!/data/backups/
+!/data/backups/*
 
 # Frontend
 node_modules/

@@ -150,6 +150,7 @@ FAISS、ChromaDB、Neo4j、Transformers、Sentence-Transformers、Pandas 和 Mat
 .venv\Scripts\python.exe -c "import ast, pathlib; files=['config.py','app/auth.py','app/main.py','knowledge_api.py','quiz_api.py','flashcard_api.py','behavior_api.py','report_api.py']; [ast.parse(pathlib.Path(f).read_text(encoding='utf-8'), filename=f) for f in files]; print('AST ok')"
 .venv\Scripts\python.exe -m unittest tests.test_security_contracts -v
 .venv\Scripts\python.exe -m unittest scripts.test_member6_all_tasks -v
+.venv\Scripts\python.exe scripts/e2e_no_docker.py
 ```
 
 完整回归：
@@ -158,11 +159,11 @@ FAISS、ChromaDB、Neo4j、Transformers、Sentence-Transformers、Pandas 和 Mat
 .venv\Scripts\python.exe -m unittest test_edumatrix -v
 ```
 
-完整回归涉及联网搜索、外部 LLM、可选 Docker 和 Chromium 等环境条件。无 Docker 模式可以完成核心 API、学习闭环和安全契约验收；代码执行属于单独的可选能力。测试报告必须记录实际命令、日期、依赖版本、网络状态、沙箱模式和失败原因，不能把可选环境依赖未满足写成核心代码缺陷，也不能把专项测试通过写成全系统安全认证。
+完整回归涉及联网搜索、外部 LLM、可选 Docker 和 Chromium 等环境条件。无 Docker 模式可以完成核心 API、学习闭环和安全契约验收；代码执行属于单独的可选能力。浏览器 E2E 的当前证据位于 `outputs/e2e_no_docker/report.json`。测试报告必须记录实际命令、日期、依赖版本、网络状态、沙箱模式和失败原因，不能把可选环境依赖未满足写成核心代码缺陷，也不能把专项测试通过写成全系统安全认证。
 
 ## 8. 当前机器验证快照
 
-截至 2026-07-19，当前工作区已验证：Python 3.11.9、NumPy 2.4.6、PyTorch 2.13.0、OpenAI 2.46.0、Instructor 1.15.4、python-docx 1.2.0、pytest 9.1.1、Playwright 1.61.0 和 Docker SDK 7.2.0 可导入。Playwright Chromium 二进制在本次环境中尚未完成下载验证；默认沙箱模式为 `disabled`，Docker daemon 未运行不影响核心应用导入和启动。Docker 模式只验证了“不可用时拒绝执行”的安全行为。
+截至 2026-07-19，当前工作区已验证：Python 3.11.9、NumPy 2.4.6、PyTorch 2.13.0、OpenAI 2.46.0、Instructor 1.15.4、python-docx 1.2.0、pytest 9.1.1、Playwright 1.61.0 和 Docker SDK 7.2.0 可导入。当前机器的 Playwright Chromium 已实际用于无 Docker 浏览器 E2E，报告标记为 `passed`；PDF 导出和目标评委机浏览器仍需单独复核。默认沙箱模式为 `disabled`，Docker daemon 未运行不影响核心应用导入、启动和默认学习闭环。Docker 模式只验证了“不可用时拒绝执行”的安全行为。
 
 ## 9. 常见故障
 

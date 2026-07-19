@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/stream", tags=["streaming"])
 # === P1-4 形成性评价：微型检查点函数 ===
 def _run_formative_check(query: str, target: str, streamed_parts: list, profile) -> dict | None:
     """根据教学内容生成快速理解检查的关键词和判断。"""
-    if not streamed_parts or not target:
+    if not streamed_parts or not target or target == "未知":
         return None
 
     # 提取教学内容的摘要关键词
@@ -774,8 +774,8 @@ async def stream_chat(request: Request, current_user=Depends(get_current_user)) 
                     query_text = f"{message} {ocr_text}".strip()
                     await check_disconnection()
                     yield _sse("progress", {"step": "rag", "message": "正在检索知识库...", "progress": 50})
-                    retrieval = await swarm.planner.plan_async(swarm.rag, query_text, swarm.profile_store.get(student_id))
-                    debate_result = swarm.debate.clean(retrieval)
+                    retrieval = await swarm.planner.plan_async(swarm.rag, query_text, swarm.profile_store.get(student_id), doc_constraint=doc_constraints if doc_constraints else None)
+                    debate_result = await swarm.debate.aclean(retrieval)
                     
                     # 提取匹配的图片
                     from models import EvidenceModality
@@ -1112,8 +1112,8 @@ async def stream_chat(request: Request, current_user=Depends(get_current_user)) 
                 yield _sse("progress", {"step": "rag", "message": "正在检索知识库...", "progress": 25})
 
                 try:
-                    retrieval = await swarm.planner.plan_async(swarm.rag, message, swarm.profile_store.get(student_id))
-                    debate_result = swarm.debate.clean(retrieval)
+                    retrieval = await swarm.planner.plan_async(swarm.rag, message, swarm.profile_store.get(student_id), doc_constraint=doc_constraints if doc_constraints else None)
+                    debate_result = await swarm.debate.aclean(retrieval)
                     await check_disconnection()
                     yield _sse("progress", {"step": "debate", "message": f"证据清洗完成 ({len(debate_result.clean_evidence)} 条证据保留)", "progress": 40})
                 except asyncio.CancelledError:
@@ -1520,7 +1520,7 @@ async def regenerate_component(request: Request, current_user=Depends(get_curren
     
     try:
         retrieval = await swarm.planner.plan_async(swarm.rag, query, profile)
-        evidence = swarm.debate.clean(retrieval).clean_evidence
+        evidence = (await swarm.debate.aclean(retrieval)).clean_evidence
         graph_context = retrieval.graph_context
     except Exception:
         from models import GraphContext

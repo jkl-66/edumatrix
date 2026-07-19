@@ -68,7 +68,7 @@ function initParticles() {
   const radius = Math.min(w, h) / 2 - 20
 
   // 1. 目标知识点粒子（金色系）
-  props.targetPoints.forEach((t, i) => {
+  props.targetPoints.filter(t => t && t.name && t.name !== '未知' && t.name !== '未知概念' && t.name !== '未知主题').forEach((t, i) => {
     const angle = (i / Math.max(props.targetPoints.length, 1)) * Math.PI * 2 + 0.3
     const hasCoords = (t.x !== undefined && t.y !== undefined && (t.x !== 0 || t.y !== 0))
     
@@ -95,7 +95,7 @@ function initParticles() {
   })
 
   // 2. 学生掌握状态粒子（绿色/蓝色系）
-  props.studentMastery.forEach((s, i) => {
+  props.studentMastery.filter(s => s && s.name && s.name !== '未知' && s.name !== '未知概念' && s.name !== '未知主题').forEach((s, i) => {
     const angle = (i / Math.max(props.studentMastery.length, 1)) * Math.PI * 2
     const hasCoords = (s.x !== undefined && s.y !== undefined && (s.x !== 0 || s.y !== 0))
     

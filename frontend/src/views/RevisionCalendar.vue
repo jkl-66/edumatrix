@@ -284,13 +284,13 @@ onUnmounted(() => {
               type="button"
               @click="isOpen = !isOpen"
               class="input text-left flex justify-between items-center bg-white cursor-pointer select-none text-sm pr-3"
-              :class="{ 'border-blue-500 ring-2 ring-blue-100': isOpen }"
+              :class="{ 'border-emerald-500 ring-2 ring-emerald-100': isOpen }"
             >
               <span v-if="selectedConcept" class="text-gray-800 font-medium">
                 {{ selectedConcept }} (掌握度 {{ ((reviewPlans.find(p => p.concept === selectedConcept)?.mastery || 0) * 100).toFixed(0) }}%)
               </span>
               <span v-else class="text-gray-400">-- 请选择并搜索打卡知识点 --</span>
-              <ChevronDown :size="16" class="text-gray-400 transition-transform duration-200" :class="{ 'rotate-180': isOpen }" />
+              <ChevronDown :size="16" class="text-slate-500 transition-transform duration-200" :class="{ 'rotate-180': isOpen }" />
             </button>
 
             <!-- Dropdown Menu -->
@@ -300,12 +300,12 @@ onUnmounted(() => {
             >
               <!-- Search box inside dropdown -->
               <div class="relative">
-                <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-600" />
                 <input
                   ref="searchInputRef"
                   v-model="conceptSearchQuery"
                   type="text"
-                  class="input text-sm pl-10 py-1.5 focus:border-blue-500"
+                  class="checkin-search-input input text-sm py-1.5 focus:border-emerald-500"
                   placeholder="输入关键字搜索知识点..."
                   @click.stop
                   @keydown.esc="isOpen = false"
@@ -540,3 +540,9 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.checkin-search-input {
+  padding-left: 2.75rem !important;
+}
+</style>

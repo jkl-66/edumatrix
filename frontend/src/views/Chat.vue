@@ -272,10 +272,12 @@ const nameToRole = {
 
 const radarConcepts = computed(() => {
   if (!latestProfile.value?.concept_mastery) return []
-  return Object.entries(latestProfile.value.concept_mastery).map(([name, score]) => ({
-    name,
-    mastery: score
-  }))
+  return Object.entries(latestProfile.value.concept_mastery)
+    .filter(([name]) => name && name !== '未知' && name !== '未知概念' && name !== '未知主题')
+    .map(([name, score]) => ({
+      name,
+      mastery: score
+    }))
 })
 
 const showComparison = computed(() => {
@@ -1603,15 +1605,17 @@ const studentMastery = computed(() => {
     }
   }
   if (!profile || !profile.concept_mastery) return []
-  return Object.entries(profile.concept_mastery).map(([name, score]) => {
-    const coords = profile.coordinate_map?.[name] || [0.0, 0.0]
-    return {
-      name,
-      mastery: score,
-      x: coords[0],
-      y: coords[1]
-    }
-  })
+  return Object.entries(profile.concept_mastery)
+    .filter(([name]) => name && name !== '未知' && name !== '未知概念' && name !== '未知主题')
+    .map(([name, score]) => {
+      const coords = profile.coordinate_map?.[name] || [0.0, 0.0]
+      return {
+        name,
+        mastery: score,
+        x: coords[0],
+        y: coords[1]
+      }
+    })
 })
 
 const targetPoints = computed(() => {
@@ -1625,14 +1629,16 @@ const targetPoints = computed(() => {
     }
   }
   if (!profile || !profile.concept_mastery) return []
-  return Object.keys(profile.concept_mastery).map(name => {
-    const coords = profile.coordinate_map?.[name] || [0.0, 0.0]
-    return {
-      name,
-      x: coords[0],
-      y: coords[1]
-    }
-  })
+  return Object.keys(profile.concept_mastery)
+    .filter(name => name && name !== '未知' && name !== '未知概念' && name !== '未知主题')
+    .map(name => {
+      const coords = profile.coordinate_map?.[name] || [0.0, 0.0]
+      return {
+        name,
+        x: coords[0],
+        y: coords[1]
+      }
+    })
 })
 
 const lastAssistantMessage = computed(() => {

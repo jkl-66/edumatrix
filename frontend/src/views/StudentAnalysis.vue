@@ -74,11 +74,13 @@ const dimensionList = computed(() => {
 const conceptMastery = computed(() => {
   const raw = analysis.value?.raw_profile?.concept_mastery || {}
   const errs = analysis.value?.raw_profile?.concept_p_err || {}
-  return Object.entries(raw).map(([name, score]) => ({
-    name,
-    mastery: score,
-    p_err: errs[name] !== undefined ? errs[name] : 0.1
-  }))
+  return Object.entries(raw)
+    .filter(([name]) => name && name !== '未知' && name !== '未知概念' && name !== '未知主题')
+    .map(([name, score]) => ({
+      name,
+      mastery: score,
+      p_err: errs[name] !== undefined ? errs[name] : 0.1
+    }))
 })
 
 const avgMastery = computed(() => {

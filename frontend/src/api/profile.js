@@ -59,3 +59,9 @@ export async function deleteStudentConcept(studentId, conceptName) {
   const r = await api.delete(`/profile/${studentId}/concept/${encodeURIComponent(conceptName)}`, { headers: buildHeaders() })
   return r.data
 }
+
+// 一键清空重置当前学生账号学情画像与测试历史（恢复为完全空白初始账号）
+export async function resetStudentProfile(studentId) {
+  const r = await api.post(`/profile/${studentId}/reset`, {}, { headers: buildHeaders() })
+  return r.data
+}

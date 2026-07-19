@@ -1,7 +1,29 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getStudentProfile, getProfileAnalysis, getProfileNarrative, updateStudentProfile, deleteStudentConcept } from '../api'
+import { getStudentProfile, getProfileAnalysis, getProfileNarrative, updateStudentProfile, deleteStudentConcept, resetStudentProfile } from '../api'
+
+async function handleResetProfile() {
+  if (!confirm('确定要清空重置当前账号的所有学情画像数据与测试历史吗？此操作会将知识点掌握度还原为 100% 空白冷启动状态，方便演示。')) return
+  try {
+    loading.value = true
+    await resetStudentProfile(studentId.value)
+    const [profile, data] = await Promise.all([
+      getStudentProfile(studentId.value),
+      getProfileAnalysis(studentId.value)
+    ])
+    analysis.value = {
+      ...data,
+      raw_profile: profile,
+    }
+    narrative.value = ''
+    alert('已成功清空重置学情数据！当前画像已恢复为完全空白初始状态。')
+  } catch (err) {
+    alert('重置失败: ' + (err.response?.data?.detail || err.message))
+  } finally {
+    loading.value = false
+  }
+}
 import {
   BrainCircuit, Target, TrendingUp, BookOpen, AlertTriangle,
   User, Lightbulb, BarChart3, Layers, Activity, Zap, Heart,
@@ -756,6 +778,9 @@ onUnmounted(() => {
         </button>
         <button class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-all flex items-center gap-1.5" @click="goPath">
           <TrendingUp :size="12" /> 查看学习路径
+        </button>
+        <button class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-all flex items-center gap-1.5" @click="handleResetProfile" title="重置知识点掌握度为空白，方便演示">
+          <Trash2 :size="12" /> 重置空白学情
         </button>
       </div>
     </div>

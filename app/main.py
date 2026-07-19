@@ -2,6 +2,7 @@ import sys
 import os
 import uuid
 import time
+import multiprocessing
 from datetime import timedelta
 from dataclasses import asdict
 from typing import Any
@@ -169,7 +170,7 @@ async def register_user(request: Request):
         user = DBUser(username=username, hashed_password=hashed, role="student", display_name=display_name)
         session.add(user)
         
-        # 预先创建学生画像并注入问卷的冷启动初始参数，触发先验协同过滤
+        # 预先创建干净全新的初始学生画像（概念掌握度为空，便于演示与冷启动）
         db_profile = DBStudentProfile(
             student_id=username,
             major=major,
@@ -178,21 +179,6 @@ async def register_user(request: Request):
             concept_mastery={},
             bkt_states={}
         )
-        
-        from app.crud import calibrate_student_prior_collaborative
-        from models import StudentProfile
-        temp_prof = StudentProfile(student_id=username)
-        temp_prof.major = major
-        temp_prof.cognitive_style = cognitive_style
-        temp_prof.motivation_type = motivation_type
-        
-        try:
-            calibrate_student_prior_collaborative(session, temp_prof)
-            db_profile.concept_mastery = temp_prof.concept_mastery
-            db_profile.bkt_states = temp_prof.bkt_states
-        except Exception:
-            pass
-            
         session.add(db_profile)
         session.commit()
         
@@ -228,6 +214,10 @@ async def register_user(request: Request):
 @app.on_event("startup")
 async def startup():
     global _worker_pool
+    # Re-assert the interpreter after all application modules have loaded.
+    # Some scientific libraries can alter multiprocessing defaults on Windows.
+    multiprocessing.set_executable(sys.executable)
+    print(f"  [EduMatrix] Python executable: {sys.executable}")
     from config import CONFIG
     from code_exec_api import SANDBOX_RUNNER
     _worker_pool = AsyncWorkerPool(max_workers=CONFIG.max_concurrent_llm)
@@ -753,6 +743,56 @@ async def test_llm_connection(request: Request):
         }
 
 
+@app.get("/api/llm/test-vision")
+async def test_vision_connection(request: Request):
+    """Send a tiny image through the configured vision route.
+
+    This endpoint verifies the evaluator's actual visual-model configuration,
+    while returning only status and a short response preview.
+    """
+    from swarm_factory import build_swarm_from_headers
+
+    swarm_obj = build_swarm_from_headers(request.headers)
+    llm = swarm_obj.llm
+    llm_type = type(llm).__name__
+    vision_llm = getattr(llm, "external_vision_backend", None)
+    if vision_llm is None:
+        return {
+            "status": "warning",
+            "message": "当前没有可用的外部视觉模型配置",
+            "hint": "请同时配置主模型或在 Settings 页面填写视觉 API Key、Endpoint 和模型名称",
+            "llm_type": llm_type,
+        }
+
+    test_image = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    try:
+        chunks = []
+        async for chunk in vision_llm.generate_stream(
+            "你是视觉模型连通性测试助手。",
+            "请确认你已收到一张图片，仅用一句话回复。",
+            role="视觉连接测试",
+            images=[test_image],
+        ):
+            chunks.append(chunk)
+            if sum(len(item) for item in chunks) >= 500:
+                break
+        return {
+            "status": "ok",
+            "message": "视觉模型请求已成功返回",
+            "llm_type": llm_type,
+            "response": "".join(chunks)[:500],
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"视觉模型调用失败: {str(e)}",
+            "llm_type": llm_type,
+        }
+
+
 @app.get("/api/metrics")
 async def get_metrics():
     from observability import TELEMETRY
@@ -1188,4 +1228,5 @@ if os.path.isdir(FRONTEND_DIST):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)
+    # Keep direct execution compatible, but do not create a Windows reload process.
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=False)

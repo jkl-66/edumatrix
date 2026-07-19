@@ -17,11 +17,11 @@ const quizHistory = ref([])
 const wrongQuestions = ref([])
 
 const dimLabels = {
-  knowledge_mastery: '知识掌握度', misconception_profile: '误概念/易混点',
-  understanding_fluency_transfer: '掌握与迁移', cognitive_processing: '认知加工',
-  learning_strategy: '学习策略', metacognition: '元认知',
-  motivation_and_purpose: '动机与目标', affect_resilience: '情感与毅力',
-  interaction_preference: '交互偏好', learning_context: '学习情境',
+  knowledge_mastery: '知识基础与掌握度', misconception_profile: '易错点与概念解构',
+  understanding_fluency_transfer: '理解熟练与迁移能力', cognitive_processing: '认知加工与负荷调控',
+  learning_strategy: '自适应学习策略', metacognition: '元认知与自我调节',
+  motivation_and_purpose: '内在动机与目标指引', affect_resilience: '情绪信心与抗挫韧性',
+  interaction_preference: '表达互动与模式偏好', learning_context: '学习情境与全环境支持',
 }
 
 const sortedMastery = computed(() => {

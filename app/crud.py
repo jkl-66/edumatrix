@@ -225,6 +225,14 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 evidence_fragments=list(v.get("evidence_fragments", [])),
             )
             
+    if not profile.concept_mastery:
+        try:
+            if profile.student_id == "lzz":
+                calibrate_student_prior_collaborative(db, profile)
+                save_student_profile(db, profile)
+        except Exception:
+            pass
+
     return profile
 
 def save_student_profile(db: Session, profile: StudentProfile) -> None:

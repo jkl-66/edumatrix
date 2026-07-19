@@ -112,9 +112,8 @@ def _build_dimension_analysis(dimension_key: str, state) -> dict[str, Any]:
     else:
         level = "low"
 
-    from models import DIMENSION_LABELS
-    chinese_label = DIMENSION_LABELS.get(dimension_key)
-    label = chinese_label if chinese_label else (state.label if state and state.label else dimension_key)
+    diagnosis = DIMENSION_DIAGNOSIS.get(dimension_key, {}).get(level, "状态待评估")
+    label = state.label if state else dimension_key
 
     evidence_fragments = state.evidence_fragments[:3] if state and hasattr(state, 'evidence_fragments') else []
     interventions = state.recommended_interventions[:3] if state and hasattr(state, 'recommended_interventions') else []
@@ -1593,68 +1592,4 @@ async def delete_student_concept(
         "message": f"Successfully deleted concept '{target}' from profile and review plans.",
         "student_id": student_id,
         "deleted_concept": target,
-    }
-
-
-@router.post("/{student_id}/reset")
-async def reset_student_profile(
-    student_id: str,
-    request: Request,
-    current_user=Depends(get_current_user),
-) -> dict[str, Any]:
-    """一键清空重置学生画像与学习历史（知识点掌握度、BKT 状态、复习计划、错题本全清，还原为完全空白账户）"""
-    student_id = enforce_student_access(student_id, current_user)
-    if student_id.lower() == "lzz":
-        raise HTTPException(status_code=403, detail="账号 lzz 为核心展示账号，数据受系统保护，禁止清空！")
-    swarm = build_swarm_from_headers(request.headers)
-    profile = swarm.profile_store.get(student_id)
-    if not profile:
-        profile = await run_db_op(load_student_profile, student_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="Student profile not found.")
-        swarm.profile_store[student_id] = profile
-
-    # 1. 重置内存画像状态为 100% 空白
-    profile.concept_mastery = {}
-    profile.bkt_states = {}
-    profile.concept_layers = {}
-    profile.recent_quiz_accuracy = {}
-    profile.weak_points = []
-    profile.learning_state_causes = {}
-    profile.dimension_states = {}
-    profile.narrative_report = ""
-    profile.dashboard_report = ""
-
-    # 2. 清理数据库对应学情历史记录
-    def _reset_db(session):
-        from app.database import DBReviewPlan, DBWrongQuestion, DBQuizRecord
-        session.query(DBReviewPlan).filter(DBReviewPlan.student_id == student_id).delete(synchronize_session=False)
-        session.query(DBWrongQuestion).filter(DBWrongQuestion.student_id == student_id).delete(synchronize_session=False)
-        session.query(DBQuizRecord).filter(DBQuizRecord.student_id == student_id).delete(synchronize_session=False)
-        session.commit()
-
-    await run_db_op(_reset_db)
-
-    # 3. 持久化保存清空后的画像
-    await run_db_op(save_student_profile, profile)
-
-    # 4. 同步清空 Swarm 缓存
-    from swarm_factory import _swarm_cache
-    for sw in _swarm_cache.values():
-        cached = sw.profile_store.get(student_id)
-        if cached:
-            cached.concept_mastery = {}
-            cached.bkt_states = {}
-            cached.concept_layers = {}
-            cached.recent_quiz_accuracy = {}
-            cached.weak_points = []
-            cached.learning_state_causes = {}
-            cached.dimension_states = {}
-            cached.narrative_report = ""
-            cached.dashboard_report = ""
-
-    return {
-        "status": "success",
-        "message": "已成功重置当前账号所有学情数据与测试历史！",
-        "student_id": student_id,
     }

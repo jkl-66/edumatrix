@@ -40,27 +40,27 @@ class StrategyType(str, Enum):
 
 
 CAUSE_LABELS: dict[str, str] = {
-    LearningStateCause.PREREQUISITE_GAP.value: "前置知识缺口",
-    LearningStateCause.MISCONCEPTION.value: "误概念/易混点",
-    LearningStateCause.COGNITIVE_LOAD.value: "认知负荷过高",
-    LearningStateCause.STRATEGY_GAP.value: "学习策略不足",
-    LearningStateCause.METACOGNITIVE_MISMATCH.value: "自我判断失准",
-    LearningStateCause.AFFECTIVE_BARRIER.value: "情绪与信心阻滞",
-    LearningStateCause.INTERACTION_MISMATCH.value: "讲解方式适配需求",
+    LearningStateCause.PREREQUISITE_GAP.value: "前置知识漏洞",
+    LearningStateCause.MISCONCEPTION.value: "概念理解误区",
+    LearningStateCause.COGNITIVE_LOAD.value: "高认知负荷",
+    LearningStateCause.STRATEGY_GAP.value: "解题策略缺失",
+    LearningStateCause.METACOGNITIVE_MISMATCH.value: "元认知偏差",
+    LearningStateCause.AFFECTIVE_BARRIER.value: "学习焦虑障碍",
+    LearningStateCause.INTERACTION_MISMATCH.value: "交互偏好不匹配",
 }
 
 
 DIMENSION_LABELS: dict[str, str] = {
-    "knowledge_mastery": "知识基础",
-    "misconception_profile": "易错点与误概念",
-    "understanding_fluency_transfer": "理解-熟练-迁移",
-    "cognitive_processing": "认知加工与负荷",
-    "learning_strategy": "学习策略",
+    "knowledge_mastery": "知识基础与掌握度",
+    "misconception_profile": "易错点与概念解构",
+    "understanding_fluency_transfer": "理解熟练与迁移能力",
+    "cognitive_processing": "认知加工与负荷调控",
+    "learning_strategy": "自适应学习策略",
     "metacognition": "元认知与自我调节",
-    "motivation_and_purpose": "动机目标与意义感",
-    "affect_resilience": "情绪信心与韧性",
-    "interaction_preference": "互动与表达偏好",
-    "learning_context": "学习情境与公平支持",
+    "motivation_and_purpose": "内在动机与目标指引",
+    "affect_resilience": "情绪信心与抗挫韧性",
+    "interaction_preference": "表达互动与模式偏好",
+    "learning_context": "学习情境与全环境支持",
 }
 
 

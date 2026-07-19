@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import { echarts } from '../lib/echarts-pie'
 import { 
   getWrongQuestions, getWrongConcepts, 
   generateFlashcard, generateSimilarQuiz, evaluateQuizAnswer,
@@ -145,10 +145,18 @@ async function submitSimilarAnswer(q) {
 
 function getCategoryLabel(cat) {
   const labels = {
+    prerequisite_gap: '前置知识漏洞',
+    misconception: '概念理解误区',
+    cognitive_load: '高认知负荷',
+    strategy_gap: '解题策略缺失',
+    metacognitive_mismatch: '元认知偏差',
+    affective_barrier: '学习焦虑障碍',
+    interaction_mismatch: '交互偏好不匹配',
     review: '概念未掌握',
     practice: '熟练度不足',
     advance: '粗心/笔误',
-    misconception: '概念误解',
+    calculation_error: '计算错误',
+    carelessness: '粗心大意',
     unknown: '未分类',
   }
   return labels[cat] || cat || '未分类'
@@ -156,12 +164,20 @@ function getCategoryLabel(cat) {
 
 function getCategoryColor(cat) {
   const colors = {
-    review: 'bg-red-50 text-red-600',
-    practice: 'bg-amber-50 text-amber-600',
-    advance: 'bg-emerald-50 text-emerald-600',
-    misconception: 'bg-purple-50 text-purple-600',
+    prerequisite_gap: 'bg-rose-50 text-rose-600 border border-rose-100',
+    misconception: 'bg-purple-50 text-purple-600 border border-purple-100',
+    cognitive_load: 'bg-blue-50 text-blue-600 border border-blue-100',
+    strategy_gap: 'bg-indigo-50 text-indigo-600 border border-indigo-100',
+    metacognitive_mismatch: 'bg-amber-50 text-amber-600 border border-amber-100',
+    affective_barrier: 'bg-orange-50 text-orange-600 border border-orange-100',
+    interaction_mismatch: 'bg-teal-50 text-teal-600 border border-teal-100',
+    review: 'bg-red-50 text-red-600 border border-red-100',
+    practice: 'bg-amber-50 text-amber-600 border border-amber-100',
+    advance: 'bg-emerald-50 text-emerald-600 border border-emerald-100',
+    calculation_error: 'bg-cyan-50 text-cyan-600 border border-cyan-100',
+    carelessness: 'bg-emerald-50 text-emerald-600 border border-emerald-100',
   }
-  return colors[cat] || 'bg-gray-50 text-gray-600'
+  return colors[cat] || 'bg-gray-50 text-gray-600 border border-gray-100'
 }
 
 // 矩阵闭环学习流：记入笔记反思相关状态与方法
@@ -322,10 +338,18 @@ const diagnosisSummary = computed(() => {
 })
 
 const clusterColors = {
+  prerequisite_gap: { bg: 'bg-rose-50', text: 'text-rose-600', bar: 'bg-rose-400', border: 'border-rose-200' },
+  misconception: { bg: 'bg-purple-50', text: 'text-purple-600', bar: 'bg-purple-400', border: 'border-purple-200' },
+  cognitive_load: { bg: 'bg-blue-50', text: 'text-blue-600', bar: 'bg-blue-400', border: 'border-blue-200' },
+  strategy_gap: { bg: 'bg-indigo-50', text: 'text-indigo-600', bar: 'bg-indigo-400', border: 'border-indigo-200' },
+  metacognitive_mismatch: { bg: 'bg-amber-50', text: 'text-amber-600', bar: 'bg-amber-400', border: 'border-amber-200' },
+  affective_barrier: { bg: 'bg-orange-50', text: 'text-orange-600', bar: 'bg-orange-400', border: 'border-orange-200' },
+  interaction_mismatch: { bg: 'bg-teal-50', text: 'text-teal-600', bar: 'bg-teal-400', border: 'border-teal-200' },
   review: { bg: 'bg-red-50', text: 'text-red-600', bar: 'bg-red-400', border: 'border-red-200' },
   practice: { bg: 'bg-amber-50', text: 'text-amber-600', bar: 'bg-amber-400', border: 'border-amber-200' },
   advance: { bg: 'bg-emerald-50', text: 'text-emerald-600', bar: 'bg-emerald-400', border: 'border-emerald-200' },
-  misconception: { bg: 'bg-purple-50', text: 'text-purple-600', bar: 'bg-purple-400', border: 'border-purple-200' },
+  calculation_error: { bg: 'bg-cyan-50', text: 'text-cyan-600', bar: 'bg-cyan-400', border: 'border-cyan-200' },
+  carelessness: { bg: 'bg-emerald-50', text: 'text-emerald-600', bar: 'bg-emerald-400', border: 'border-emerald-200' },
   unknown: { bg: 'bg-gray-50', text: 'text-gray-500', bar: 'bg-gray-300', border: 'border-gray-200' },
 }
 
@@ -347,10 +371,18 @@ function initOrUpdateChart() {
       chartInstance = echarts.init(chartRef.value, isDark ? 'dark' : null, { backgroundColor: 'transparent' })
       
       const colorMap = {
-        review: '#f87171',
+        prerequisite_gap: '#f43f5e',
+        misconception: '#a855f7',
+        cognitive_load: '#3b82f6',
+        strategy_gap: '#6366f1',
+        metacognitive_mismatch: '#f59e0b',
+        affective_barrier: '#f97316',
+        interaction_mismatch: '#14b8a6',
+        review: '#ef4444',
         practice: '#fbbf24',
-        advance: '#34d399',
-        misconception: '#a78bfa',
+        advance: '#10b981',
+        calculation_error: '#06b6d4',
+        carelessness: '#10b981',
       }
       
       const pieData = diagnosisClusters.value.map(c => ({
@@ -496,18 +528,15 @@ onUnmounted(() => {
 
           <!-- 总览与指标 -->
           <div class="space-y-3">
-            <div class="grid grid-cols-3 gap-2">
-              <div class="bg-red-50/60 rounded-xl p-2.5 text-center border border-red-100">
-                <p class="text-xl font-bold text-red-600">{{ diagnosisSummary.reviewCount }}</p>
-                <p class="text-[9px] text-red-500 font-medium">概念未掌握</p>
-              </div>
-              <div class="bg-amber-50/60 rounded-xl p-2.5 text-center border border-amber-100">
-                <p class="text-xl font-bold text-amber-600">{{ diagnosisSummary.practiceCount }}</p>
-                <p class="text-[9px] text-amber-500 font-medium">熟练度不足</p>
-              </div>
-              <div class="bg-emerald-50/60 rounded-xl p-2.5 text-center border border-emerald-100">
-                <p class="text-xl font-bold text-emerald-600">{{ diagnosisSummary.advanceCount }}</p>
-                <p class="text-[9px] text-emerald-500 font-medium">粗心/笔误</p>
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div
+                v-for="c in diagnosisClusters.slice(0, 6)"
+                :key="c.key"
+                class="rounded-xl p-2.5 text-center border shadow-2xs transition-all"
+                :class="(clusterColors[c.key] || clusterColors.unknown).bg + ' ' + (clusterColors[c.key] || clusterColors.unknown).border"
+              >
+                <p class="text-xl font-bold" :class="(clusterColors[c.key] || clusterColors.unknown).text">{{ c.count }}</p>
+                <p class="text-[9px] font-medium truncate" :class="(clusterColors[c.key] || clusterColors.unknown).text">{{ c.label }}</p>
               </div>
             </div>
             
@@ -534,7 +563,7 @@ onUnmounted(() => {
         <div class="space-y-2">
           <p class="text-[11px] font-semibold text-gray-600">错因聚类分布</p>
           <div v-for="cluster in diagnosisClusters" :key="cluster.key" class="flex items-center gap-2">
-            <span class="text-[10px] w-12 text-right font-medium" :class="(clusterColors[cluster.key] || clusterColors.unknown).text">
+            <span class="text-[10px] w-20 text-right font-medium truncate" :class="(clusterColors[cluster.key] || clusterColors.unknown).text">
               {{ cluster.label }}
             </span>
             <div class="flex-1 h-5 bg-gray-100 rounded-full overflow-hidden">
@@ -559,10 +588,14 @@ onUnmounted(() => {
               <span class="text-[10px] font-bold w-5 text-gray-400">#{{ idx + 1 }}</span>
               <span class="text-xs text-gray-700 flex-1 truncate">{{ item.concept }}</span>
               <span class="text-[10px] font-semibold text-gray-500">{{ item.count }} 题</span>
-              <div class="flex gap-0.5">
-                <span v-if="item.categories.review" class="w-2 h-2 rounded-full bg-red-400" title="概念未掌握"></span>
-                <span v-if="item.categories.practice" class="w-2 h-2 rounded-full bg-amber-400" title="熟练度不足"></span>
-                <span v-if="item.categories.advance" class="w-2 h-2 rounded-full bg-emerald-400" title="粗心/笔误"></span>
+              <div class="flex gap-1 flex-wrap justify-end">
+                <span
+                  v-for="(cnt, catKey) in item.categories"
+                  :key="catKey"
+                  class="w-2.5 h-2.5 rounded-full inline-block"
+                  :class="(clusterColors[catKey] || clusterColors.unknown).bar"
+                  :title="getCategoryLabel(catKey) + ': ' + cnt + '题'"
+                ></span>
               </div>
             </div>
           </div>

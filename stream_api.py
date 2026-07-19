@@ -774,7 +774,7 @@ async def stream_chat(request: Request, current_user=Depends(get_current_user)) 
                     query_text = f"{message} {ocr_text}".strip()
                     await check_disconnection()
                     yield _sse("progress", {"step": "rag", "message": "正在检索知识库...", "progress": 50})
-                    retrieval = await swarm.planner.plan_async(swarm.rag, query_text, swarm.profile_store.get(student_id))
+                    retrieval = await swarm.planner.plan_async(swarm.rag, query_text, swarm.profile_store.get(student_id), doc_constraint=doc_constraints if doc_constraints else None)
                     debate_result = await swarm.debate.aclean(retrieval)
                     
                     # 提取匹配的图片
@@ -1112,7 +1112,7 @@ async def stream_chat(request: Request, current_user=Depends(get_current_user)) 
                 yield _sse("progress", {"step": "rag", "message": "正在检索知识库...", "progress": 25})
 
                 try:
-                    retrieval = await swarm.planner.plan_async(swarm.rag, message, swarm.profile_store.get(student_id))
+                    retrieval = await swarm.planner.plan_async(swarm.rag, message, swarm.profile_store.get(student_id), doc_constraint=doc_constraints if doc_constraints else None)
                     debate_result = await swarm.debate.aclean(retrieval)
                     await check_disconnection()
                     yield _sse("progress", {"step": "debate", "message": f"证据清洗完成 ({len(debate_result.clean_evidence)} 条证据保留)", "progress": 40})

@@ -667,7 +667,7 @@ async def delete_document(
     def do_delete(session):
         doc = (
             session.query(DBKnowledgeDocument)
-            .filter(DBKnowledgeDocument.id == doc_id, DBKnowledgeDocument.student_id == student_id)
+            .filter(DBKnowledgeDocument.id == doc_id, DBKnowledgeDocument.student_id.in_([student_id, "public", "system"]))
             .first()
         )
         if not doc:

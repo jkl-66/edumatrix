@@ -461,16 +461,16 @@ async function doCrossModalSearch() {
       <div class="absolute inset-0 bg-black/75 backdrop-blur-sm cursor-pointer" @click="closeDocModal" />
       
       <!-- Modal 主体弹窗 -->
-      <div class="knowledge-modal relative bg-[#0d1322] border border-white/10 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col z-10 overflow-hidden" @click.stop>
+      <div class="knowledge-modal relative bg-[#0b0f19] border border-white/10 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col z-10 overflow-hidden text-slate-100" @click.stop>
         <!-- 头部 -->
-        <div class="bg-[#0b0f19] border-b border-white/[0.08] px-6 py-4 flex items-center justify-between shrink-0">
+        <div class="bg-[#131926] border-b border-white/10 px-6 py-4 flex items-center justify-between shrink-0">
           <div class="flex items-center gap-3 min-w-0">
             <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" :class="fileColor(selectedDoc.file_type)">
               <component :is="fileIcon(selectedDoc.file_type)" :size="20" />
             </div>
             <div class="min-w-0">
-              <h3 class="text-sm font-semibold text-[#f3f4f6] truncate">{{ selectedDoc.filename }}</h3>
-              <p class="text-[10px] text-[#64748b]">{{ formatSize(selectedDoc.file_size) }} · {{ selectedDoc.chunk_count }} 知识块</p>
+              <h3 class="text-sm font-bold text-white truncate">{{ selectedDoc.filename }}</h3>
+              <p class="text-[11px] text-slate-400 mt-0.5">{{ formatSize(selectedDoc.file_size) }} · {{ selectedDoc.chunk_count }} 知识块</p>
             </div>
           </div>
           <div class="flex items-center gap-2">
@@ -487,51 +487,50 @@ async function doCrossModalSearch() {
                title="删除此文档">
               <Trash2 :size="12" /> 删除文档
             </button>
-            <button class="p-1.5 text-gray-300 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors flex items-center gap-1 text-xs" @click="closeDocModal" title="关闭 (Esc)">
+            <button class="p-1.5 text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors flex items-center gap-1 text-xs shrink-0" @click="closeDocModal" title="关闭 (Esc)">
               <X :size="16" />
-              <span class="hidden sm:inline">关闭</span>
             </button>
           </div>
         </div>
         
         <!-- 主体滚动区域 -->
-        <div class="px-6 py-5 space-y-5 overflow-y-auto flex-1">
+        <div class="px-6 py-5 space-y-5 overflow-y-auto flex-1 bg-[#0b0f19]">
           <!-- 导读指南面板（NotebookLM 风格） -->
-          <div v-if="selectedDoc.multimodal_metadata?.doc_guide" class="bg-gradient-to-br from-[#0ea5e9]/5 to-[#10b981]/5 border border-[#0ea5e9]/20 rounded-xl p-5 backdrop-blur-sm">
+          <div v-if="selectedDoc.multimodal_metadata?.doc_guide" class="bg-[#131926]/90 border border-white/10 rounded-xl p-5 backdrop-blur-sm">
             <div class="flex items-center gap-2 mb-4">
-              <Sparkles :size="16" class="text-[#0ea5e9]" />
-              <h4 class="text-sm font-semibold text-[#f3f4f6]">文档导读</h4>
+              <Sparkles :size="16" class="text-cyan-400" />
+              <h4 class="text-sm font-bold text-white">文档导读</h4>
             </div>
             
-            <!-- 一句话概述 -->
-            <div class="mb-4 p-3 bg-white/[0.03] rounded-lg border border-white/[0.04]">
-              <p class="text-xs text-[#64748b] mb-1">📌 一句话概括</p>
-              <p class="text-sm text-[#f3f4f6] leading-relaxed">{{ selectedDoc.multimodal_metadata.doc_guide.brief_summary }}</p>
+            <!-- 一句话概述：白色背景使用清晰纯黑/深灰文字 -->
+            <div class="mb-4 p-4 bg-white rounded-xl border border-white/20 shadow-sm">
+              <p class="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1">📌 一句话概括</p>
+              <p class="text-sm font-semibold text-slate-900 leading-relaxed">{{ selectedDoc.multimodal_metadata.doc_guide.brief_summary }}</p>
             </div>
             
-            <!-- 核心看点 -->
+            <!-- 核心看点：黑色背景使用清晰高对比度亮度纯白/天蓝文字 -->
             <div class="mb-4">
-              <p class="text-xs text-[#64748b] mb-2">✨ 核心看点</p>
-              <ul class="space-y-1.5">
+              <p class="text-xs font-semibold text-slate-400 mb-2.5">✨ 核心看点</p>
+              <ul class="space-y-2">
                 <li v-for="(hl, i) in selectedDoc.multimodal_metadata.doc_guide.highlights" :key="i"
-                  class="flex items-start gap-2 text-sm text-[#cbd5e1]">
-                  <span class="w-5 h-5 rounded-full bg-[#0ea5e9]/10 text-[#0ea5e9] text-[10px] flex items-center justify-center shrink-0 mt-0.5">{{ i + 1 }}</span>
-                  {{ hl }}
+                  class="flex items-start gap-2.5 text-sm text-slate-100 font-medium">
+                  <span class="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-300 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 border border-cyan-500/30">{{ i + 1 }}</span>
+                  <span class="leading-relaxed">{{ hl }}</span>
                 </li>
               </ul>
             </div>
             
-            <!-- FAQs -->
+            <!-- FAQs：白色背景卡片使用清晰黑色字 -->
             <div v-if="selectedDoc.multimodal_metadata.doc_guide.faqs?.length > 0">
-              <p class="text-xs text-[#64748b] mb-2">❓ 常见问题</p>
-              <div class="space-y-2">
+              <p class="text-xs font-semibold text-slate-400 mb-2.5">❓ 常见问题</p>
+              <div class="space-y-2.5">
                 <details v-for="(faq, i) in selectedDoc.multimodal_metadata.doc_guide.faqs" :key="i"
-                  class="bg-white/[0.02] border border-white/[0.04] rounded-lg overflow-hidden group">
-                  <summary class="px-3 py-2 text-xs font-medium text-[#cbd5e1] cursor-pointer hover:bg-white/[0.03] transition-colors list-none flex items-center gap-2">
-                    <span class="w-4 h-4 rounded-full bg-[#10b981]/10 text-[#10b981] text-[9px] flex items-center justify-center shrink-0">?</span>
-                    {{ faq.q }}
+                  class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm group">
+                  <summary class="px-4 py-3 text-xs font-bold text-slate-900 cursor-pointer hover:bg-slate-50 transition-colors list-none flex items-center gap-2">
+                    <span class="w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-700 text-[10px] font-bold flex items-center justify-center shrink-0">?</span>
+                    <span class="flex-1">{{ faq.q }}</span>
                   </summary>
-                  <div class="px-3 pb-3 pt-1 text-xs text-[#94a3b8] leading-relaxed border-t border-white/[0.04] mt-1">
+                  <div class="px-4 pb-3.5 pt-2 text-xs text-slate-700 leading-relaxed border-t border-slate-100 bg-slate-50/50">
                     {{ faq.a }}
                   </div>
                 </details>
@@ -540,43 +539,35 @@ async function doCrossModalSearch() {
           </div>
           
           <!-- 导读未就绪 -->
-          <div v-else class="bg-white/[0.02] border border-white/[0.04] rounded-xl p-5 text-center">
-            <Sparkles :size="24" class="mx-auto mb-2 text-[#0ea5e9] animate-pulse" />
-            <p class="text-sm text-[#64748b]">智能导读解析中...</p>
-            <p class="text-xs text-[#475569] mt-1">AI 正在提炼核心概述、看点与 FAQs 问答，请稍候 2~3 秒</p>
+          <div v-else class="bg-[#131926]/90 border border-white/10 rounded-xl p-5 text-center">
+            <Sparkles :size="24" class="mx-auto mb-2 text-cyan-400 animate-pulse" />
+            <p class="text-sm font-medium text-white">智能导读解析中...</p>
+            <p class="text-xs text-slate-400 mt-1">AI 正在提炼核心概述、看点与 FAQs 问答，请稍候 2~3 秒</p>
           </div>
           
           <!-- 内容预览与完整 Markdown -->
-          <div class="bg-white/[0.02] border border-white/[0.04] rounded-xl p-4">
-            <div class="flex items-center justify-between mb-2">
-              <p class="text-xs text-[#64748b]">📄 内容详情 / 富媒体 Markdown</p>
+          <div class="bg-[#131926]/90 border border-white/10 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-2.5">
+              <p class="text-xs font-semibold text-slate-400">📄 内容详情 / 富媒体 Markdown</p>
               <a v-if="selectedDoc.multimodal_metadata?.url"
                  :href="selectedDoc.multimodal_metadata.url"
                  target="_blank"
                  rel="noopener noreferrer"
-                 class="text-[10px] text-cyan-400 hover:underline flex items-center gap-1">
-                <ExternalLink :size="10" /> {{ selectedDoc.multimodal_metadata.url }}
+                 class="text-[11px] text-cyan-400 hover:underline flex items-center gap-1 font-medium">
+                <ExternalLink :size="11" /> {{ selectedDoc.multimodal_metadata.url }}
               </a>
             </div>
-            <div class="text-xs text-[#94a3b8] leading-relaxed whitespace-pre-wrap max-h-96 overflow-y-auto font-mono text-[11px] bg-[#070a12] p-3 rounded-lg border border-white/[0.03] select-text">
+            <div class="text-xs text-slate-100 leading-relaxed whitespace-pre-wrap max-h-96 overflow-y-auto font-mono text-[11px] bg-[#070a12] p-4 rounded-xl border border-white/10 select-text">
               {{ selectedDoc.content || selectedDoc.content_preview }}
             </div>
           </div>
           
           <!-- 标签 -->
-          <div v-if="selectedDoc.tags?.length > 0" class="flex flex-wrap gap-1.5">
-            <span v-for="tag in selectedDoc.tags" :key="tag" class="inline-flex items-center gap-0.5 bg-[#0ea5e9]/10 text-[#0ea5e9] text-[10px] px-2 py-0.5 rounded-full">
-              <Tag :size="8" /> {{ tag }}
+          <div v-if="selectedDoc.tags?.length > 0" class="flex flex-wrap gap-2">
+            <span v-for="tag in selectedDoc.tags" :key="tag" class="inline-flex items-center gap-1 bg-cyan-500/15 text-cyan-300 text-xs px-2.5 py-1 rounded-full font-medium border border-cyan-500/20">
+              <Tag :size="10" /> {{ tag }}
             </span>
           </div>
-        </div>
-
-        <!-- 底部固定关闭辅助栏 -->
-        <div class="px-6 py-3 bg-[#070a12] border-t border-white/[0.06] flex items-center justify-between shrink-0">
-          <span class="text-[11px] text-gray-400">提示：按 Esc 键或点击遮罩边缘亦可关闭</span>
-          <button class="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 hover:text-white rounded-lg text-xs font-medium transition-colors" @click="closeDocModal">
-            关闭窗口
-          </button>
         </div>
       </div>
     </div>
@@ -608,27 +599,5 @@ async function doCrossModalSearch() {
   color: var(--knowledge-muted) !important;
 }
 
-.knowledge-modal {
-  color: #1e293b;
-}
 
-.knowledge-modal :deep([class*="bg-white/[0.02]"]),
-.knowledge-modal :deep([class*="bg-white/[0.03]"]) {
-  background: #f8fafc !important;
-}
-
-.knowledge-modal :deep([class*="bg-[#070a12]"]) {
-  background: #f8fafc !important;
-  border-color: #e2e8f0 !important;
-}
-
-.knowledge-modal :deep([class*="text-[#f3f4f6]"]),
-.knowledge-modal :deep([class*="text-[#cbd5e1]"]) {
-  color: #1e293b !important;
-}
-
-.knowledge-modal :deep([class*="text-[#94a3b8]"]),
-.knowledge-modal :deep([class*="text-[#64748b]"]) {
-  color: #64748b !important;
-}
 </style>

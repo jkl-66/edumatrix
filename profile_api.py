@@ -112,8 +112,9 @@ def _build_dimension_analysis(dimension_key: str, state) -> dict[str, Any]:
     else:
         level = "low"
 
-    diagnosis = DIMENSION_DIAGNOSIS.get(dimension_key, {}).get(level, "状态待评估")
-    label = state.label if state else dimension_key
+    from models import DIMENSION_LABELS
+    chinese_label = DIMENSION_LABELS.get(dimension_key)
+    label = chinese_label if chinese_label else (state.label if state and state.label else dimension_key)
 
     evidence_fragments = state.evidence_fragments[:3] if state and hasattr(state, 'evidence_fragments') else []
     interventions = state.recommended_interventions[:3] if state and hasattr(state, 'recommended_interventions') else []
@@ -1603,6 +1604,8 @@ async def reset_student_profile(
 ) -> dict[str, Any]:
     """一键清空重置学生画像与学习历史（知识点掌握度、BKT 状态、复习计划、错题本全清，还原为完全空白账户）"""
     student_id = enforce_student_access(student_id, current_user)
+    if student_id.lower() == "lzz":
+        raise HTTPException(status_code=403, detail="账号 lzz 为核心展示账号，数据受系统保护，禁止清空！")
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
     if not profile:

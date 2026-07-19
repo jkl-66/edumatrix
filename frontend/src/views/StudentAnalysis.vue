@@ -4,6 +4,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { getStudentProfile, getProfileAnalysis, getProfileNarrative, updateStudentProfile, deleteStudentConcept, resetStudentProfile } from '../api'
 
 async function handleResetProfile() {
+  if (studentId.value === 'lzz') {
+    alert('账号 lzz 为核心展示账号，数据受系统保护，禁止清空！')
+    return
+  }
   if (!confirm('确定要清空重置当前账号的所有学情画像数据与测试历史吗？此操作会将知识点掌握度还原为 100% 空白冷启动状态，方便演示。')) return
   try {
     loading.value = true
@@ -86,11 +90,29 @@ const causes = computed(() => analysis.value?.causes || {})
 const weakAnalysis = computed(() => analysis.value?.weak_analysis || [])
 const suggestions = computed(() => analysis.value?.suggestions || [])
 
+const DIMENSION_CHINESE_MAP = {
+  knowledge_mastery: '知识基础与概念掌握度',
+  misconception_profile: '易错点与误概念剖析',
+  understanding_fluency_transfer: '理解-熟练-迁移水平',
+  cognitive_processing: '认知加工与负荷状态',
+  learning_strategy: '学习策略与元认知实践',
+  metacognition: '自我调节与能力校准',
+  motivation_and_purpose: '动机目标与学习意义感',
+  affect_resilience: '情绪信心与挫败韧性',
+  interaction_preference: '互动偏好与表达沟通',
+  learning_context: '学习情境与公平支持',
+}
+
 const dimensionList = computed(() => {
-  return Object.entries(dimensions.value).map(([key, val]) => ({
-    key,
-    ...val,
-  }))
+  return Object.entries(dimensions.value).map(([key, val]) => {
+    const rawLabel = val?.label || key
+    const label = DIMENSION_CHINESE_MAP[key] || DIMENSION_CHINESE_MAP[rawLabel] || (rawLabel && !/^[a-zA-Z_]+$/.test(rawLabel) ? rawLabel : key)
+    return {
+      key,
+      ...val,
+      label,
+    }
+  })
 })
 
 const conceptMastery = computed(() => {

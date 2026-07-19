@@ -238,7 +238,20 @@ const graphEdges = computed(() => {
   return edges
 })
 
-onMounted(load)
+function handleGlobalKeydown(e) {
+  if (e.key === 'Escape' && showDocModal.value) {
+    closeDocModal()
+  }
+}
+
+onMounted(() => {
+  load()
+  window.addEventListener('keydown', handleGlobalKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+})
 
 // ── 成员 3: 图谱统计 ──
 const graphStats = ref({ status: 'loading', nodes: 0, edges: 0, backend: 'loading' })
@@ -441,13 +454,16 @@ async function doCrossModalSearch() {
       />
     </div>
 
-  <!-- 文档预览 Modal（含 NotbookLM 风格导读） -->
+  <!-- 文档预览 Modal（含 NotebookLM 风格导读） -->
   <Teleport to="body">
-    <div v-if="showDocModal && selectedDoc" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="closeDocModal">
-      <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div class="knowledge-modal relative bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+    <div v-if="showDocModal && selectedDoc" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <!-- 遮罩背景（点击遮罩背景即可直接关闭 Modal） -->
+      <div class="absolute inset-0 bg-black/75 backdrop-blur-sm cursor-pointer" @click="closeDocModal" />
+      
+      <!-- Modal 主体弹窗 -->
+      <div class="knowledge-modal relative bg-[#0d1322] border border-white/10 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col z-10 overflow-hidden" @click.stop>
         <!-- 头部 -->
-        <div class="sticky top-0 bg-[#0b0f19]/95 backdrop-blur-md border-b border-white/[0.06] px-6 py-4 flex items-center justify-between rounded-t-2xl z-10">
+        <div class="bg-[#0b0f19] border-b border-white/[0.08] px-6 py-4 flex items-center justify-between shrink-0">
           <div class="flex items-center gap-3 min-w-0">
             <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" :class="fileColor(selectedDoc.file_type)">
               <component :is="fileIcon(selectedDoc.file_type)" :size="20" />
@@ -464,20 +480,22 @@ async function doCrossModalSearch() {
                rel="noopener noreferrer"
                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-semibold shadow-sm hover:shadow-cyan-500/20 transition-all shrink-0"
                title="在新标签页中打开网页原文">
-              <ExternalLink :size="12" /> 访问网页原文
+              <ExternalLink :size="12" /> 访问原文
             </a>
             <button class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/80 text-red-400 hover:text-white border border-red-500/20 text-xs font-medium transition-all shrink-0"
                @click="remove(selectedDoc.id, selectedDoc.filename); closeDocModal()"
                title="删除此文档">
               <Trash2 :size="12" /> 删除文档
             </button>
-            <button class="p-1.5 text-[#475569] hover:text-[#cbd5e1] hover:bg-white/[0.06] rounded-lg transition-colors" @click="closeDocModal">
-              <X :size="18" />
+            <button class="p-1.5 text-gray-300 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors flex items-center gap-1 text-xs" @click="closeDocModal" title="关闭 (Esc)">
+              <X :size="16" />
+              <span class="hidden sm:inline">关闭</span>
             </button>
           </div>
         </div>
         
-        <div class="px-6 py-5 space-y-5">
+        <!-- 主体滚动区域 -->
+        <div class="px-6 py-5 space-y-5 overflow-y-auto flex-1">
           <!-- 导读指南面板（NotebookLM 风格） -->
           <div v-if="selectedDoc.multimodal_metadata?.doc_guide" class="bg-gradient-to-br from-[#0ea5e9]/5 to-[#10b981]/5 border border-[#0ea5e9]/20 rounded-xl p-5 backdrop-blur-sm">
             <div class="flex items-center gap-2 mb-4">
@@ -551,6 +569,14 @@ async function doCrossModalSearch() {
               <Tag :size="8" /> {{ tag }}
             </span>
           </div>
+        </div>
+
+        <!-- 底部固定关闭辅助栏 -->
+        <div class="px-6 py-3 bg-[#070a12] border-t border-white/[0.06] flex items-center justify-between shrink-0">
+          <span class="text-[11px] text-gray-400">提示：按 Esc 键或点击遮罩边缘亦可关闭</span>
+          <button class="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 hover:text-white rounded-lg text-xs font-medium transition-colors" @click="closeDocModal">
+            关闭窗口
+          </button>
         </div>
       </div>
     </div>

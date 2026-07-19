@@ -4,10 +4,10 @@
 
 ## 📈 系统整体统计 (System Stats)
 
-- **总模块数 (Python Files)**: 58
-- **总定义类数 (Classes)**: 152
-- **顶级函数数 (Functions)**: 234
-- **模块间显式物理依赖数 (Dependencies)**: 134
+- **总模块数 (Python Files)**: 102
+- **总定义类数 (Classes)**: 153
+- **顶级函数数 (Functions)**: 260
+- **模块间显式物理依赖数 (Dependencies)**: 155
 
 ## 🔗 模块物理依赖拓扑图 (Module Dependency Graph)
 
@@ -63,6 +63,50 @@ flowchart TD
     report_api["report_api.py"]:::coreNode
     retrieval_evaluation["retrieval_evaluation.py"]:::coreNode
     run["run.py"]:::coreNode
+    scratch_check_bvid["scratch/check_bvid.py"]:::coreNode
+    scratch_check_chat_root["scratch/check_chat_root.py"]:::coreNode
+    scratch_check_db["scratch/check_db.py"]:::coreNode
+    scratch_check_simhei_glyphs["scratch/check_simhei_glyphs.py"]:::coreNode
+    scratch_debug_bing_html["scratch/debug_bing_html.py"]:::coreNode
+    scratch_debug_bing_video["scratch/debug_bing_video.py"]:::coreNode
+    scratch_debug_pdf_trace["scratch/debug_pdf_trace.py"]:::coreNode
+    scratch_find_3b1b_bvid["scratch/find_3b1b_bvid.py"]:::coreNode
+    scratch_find_all_non_test_users["scratch/find_all_non_test_users.py"]:::coreNode
+    scratch_find_template_close["scratch/find_template_close.py"]:::coreNode
+    scratch_find_template_end["scratch/find_template_end.py"]:::coreNode
+    scratch_find_user_data["scratch/find_user_data.py"]:::coreNode
+    scratch_fix_export_pdf["scratch/fix_export_pdf.py"]:::coreNode
+    scratch_get_file_times["scratch/get_file_times.py"]:::coreNode
+    scratch_query_db["scratch/query_db.py"]:::coreNode
+    scratch_query_db_backup["scratch/query_db_backup.py"]:::coreNode
+    scratch_query_db_backup_demo["scratch/query_db_backup_demo.py"]:::coreNode
+    scratch_query_db_backup_lzz["scratch/query_db_backup_lzz.py"]:::coreNode
+    scratch_query_db_test["scratch/query_db_test.py"]:::coreNode
+    scratch_query_db_v2["scratch/query_db_v2.py"]:::coreNode
+    scratch_restore_db["scratch/restore_db.py"]:::coreNode
+    scratch_restore_truncate["scratch/restore_truncate.py"]:::coreNode
+    scratch_search_html_occurrences["scratch/search_html_occurrences.py"]:::coreNode
+    scratch_test_alternative_search["scratch/test_alternative_search.py"]:::coreNode
+    scratch_test_baidu_search["scratch/test_baidu_search.py"]:::coreNode
+    scratch_test_bili_api["scratch/test_bili_api.py"]:::coreNode
+    scratch_test_bili_cookie["scratch/test_bili_cookie.py"]:::coreNode
+    scratch_test_bili_search["scratch/test_bili_search.py"]:::coreNode
+    scratch_test_bing_redirect["scratch/test_bing_redirect.py"]:::coreNode
+    scratch_test_bing_search["scratch/test_bing_search.py"]:::coreNode
+    scratch_test_bing_unicode["scratch/test_bing_unicode.py"]:::coreNode
+    scratch_test_code_font["scratch/test_code_font.py"]:::coreNode
+    scratch_test_export_api["scratch/test_export_api.py"]:::coreNode
+    scratch_test_helvetica_chinese["scratch/test_helvetica_chinese.py"]:::coreNode
+    scratch_test_keyword_search["scratch/test_keyword_search.py"]:::coreNode
+    scratch_test_math_pdf["scratch/test_math_pdf.py"]:::coreNode
+    scratch_test_pdf_long_code["scratch/test_pdf_long_code.py"]:::coreNode
+    scratch_test_profile_robustness["scratch/test_profile_robustness.py"]:::coreNode
+    scratch_test_quote["scratch/test_quote.py"]:::coreNode
+    scratch_test_screenshot_formulas["scratch/test_screenshot_formulas.py"]:::coreNode
+    scratch_test_search_videos["scratch/test_search_videos.py"]:::coreNode
+    scratch_test_subsup["scratch/test_subsup.py"]:::coreNode
+    scratch_test_ultimate_sanitizer["scratch/test_ultimate_sanitizer.py"]:::coreNode
+    scratch_try_delete["scratch/try_delete.py"]:::coreNode
     stream_api["stream_api.py"]:::coreNode
     swarm_factory["swarm_factory.py"]:::coreNode
     swarm_orchestrator["swarm_orchestrator.py"]:::coreNode
@@ -171,6 +215,27 @@ flowchart TD
     report_api --> app_database
     retrieval_evaluation --> models
     retrieval_evaluation --> rag_engine
+    scratch_check_db --> app_database
+    scratch_debug_pdf_trace --> export_pdf
+    scratch_test_baidu_search --> web_search_api
+    scratch_test_bili_search --> web_search_api
+    scratch_test_bing_search --> web_search_api
+    scratch_test_bing_unicode --> web_search_api
+    scratch_test_code_font --> export_pdf
+    scratch_test_export_api --> app_main
+    scratch_test_helvetica_chinese --> export_pdf
+    scratch_test_keyword_search --> web_search_api
+    scratch_test_math_pdf --> export_pdf
+    scratch_test_pdf_long_code --> export_pdf
+    scratch_test_profile_robustness --> app_crud
+    scratch_test_profile_robustness --> app_database
+    scratch_test_profile_robustness --> learning_event_bus
+    scratch_test_profile_robustness --> models
+    scratch_test_profile_robustness --> profile_api
+    scratch_test_quote --> export_pdf
+    scratch_test_screenshot_formulas --> export_pdf
+    scratch_test_search_videos --> web_search_api
+    scratch_test_ultimate_sanitizer --> export_pdf
     stream_api --> content_safety
     stream_api --> models
     stream_api --> swarm_factory
@@ -387,9 +452,11 @@ flowchart TD
 - `review_plan_to_dict()`: *无描述*
 - `get_review_plan()`: *无描述*
 - `upsert_review_plan()`: *无描述*
+- `delete_review_plan()`: *无描述*
 - `apply_review_feedback()`: *无描述*
 - `record_conversation()`: *无描述*
 - `get_conversation_history()`: *无描述*
+- `migrate_anonymous_data()`: 将匿名临时ID(anon_id)产生的所有学情数据迁移/合并到正式账号(target_id)下，
 
 ---
 
@@ -781,7 +848,8 @@ This module re-exports all public symbols for the documented path.
 - `project_to_ball()`: 将向量投影到 Poincaré 单位球内部（用于距离计算）。
 - `_get_mds_process_executor()`: *无描述*
 - `_poincare_mds_live_optimization_worker()`: MDS 双曲投影 Adam 优化的子进程 Worker，彻底释放主进程的 GIL 锁
-- `poincare_to_2d_coordinates()`: 使用双曲多维尺度变换 (Hyperbolic MDS) 并结合本地数据库缓存，将高维双曲向量动态投影至 2D 庞加莱圆盘
+- `_get_raw_poincare_coordinates()`: 使用双曲多维尺度变换 (Hyperbolic MDS) 并结合本地数据库缓存，将高维双曲向量动态投影至 2D 庞加莱圆盘
+- `poincare_to_2d_coordinates()`: 将专业领域概念映射至 2D 庞加莱圆盘中，采用同心环深度分布与角度等间距对齐算法，保障极致的排版与疏密排版均匀度
 - `find_nearest_concept()`: 在双曲空间中找到距离目标最近的概念（用于困难时跳转）。
 - `ebbinghaus_decay()`: 艾宾浩斯遗忘衰减公式。
 - `compute_decay_beta()`: 根据认知负荷和挫败感动态计算衰减系数 beta。
@@ -882,7 +950,8 @@ This module re-exports all public symbols for the documented path.
 - `_describe_image_with_pil()`: 使用 PIL 生成基础图片元数据描述（非视觉模型时的降级方案）。
 - `parse_pdf_visually()`: 解析 PDF 的视觉内容：逐页渲染为图片 → 调用多模态大模型生成语义描述。
 - `parse_uploaded_file()`: *无描述*
-- `_parse_pdf()`: *无描述*
+- `_parse_pdf()`: 解析 PDF 文本，优先 pdfplumber（支持表格提取），降级 PyPDF2，保底 decode。
+- `_markdown_escape_cell()`: 转义表格单元格中可能破坏 Markdown 表格的字符。
 - `_parse_docx()`: *无描述*
 - `_parse_pptx()`: *无描述*
 - `_describe_image()`: *无描述*
@@ -891,7 +960,9 @@ This module re-exports all public symbols for the documented path.
 - `_audio_transcription()`: *无描述*
 - `_speech_to_text()`: *无描述*
 - `parse_pptx_slides()`: *无描述*
-- `chunk_document()`: *无描述*
+- `chunk_document()`: 将文档切分为父子分块结构。
+- `_chunk_code()`: 代码文件分块（保持原有逻辑）。
+- `_chunk_with_parent_child()`: 父子分块：先切父块(~1000-1500字)，再在每个父块内切子块(~200-250字)。
 - `_infer_tags()`: *无描述*
 
 ---
@@ -976,6 +1047,9 @@ This module re-exports all public symbols for the documented path.
 
 - `_make_styles()`: *无描述*
 - `_escape_pdf()`: 转义 ReportLab Paragraph 的 XML 特殊字符。
+- `_get_simhei_char_map()`: *无描述*
+- `_sanitize_simhei_glyphs()`: 过滤掉 SimHei 字体中不存在的缺失字符，彻底杜绝 PDF 中的缺字方框 □。
+- `_clean_latex_to_reportlab_html()`: 将 LaTeX 数学公式表达式转换为带有 ReportLab <sub>/<sup> 标签的优雅 HTML，防止 CJK 字体缺字方框 □。
 - `_inline_to_pdf()`: 将行内 Markdown 标记转换为 ReportLab XML 格式。
 - `md_to_flowables()`: 将 Markdown 文本转换为 ReportLab Flowable 列表。
 - `_build_cover()`: 构建封面页的 flowable 列表。
@@ -1038,6 +1112,7 @@ Endpoints:
 - `_sentence_diff()`: 对两段文本做句级别 diff，返回仅存在于新文本中的句子。
 - `_get_graph_builder()`: 延迟初始化图谱构建器（InMemory 后端，种子数据预填充）。
 - `build_graph_after_upload()`: 文档上传后触发增量图谱自生长 (Task 2)。
+- `_build_co_occur_edges()`: 跨文档共现关联：对新切片搜索已有索引中相似度>0.85的切片，建立 CO_OCCUR 边。
 
 ---
 
@@ -1125,7 +1200,7 @@ Endpoints:
 
 #### ⚙️ 独立函数 (Functions)
 
-- `_run_offline_cognition_pipeline()`: 在后台线程中计算 DKT + BKT 状态，并保存至数据库（解决同步锁和高并发响应延迟）
+- `_run_offline_cognition_pipeline()`: 在后台线程中计算 DKT + BKT 状态，并保存至数据库（解决同步锁 and 高并发响应延迟）
 - `register_default_subscribers()`: 注册全局默认订阅器。
 
 ---
@@ -1234,6 +1309,9 @@ Endpoints:
 - `_mermaid()`: *无描述*
 - `_quiz()`: *无描述*
 - `_video_script()`: *无描述*
+- `_video_recommendations()`: *无描述*
+- `get_concept_rich_adaptation()`: Return high-fidelity concept-specific simplified explanation and detailed Mermaid mindmap.
+- `_simplified_explanation()`: *无描述*
 
 ---
 
@@ -1341,6 +1419,7 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
 - **`class Evidence`**: *无类文档*
   - **核心方法 (Methods)**:
     - `with_score()`: *无描述*
+    - `with_content()`: 返回替换 content 后的新 Evidence（保留其他字段）。
 - **`class GraphContext`**: *无类文档*
   - **核心方法 (Methods)**:
     - `to_prompt()`: *无描述*
@@ -1511,6 +1590,7 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
 - `_build_dimension_analysis()`: 构建单个维度的分析文本
 - `_build_weak_point_analysis()`: 分析薄弱点的根因
 - `load_display_name()`: *无描述*
+- `resolve_learning_goals_three_tiers()`: 三级自适应最终目标智能决策器：
 
 ---
 
@@ -1588,6 +1668,8 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
 - `jinaclip_text_similarity()`: *无描述*
 - `_similarity()`: *无描述*
 - `_evidence_text()`: *无描述*
+- `pre_filter_index()`: Helper to pre-filter items of an index by doc_constraints and compute similarities.
+- `_search_videos_sync()`: 同步包装异步视频搜索函数，支持在各种上下文下（有/无运行中的event loop）正确运行
 - `build_rag_pipeline()`: 构建混合 RAG 管线。
 - `_query_hash()`: *无描述*
 - `check_arxiv_cache()`: 检查 arXiv 缓存表是否命中。
@@ -1667,6 +1749,378 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
 
 ---
 
+### 📄 [check_bvid.py](file:///d:/project-edumatrix/edumatrix-main/scratch/check_bvid.py)
+
+**文件路径**: `scratch/check_bvid.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [check_chat_root.py](file:///d:/project-edumatrix/edumatrix-main/scratch/check_chat_root.py)
+
+**文件路径**: `scratch/check_chat_root.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [check_db.py](file:///d:/project-edumatrix/edumatrix-main/scratch/check_db.py)
+
+**文件路径**: `scratch/check_db.py`
+
+> *暂无详细模块级别文档注释.*
+
+#### ⚙️ 独立函数 (Functions)
+
+- `check()`: *无描述*
+
+---
+
+### 📄 [check_simhei_glyphs.py](file:///d:/project-edumatrix/edumatrix-main/scratch/check_simhei_glyphs.py)
+
+**文件路径**: `scratch/check_simhei_glyphs.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [debug_bing_html.py](file:///d:/project-edumatrix/edumatrix-main/scratch/debug_bing_html.py)
+
+**文件路径**: `scratch/debug_bing_html.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [debug_bing_video.py](file:///d:/project-edumatrix/edumatrix-main/scratch/debug_bing_video.py)
+
+**文件路径**: `scratch/debug_bing_video.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [debug_pdf_trace.py](file:///d:/project-edumatrix/edumatrix-main/scratch/debug_pdf_trace.py)
+
+**文件路径**: `scratch/debug_pdf_trace.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [find_3b1b_bvid.py](file:///d:/project-edumatrix/edumatrix-main/scratch/find_3b1b_bvid.py)
+
+**文件路径**: `scratch/find_3b1b_bvid.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [find_all_non_test_users.py](file:///d:/project-edumatrix/edumatrix-main/scratch/find_all_non_test_users.py)
+
+**文件路径**: `scratch/find_all_non_test_users.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [find_template_close.py](file:///d:/project-edumatrix/edumatrix-main/scratch/find_template_close.py)
+
+**文件路径**: `scratch/find_template_close.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [find_template_end.py](file:///d:/project-edumatrix/edumatrix-main/scratch/find_template_end.py)
+
+**文件路径**: `scratch/find_template_end.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [find_user_data.py](file:///d:/project-edumatrix/edumatrix-main/scratch/find_user_data.py)
+
+**文件路径**: `scratch/find_user_data.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [fix_export_pdf.py](file:///d:/project-edumatrix/edumatrix-main/scratch/fix_export_pdf.py)
+
+**文件路径**: `scratch/fix_export_pdf.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [get_file_times.py](file:///d:/project-edumatrix/edumatrix-main/scratch/get_file_times.py)
+
+**文件路径**: `scratch/get_file_times.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [query_db.py](file:///d:/project-edumatrix/edumatrix-main/scratch/query_db.py)
+
+**文件路径**: `scratch/query_db.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [query_db_backup.py](file:///d:/project-edumatrix/edumatrix-main/scratch/query_db_backup.py)
+
+**文件路径**: `scratch/query_db_backup.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [query_db_backup_demo.py](file:///d:/project-edumatrix/edumatrix-main/scratch/query_db_backup_demo.py)
+
+**文件路径**: `scratch/query_db_backup_demo.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [query_db_backup_lzz.py](file:///d:/project-edumatrix/edumatrix-main/scratch/query_db_backup_lzz.py)
+
+**文件路径**: `scratch/query_db_backup_lzz.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [query_db_test.py](file:///d:/project-edumatrix/edumatrix-main/scratch/query_db_test.py)
+
+**文件路径**: `scratch/query_db_test.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [query_db_v2.py](file:///d:/project-edumatrix/edumatrix-main/scratch/query_db_v2.py)
+
+**文件路径**: `scratch/query_db_v2.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [restore_db.py](file:///d:/project-edumatrix/edumatrix-main/scratch/restore_db.py)
+
+**文件路径**: `scratch/restore_db.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [restore_truncate.py](file:///d:/project-edumatrix/edumatrix-main/scratch/restore_truncate.py)
+
+**文件路径**: `scratch/restore_truncate.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [search_html_occurrences.py](file:///d:/project-edumatrix/edumatrix-main/scratch/search_html_occurrences.py)
+
+**文件路径**: `scratch/search_html_occurrences.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_alternative_search.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_alternative_search.py)
+
+**文件路径**: `scratch/test_alternative_search.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_baidu_search.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_baidu_search.py)
+
+**文件路径**: `scratch/test_baidu_search.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_bili_api.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_bili_api.py)
+
+**文件路径**: `scratch/test_bili_api.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_bili_cookie.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_bili_cookie.py)
+
+**文件路径**: `scratch/test_bili_cookie.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_bili_search.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_bili_search.py)
+
+**文件路径**: `scratch/test_bili_search.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_bing_redirect.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_bing_redirect.py)
+
+**文件路径**: `scratch/test_bing_redirect.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_bing_search.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_bing_search.py)
+
+**文件路径**: `scratch/test_bing_search.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_bing_unicode.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_bing_unicode.py)
+
+**文件路径**: `scratch/test_bing_unicode.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_code_font.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_code_font.py)
+
+**文件路径**: `scratch/test_code_font.py`
+
+> *暂无详细模块级别文档注释.*
+
+#### ⚙️ 独立函数 (Functions)
+
+- `patched_make_styles()`: *无描述*
+
+---
+
+### 📄 [test_export_api.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_export_api.py)
+
+**文件路径**: `scratch/test_export_api.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_helvetica_chinese.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_helvetica_chinese.py)
+
+**文件路径**: `scratch/test_helvetica_chinese.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_keyword_search.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_keyword_search.py)
+
+**文件路径**: `scratch/test_keyword_search.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_math_pdf.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_math_pdf.py)
+
+**文件路径**: `scratch/test_math_pdf.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_pdf_long_code.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_pdf_long_code.py)
+
+**文件路径**: `scratch/test_pdf_long_code.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_profile_robustness.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_profile_robustness.py)
+
+**文件路径**: `scratch/test_profile_robustness.py`
+
+> *暂无详细模块级别文档注释.*
+
+#### 📦 类定义 (Classes)
+
+- **`class TestProfileRobustness`**: *无类文档*
+  - **核心方法 (Methods)**:
+    - `setUp()`: *无描述*
+    - `tearDown()`: *无描述*
+    - `test_dynamic_evidence_filtering()`: 1. 审计验证：特征级别证据链精确筛选
+    - `test_concept_specific_weak_point_attribution()`: 2. 审计验证：薄弱点成因概念级精细诊断
+    - `test_learning_event_bus_dynamic_update()`: 3. 审计验证：测验答题事件总线自动连通与雷达图刷新
+    - `test_personalized_suggestions_summary()`: 4. 审计验证：教学建议个性化动态汇总与分层提炼
+    - `test_misconception_score_reduction()`: 5. 审计验证：主观陈述误概念后评估分数正确降低
+
+---
+
+### 📄 [test_quote.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_quote.py)
+
+**文件路径**: `scratch/test_quote.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_screenshot_formulas.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_screenshot_formulas.py)
+
+**文件路径**: `scratch/test_screenshot_formulas.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_search_videos.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_search_videos.py)
+
+**文件路径**: `scratch/test_search_videos.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_subsup.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_subsup.py)
+
+**文件路径**: `scratch/test_subsup.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [test_ultimate_sanitizer.py](file:///d:/project-edumatrix/edumatrix-main/scratch/test_ultimate_sanitizer.py)
+
+**文件路径**: `scratch/test_ultimate_sanitizer.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
+### 📄 [try_delete.py](file:///d:/project-edumatrix/edumatrix-main/scratch/try_delete.py)
+
+**文件路径**: `scratch/try_delete.py`
+
+> *暂无详细模块级别文档注释.*
+
+---
+
 ### 📄 [stream_api.py](file:///d:/project-edumatrix/edumatrix-main/stream_api.py)
 
 **文件路径**: `stream_api.py`
@@ -1676,6 +2130,7 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
 #### ⚙️ 独立函数 (Functions)
 
 - `_run_formative_check()`: 根据教学内容生成快速理解检查的关键词和判断。
+- `_extract_suggested_questions()`: *无描述*
 - `_calculate_rdi()`: *无描述*
 - `_sse()`: *无描述*
 - `_format_chat_history()`: 从 profile.history 中提取最近的对话历史（包含学生提问和助教回答）。
@@ -1746,6 +2201,7 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
     - `test_database_pool_wash_with_postgres_mock()`: *无描述*
     - `test_stream_disconnect_handling()`: *无描述*
     - `test_guided_decoding_self_healing()`: *无描述*
+    - `test_export_note_pdf_endpoint()`: *无描述*
     - `test_sandbox_resource_limits_and_timeout()`: *无描述*
     - `test_sandbox_class_execution()`: *无描述*
     - `test_database_cascade_deletes()`: *无描述*
@@ -1753,11 +2209,13 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
     - `test_coreference_resolution_with_garbage_words()`: 验证口语指代消解在垃圾词打断场景下的自愈与兜底机制
     - `test_automatic_review_plan_generation_on_chat()`: 验证在对话框学习后自动在 review_plans 表生成复习安排的机制
     - `test_manual_review_plan_creation_without_preexisting_profile()`: 验证在学生画像表尚无记录时，手动创建复习计划也能安全自愈通过
+    - `test_delete_student_concept_endpoint()`: 验证删除垃圾知识点 API 能够精准清理画像和复习计划表中的条目
     - `test_flashcard_review_updates_persisted_sm2_plan_without_memory_card()`: The review API should update review_plans even if no in-memory card exists.
     - `test_animation_dataset_feeds_resource_aware_planning()`: 本地 animations 数据集应能进入动态图谱，并为路径规划提供资源信号。
     - `test_adaptive_astar_route_expands_prerequisites_deterministically()`: A* 路径应稳定生成，并补齐多前置概念中的必要依赖。
     - `test_path_planner_respects_goal_variants_and_mastered_boundary()`: PathPlanner 应能针对不同目标/薄弱点生成稳定路线，并处理全掌握边界。
     - `test_learning_path_api_exposes_adaptive_astar_route()`: 学习路径 API 应暴露成员 2 的微概念图谱与 A* 动态路线。
+    - `test_composite_concept_prerequisite_inference()`: 验证复合知识点（如卷积核与注意力机制的数学统一性）不会因缺少静态条目而跌落至 Tier 0，而是会自动识别其子概念作为前置
     - `test_note_matrix_closed_loop()`: 验证矩阵闭环学习流：笔记更新、AI 润色解析以及错题反思追加这套完整链路的正确性
     - `test_checkin_flow_and_streak()`: 验证复习打卡签到和连续天数（Streak）计算的完整流程
     - `test_checkin_history_filtering()`: 验证签到历史查询与过滤逻辑
@@ -1766,6 +2224,7 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
     - `test_pdf_upload_and_parsing()`: 验证 PDF 上传和解析不会因 BytesIO/seek 属性缺失而导致 500 崩溃
     - `test_docx_upload_and_parsing()`: 验证 Word (.docx) 上传和解析逻辑能够正常提取文本与入库
     - `test_socratic_explain_multi_round()`: 验证苏格拉底即时答疑接口在单轮和多轮追问模式下的参数和路由行为
+    - `test_notebooklm_suggested_questions()`: 验证 NotebookLM 式建议追问提取及流式返回正确性
     - `test_component_regeneration_endpoint()`: *无描述*
     - `test_lmcd_knowledge_diffusion()`: 验证 LMCD 知识扩散算法：当某个核心概念变化时，其增量会正确传播到邻近概念
     - `test_council_mode_consensus_synthesis()`: 验证 Council Mode 委员会机制对平行生成的资源进行共识评测与幻觉拦截
@@ -1782,6 +2241,18 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
     - `test_graph_kalman_propagation()`: 验证图卡尔曼信念传播：更新节点，前置节点与后续依赖节点同步平滑演进
     - `test_dkt_and_ekf_concurrency_and_math_consistency()`: Task 4: 验证 DktService 并发更新的线程安全性、EKF 状态转移矩阵的行和恒为 1.0，以及非阻塞 MDS 异步运行
     - `test_dkt_dynamic_concept_tracking_and_ekf_backward_propagation()`: 验证 DKT 动态概念追踪和 EKF 双向信念传播与行和守恒
+    - `test_direct_slash_commands_routing()`: 验证 Slash 快捷指令能够绕过常规意图分类，直接将定向参数及约束传给 EduMatrixSwarm
+    - `test_rag_document_constraint_retrieval()`: 验证 @ 课件引用约束能够成功地把检索候选池约束到特定课件
+    - `test_multiple_doc_constraints_filtering()`: 验证多文档约束条件下的前置过滤与合并检索
+    - `test_add_web_source_endpoint()`: 测试 POST /api/knowledge/add-web-source 接口
+    - `test_web_search_category_and_file_type_detection()`: 测试 Web 搜索的分类查询（在线网页/文档）以及返回项的文件类型检测标记
+    - `test_web_search_query_normalization_and_relevance()`: 测试 Web 搜索对类似 '深度学习卷积' 模糊词的 Query 规范化与相关度防错防护
+    - `test_download_web_file_pipeline()`: 测试在线文档流式下载与本地 RAG 深度导入管道 (Mock 下载和解析)
+    - `test_web_source_dehydration_summary()`: 测试网页导入时，LLM 智能脱水总结将其格式化为结构化 Markdown 笔记的过程
+    - `test_get_single_document_details()`: 测试 GET /api/knowledge/{doc_id} 接口以获取知识库文档完整文本内容
+    - `test_video_embedded_url_mapping()`: *无描述*
+    - `test_video_recommender_swarm_flow()`: *无描述*
+    - `test_anonymous_data_migration()`: 验证匿名临时ID的数据能够在登录时成功迁移/合并到正式账号中。
 
 ---
 
@@ -1872,8 +2343,15 @@ P2-2 重构：集中所有余弦相似度计算，消除四处重复实现。
 #### ⚙️ 独立函数 (Functions)
 
 - `_generate_id()`: *无描述*
+- `_clean_search_query()`: *无描述*
+- `_get_optimized_query_candidates()`: *无描述*
+- `_is_result_relevant()`: *无描述*
+- `_parse_duckduckgo_lite_html()`: *无描述*
 - `_parse_duckduckgo_html()`: *无描述*
+- `_parse_baidu_html()`: *无描述*
+- `_parse_bing_html()`: *无描述*
 - `search_arxiv()`: 内部函数：并发调用的 arXiv 学术检索接口（带自动重试抗压机制）
+- `to_embedded_player_url()`: *无描述*
 
 ---
 

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "synthetic_visual",
+    "label": "视觉型计算机本科生",
+    "major": "计算机科学与技术",
+    "goals": [
+      "期末复习冲刺"
+    ],
+    "preferences": [
+      "图示演示",
+      "具体例子"
+    ],
+    "style": "视觉演示导向",
+    "data_label": "合成演示数据，不代表真实用户调研"
+  },
+  {
+    "id": "synthetic_engineering",
+    "label": "项目型软件工程学生",
+    "major": "软件工程",
+    "goals": [
+      "求职面试准备"
+    ],
+    "preferences": [
+      "代码实操",
+      "分步引导"
+    ],
+    "style": "代码实操导向",
+    "data_label": "合成演示数据，不代表真实用户调研"
+  },
+  {
+    "id": "synthetic_research",
+    "label": "跨专业研究型学习者",
+    "major": "数学",
+    "goals": [
+      "科研学术深造"
+    ],
+    "preferences": [
+      "对比解析",
+      "分步引导"
+    ],
+    "style": "文本阅读导向",
+    "data_label": "合成演示数据，不代表真实用户调研"
+  }
+]

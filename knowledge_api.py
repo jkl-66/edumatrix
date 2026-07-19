@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any
 import re
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request, BackgroundTasks
 
 from app.database import DBKnowledgeDocument, run_db_op
+from app.auth import enforce_student_access, get_current_user
+from config import CONFIG
 from document_parser import chunk_document, parse_uploaded_file, parse_pptx_slides, parse_pdf_visually
 from rag_engine import hybrid_rag
 from ingestion import build_graph_after_upload, _get_graph_builder
@@ -41,19 +43,9 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     student_id: str = "default",
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
-    # 安全: 无条件 sanitize student_id
-    student_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(student_id))[:64]
-    if student_id == "default":
-        try:
-            form = await request.form()
-            form_student_id = form.get("student_id")
-            if form_student_id:
-                student_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(form_student_id))[:64]
-        except Exception:
-            pass
-    if not student_id:
-        student_id = "default"
+    student_id = enforce_student_access(student_id, current_user)
 
     filename = file.filename or "unnamed"
     ext = os.path.splitext(filename)[1].lower()
@@ -64,8 +56,10 @@ async def upload_document(
         allowed = ", ".join(SUPPORTED_EXTENSIONS.keys())
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext}，支持 {allowed}")
 
-    raw = await file.read()
+    raw = await file.read(CONFIG.max_upload_bytes + 1)
     file_size = len(raw)
+    if file_size > CONFIG.max_upload_bytes:
+        raise HTTPException(status_code=413, detail=f"文件超过大小限制 ({CONFIG.max_upload_bytes} bytes)")
 
     doc_id = hashlib.sha256(f"{student_id}:{filename}:{os.urandom(4).hex()}".encode()).hexdigest()[:16]
 
@@ -126,7 +120,7 @@ async def upload_document(
     with open(doc_file_path, "wb") as f:
         f.write(raw)
 
-    hybrid_rag.ingest_user_documents(evidence_chunks)
+    hybrid_rag.ingest_user_documents(evidence_chunks, owner_id=student_id)
 
     try:
         from learning_strategy import invalidate_graph_cache
@@ -184,7 +178,9 @@ def _estimate_video_duration(raw: bytes) -> float:
 @router.get("/list")
 async def list_documents(
     student_id: str = "default",
+    current_user=Depends(get_current_user),
 ) -> list[dict[str, Any]]:
+    student_id = enforce_student_access(student_id, current_user)
     def fetch_docs(session):
         return (
             session.query(DBKnowledgeDocument)
@@ -342,6 +338,7 @@ async def _generate_doc_guide_for_document(doc_id: str, student_id: str, text_co
 async def add_web_source(
     request: Request,
     background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """将网页搜索结果显式拉取加入知识库，利用 LLM 智能脱水总结为包含富媒体与原文链接的 Markdown。"""
     import re
@@ -351,7 +348,7 @@ async def add_web_source(
     title = str(payload.get("title", "")).strip()
     url = str(payload.get("url", "")).strip()
     snippet = str(payload.get("snippet", "")).strip()
-    student_id = str(payload.get("student_id", "default")).strip()
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
 
     if not title or not snippet:
         raise HTTPException(status_code=400, detail="标题和摘要内容不能为空")
@@ -431,7 +428,7 @@ async def add_web_source(
         f.write(text_content.encode("utf-8"))
 
     # 6. 加载进 RAG
-    hybrid_rag.ingest_user_documents(evidence_chunks)
+    hybrid_rag.ingest_user_documents(evidence_chunks, owner_id=student_id)
 
     try:
         from learning_strategy import invalidate_graph_cache
@@ -462,6 +459,7 @@ async def add_web_source(
 async def download_web_file(
     request: Request,
     background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """通过 URL 直链流式下载网页文档，并调用本地解析器进行深度导入。"""
     import re
@@ -470,7 +468,7 @@ async def download_web_file(
     url = str(payload.get("url", "")).strip()
     file_type = str(payload.get("file_type", "")).strip().lower()
     title = str(payload.get("title", "")).strip()
-    student_id = str(payload.get("student_id", "default")).strip()
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
 
     if not url:
         raise HTTPException(status_code=400, detail="直链 URL 不能为空")
@@ -496,17 +494,36 @@ async def download_web_file(
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
-            resp = await client.get(url, headers=headers, follow_redirects=True)
-            if resp.status_code != 200:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"文件下载失败，HTTP 状态码: {resp.status_code}"
-                )
-            raw = resp.content
+            async with client.stream("GET", url, headers=headers, follow_redirects=True) as resp:
+                if resp.status_code != 200:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"文件下载失败，HTTP 状态码: {resp.status_code}",
+                    )
+                content_length = resp.headers.get("content-length")
+                if content_length and int(content_length) > CONFIG.max_upload_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"下载文件超过大小限制 ({CONFIG.max_upload_bytes} bytes)",
+                    )
+                chunks: list[bytes] = []
+                file_size = 0
+                async for chunk in resp.aiter_bytes(64 * 1024):
+                    file_size += len(chunk)
+                    if file_size > CONFIG.max_upload_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"下载文件超过大小限制 ({CONFIG.max_upload_bytes} bytes)",
+                        )
+                    chunks.append(chunk)
+                raw = b"".join(chunks)
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"无法读取下载文件大小: {e}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"无法从直链下载文件: {e}")
 
-    file_size = len(raw)
     if file_size == 0:
         raise HTTPException(status_code=400, detail="下载的文件大小为 0 字节。")
 
@@ -571,7 +588,7 @@ async def download_web_file(
         f.write(raw)
 
     # 8. 加载并灌入 RAG 索引
-    hybrid_rag.ingest_user_documents(evidence_chunks)
+    hybrid_rag.ingest_user_documents(evidence_chunks, owner_id=student_id)
 
     try:
         from learning_strategy import invalidate_graph_cache
@@ -610,8 +627,10 @@ async def download_web_file(
 async def get_document(
     doc_id: str,
     student_id: str = "default",
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """获取单个知识库文档的完整详情（含完整文本内容）。"""
+    student_id = enforce_student_access(student_id, current_user)
     def fetch_doc(session):
         return (
             session.query(DBKnowledgeDocument)
@@ -642,7 +661,9 @@ async def get_document(
 async def delete_document(
     doc_id: str,
     student_id: str = "default",
+    current_user=Depends(get_current_user),
 ) -> dict[str, str]:
+    student_id = enforce_student_access(student_id, current_user)
     def do_delete(session):
         doc = (
             session.query(DBKnowledgeDocument)
@@ -668,7 +689,7 @@ async def delete_document(
     if doc_file.exists():
         doc_file.unlink()
 
-    hybrid_rag.remove_user_documents(filename)
+    hybrid_rag.remove_user_documents(filename, owner_id=student_id)
 
     try:
         from learning_strategy import invalidate_graph_cache

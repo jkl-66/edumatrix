@@ -43,6 +43,8 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> DBU
         headers={"WWW-Authenticate": "Bearer"},
     )
     if not token:
+        if not CONFIG.demo_mode:
+            raise credentials_exception
         def get_or_create_demo(session):
             user = session.query(DBUser).filter(DBUser.username == "demo-student").first()
             if not user:
@@ -79,6 +81,34 @@ async def get_current_teacher(user: DBUser = Depends(get_current_user)) -> DBUse
             status_code=status.HTTP_403_FORBIDDEN,
             detail="仅教师可访问此接口",
         )
+    return user
+
+
+def enforce_student_access(requested_student_id: str | None, user: DBUser) -> str:
+    """Resolve a student scope from the authenticated user instead of trusting input."""
+    requested = str(requested_student_id or "").strip()
+    if requested == "default":
+        requested = ""
+    if user.role == "teacher":
+        if not requested:
+            raise HTTPException(status_code=400, detail="student_id 不能为空")
+        return requested
+    if requested and requested != user.username:
+        raise HTTPException(status_code=403, detail="无权访问其他学生的数据")
+    return user.username
+
+
+async def enforce_request_student_scope(
+    student_id: str | None = None,
+    user: DBUser = Depends(get_current_user),
+) -> DBUser:
+    """Authenticate a route and validate path/query student_id when present."""
+    # Body-scoped routes resolve their target after parsing JSON. Do not reject
+    # a teacher before the handler has had a chance to read that target.
+    if student_id is not None:
+        enforce_student_access(student_id, user)
+    elif user.role != "teacher":
+        enforce_student_access(None, user)
     return user
 
 def authenticate_user(db, username: str, password: str) -> Optional[DBUser]:

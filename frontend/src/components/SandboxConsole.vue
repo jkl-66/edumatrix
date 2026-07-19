@@ -4,8 +4,8 @@
  *
  * 独立可拖拽代码编辑器 + 实时渲染运行输出流 + Base64 矢量图展示
  */
-import { ref, computed, watch, nextTick } from 'vue'
-import { runCode } from '../api'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { getCodeStatus, runCode } from '../api'
 import { Play, Trash2, Copy, Check, Terminal, Loader2 } from '@lucide/vue'
 
 const props = defineProps({
@@ -25,6 +25,8 @@ const history = ref([])
 const copied = ref(false)
 const showViz = ref(false)
 const minimized = ref(false)
+const sandboxReady = ref(false)
+const sandboxMessage = ref('正在检查代码沙箱状态...')
 
 // 代码预设
 const presets = [
@@ -49,6 +51,10 @@ const vizHtml = computed(() => {
 
 async function run() {
   if (!code.value.trim() || running.value) return
+  if (!sandboxReady.value) {
+    errorMsg.value = sandboxMessage.value
+    return
+  }
   running.value = true
   output.value = ''
   errorMsg.value = ''
@@ -75,6 +81,17 @@ async function run() {
     emit('error', e.message)
   } finally {
     running.value = false
+  }
+}
+
+async function loadSandboxStatus() {
+  try {
+    const status = await getCodeStatus()
+    sandboxReady.value = Boolean(status.execution_enabled)
+    sandboxMessage.value = status.message || '代码沙箱当前未启用'
+  } catch (error) {
+    sandboxReady.value = false
+    sandboxMessage.value = '无法读取代码沙箱状态；当前不执行宿主机代码'
   }
 }
 
@@ -119,6 +136,8 @@ watch([output, errorMsg], () => {
 watch(() => props.initialCode, (v) => {
   if (v) code.value = v
 })
+
+onMounted(loadSandboxStatus)
 </script>
 
 <template>
@@ -135,15 +154,19 @@ watch(() => props.initialCode, (v) => {
         <span v-else-if="execTime > 0" class="text-[10px] text-gray-500">{{ execTime }}ms</span>
       </div>
       <div class="flex items-center gap-1">
-        <button @click.stop="run" :disabled="running"
+        <button @click.stop="run" :disabled="running || !sandboxReady"
           class="px-2 py-1 bg-green-700 hover:bg-green-600 disabled:opacity-50 rounded text-[10px] text-white transition-colors flex items-center gap-1">
-          <Play :size="10" /> 运行
+          <Play :size="10" /> {{ sandboxReady ? '运行' : '沙箱未启用' }}
         </button>
         <button @click.stop="minimized = !minimized"
           class="text-gray-400 hover:text-white text-xs px-1">
           {{ minimized ? '▼' : '▲' }}
         </button>
       </div>
+    </div>
+
+    <div v-if="!sandboxReady" class="px-3 py-2 bg-amber-950/40 border-b border-amber-800/50 text-[10px] text-amber-300">
+      {{ sandboxMessage }}。代码编辑、静态检查和资源查看仍可使用。
     </div>
 
     <!-- 代码预设（仅展开时显示） -->

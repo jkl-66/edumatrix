@@ -1391,9 +1391,8 @@ class EduMatrixSwarm:
                 )
                 learning_signal = LearningSignal(
                     accuracy=1.0,
-                    needs_replan=False,
-                    error_message="",
-                    grading_details={},
+                    dwell_seconds=0,
+                    sandbox_error_rate=0.0,
                 )
                 if event_callback:
                     await _trigger_event(event_callback, "agent_done", {

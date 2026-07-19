@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 import math
@@ -400,14 +401,36 @@ class HybridRAGPipeline:
             except Exception:
                 self.formula_rag = None
 
-    def ingest_user_documents(self, evidence: tuple[Evidence, ...]) -> None:
+    def ingest_user_documents(self, evidence: tuple[Evidence, ...], owner_id: str = "") -> None:
         if not evidence:
             return
-        self.user_index.upsert(evidence)
+        if not owner_id:
+            raise ValueError("owner_id is required for user document ingestion")
+        owned_evidence = tuple(
+            replace(item, metadata={**item.metadata, "owner_id": owner_id, "visibility": "private"})
+            for item in evidence
+        )
+        self.user_index.upsert(owned_evidence)
         TELEMETRY.record_metric("user_index.documents_ingested", len(evidence))
 
-    def remove_user_documents(self, source: str) -> None:
-        removed = self.user_index.remove_by_source(source)
+    @staticmethod
+    def _visible_user_evidence(items: list[Evidence], owner_id: str) -> list[Evidence]:
+        if not owner_id:
+            return []
+        return [item for item in items if item.metadata.get("owner_id") == owner_id]
+
+    def remove_user_documents(self, source: str, owner_id: str = "") -> None:
+        if not owner_id:
+            raise ValueError("owner_id is required for user document removal")
+        matching_ids = [
+            item.id
+            for item in self.user_index._items.values()
+            if item.source == source and item.metadata.get("owner_id") == owner_id
+        ]
+        removed = 0
+        for item_id in matching_ids:
+            if self.user_index._items.pop(item_id, None) is not None:
+                removed += 1
         if removed > 0:
             TELEMETRY.record_metric("user_index.documents_removed", removed)
 
@@ -456,7 +479,10 @@ class HybridRAGPipeline:
                 candidates.extend(local_hits)
                 
                 # 3. 前置过滤 user_index
-                user_hits = pre_filter_index(self.user_index, query, query_with_graph, doc_constraints, top_k)
+                user_hits = self._visible_user_evidence(
+                    pre_filter_index(self.user_index, query, query_with_graph, doc_constraints, top_k),
+                    getattr(profile, "student_id", "") if profile else "",
+                )
                 candidates.extend(user_hits)
             else:
                 candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
@@ -487,7 +513,10 @@ class HybridRAGPipeline:
                             print(f"  [RAG] arXiv search failed: {e}")
                 # === 修改区结束 ===
 
-                user_results = self.user_index.search(query_with_graph, top_k=top_k)
+                user_results = self._visible_user_evidence(
+                    self.user_index.search(query_with_graph, top_k=top_k),
+                    getattr(profile, "student_id", "") if profile else "",
+                )
                 candidates.extend(user_results)
 
                 # === 视频推荐数据接入 ===

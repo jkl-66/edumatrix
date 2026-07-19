@@ -29,11 +29,11 @@ class TestRecommendationEngine(unittest.TestCase):
             tags=("梯度下降",),
             anchors=()
         )
-        hybrid_rag.ingest_user_documents((self.code_evidence,))
+        hybrid_rag.ingest_user_documents((self.code_evidence,), owner_id=self.student_id)
 
     def tearDown(self):
         # 清除 mock 代码 Evidence
-        hybrid_rag.remove_user_documents("gradient_descent.py")
+        hybrid_rag.remove_user_documents("gradient_descent.py", owner_id=self.student_id)
 
         existing = self.db.query(DBStudentProfile).filter_by(student_id=self.student_id).first()
         if existing:

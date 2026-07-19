@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Depends, Request, HTTPException
 from pydantic import BaseModel
 from app.database import run_db_op
+from app.auth import enforce_student_access, get_current_user
 from app.crud import load_student_profile, save_student_profile
 from learning_strategy import (
     PathPlanner,
@@ -267,7 +268,9 @@ def load_display_name(db: Session, username: str) -> str:
 async def get_profile(
     student_id: str,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
+    student_id = enforce_student_access(student_id, current_user)
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
 
@@ -455,8 +458,10 @@ async def update_profile(
     student_id: str,
     update_data: ProfileUpdateRequest,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """显式/增量修改学生画像，同步保存至数据库"""
+    student_id = enforce_student_access(student_id, current_user)
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
     if not profile:
@@ -561,8 +566,10 @@ async def update_profile(
 async def get_profile_analysis(
     student_id: str,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """获取学生画像的多维度文本分析报告"""
+    student_id = enforce_student_access(student_id, current_user)
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
 
@@ -867,8 +874,10 @@ def resolve_learning_goals_three_tiers(db, profile, concepts: set[str], dag: dic
 async def get_learning_path(
     student_id: str,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """获取结构化学习路径分析（基于拓扑排序链条式推进）"""
+    student_id = enforce_student_access(student_id, current_user)
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
 
@@ -1131,8 +1140,10 @@ async def get_learning_path(
 async def get_goal_recommendations(
     student_id: str,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """根据学情与 DAG 结构，智能发现顶级终极目标，并规划出多路径通关路线，以活跃剪裁视窗展示节点及状态"""
+    student_id = enforce_student_access(student_id, current_user)
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
     if not profile:
@@ -1297,7 +1308,9 @@ async def get_goal_recommendations(
 async def update_profile(
     student_id: str,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, str]:
+    student_id = enforce_student_access(student_id, current_user)
     payload = await request.json()
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
@@ -1359,8 +1372,10 @@ async def update_profile(
 async def get_profile_narrative(
     student_id: str,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """异步按需获取/生成最新的 StoryLensEdu 叙事评估成长信笺"""
+    student_id = enforce_student_access(student_id, current_user)
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
 
@@ -1386,8 +1401,10 @@ async def get_recommendations(
     student_id: str,
     concept: str | None = None,
     pathway: str | None = None,
+    current_user=Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """获取针对学生的自适应智能推送学习资源，支持按概念与战术路线手动切换与重新编译"""
+    student_id = enforce_student_access(student_id, current_user)
     from app.utils.recommendation_engine import get_smart_recommendations
     
     return await run_db_op(get_smart_recommendations, student_id, concept=concept, pathway=pathway)
@@ -1409,6 +1426,7 @@ async def rollback_profile(
     student_id: str,
     body: RollbackRequest,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """
     时空回溯端点：从历史对话中读取 profile_snapshot 并
@@ -1416,6 +1434,7 @@ async def rollback_profile(
 
     前端 History.vue「跳转到当时认知状态」按钮调用此接口。
     """
+    student_id = enforce_student_access(student_id, current_user)
     from app.database import SessionLocal, DBConversationHistory
 
     # ── 1. 从数据库取出目标 conversation 的 profile_snapshot ──
@@ -1510,8 +1529,10 @@ async def delete_student_concept(
     student_id: str,
     concept_name: str,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """物理删除学生画像中的指定知识点（如测试产生的垃圾/非法词条），并级联清理关联复习计划"""
+    student_id = enforce_student_access(student_id, current_user)
     swarm = build_swarm_from_headers(request.headers)
     profile = swarm.profile_store.get(student_id)
     if not profile:

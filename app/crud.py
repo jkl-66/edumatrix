@@ -335,8 +335,11 @@ def get_notes(db: Session, student_id: str, limit: int = 20) -> list[DBNote]:
     )
 
 
-def delete_note(db: Session, note_id: str) -> bool:
-    note = db.query(DBNote).filter(DBNote.id == note_id).first()
+def delete_note(db: Session, note_id: str, student_id: str | None = None) -> bool:
+    query = db.query(DBNote).filter(DBNote.id == note_id)
+    if student_id:
+        query = query.filter(DBNote.student_id == student_id)
+    note = query.first()
     if not note:
         return False
     db.delete(note)
@@ -344,8 +347,18 @@ def delete_note(db: Session, note_id: str) -> bool:
     return True
 
 
-def update_note(db: Session, note_id: str, content: str, tags: list[str] | None = None, concepts: list[str] | None = None) -> DBNote | None:
-    db_note = db.query(DBNote).filter(DBNote.id == note_id).first()
+def update_note(
+    db: Session,
+    note_id: str,
+    content: str,
+    tags: list[str] | None = None,
+    concepts: list[str] | None = None,
+    student_id: str | None = None,
+) -> DBNote | None:
+    query = db.query(DBNote).filter(DBNote.id == note_id)
+    if student_id:
+        query = query.filter(DBNote.student_id == student_id)
+    db_note = query.first()
     if not db_note:
         return None
     db_note.content = content
@@ -369,7 +382,10 @@ def update_note(db: Session, note_id: str, content: str, tags: list[str] | None 
 
 def append_wrong_question_reflection(db: Session, student_id: str, concept: str, quiz_record_id: str, wrong_reason: str) -> DBNote:
     from app.database import DBQuizRecord
-    record = db.query(DBQuizRecord).filter(DBQuizRecord.id == quiz_record_id).first()
+    record = db.query(DBQuizRecord).filter(
+        DBQuizRecord.id == quiz_record_id,
+        DBQuizRecord.student_id == student_id,
+    ).first()
     
     time_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
     q_text = (record.question or "自适应测试题").strip() if record else "自适应测试题"
@@ -552,8 +568,11 @@ def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: floa
     return existing
 
 
-def delete_review_plan(db: Session, plan_id: int) -> bool:
-    plan = db.query(DBReviewPlan).filter(DBReviewPlan.id == plan_id).first()
+def delete_review_plan(db: Session, plan_id: int, student_id: str | None = None) -> bool:
+    query = db.query(DBReviewPlan).filter(DBReviewPlan.id == plan_id)
+    if student_id:
+        query = query.filter(DBReviewPlan.student_id == student_id)
+    plan = query.first()
     if not plan:
         return False
     db.delete(plan)

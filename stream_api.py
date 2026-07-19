@@ -4,9 +4,10 @@ import json
 import asyncio
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.auth import enforce_student_access, get_current_user
 from swarm_factory import build_swarm_from_headers
 from content_safety import CONTENT_SAFETY
 from models import AgentOutput
@@ -384,7 +385,7 @@ def _format_chat_history(profile, max_turns: int = 5) -> str:
 
 
 @router.post("/chat")
-async def stream_chat(request: Request) -> StreamingResponse:
+async def stream_chat(request: Request, current_user=Depends(get_current_user)) -> StreamingResponse:
     import time
     start_time = time.time()
 
@@ -402,7 +403,7 @@ async def stream_chat(request: Request) -> StreamingResponse:
 
     payload = await request.json()
     message = str(payload.get("message", "")).strip()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     mode = str(payload.get("mode", "chat")).strip()
     images = list(payload.get("images", []))
     active_doc_ids = list(payload.get("active_doc_ids", []))
@@ -1490,12 +1491,12 @@ async def stream_chat(request: Request) -> StreamingResponse:
 
 
 @router.post("/regenerate")
-async def regenerate_component(request: Request) -> dict[str, Any]:
+async def regenerate_component(request: Request, current_user=Depends(get_current_user)) -> dict[str, Any]:
     from app.database import run_db_op
     from app.crud import load_student_profile
 
     payload = await request.json()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     role = str(payload.get("role", ""))
     resource_type = str(payload.get("resource_type", ""))
     query = str(payload.get("query", ""))
@@ -1654,13 +1655,13 @@ async def regenerate_component(request: Request) -> dict[str, Any]:
 
 
 @router.post("/explain", response_model=None)
-async def socratic_explain(request: Request) -> StreamingResponse | dict[str, Any]:
+async def socratic_explain(request: Request, current_user=Depends(get_current_user)) -> StreamingResponse | dict[str, Any]:
     """任务 8.1: 行级/公式苏格拉底即时答疑（支持流式 SSE 和常规 JSON 双轨模式）。"""
     payload = await request.json()
     target_text = str(payload.get("target_text", "")).strip()
     context_before = str(payload.get("context_before", ""))
     context_after = str(payload.get("context_after", ""))
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     follow_up = str(payload.get("follow_up", "")).strip()
     history = str(payload.get("history", "")).strip()
 

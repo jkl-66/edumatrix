@@ -4,6 +4,7 @@
  * 选择图表类型→自动生成代码→运行→显示图像→生成讲解
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { getCodeStatus } from '../api'
 
 const emit = defineEmits(['close'])
 const props = defineProps({
@@ -20,6 +21,8 @@ const running = ref(false)
 const explaining = ref(false)
 const explanation = ref('')
 const error = ref('')
+const sandboxReady = ref(false)
+const sandboxMessage = ref('正在检查代码沙箱状态...')
 
 // === 任务 9: Monaco 沙箱编辑器 ===
 const monacoContainerRef = ref(null)
@@ -232,6 +235,10 @@ function selectChart(id) {
 }
 
 async function runCode() {
+  if (!sandboxReady.value) {
+    error.value = sandboxMessage.value
+    return
+  }
   running.value = true
   error.value = ''
   output.value = ''
@@ -264,6 +271,17 @@ async function runCode() {
   running.value = false
 }
 
+async function loadSandboxStatus() {
+  try {
+    const status = await getCodeStatus()
+    sandboxReady.value = Boolean(status.execution_enabled)
+    sandboxMessage.value = status.message || '代码沙箱当前未启用'
+  } catch (statusError) {
+    sandboxReady.value = false
+    sandboxMessage.value = '无法读取代码沙箱状态；当前不执行宿主机代码'
+  }
+}
+
 async function generateExplanation() {
   explaining.value = true
   try {
@@ -286,6 +304,7 @@ function close() {
 }
 
 onMounted(() => {
+  loadSandboxStatus()
   // 动态加载 Monaco AMD Loader 脚本
   if (window.monaco) {
     initMonaco()
@@ -356,9 +375,9 @@ selectChart('line')
         <div class="flex items-center justify-between px-3 py-1.5 bg-gray-800 border-b border-gray-700/50">
           <span class="text-[9px] text-gray-500 font-mono">matplotlib 代码</span>
           <button class="px-3 py-1 text-[9px] font-semibold rounded-lg transition-all"
-            :class="running ? 'bg-gray-700 text-gray-400 cursor-wait' : 'bg-teal-600 text-white hover:bg-teal-500'"
-            :disabled="running" @click="runCode">
-            {{ running ? '⏳ 运行中...' : '▶ 运行' }}
+            :class="running ? 'bg-gray-700 text-gray-400 cursor-wait' : sandboxReady ? 'bg-teal-600 text-white hover:bg-teal-500' : 'bg-gray-700 text-gray-400'"
+            :disabled="running || !sandboxReady" @click="runCode">
+            {{ running ? '⏳ 运行中...' : sandboxReady ? '▶ 运行' : '沙箱未启用' }}
           </button>
         </div>
         <div class="p-2 bg-gray-950">
@@ -397,6 +416,10 @@ selectChart('line')
         <p class="text-[10px] text-gray-300 leading-relaxed text-left">{{ explanation }}</p>
       </div>
 
+    </div>
+
+    <div v-if="!sandboxReady" class="mx-3 mb-3 rounded-lg border border-amber-800/50 bg-amber-950/40 px-3 py-2 text-[10px] text-amber-300">
+      {{ sandboxMessage }}。当前版本不执行宿主机代码。
     </div>
   </div>
 </template>

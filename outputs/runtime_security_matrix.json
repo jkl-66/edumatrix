@@ -1,0 +1,629 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "started_at": "2026-07-19T14:45:26+0800",
+  "accounts": {
+    "student_a": "matrix_a_1784443526",
+    "student_b": "matrix_b_1784443526"
+  },
+  "checks": [
+    {
+      "name": "unauthenticated profile is rejected",
+      "method": "GET",
+      "path": "/api/profile/matrix_a_1784443526",
+      "status": 401,
+      "expected": [
+        401
+      ],
+      "passed": true,
+      "body": {
+        "detail": "Could not validate credentials"
+      }
+    },
+    {
+      "name": "student A can read own profile",
+      "method": "GET",
+      "path": "/api/profile/matrix_a_1784443526",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "passed": true,
+      "body": {
+        "student_id": "matrix_a_1784443526"
+      }
+    },
+    {
+      "name": "student B can read own profile",
+      "method": "GET",
+      "path": "/api/profile/matrix_b_1784443526",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "passed": true,
+      "body": {
+        "student_id": "matrix_b_1784443526"
+      }
+    },
+    {
+      "name": "student A can use default alias for own scope",
+      "method": "GET",
+      "path": "/api/profile/default",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "passed": true,
+      "body": {
+        "student_id": "matrix_a_1784443526"
+      }
+    },
+    {
+      "name": "A cannot read B: profile",
+      "method": "GET",
+      "path": "/api/profile/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: profile analysis",
+      "method": "GET",
+      "path": "/api/profile/matrix_b_1784443526/analysis",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: learning path",
+      "method": "GET",
+      "path": "/api/profile/matrix_b_1784443526/learning-path",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: goal recommendations",
+      "method": "GET",
+      "path": "/api/profile/matrix_b_1784443526/goal-recommendations",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: profile narrative",
+      "method": "GET",
+      "path": "/api/profile/matrix_b_1784443526/narrative",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: recommendations",
+      "method": "GET",
+      "path": "/api/profile/matrix_b_1784443526/recommendations",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: knowledge list",
+      "method": "GET",
+      "path": "/api/knowledge/list?student_id=matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: knowledge document",
+      "method": "GET",
+      "path": "/api/knowledge/not-a-real-document?student_id=matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: quiz history",
+      "method": "GET",
+      "path": "/api/quiz/history/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: wrong questions",
+      "method": "GET",
+      "path": "/api/quiz/wrong-questions/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: wrong concepts",
+      "method": "GET",
+      "path": "/api/quiz/wrong-concepts/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: checkin streak",
+      "method": "GET",
+      "path": "/api/quiz/checkin/streak/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: checkin history",
+      "method": "GET",
+      "path": "/api/quiz/checkin/history/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: flashcard due",
+      "method": "GET",
+      "path": "/api/flashcard/due?student_id=matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: behavior scope is not a read route",
+      "method": "GET",
+      "path": "/api/sessions/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: conversation history",
+      "method": "GET",
+      "path": "/api/history/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: progress",
+      "method": "GET",
+      "path": "/api/progress/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: review plans",
+      "method": "GET",
+      "path": "/api/review/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: code history",
+      "method": "GET",
+      "path": "/api/code/history/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot read B: profile PDF",
+      "method": "GET",
+      "path": "/api/v1/profile/export?student_id=matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: process",
+      "method": "POST",
+      "path": "/api/process",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: stream explain",
+      "method": "POST",
+      "path": "/api/stream/explain",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: stream chat",
+      "method": "POST",
+      "path": "/api/stream/chat",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: profile update",
+      "method": "POST",
+      "path": "/api/profile/matrix_b_1784443526/update",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: profile update legacy",
+      "method": "POST",
+      "path": "/api/profile/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: knowledge web source",
+      "method": "POST",
+      "path": "/api/knowledge/add-web-source",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: knowledge web download",
+      "method": "POST",
+      "path": "/api/knowledge/download-web-file",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: notes create",
+      "method": "POST",
+      "path": "/api/notes/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: notes reflection",
+      "method": "POST",
+      "path": "/api/notes/append-reflection",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: notes update",
+      "method": "POST",
+      "path": "/api/notes/update/not-a-real-note",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: quiz generate",
+      "method": "POST",
+      "path": "/api/quiz/generate",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: quiz evaluate",
+      "method": "POST",
+      "path": "/api/quiz/evaluate",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: quiz adapt",
+      "method": "POST",
+      "path": "/api/quiz/adapt",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: quiz similar",
+      "method": "POST",
+      "path": "/api/quiz/similar",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: flashcard generate",
+      "method": "POST",
+      "path": "/api/flashcard/generate",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: flashcard review",
+      "method": "POST",
+      "path": "/api/flashcard/review",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: behavior logs",
+      "method": "POST",
+      "path": "/api/behavior/logs",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: quiz checkin",
+      "method": "POST",
+      "path": "/api/quiz/checkin/matrix_b_1784443526",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "A cannot mutate B: code run",
+      "method": "POST",
+      "path": "/api/code/run",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "无权访问其他学生的数据"
+      }
+    },
+    {
+      "name": "student A cannot access teacher dashboard",
+      "method": "GET",
+      "path": "/api/teacher",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "仅教师可访问此接口"
+      }
+    },
+    {
+      "name": "student B cannot access teacher reviews",
+      "method": "GET",
+      "path": "/api/teacher/reviews",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "passed": true,
+      "body": {
+        "detail": "仅教师可访问此接口"
+      }
+    },
+    {
+      "name": "teacher can access teacher dashboard",
+      "method": "GET",
+      "path": "/api/teacher",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "passed": true,
+      "body": {}
+    },
+    {
+      "name": "teacher can access teacher reviews",
+      "method": "GET",
+      "path": "/api/teacher/reviews",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "passed": true,
+      "body": {}
+    }
+  ],
+  "teacher": {
+    "available": true,
+    "username": "teacher"
+  },
+  "summary": {
+    "total": 47,
+    "passed": 47,
+    "failed": 0,
+    "failed_names": []
+  },
+  "result": "passed",
+  "finished_at": "2026-07-19T14:45:29+0800"
+}

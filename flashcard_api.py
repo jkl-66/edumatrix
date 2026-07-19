@@ -21,8 +21,9 @@ from app.crud import (
     review_plan_to_dict,
 )
 from app.database import DBQuizRecord, DBReviewPlan, get_db
+from app.auth import enforce_request_student_scope, enforce_student_access, get_current_user
 
-router = APIRouter(prefix="/api/flashcard", tags=["flashcard"])
+router = APIRouter(prefix="/api/flashcard", tags=["flashcard"], dependencies=[Depends(enforce_request_student_scope)])
 
 
 def _utcnow_naive() -> datetime:
@@ -40,10 +41,14 @@ def _iso_utc(value: datetime | None) -> str:
 
 
 @router.post("/generate")
-async def generate_flashcard(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+async def generate_flashcard(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> dict[str, Any]:
     """Create or load a flashcard and mirror it into review_plans."""
     payload = await request.json()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     quiz_id = str(payload.get("quiz_id", "")).strip()
 
     concept = ""
@@ -144,10 +149,14 @@ async def generate_flashcard(request: Request, db: Session = Depends(get_db)) ->
 
 
 @router.post("/review")
-async def review_flashcard(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+async def review_flashcard(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> dict[str, Any]:
     """Record review quality and persist the SM-2 schedule in database."""
     payload = await request.json()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     concept = str(payload.get("concept", "")).strip()
     try:
         quality = int(payload.get("quality", 4))
@@ -201,8 +210,10 @@ async def get_due_cards(
     student_id: str = "default",
     max_count: int = 20,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return due cards directly from DB."""
+    student_id = enforce_student_access(student_id, current_user)
     now = _utcnow_naive()
     plans = (
         db.query(DBReviewPlan)
@@ -246,8 +257,10 @@ async def get_all_cards(
     request: Request,
     student_id: str = "default",
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return all cards directly from DB."""
+    student_id = enforce_student_access(student_id, current_user)
     plans = db.query(DBReviewPlan).filter(DBReviewPlan.student_id == student_id).all()
     
     cards = []

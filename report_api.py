@@ -24,10 +24,11 @@ from sqlalchemy.orm import Session
 
 from app.crud import load_student_profile
 from app.database import get_db
+from app.auth import enforce_request_student_scope, enforce_student_access, get_current_user
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/profile", tags=["profile"])
+router = APIRouter(prefix="/api/v1/profile", tags=["profile"], dependencies=[Depends(enforce_request_student_scope)])
 
 
 # ============================================================
@@ -228,6 +229,7 @@ async def export_profile_pdf(
     student_id: str = Query("default", description="学生 ID"),
     db: Session = Depends(get_db),
     pool: BrowserPool = Depends(get_browser_pool),
+    current_user=Depends(get_current_user),
 ):
     """导出学生画像为 PDF 诊断报告。
 
@@ -237,6 +239,7 @@ async def export_profile_pdf(
     3. Playwright 无头浏览器渲染 A4 PDF
     4. StreamingResponse 流式返回
     """
+    student_id = enforce_student_access(student_id, current_user)
     profile = load_student_profile(db, student_id)
     if not profile:
         raise HTTPException(status_code=404, detail="学生画像未找到")

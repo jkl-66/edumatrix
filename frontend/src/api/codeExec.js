@@ -1,6 +1,11 @@
 import { api, buildHeaders } from './common'
 
 // --- Code Execution API ---
+export async function getCodeStatus() {
+  const r = await api.get('/code/status', { headers: buildHeaders() })
+  return r.data
+}
+
 export async function runCode(code, language = 'python', studentId = 'default') {
   const r = await api.post('/code/run', {
     code,

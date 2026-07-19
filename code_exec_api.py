@@ -10,9 +10,10 @@ import asyncio
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.database import DBCodeExecution, run_db_op
+from app.auth import enforce_student_access, get_current_user
 from config import CONFIG
 
 router = APIRouter(prefix="/api/code", tags=["code_execution"])
@@ -27,8 +28,13 @@ class SandboxProcessRunner:
         self.pool_size = pool_size
         self.image = image
         self._lock = asyncio.Lock()
+        self.mode = CONFIG.sandbox_mode if CONFIG.sandbox_mode in {"disabled", "docker"} else "disabled"
 
     async def start(self):
+        if self.mode != "docker":
+            self.docker_available = False
+            print("  [Sandbox] Mode=disabled. Code execution is unavailable; Docker is optional.")
+            return
         try:
             import docker
             loop = asyncio.get_running_loop()
@@ -40,7 +46,7 @@ class SandboxProcessRunner:
             await self._prewarm_pool()
         except Exception as e:
             self.docker_available = False
-            print(f"  [Sandbox] Docker daemon not available ({e}). Falling back to Subprocess sandbox.")
+            print(f"  [Sandbox] Docker daemon not available ({e}). Code execution will remain disabled.")
 
     async def _prewarm_pool(self):
         loop = asyncio.get_running_loop()
@@ -48,7 +54,7 @@ class SandboxProcessRunner:
             print(f"  [Sandbox] Checking/Pulling image {self.image}...")
             await loop.run_in_executor(self.executor, self.client.images.pull, self.image)
         except Exception as e:
-            print(f"  [Sandbox] Failed to pull image {self.image}: {e}. Falling back to Subprocess.")
+            print(f"  [Sandbox] Failed to pull image {self.image}: {e}. Code execution will remain disabled.")
             self.docker_available = False
             return
 
@@ -140,10 +146,9 @@ class SandboxProcessRunner:
         if validation_error:
             return "", validation_error, 0.0
 
-        if self.docker_available:
-            return await self._run_in_docker(code)
-        else:
-            return await self._run_in_subprocess(code)
+        if not self.docker_available:
+            return "", "错误: Docker 沙箱不可用或未启用，已拒绝执行代码（可设置 EDUMATRIX_SANDBOX_MODE=docker）", 0.0
+        return await self._run_in_docker(code)
 
     async def _run_in_docker(self, code: str) -> tuple[str, str, float]:
         loop = asyncio.get_running_loop()
@@ -157,8 +162,8 @@ class SandboxProcessRunner:
                 try:
                     container = await loop.run_in_executor(self.executor, self._create_container)
                 except Exception as ce:
-                    print(f"  [Sandbox] Failed to create container dynamically: {ce}. Falling back to subprocess.")
-                    return await self._run_in_subprocess(code)
+                    print(f"  [Sandbox] Failed to create container dynamically: {ce}")
+                    return "", "错误: Docker 容器创建失败，已拒绝执行代码", time.time() - start_time
 
         # === 任务 5 & 15: Docker 容器预热池故障自愈 + 超周期僵死防患 ===
         async def check_and_heal_container():
@@ -187,7 +192,7 @@ class SandboxProcessRunner:
 
         healthy = await check_and_heal_container()
         if not healthy or container is None:
-            return await self._run_in_subprocess(code)
+            return "", "错误: Docker 容器健康检查失败，已拒绝执行代码", time.time() - start_time
 
         wrapper_script = self._get_wrapper_script()
         encoded_wrapper = base64.b64encode(wrapper_script.encode('utf-8')).decode('utf-8')
@@ -532,6 +537,22 @@ sys.stdout.write(error_buffer.getvalue())
 SANDBOX_RUNNER = SandboxProcessRunner()
 
 
+@router.get("/status")
+async def sandbox_status() -> dict[str, Any]:
+    """Expose the optional sandbox capability without requiring Docker."""
+    enabled = SANDBOX_RUNNER.mode == "docker" and SANDBOX_RUNNER.docker_available
+    if enabled:
+        message = "Docker 代码沙箱已启用"
+    else:
+        message = "代码沙箱未启用；核心学习功能可正常使用，设置 EDUMATRIX_SANDBOX_MODE=docker 后才执行代码"
+    return {
+        "mode": SANDBOX_RUNNER.mode,
+        "docker_available": SANDBOX_RUNNER.docker_available,
+        "execution_enabled": enabled,
+        "message": message,
+    }
+
+
 def _generate_id() -> str:
     return uuid.uuid4().hex[:16]
 
@@ -539,10 +560,11 @@ def _generate_id() -> str:
 @router.post("/run")
 async def run_code(
     payload: dict[str, Any],
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     code = str(payload.get("code", "")).strip()
     language = str(payload.get("language", "python")).strip().lower()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
 
     if not code:
         raise HTTPException(status_code=400, detail="代码不能为空")
@@ -550,6 +572,12 @@ async def run_code(
     # === 任务 14: 代码沙箱大文件 DoS 攻击防御拦截 (FastAPI 前置拦截) ===
     if len(code.encode('utf-8')) > 50000:
         raise HTTPException(status_code=400, detail="恶意代码长度超限，沙箱拒绝运行 (Max 50KB)")
+
+    if SANDBOX_RUNNER.mode != "docker" or not SANDBOX_RUNNER.docker_available:
+        raise HTTPException(
+            status_code=503,
+            detail="代码沙箱未启用；核心学习功能可用，设置 EDUMATRIX_SANDBOX_MODE=docker 并启动 Docker 后才执行代码",
+        )
 
     # Syntax validation of code before execution
     if language == "python":
@@ -603,7 +631,9 @@ async def _execute_python(code: str) -> tuple[str, str, float]:
 async def get_code_history(
     student_id: str,
     limit: int = 20,
+    current_user=Depends(get_current_user),
 ) -> list[dict[str, Any]]:
+    student_id = enforce_student_access(student_id, current_user)
     def fetch_history(session):
         return (
             session.query(DBCodeExecution)

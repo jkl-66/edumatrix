@@ -10,6 +10,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 
 from app.database import DBQuizRecord, DBReviewPlan, DBStudentProfile, get_db, run_db_op
+from app.auth import enforce_request_student_scope, enforce_student_access, get_current_user
 from app.crud import load_student_profile, save_student_profile
 from learning_event_bus import (
     LearningEventBus,
@@ -22,7 +23,7 @@ from code_exec_api import SANDBOX_RUNNER
 # 启动时注册默认事件订阅器
 register_default_subscribers()
 
-router = APIRouter(prefix="/api/quiz", tags=["quiz"])
+router = APIRouter(prefix="/api/quiz", tags=["quiz"], dependencies=[Depends(enforce_request_student_scope)])
 
 import json as _json_mod
 
@@ -379,9 +380,11 @@ def _get_fallback_quiz(concept: str, difficulty: str) -> dict[str, Any]:
 @router.post("/generate")
 async def generate_quiz(
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     payload = await request.json()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = str(payload.get("student_id", ""))
+    student_id = enforce_student_access(student_id, current_user)
     target_concept = str(payload.get("target_concept", "")).strip()
     req_difficulty = str(payload.get("difficulty", "")).strip().lower()
 
@@ -658,10 +661,11 @@ async def generate_quiz(
 async def evaluate_answer(
     request: Request,
     background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     payload = await request.json()
     quiz_id = str(payload.get("quiz_id", "")).strip()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     student_answer = str(payload.get("answer", "")).strip()
     student_confidence = float(payload.get("student_confidence", 0.5))
     attempt_number = int(payload.get("attempt_number", 1))
@@ -1055,9 +1059,10 @@ async def evaluate_answer(
 @router.post("/adapt")
 async def adapt_quiz(
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     payload = await request.json()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     quiz_id = str(payload.get("quiz_id", "")).strip()
     previous_action = str(payload.get("next_action", "practice"))
 
@@ -1236,7 +1241,9 @@ async def adapt_quiz(
 async def get_quiz_history(
     student_id: str,
     limit: int = 20,
+    current_user=Depends(get_current_user),
 ) -> list[dict[str, Any]]:
+    student_id = enforce_student_access(student_id, current_user)
     def fetch_history(session):
         return (
             session.query(DBQuizRecord)
@@ -1267,6 +1274,7 @@ async def get_quiz_history(
 async def generate_similar_quiz(
     request: Request,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """任务 7.7: 生成同阶错题相似题 + 沙箱自校验。
 
@@ -1284,7 +1292,7 @@ async def generate_similar_quiz(
         4. 答对后降低原题复习优先级
     """
     payload = await request.json()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     source_quiz_id = str(payload.get("source_quiz_id", "")).strip()
 
     if not source_quiz_id:
@@ -1469,9 +1477,11 @@ async def get_wrong_questions(
     student_id: str,
     concept: str = "",
     limit: int = 50,
+    current_user=Depends(get_current_user),
 ) -> list[dict]:
     """获取学生的错题列表，支持按概念筛选。"""
     from app.database import DBWrongQuestion, DBQuizRecord
+    student_id = enforce_student_access(student_id, current_user)
 
     def fetch_wrong_questions(session):
         query = session.query(DBWrongQuestion).filter(
@@ -1513,9 +1523,13 @@ async def get_wrong_questions(
 
 
 @router.get("/wrong-concepts/{student_id}")
-async def get_wrong_concepts(student_id: str) -> list[dict]:
+async def get_wrong_concepts(
+    student_id: str,
+    current_user=Depends(get_current_user),
+) -> list[dict]:
     """获取学生的错题概念聚合统计。"""
     from app.database import DBWrongQuestion
+    student_id = enforce_student_access(student_id, current_user)
 
     def fetch_concept_stats(session):
         from sqlalchemy import func
@@ -1538,9 +1552,14 @@ async def get_wrong_concepts(student_id: str) -> list[dict]:
 
 
 @router.delete("/wrong-questions/{wrong_id}")
-async def delete_wrong_question(wrong_id: int, student_id: str) -> dict:
+async def delete_wrong_question(
+    wrong_id: int,
+    student_id: str,
+    current_user=Depends(get_current_user),
+) -> dict:
     """删除指定的错题记录。"""
     from app.database import DBWrongQuestion
+    student_id = enforce_student_access(student_id, current_user)
 
     def do_delete(session):
         record = session.query(DBWrongQuestion).filter(
@@ -1557,9 +1576,14 @@ async def delete_wrong_question(wrong_id: int, student_id: str) -> dict:
 
 
 @router.patch("/wrong-questions/{wrong_id}/pin")
-async def toggle_pin_wrong_question(wrong_id: int, student_id: str) -> dict:
+async def toggle_pin_wrong_question(
+    wrong_id: int,
+    student_id: str,
+    current_user=Depends(get_current_user),
+) -> dict:
     """切换错题的置顶/取消置顶状态。"""
     from app.database import DBWrongQuestion
+    student_id = enforce_student_access(student_id, current_user)
 
     def do_pin(session):
         record = session.query(DBWrongQuestion).filter(
@@ -1576,12 +1600,17 @@ async def toggle_pin_wrong_question(wrong_id: int, student_id: str) -> dict:
 
 
 @router.patch("/wrong-questions/{wrong_id}/notes")
-async def update_wrong_question_notes(wrong_id: int, request: Request) -> dict:
+async def update_wrong_question_notes(
+    wrong_id: int,
+    request: Request,
+    current_user=Depends(get_current_user),
+) -> dict:
     """更新错题的笔记内容。"""
     from app.database import DBWrongQuestion
 
     payload = await request.json()
     student_id = str(payload.get("student_id", ""))
+    student_id = enforce_student_access(student_id, current_user)
     notes = str(payload.get("notes", ""))
 
     def do_update(session):
@@ -1602,8 +1631,10 @@ async def update_wrong_question_notes(wrong_id: int, request: Request) -> dict:
 async def checkin_review(
     student_id: str,
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict:
     """复习打卡签到：记录当天的复习行为。"""
+    student_id = enforce_student_access(student_id, current_user)
     payload = await request.json()
     concept = str(payload.get("concept", ""))
     duration_minutes = int(payload.get("duration_minutes", 10))
@@ -1659,9 +1690,13 @@ async def checkin_review(
 
 
 @router.get("/checkin/streak/{student_id}")
-async def get_checkin_streak(student_id: str) -> dict:
+async def get_checkin_streak(
+    student_id: str,
+    current_user=Depends(get_current_user),
+) -> dict:
     """获取打卡连续天数。"""
     from app.database import DBCheckinLog
+    student_id = enforce_student_access(student_id, current_user)
 
     def fetch_streak(session):
         return {"streak": _calc_streak(session, student_id)}
@@ -1670,9 +1705,14 @@ async def get_checkin_streak(student_id: str) -> dict:
 
 
 @router.get("/checkin/history/{student_id}")
-async def get_checkin_history(student_id: str, concept: str = "") -> list[dict]:
+async def get_checkin_history(
+    student_id: str,
+    concept: str = "",
+    current_user=Depends(get_current_user),
+) -> list[dict]:
     """获取学生的所有签到打卡记录，支持按特定知识点筛选。"""
     from app.database import DBCheckinLog
+    student_id = enforce_student_access(student_id, current_user)
 
     def fetch_history(session):
         query = session.query(DBCheckinLog).filter(

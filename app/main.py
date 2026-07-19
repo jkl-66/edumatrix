@@ -34,7 +34,7 @@ from app.crud import (
     update_note,
     append_wrong_question_reflection,
 )
-from app.auth import authenticate_user, create_access_token, get_current_user, get_current_teacher, get_password_hash
+from app.auth import authenticate_user, create_access_token, enforce_request_student_scope, enforce_student_access, get_current_user, get_current_teacher, get_password_hash
 from knowledge_api import router as knowledge_router
 from quiz_api import router as quiz_router
 from web_search_api import router as web_search_router
@@ -595,7 +595,7 @@ async def process_student_message(
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
         
     message = str(payload.get("message") or "").strip()
-    student_id = str(payload.get("student_id") or "demo-student").strip()
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
@@ -640,13 +640,16 @@ app.include_router(report_router)
 
 
 # === 任务 8.1: 行级/公式苏格拉底即时答疑 (直接挂载在app上，避免模块缓存问题) ===
-@app.post("/api/stream/explain")
-async def socratic_explain_direct(request: Request) -> dict[str, Any]:
+@app.post("/api/stream/explain", dependencies=[Depends(get_current_user)])
+async def socratic_explain_direct(
+    request: Request,
+    current_user: DBUser = Depends(get_current_user),
+) -> dict[str, Any]:
     payload = await request.json()
     target_text = str(payload.get("target_text", "")).strip()
     context_before = str(payload.get("context_before", ""))
     context_after = str(payload.get("context_after", ""))
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     follow_up = str(payload.get("follow_up", "")).strip()
     history = payload.get("history", "")
     if not target_text and not follow_up:
@@ -759,8 +762,12 @@ async def get_metrics():
     }
 
 
-@app.get("/api/sessions/{student_id}")
-async def list_sessions(student_id: str):
+@app.get("/api/sessions/{student_id}", dependencies=[Depends(enforce_request_student_scope)])
+async def list_sessions(
+    student_id: str,
+    current_user: DBUser = Depends(get_current_user),
+):
+    student_id = enforce_student_access(student_id, current_user)
     conversations = await run_db_op(get_conversation_history, student_id, limit=20)
     return {
         "student_id": student_id,
@@ -805,7 +812,7 @@ async def submit_feedback(request: Request):
     }
 
 
-@app.post("/api/notes/ai-polish")
+@app.post("/api/notes/ai-polish", dependencies=[Depends(get_current_user)])
 async def polish_note(request: Request):
     try:
         payload = await request.json()
@@ -922,10 +929,13 @@ async def polish_note(request: Request):
         raise outer_e
 
 
-@app.post("/api/notes/append-reflection")
-async def append_reflection(request: Request):
+@app.post("/api/notes/append-reflection", dependencies=[Depends(get_current_user)])
+async def append_reflection(
+    request: Request,
+    current_user: DBUser = Depends(get_current_user),
+):
     payload = await request.json()
-    student_id = str(payload.get("student_id", "")).strip()
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     concept = str(payload.get("concept", "")).strip()
     quiz_record_id = str(payload.get("quiz_record_id", "")).strip()
     wrong_reason = str(payload.get("wrong_reason", "misconception")).strip()
@@ -943,30 +953,46 @@ async def append_reflection(request: Request):
     return {"id": note.id, "updated_at": note.updated_at.isoformat()}
 
 
-@app.post("/api/notes/update/{note_id}")
-async def update_existing_note(note_id: str, request: Request):
+@app.post("/api/notes/update/{note_id}", dependencies=[Depends(get_current_user)])
+async def update_existing_note(
+    note_id: str,
+    request: Request,
+    current_user: DBUser = Depends(get_current_user),
+):
     payload = await request.json()
     content = str(payload.get("content", "")).strip()
     if not content:
         raise HTTPException(status_code=400, detail="content is required")
     
+    requested_student_id = payload.get("student_id")
+    student_scope = enforce_student_access(requested_student_id, current_user)
     note = await run_db_op(
         update_note, note_id, content=content,
-        tags=payload.get("tags"), concepts=payload.get("concepts")
+        tags=payload.get("tags"), concepts=payload.get("concepts"),
+        student_id=None if current_user.role == "teacher" else student_scope,
     )
     if not note:
         raise HTTPException(status_code=404, detail="note not found")
     return {"id": note.id, "updated_at": note.updated_at.isoformat()}
 
 
-@app.get("/api/notes/{student_id}")
-async def list_notes(student_id: str):
+@app.get("/api/notes/{student_id}", dependencies=[Depends(enforce_request_student_scope)])
+async def list_notes(
+    student_id: str,
+    current_user: DBUser = Depends(get_current_user),
+):
+    student_id = enforce_student_access(student_id, current_user)
     notes = await run_db_op(get_notes, student_id)
     return {"student_id": student_id, "notes": [{"id": n.id, "source": n.source, "content": n.content, "tags": n.tags, "concepts": n.concepts, "created_at": n.created_at.isoformat()} for n in notes]}
 
 
-@app.post("/api/notes/{student_id}")
-async def add_note(student_id: str, request: Request):
+@app.post("/api/notes/{student_id}", dependencies=[Depends(enforce_request_student_scope)])
+async def add_note(
+    student_id: str,
+    request: Request,
+    current_user: DBUser = Depends(get_current_user),
+):
+    student_id = enforce_student_access(student_id, current_user)
     payload = await request.json()
     content = str(payload.get("content", "")).strip()
     if not content:
@@ -979,15 +1005,22 @@ async def add_note(student_id: str, request: Request):
     return {"id": note.id, "created_at": note.created_at.isoformat()}
 
 
-@app.delete("/api/notes/{note_id}")
-async def remove_note(note_id: str):
-    success = await run_db_op(delete_note, note_id)
+@app.delete("/api/notes/{note_id}", dependencies=[Depends(get_current_user)])
+async def remove_note(
+    note_id: str,
+    current_user: DBUser = Depends(get_current_user),
+):
+    success = await run_db_op(
+        delete_note,
+        note_id,
+        student_id=None if current_user.role == "teacher" else current_user.username,
+    )
     if not success:
         raise HTTPException(status_code=404, detail="note not found")
     return {"deleted": True}
 
 
-@app.post("/api/export-notes-pdf")
+@app.post("/api/export-notes-pdf", dependencies=[Depends(get_current_user)])
 async def export_note_pdf(request: Request):
     """任务 2: 将笔记导出为 PDF 文件。"""
     from fastapi.responses import StreamingResponse
@@ -1041,8 +1074,12 @@ async def export_note_pdf(request: Request):
         raise HTTPException(status_code=500, detail=f"PDF 生成失败: {str(e)[:200]}")
 
 
-@app.get("/api/progress/{student_id}")
-async def get_progress(student_id: str):
+@app.get("/api/progress/{student_id}", dependencies=[Depends(enforce_request_student_scope)])
+async def get_progress(
+    student_id: str,
+    current_user: DBUser = Depends(get_current_user),
+):
+    student_id = enforce_student_access(student_id, current_user)
     def fetch_data(session):
         profile = load_student_profile(session, student_id)
         notes = get_notes(session, student_id, limit=5)
@@ -1065,8 +1102,12 @@ async def get_progress(student_id: str):
     }
 
 
-@app.get("/api/history/{student_id}")
-async def get_history(student_id: str):
+@app.get("/api/history/{student_id}", dependencies=[Depends(enforce_request_student_scope)])
+async def get_history(
+    student_id: str,
+    current_user: DBUser = Depends(get_current_user),
+):
+    student_id = enforce_student_access(student_id, current_user)
     conversations = await run_db_op(get_conversation_history, student_id)
     return {
         "student_id": student_id,
@@ -1088,8 +1129,12 @@ async def get_history(student_id: str):
     }
 
 
-@app.get("/api/review/{student_id}")
-async def get_review(student_id: str):
+@app.get("/api/review/{student_id}", dependencies=[Depends(enforce_request_student_scope)])
+async def get_review(
+    student_id: str,
+    current_user: DBUser = Depends(get_current_user),
+):
+    student_id = enforce_student_access(student_id, current_user)
     plans = await run_db_op(get_review_plan, student_id)
     return {
         "student_id": student_id,
@@ -1097,8 +1142,13 @@ async def get_review(student_id: str):
     }
 
 
-@app.post("/api/review/{student_id}")
-async def update_review(student_id: str, request: Request):
+@app.post("/api/review/{student_id}", dependencies=[Depends(enforce_request_student_scope)])
+async def update_review(
+    student_id: str,
+    request: Request,
+    current_user: DBUser = Depends(get_current_user),
+):
+    student_id = enforce_student_access(student_id, current_user)
     payload = await request.json()
     concept = str(payload.get("concept", "")).strip()
     mastery = float(payload.get("mastery", 0.5))
@@ -1109,9 +1159,16 @@ async def update_review(student_id: str, request: Request):
     return review_plan_to_dict(plan)
 
 
-@app.delete("/api/review/{plan_id}")
-async def remove_review_plan(plan_id: int):
-    success = await run_db_op(delete_review_plan, plan_id)
+@app.delete("/api/review/{plan_id}", dependencies=[Depends(get_current_user)])
+async def remove_review_plan(
+    plan_id: int,
+    current_user: DBUser = Depends(get_current_user),
+):
+    success = await run_db_op(
+        delete_review_plan,
+        plan_id,
+        student_id=None if current_user.role == "teacher" else current_user.username,
+    )
     if not success:
         raise HTTPException(status_code=404, detail="Review plan not found")
     return {"status": "ok", "deleted": True}

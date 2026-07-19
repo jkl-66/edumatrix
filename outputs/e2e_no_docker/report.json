@@ -1,0 +1,45 @@
+{
+  "mode": "disabled",
+  "base_url": "http://127.0.0.1:5173",
+  "started_at": "2026-07-19T14:40:44+0800",
+  "screenshots": [
+    "outputs/e2e_no_docker/01-login.png",
+    "outputs/e2e_no_docker/02-dashboard.png",
+    "outputs/e2e_no_docker/03-chat-empty.png",
+    "outputs/e2e_no_docker/04-chat-response.png",
+    "outputs/e2e_no_docker/05-code-sandbox-disabled.png",
+    "outputs/e2e_no_docker/06-learning-path.png"
+  ],
+  "checks": {
+    "health": {
+      "status": "ok",
+      "version": "1.1.0",
+      "service": "EduMatrix 智教矩阵",
+      "llm_provider": "deterministic",
+      "llm_model": "deepseek-v4-flash",
+      "llm_endpoint": "https://api.deepseek.com/v1/chat/completions",
+      "llm_api_key_configured": true,
+      "user_api_key_provided": false,
+      "embedding_provider": "hash",
+      "concurrent_llm": 8,
+      "rate_limit_rpm": 120
+    },
+    "sandbox_status": {
+      "mode": "disabled",
+      "docker_available": false,
+      "execution_enabled": false,
+      "message": "代码沙箱未启用；核心学习功能可正常使用，设置 EDUMATRIX_SANDBOX_MODE=docker 后才执行代码"
+    },
+    "temporary_student": "e2e_1784443247",
+    "chat_response": {
+      "question": "解释 accuracy 和 recall 的区别，用一个混淆矩阵例子。",
+      "assistant_cards": 1
+    },
+    "frontend_sandbox_guard": {
+      "message_visible": true,
+      "run_button_disabled": true
+    }
+  },
+  "result": "passed",
+  "finished_at": "2026-07-19T14:41:16+0800"
+}

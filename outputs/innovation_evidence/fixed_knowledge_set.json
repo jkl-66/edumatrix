@@ -1,0 +1,20 @@
+[
+  {
+    "id": "fixed-ml-eval-001",
+    "topic": "混淆矩阵与召回率",
+    "statement": "Recall = TP / (TP + FN)，正类样本稀少时仅看 accuracy 可能掩盖漏检。",
+    "data_label": "公开知识整理后的固定演示知识集"
+  },
+  {
+    "id": "fixed-ml-pooling-001",
+    "topic": "最大池化与平均池化",
+    "statement": "最大池化在窗口内选择最大值，平均池化计算窗口均值；二者不是同一算子。",
+    "data_label": "公开教材概念整理后的固定演示知识集"
+  },
+  {
+    "id": "fixed-ml-regularization-001",
+    "topic": "L1/L2 正则化",
+    "statement": "L1 惩罚绝对值和，L2 惩罚平方和；正则项会改变优化目标与参数偏好。",
+    "data_label": "公开教材概念整理后的固定演示知识集"
+  }
+]

@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.database import DBWebSearchHistory, run_db_op
+from app.auth import enforce_student_access, get_current_user
 from document_parser import chunk_document
 from rag_engine import hybrid_rag
 from swarm_factory import build_swarm_from_headers
@@ -41,10 +42,11 @@ _SEARCH_CACHE_TTL = 300  # 5分钟
 @router.post("/search")
 async def web_search(
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     payload = await request.json()
     query = str(payload.get("query", "")).strip()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     max_results = int(payload.get("max_results", 10))
     category = str(payload.get("category", "all")).strip().lower()
 
@@ -507,10 +509,11 @@ def _parse_bing_html(html: str, max_results: int) -> list[dict[str, str]]:
 @router.post("/load-url")
 async def load_url(
     request: Request,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     payload = await request.json()
     url = str(payload.get("url", "")).strip()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
 
     if not url:
         raise HTTPException(status_code=400, detail="URL不能为空")
@@ -535,7 +538,7 @@ async def load_url(
     # Chunk and ingest
     evidence_chunks = chunk_document(text_content, source=f"url:{url}")
     if evidence_chunks:
-        hybrid_rag.ingest_user_documents(evidence_chunks)
+        hybrid_rag.ingest_user_documents(evidence_chunks, owner_id=student_id)
 
     # Summarize with LLM
     summary = ""
@@ -597,7 +600,9 @@ async def _fetch_url_content(url: str) -> str:
 async def get_search_history(
     student_id: str,
     limit: int = 20,
+    current_user=Depends(get_current_user),
 ) -> list[dict[str, Any]]:
+    student_id = enforce_student_access(student_id, current_user)
     def fetch_history(session):
         return (
             session.query(DBWebSearchHistory)
@@ -1098,4 +1103,4 @@ async def search_videos(query: str, max_results: int = 5) -> list[dict]:
                 unique_videos.append(onl)
                 seen_urls.add(onl["url"])
 
-    return unique_videos[:max_results]
+    return unique_videos[:max_results]

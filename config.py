@@ -2,12 +2,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import secrets
 
 try:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 except ImportError:
     pass
+
+
+_INSECURE_AUTH_SECRET = "edumatrix_super_secret_v1_2026"
+
+
+def _load_auth_secret_key() -> str:
+    """Require an explicit strong key in production and isolate dev tokens."""
+    configured = os.getenv("EDUMATRIX_AUTH_SECRET_KEY", "").strip()
+    environment = os.getenv("EDUMATRIX_ENV", "development").strip().lower()
+    if environment in {"production", "prod"}:
+        if not configured or configured == _INSECURE_AUTH_SECRET or len(configured) < 32:
+            raise RuntimeError(
+                "EDUMATRIX_AUTH_SECRET_KEY must be a unique value of at least 32 characters in production"
+            )
+        return configured
+    if not configured or configured == _INSECURE_AUTH_SECRET:
+        return secrets.token_urlsafe(32)
+    return configured
 
 
 @dataclass(frozen=True)
@@ -66,12 +85,15 @@ class EduMatrixConfig:
     chroma_collection_formulas: str = os.getenv("EDUMATRIX_CHROMA_FORMULAS", "edumatrix_formulas")
 
     # Auth Settings
-    auth_secret_key: str = os.getenv("EDUMATRIX_AUTH_SECRET_KEY", "edumatrix_super_secret_v1_2026")
+    auth_secret_key: str = _load_auth_secret_key()
     auth_algorithm: str = os.getenv("EDUMATRIX_AUTH_ALGORITHM", "HS256")
     auth_access_token_expire_minutes: int = int(os.getenv("EDUMATRIX_AUTH_TOKEN_EXPIRE_MINS", "1440")) # Default 24 hours
+    demo_mode: bool = os.getenv("EDUMATRIX_DEMO_MODE", "0") == "1"
 
     # Sandbox Settings
+    sandbox_mode: str = os.getenv("EDUMATRIX_SANDBOX_MODE", "disabled").strip().lower()
     sandbox_timeout: float = float(os.getenv("EDUMATRIX_SANDBOX_TIMEOUT", "10.0"))
+    max_upload_bytes: int = int(os.getenv("EDUMATRIX_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 
 
 

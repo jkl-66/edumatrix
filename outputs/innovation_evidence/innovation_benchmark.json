@@ -1,0 +1,159 @@
+{
+  "data_label": "结构性代码实测 + 合成演示基线，不是用户效果实验",
+  "protocol": {
+    "profiles": 3,
+    "same_query": "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+    "llm": "AsyncDeterministicEducationLLM",
+    "external_search": "disabled"
+  },
+  "single_agent_vs_multi_agent": {
+    "single_agent_baseline": {
+      "resource_count": 1,
+      "resource_types": [
+        "单段文本"
+      ],
+      "required_resource_type_coverage": "0/5 (基线定义)"
+    },
+    "edumatrix_multi_agent": {
+      "resource_count_per_case": [
+        5,
+        5,
+        5
+      ],
+      "resource_types_observed": [
+        "专业讲义",
+        "代码实操案例",
+        "思维导图",
+        "练习题",
+        "自适应推荐视频"
+      ],
+      "required_resource_type_coverage": "5/5 (代码实测)"
+    }
+  },
+  "without_profile_vs_with_profile": {
+    "without_profile_baseline": {
+      "profile_fields": 0,
+      "adaptation_basis": [],
+      "data_label": "基线定义，不宣称质量结果"
+    },
+    "with_profile": {
+      "profile_fields_observed": [
+        "major",
+        "learning_goals",
+        "interaction_preferences",
+        "cognitive_style",
+        "learning_state_causes"
+      ],
+      "cases": [
+        {
+          "label": "视觉型计算机本科生",
+          "major_before": "计算机科学与技术",
+          "major_after": "计算机科学与技术",
+          "preferences_before": [
+            "图示演示",
+            "具体例子"
+          ],
+          "preferences_after": [
+            "图示演示",
+            "具体例子",
+            "代码实操"
+          ],
+          "style_after": "代码实操导向",
+          "target": "池化层",
+          "strategy_target": "池化层"
+        },
+        {
+          "label": "项目型软件工程学生",
+          "major_before": "软件工程",
+          "major_after": "软件工程",
+          "preferences_before": [
+            "代码实操",
+            "分步引导"
+          ],
+          "preferences_after": [
+            "代码实操",
+            "分步引导",
+            "图示演示"
+          ],
+          "style_after": "代码实操导向",
+          "target": "池化层",
+          "strategy_target": "池化层"
+        },
+        {
+          "label": "跨专业研究型学习者",
+          "major_before": "数学",
+          "major_after": "数学",
+          "preferences_before": [
+            "对比解析",
+            "分步引导"
+          ],
+          "preferences_after": [
+            "对比解析",
+            "分步引导",
+            "图示演示",
+            "代码实操"
+          ],
+          "style_after": "代码实操导向",
+          "target": "池化层",
+          "strategy_target": "池化层"
+        }
+      ]
+    }
+  },
+  "without_rag_vs_with_rag": {
+    "without_rag_baseline": {
+      "citation_count": 0,
+      "evidence_count": 0
+    },
+    "with_rag": {
+      "query": "最大池化和平均池化的区别",
+      "target": "池化层",
+      "evidence_count": 6,
+      "evidence": [
+        {
+          "id": "TXT_CONV_PRE_01",
+          "title": "池化层前置知识",
+          "source": "课程知识库:CNN/Prerequisite",
+          "modality": "text",
+          "score": 1.0
+        },
+        {
+          "id": "TXT_POOL_DEF_01",
+          "title": "池化层定义与作用",
+          "source": "课程知识库:CNN/Pooling",
+          "modality": "text",
+          "score": 1.0
+        },
+        {
+          "id": "TXT_POOL_ERR_01",
+          "title": "池化层易错点",
+          "source": "课程知识库:CNN/Misconceptions",
+          "modality": "text",
+          "score": 0.8438
+        },
+        {
+          "id": "IMG_PATCH_CONV_01",
+          "title": "卷积核滑动与步长示意图",
+          "source": "教材图像切片 PDF:P42",
+          "modality": "image",
+          "score": 0.7173
+        },
+        {
+          "id": "IMG_PATCH_POOL_01",
+          "title": "2x2 最大池化矩阵演算图",
+          "source": "教材图像切片 PDF:P45",
+          "modality": "image",
+          "score": 0.5159
+        },
+        {
+          "id": "IMG_PATCH_POOL_02",
+          "title": "平均池化对照图",
+          "source": "教材图像切片 PDF:P46",
+          "modality": "image",
+          "score": 0.3529
+        }
+      ],
+      "data_label": "代码实测：本地固定/内置知识索引，外部检索已禁用"
+    }
+  }
+}

@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 
 from app.crud import load_student_profile, save_student_profile
 from app.database import get_db
+from app.auth import enforce_request_student_scope, enforce_student_access, get_current_user
 from models import LearningStateCause, StudentProfile
 
-router = APIRouter(prefix="/api/behavior", tags=["behavior"])
+router = APIRouter(prefix="/api/behavior", tags=["behavior"], dependencies=[Depends(enforce_request_student_scope)])
 
 
 # 标准化参数
@@ -74,6 +75,7 @@ def _update_focus_level(
 async def upload_behavior_logs(
     request: Request,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """上报前端行为统计数据，批量更新画像负荷和专注度。
 
@@ -89,7 +91,7 @@ async def upload_behavior_logs(
         {cognitive_load_new, focus_level_new, affective_block_triggered, ...}
     """
     payload = await request.json()
-    student_id = str(payload.get("student_id", "default"))
+    student_id = enforce_student_access(payload.get("student_id"), current_user)
     actual_stay = float(payload.get("actual_stay_seconds", T_BASE_SECONDS))
     sandbox_errors = int(payload.get("sandbox_errors", 0))
     accuracy = float(payload.get("page_accuracy", 0.5))

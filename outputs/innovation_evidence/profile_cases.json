@@ -1,0 +1,1353 @@
+[
+  {
+    "profile": {
+      "id": "synthetic_visual",
+      "label": "视觉型计算机本科生",
+      "major": "计算机科学与技术",
+      "goals": [
+        "期末复习冲刺"
+      ],
+      "preferences": [
+        "图示演示",
+        "具体例子"
+      ],
+      "style": "视觉演示导向"
+    },
+    "package": {
+      "student_id": "synthetic_visual",
+      "target": "池化层",
+      "resource_count": 5,
+      "resource_types": [
+        "代码实操案例",
+        "专业讲义",
+        "思维导图",
+        "练习题",
+        "自适应推荐视频"
+      ],
+      "resource_agents": [
+        "极客助教",
+        "理论教授",
+        "逻辑画师",
+        "考官智能体",
+        "视频推荐官"
+      ],
+      "citation_count": 30,
+      "resource_previews": [
+        {
+          "agent": "极客助教",
+          "resource_type": "代码实操案例",
+          "content_preview": "```python\nimport torch\nimport torch.nn as nn\n\nx = torch.tensor([[[[1., 3., 2., 4.],\n                    [5., 6., 1., 2.],\n                    [0., 2., 8., 1.],\n                    [3., 1., 2., 7.]]]])\n\npool = nn.MaxPool2",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "理论教授",
+          "resource_type": "专业讲义",
+          "content_preview": "# 池化层讲义\n\n池化层位于特征图之后，用一个固定窗口把局部区域压缩成更小的表示。以 2x2 最大池化为例，每个窗口只保留最大响应值，因此输出保留最显著的局部特征，同时降低空间尺寸和后续计算量。\n\n关键步骤：\n1. 在特征图上放置 2x2 窗口。\n2. 按 stride 移动窗口。\n3. 对每个窗口取 max 得到输出矩阵中的一个元素。\n\n常见误区：最大池化不是卷积，不学习参数；平均池化取均值，最大池化取最大值，二者不能混用。\n\n画像驱",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "逻辑画师",
+          "resource_type": "思维导图",
+          "content_preview": "```mermaid\nflowchart LR\n  A[输入特征图] --> B[2x2 窗口]\n  B --> C[取局部最大值]\n  C --> D[降采样特征图]\n  D --> E[全连接层或下一层卷积]\n```",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "考官智能体",
+          "resource_type": "练习题",
+          "content_preview": "1. 选择题：2x2 最大池化窗口 [1, 3; 5, 2] 的输出是多少？答案：5。\n2. 填空题：最大池化主要保留局部区域中的____响应。答案：最大/最强。\n3. 代码改错：若讲义要求最大池化，代码应使用 nn.MaxPool2d 而不是 nn.AvgPool2d。\n4. 画像校准题：先自评本题把握度 0-1，再独立写出第一个窗口的计算过程；若自评高但做错，系统记录为元认知校准风险，并安排相似题重测。",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "视频推荐官",
+          "resource_type": "自适应推荐视频",
+          "content_preview": "[{\"title\": \"Bilibili: 机器学习中池化层的可视化教学\", \"url\": \"https://www.bilibili.com/video/BV1111111111\", \"source\": \"B站视频\", \"recommendation\": \"该视频通过精美的三维动画直观地演示了池化层的运行轨迹，非常适合帮助建立空间与几何直观感知。\"}, {\"title\": \"本地三维演示动画 - 池化层\", \"url\": \"/api/",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        }
+      ],
+      "retrieval": {
+        "evidence_count": 6,
+        "evidence_ids": [
+          "TXT_POOL_DEF_01",
+          "TXT_POOL_ERR_01",
+          "TXT_CONV_PRE_01",
+          "IMG_PATCH_CONV_01",
+          "IMG_PATCH_POOL_01",
+          "IMG_PATCH_POOL_02"
+        ],
+        "evidence_sources": [
+          "课程知识库:CNN/Pooling",
+          "课程知识库:CNN/Misconceptions",
+          "课程知识库:CNN/Prerequisite",
+          "教材图像切片 PDF:P42",
+          "教材图像切片 PDF:P45",
+          "教材图像切片 PDF:P46"
+        ],
+        "graph_learning_path": [
+          "卷积核",
+          "填充",
+          "步长",
+          "线性代数",
+          "卷积运算",
+          "矩阵乘法",
+          "张量运算",
+          "特征图",
+          "池化层"
+        ],
+        "graph_prerequisite_edges": [
+          [
+            "卷积核",
+            "卷积运算"
+          ],
+          [
+            "填充",
+            "卷积运算"
+          ],
+          [
+            "步长",
+            "卷积运算"
+          ],
+          [
+            "线性代数",
+            "矩阵乘法"
+          ],
+          [
+            "卷积运算",
+            "特征图"
+          ],
+          [
+            "矩阵乘法",
+            "张量运算"
+          ],
+          [
+            "张量运算",
+            "特征图"
+          ],
+          [
+            "特征图",
+            "池化层"
+          ]
+        ],
+        "graph_downstream_edges": [
+          [
+            "池化层",
+            "全连接层"
+          ],
+          [
+            "池化层",
+            "卷积神经网络"
+          ],
+          [
+            "池化层",
+            "平均池化"
+          ],
+          [
+            "池化层",
+            "最大池化"
+          ]
+        ],
+        "low_confidence": false,
+        "out_of_domain": false
+      },
+      "debate": {
+        "verdict_count": 6,
+        "kept_count": 6,
+        "kept_evidence_ids": [
+          "TXT_POOL_DEF_01",
+          "TXT_POOL_ERR_01",
+          "TXT_CONV_PRE_01",
+          "IMG_PATCH_CONV_01",
+          "IMG_PATCH_POOL_01",
+          "IMG_PATCH_POOL_02"
+        ]
+      },
+      "alignment": {
+        "passed": true,
+        "distance": 0.541,
+        "threshold": 0.65,
+        "conflicts": [
+          {
+            "type": "委员会核查拦截",
+            "resources": [
+              "理论教授"
+            ],
+            "distance": 0.35,
+            "suggestion": "事实分(0.65)或相关分(0.8)不符合阈值。建议：自动兜底通过"
+          },
+          {
+            "type": "委员会核查拦截",
+            "resources": [
+              "考官智能体"
+            ],
+            "distance": 0.35,
+            "suggestion": "事实分(0.65)或相关分(0.8)不符合阈值。建议：自动兜底通过"
+          }
+        ],
+        "advice": "【委员会共识合成报告】事实均分: 0.86, 相关均分: 0.80。Agentic校验抛出异常，进入兜底直通防线。\n原图谱校验：所有资源在一致性流形中校验良好，无需回滚。"
+      },
+      "learning_signal": {
+        "accuracy": 0.9,
+        "dwell_seconds": 420,
+        "sandbox_error_rate": 0.18
+      },
+      "strategy_plan": {
+        "course": "机器学习导论",
+        "target": "池化层",
+        "actions": [
+          {
+            "strategy": "spaced_review",
+            "title": "间隔复习队列",
+            "description": "把“最大池化”加入 1 天、3 天、7 天复习队列，每次只做短检索题验证保持率。",
+            "trigger": "固定课程场景下持续巩固薄弱知识点",
+            "priority": 3,
+            "scheduled_after": "1d/3d/7d"
+          }
+        ],
+        "rationale": "策略引擎依据学生画像中的不会原因占比、知识掌握度和互动偏好，优先选择 worked example、提示阶梯、检索练习、间隔复习和元认知校准。"
+      },
+      "profile_after": {
+        "student_id": "synthetic_visual",
+        "major": "计算机科学与技术",
+        "target_course": "机器学习导论",
+        "learning_goals": [
+          "期末复习冲刺"
+        ],
+        "interaction_preferences": [
+          "图示演示",
+          "具体例子",
+          "代码实操"
+        ],
+        "cognitive_style": "代码实操导向",
+        "weak_points": [
+          "最大池化",
+          "平均池化"
+        ],
+        "learning_state_causes": {
+          "interaction_mismatch": {
+            "key": "interaction_mismatch",
+            "label": "讲解方式适配需求",
+            "percentage": 100.0,
+            "confidence": 0.7,
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "根据学生反馈切换讲解形式",
+              "保留学生偏好的图、代码、例子或苏格拉底追问"
+            ]
+          }
+        },
+        "dimension_states": {
+          "knowledge_mastery": {
+            "key": "knowledge_mastery",
+            "label": "知识基础",
+            "score": 0.48,
+            "confidence": 0.62,
+            "status": "基础可支撑下一步学习",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "优先补习【最大池化, 平均池化】的前置依赖概念，打牢基础",
+              "利用自适应微诊断题（CAT）验证【最大池化, 平均池化】的掌握边界"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          },
+          "misconception_profile": {
+            "key": "misconception_profile",
+            "label": "易错点与误概念",
+            "score": 1.0,
+            "confidence": 0.62,
+            "status": "未发现稳定误概念",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "加入概念对照表，预先辨析相似算法概念的适用边界",
+              "要求学生解释典型错误案例的诱因以防范未然"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          },
+          "understanding_fluency_transfer": {
+            "key": "understanding_fluency_transfer",
+            "label": "理解-熟练-迁移",
+            "score": 0.48,
+            "confidence": 0.62,
+            "status": "迁移表现待验证",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "提供【最大池化】的Worked Example后，立即推送相似结构变式题以巩固迁移",
+              "要求学生复述【最大池化】在算法场景中的触发和适用条件"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          },
+          "cognitive_processing": {
+            "key": "cognitive_processing",
+            "label": "认知加工与负荷",
+            "score": 0.55,
+            "confidence": 0.62,
+            "status": "负荷处于可教学区间",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "把当前高负荷任务拆分为不超过 3 步的渐进小块",
+              "利用系统右侧的【图示/脑图】辅助表达，减轻工作记忆负担"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          },
+          "learning_strategy": {
+            "key": "learning_strategy",
+            "label": "学习策略",
+            "score": 1.0,
+            "confidence": 0.62,
+            "status": "暂未发现明显策略缺口",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "实施‘间隔复习法’，对于易忘点在艾宾浩斯周期临界点进行精准推送",
+              "建议开启检索式问答练习，避免‘看过即学会’的元认知幻觉"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          },
+          "metacognition": {
+            "key": "metacognition",
+            "label": "元认知与自我调节",
+            "score": 1.0,
+            "confidence": 0.62,
+            "status": "自评校准待继续观察",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "在每道测试题作答前要求自评信心值，做完后进行置信度自动对齐校准",
+              "建议将做错的概念标记为‘待深化复习’，强制区分‘听懂’与‘独立会做’"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          },
+          "motivation_and_purpose": {
+            "key": "motivation_and_purpose",
+            "label": "动机目标与意义感",
+            "score": 0.81,
+            "confidence": 0.62,
+            "status": "目标明确",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "将抽象的数学推导连接到您的【计算机科学与技术】专业及【机器学习导论】实际应用中",
+              "提供多样化学情路径选择以激发内在学习驱动力"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          },
+          "affect_resilience": {
+            "key": "affect_resilience",
+            "label": "情绪信心与韧性",
+            "score": 0.72,
+            "confidence": 0.62,
+            "status": "情绪风险暂未升高",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "当连续答错或挫败感偏高时，自动降低首题难度，提供小步子的成功体验来修补信心",
+              "反馈仅指向任务本身的改善方案与下一步具体行动，不做抽象评价"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          },
+          "interaction_preference": {
+            "key": "interaction_preference",
+            "label": "互动与表达偏好",
+            "score": 0.78,
+            "confidence": 0.62,
+            "status": "已捕捉到有效互动偏好",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "优先适配【图示演示】教学风格，保留符合个人表达倾向的教学媒介",
+              "支持学生对画像雷达图进行手动微调，确认主观状态"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          },
+          "learning_context": {
+            "key": "learning_context",
+            "label": "学习情境与公平支持",
+            "score": 0.72,
+            "confidence": 0.62,
+            "status": "学习情境已部分明确",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "结合【计算机科学与技术】及本周可用备考时间，动态调度自适应学习路径",
+              "按学生的当前设备及网络边界，灵活组织多模态 VisRAG 与纯文本 fallback 格式"
+            ],
+            "last_updated": "2026-07-19T07:05:30+00:00"
+          }
+        },
+        "cognitive_load": 0.45
+      }
+    }
+  },
+  {
+    "profile": {
+      "id": "synthetic_engineering",
+      "label": "项目型软件工程学生",
+      "major": "软件工程",
+      "goals": [
+        "求职面试准备"
+      ],
+      "preferences": [
+        "代码实操",
+        "分步引导"
+      ],
+      "style": "代码实操导向"
+    },
+    "package": {
+      "student_id": "synthetic_engineering",
+      "target": "池化层",
+      "resource_count": 5,
+      "resource_types": [
+        "代码实操案例",
+        "专业讲义",
+        "思维导图",
+        "练习题",
+        "自适应推荐视频"
+      ],
+      "resource_agents": [
+        "极客助教",
+        "理论教授",
+        "逻辑画师",
+        "考官智能体",
+        "视频推荐官"
+      ],
+      "citation_count": 30,
+      "resource_previews": [
+        {
+          "agent": "极客助教",
+          "resource_type": "代码实操案例",
+          "content_preview": "```python\nimport torch\nimport torch.nn as nn\n\nx = torch.tensor([[[[1., 3., 2., 4.],\n                    [5., 6., 1., 2.],\n                    [0., 2., 8., 1.],\n                    [3., 1., 2., 7.]]]])\n\npool = nn.MaxPool2",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "理论教授",
+          "resource_type": "专业讲义",
+          "content_preview": "# 池化层讲义\n\n池化层位于特征图之后，用一个固定窗口把局部区域压缩成更小的表示。以 2x2 最大池化为例，每个窗口只保留最大响应值，因此输出保留最显著的局部特征，同时降低空间尺寸和后续计算量。\n\n关键步骤：\n1. 在特征图上放置 2x2 窗口。\n2. 按 stride 移动窗口。\n3. 对每个窗口取 max 得到输出矩阵中的一个元素。\n\n常见误区：最大池化不是卷积，不学习参数；平均池化取均值，最大池化取最大值，二者不能混用。\n\n画像驱",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "逻辑画师",
+          "resource_type": "思维导图",
+          "content_preview": "```mermaid\nflowchart LR\n  A[输入特征图] --> B[2x2 窗口]\n  B --> C[取局部最大值]\n  C --> D[降采样特征图]\n  D --> E[全连接层或下一层卷积]\n```",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "考官智能体",
+          "resource_type": "练习题",
+          "content_preview": "1. 选择题：2x2 最大池化窗口 [1, 3; 5, 2] 的输出是多少？答案：5。\n2. 填空题：最大池化主要保留局部区域中的____响应。答案：最大/最强。\n3. 代码改错：若讲义要求最大池化，代码应使用 nn.MaxPool2d 而不是 nn.AvgPool2d。\n4. 画像校准题：先自评本题把握度 0-1，再独立写出第一个窗口的计算过程；若自评高但做错，系统记录为元认知校准风险，并安排相似题重测。",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "视频推荐官",
+          "resource_type": "自适应推荐视频",
+          "content_preview": "[{\"title\": \"Bilibili: 机器学习中池化层的可视化教学\", \"url\": \"https://www.bilibili.com/video/BV1111111111\", \"source\": \"B站视频\", \"recommendation\": \"该视频通过精美的三维动画直观地演示了池化层的运行轨迹，非常适合帮助建立空间与几何直观感知。\"}, {\"title\": \"本地三维演示动画 - 池化层\", \"url\": \"/api/",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        }
+      ],
+      "retrieval": {
+        "evidence_count": 6,
+        "evidence_ids": [
+          "TXT_POOL_DEF_01",
+          "TXT_POOL_ERR_01",
+          "TXT_CONV_PRE_01",
+          "IMG_PATCH_CONV_01",
+          "IMG_PATCH_POOL_01",
+          "IMG_PATCH_POOL_02"
+        ],
+        "evidence_sources": [
+          "课程知识库:CNN/Pooling",
+          "课程知识库:CNN/Misconceptions",
+          "课程知识库:CNN/Prerequisite",
+          "教材图像切片 PDF:P42",
+          "教材图像切片 PDF:P45",
+          "教材图像切片 PDF:P46"
+        ],
+        "graph_learning_path": [
+          "卷积核",
+          "填充",
+          "步长",
+          "线性代数",
+          "卷积运算",
+          "矩阵乘法",
+          "张量运算",
+          "特征图",
+          "池化层"
+        ],
+        "graph_prerequisite_edges": [
+          [
+            "卷积核",
+            "卷积运算"
+          ],
+          [
+            "填充",
+            "卷积运算"
+          ],
+          [
+            "步长",
+            "卷积运算"
+          ],
+          [
+            "线性代数",
+            "矩阵乘法"
+          ],
+          [
+            "卷积运算",
+            "特征图"
+          ],
+          [
+            "矩阵乘法",
+            "张量运算"
+          ],
+          [
+            "张量运算",
+            "特征图"
+          ],
+          [
+            "特征图",
+            "池化层"
+          ]
+        ],
+        "graph_downstream_edges": [
+          [
+            "池化层",
+            "全连接层"
+          ],
+          [
+            "池化层",
+            "卷积神经网络"
+          ],
+          [
+            "池化层",
+            "平均池化"
+          ],
+          [
+            "池化层",
+            "最大池化"
+          ]
+        ],
+        "low_confidence": false,
+        "out_of_domain": false
+      },
+      "debate": {
+        "verdict_count": 6,
+        "kept_count": 6,
+        "kept_evidence_ids": [
+          "TXT_POOL_DEF_01",
+          "TXT_POOL_ERR_01",
+          "TXT_CONV_PRE_01",
+          "IMG_PATCH_CONV_01",
+          "IMG_PATCH_POOL_01",
+          "IMG_PATCH_POOL_02"
+        ]
+      },
+      "alignment": {
+        "passed": true,
+        "distance": 0.541,
+        "threshold": 0.65,
+        "conflicts": [
+          {
+            "type": "委员会核查拦截",
+            "resources": [
+              "理论教授"
+            ],
+            "distance": 0.35,
+            "suggestion": "事实分(0.65)或相关分(0.8)不符合阈值。建议：自动兜底通过"
+          },
+          {
+            "type": "委员会核查拦截",
+            "resources": [
+              "考官智能体"
+            ],
+            "distance": 0.35,
+            "suggestion": "事实分(0.65)或相关分(0.8)不符合阈值。建议：自动兜底通过"
+          }
+        ],
+        "advice": "【委员会共识合成报告】事实均分: 0.86, 相关均分: 0.80。Agentic校验抛出异常，进入兜底直通防线。\n原图谱校验：所有资源在一致性流形中校验良好，无需回滚。"
+      },
+      "learning_signal": {
+        "accuracy": 0.9,
+        "dwell_seconds": 420,
+        "sandbox_error_rate": 0.18
+      },
+      "strategy_plan": {
+        "course": "机器学习导论",
+        "target": "池化层",
+        "actions": [
+          {
+            "strategy": "spaced_review",
+            "title": "间隔复习队列",
+            "description": "把“最大池化”加入 1 天、3 天、7 天复习队列，每次只做短检索题验证保持率。",
+            "trigger": "固定课程场景下持续巩固薄弱知识点",
+            "priority": 3,
+            "scheduled_after": "1d/3d/7d"
+          }
+        ],
+        "rationale": "策略引擎依据学生画像中的不会原因占比、知识掌握度和互动偏好，优先选择 worked example、提示阶梯、检索练习、间隔复习和元认知校准。"
+      },
+      "profile_after": {
+        "student_id": "synthetic_engineering",
+        "major": "软件工程",
+        "target_course": "机器学习导论",
+        "learning_goals": [
+          "求职面试准备"
+        ],
+        "interaction_preferences": [
+          "代码实操",
+          "分步引导",
+          "图示演示"
+        ],
+        "cognitive_style": "代码实操导向",
+        "weak_points": [
+          "最大池化",
+          "平均池化"
+        ],
+        "learning_state_causes": {
+          "interaction_mismatch": {
+            "key": "interaction_mismatch",
+            "label": "讲解方式适配需求",
+            "percentage": 100.0,
+            "confidence": 0.7,
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "根据学生反馈切换讲解形式",
+              "保留学生偏好的图、代码、例子或苏格拉底追问"
+            ]
+          }
+        },
+        "dimension_states": {
+          "knowledge_mastery": {
+            "key": "knowledge_mastery",
+            "label": "知识基础",
+            "score": 0.48,
+            "confidence": 0.62,
+            "status": "基础可支撑下一步学习",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "优先补习【最大池化, 平均池化】的前置依赖概念，打牢基础",
+              "利用自适应微诊断题（CAT）验证【最大池化, 平均池化】的掌握边界"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "misconception_profile": {
+            "key": "misconception_profile",
+            "label": "易错点与误概念",
+            "score": 1.0,
+            "confidence": 0.62,
+            "status": "未发现稳定误概念",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "加入概念对照表，预先辨析相似算法概念的适用边界",
+              "要求学生解释典型错误案例的诱因以防范未然"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "understanding_fluency_transfer": {
+            "key": "understanding_fluency_transfer",
+            "label": "理解-熟练-迁移",
+            "score": 0.48,
+            "confidence": 0.62,
+            "status": "迁移表现待验证",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "提供【最大池化】的Worked Example后，立即推送相似结构变式题以巩固迁移",
+              "要求学生复述【最大池化】在算法场景中的触发和适用条件"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "cognitive_processing": {
+            "key": "cognitive_processing",
+            "label": "认知加工与负荷",
+            "score": 0.55,
+            "confidence": 0.62,
+            "status": "负荷处于可教学区间",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "把当前高负荷任务拆分为不超过 3 步的渐进小块",
+              "利用系统右侧的【图示/脑图】辅助表达，减轻工作记忆负担"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "learning_strategy": {
+            "key": "learning_strategy",
+            "label": "学习策略",
+            "score": 1.0,
+            "confidence": 0.62,
+            "status": "暂未发现明显策略缺口",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "实施‘间隔复习法’，对于易忘点在艾宾浩斯周期临界点进行精准推送",
+              "建议开启检索式问答练习，避免‘看过即学会’的元认知幻觉"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "metacognition": {
+            "key": "metacognition",
+            "label": "元认知与自我调节",
+            "score": 1.0,
+            "confidence": 0.62,
+            "status": "自评校准待继续观察",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "在每道测试题作答前要求自评信心值，做完后进行置信度自动对齐校准",
+              "建议将做错的概念标记为‘待深化复习’，强制区分‘听懂’与‘独立会做’"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "motivation_and_purpose": {
+            "key": "motivation_and_purpose",
+            "label": "动机目标与意义感",
+            "score": 0.81,
+            "confidence": 0.62,
+            "status": "目标明确",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "将抽象的数学推导连接到您的【软件工程】专业及【机器学习导论】实际应用中",
+              "提供多样化学情路径选择以激发内在学习驱动力"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "affect_resilience": {
+            "key": "affect_resilience",
+            "label": "情绪信心与韧性",
+            "score": 0.72,
+            "confidence": 0.62,
+            "status": "情绪风险暂未升高",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "当连续答错或挫败感偏高时，自动降低首题难度，提供小步子的成功体验来修补信心",
+              "反馈仅指向任务本身的改善方案与下一步具体行动，不做抽象评价"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "interaction_preference": {
+            "key": "interaction_preference",
+            "label": "互动与表达偏好",
+            "score": 0.78,
+            "confidence": 0.62,
+            "status": "已捕捉到有效互动偏好",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "优先适配【代码实操】教学风格，保留符合个人表达倾向的教学媒介",
+              "支持学生对画像雷达图进行手动微调，确认主观状态"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "learning_context": {
+            "key": "learning_context",
+            "label": "学习情境与公平支持",
+            "score": 0.72,
+            "confidence": 0.62,
+            "status": "学习情境已部分明确",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "结合【软件工程】及本周可用备考时间，动态调度自适应学习路径",
+              "按学生的当前设备及网络边界，灵活组织多模态 VisRAG 与纯文本 fallback 格式"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          }
+        },
+        "cognitive_load": 0.45
+      }
+    }
+  },
+  {
+    "profile": {
+      "id": "synthetic_research",
+      "label": "跨专业研究型学习者",
+      "major": "数学",
+      "goals": [
+        "科研学术深造"
+      ],
+      "preferences": [
+        "对比解析",
+        "分步引导"
+      ],
+      "style": "文本阅读导向"
+    },
+    "package": {
+      "student_id": "synthetic_research",
+      "target": "池化层",
+      "resource_count": 5,
+      "resource_types": [
+        "代码实操案例",
+        "专业讲义",
+        "思维导图",
+        "练习题",
+        "自适应推荐视频"
+      ],
+      "resource_agents": [
+        "极客助教",
+        "理论教授",
+        "逻辑画师",
+        "考官智能体",
+        "视频推荐官"
+      ],
+      "citation_count": 30,
+      "resource_previews": [
+        {
+          "agent": "极客助教",
+          "resource_type": "代码实操案例",
+          "content_preview": "```python\nimport torch\nimport torch.nn as nn\n\nx = torch.tensor([[[[1., 3., 2., 4.],\n                    [5., 6., 1., 2.],\n                    [0., 2., 8., 1.],\n                    [3., 1., 2., 7.]]]])\n\npool = nn.MaxPool2",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "理论教授",
+          "resource_type": "专业讲义",
+          "content_preview": "# 池化层讲义\n\n池化层位于特征图之后，用一个固定窗口把局部区域压缩成更小的表示。以 2x2 最大池化为例，每个窗口只保留最大响应值，因此输出保留最显著的局部特征，同时降低空间尺寸和后续计算量。\n\n关键步骤：\n1. 在特征图上放置 2x2 窗口。\n2. 按 stride 移动窗口。\n3. 对每个窗口取 max 得到输出矩阵中的一个元素。\n\n常见误区：最大池化不是卷积，不学习参数；平均池化取均值，最大池化取最大值，二者不能混用。\n\n画像驱",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "逻辑画师",
+          "resource_type": "思维导图",
+          "content_preview": "```mermaid\nflowchart LR\n  A[输入特征图] --> B[2x2 窗口]\n  B --> C[取局部最大值]\n  C --> D[降采样特征图]\n  D --> E[全连接层或下一层卷积]\n```",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "考官智能体",
+          "resource_type": "练习题",
+          "content_preview": "1. 选择题：2x2 最大池化窗口 [1, 3; 5, 2] 的输出是多少？答案：5。\n2. 填空题：最大池化主要保留局部区域中的____响应。答案：最大/最强。\n3. 代码改错：若讲义要求最大池化，代码应使用 nn.MaxPool2d 而不是 nn.AvgPool2d。\n4. 画像校准题：先自评本题把握度 0-1，再独立写出第一个窗口的计算过程；若自评高但做错，系统记录为元认知校准风险，并安排相似题重测。",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        },
+        {
+          "agent": "视频推荐官",
+          "resource_type": "自适应推荐视频",
+          "content_preview": "[{\"title\": \"Bilibili: 机器学习中池化层的可视化教学\", \"url\": \"https://www.bilibili.com/video/BV1111111111\", \"source\": \"B站视频\", \"recommendation\": \"该视频通过精美的三维动画直观地演示了池化层的运行轨迹，非常适合帮助建立空间与几何直观感知。\"}, {\"title\": \"本地三维演示动画 - 池化层\", \"url\": \"/api/",
+          "citations": [
+            "TXT_POOL_DEF_01",
+            "TXT_POOL_ERR_01",
+            "TXT_CONV_PRE_01",
+            "IMG_PATCH_CONV_01",
+            "IMG_PATCH_POOL_01",
+            "IMG_PATCH_POOL_02"
+          ]
+        }
+      ],
+      "retrieval": {
+        "evidence_count": 6,
+        "evidence_ids": [
+          "TXT_POOL_DEF_01",
+          "TXT_POOL_ERR_01",
+          "TXT_CONV_PRE_01",
+          "IMG_PATCH_CONV_01",
+          "IMG_PATCH_POOL_01",
+          "IMG_PATCH_POOL_02"
+        ],
+        "evidence_sources": [
+          "课程知识库:CNN/Pooling",
+          "课程知识库:CNN/Misconceptions",
+          "课程知识库:CNN/Prerequisite",
+          "教材图像切片 PDF:P42",
+          "教材图像切片 PDF:P45",
+          "教材图像切片 PDF:P46"
+        ],
+        "graph_learning_path": [
+          "卷积核",
+          "填充",
+          "步长",
+          "线性代数",
+          "卷积运算",
+          "矩阵乘法",
+          "张量运算",
+          "特征图",
+          "池化层"
+        ],
+        "graph_prerequisite_edges": [
+          [
+            "卷积核",
+            "卷积运算"
+          ],
+          [
+            "填充",
+            "卷积运算"
+          ],
+          [
+            "步长",
+            "卷积运算"
+          ],
+          [
+            "线性代数",
+            "矩阵乘法"
+          ],
+          [
+            "卷积运算",
+            "特征图"
+          ],
+          [
+            "矩阵乘法",
+            "张量运算"
+          ],
+          [
+            "张量运算",
+            "特征图"
+          ],
+          [
+            "特征图",
+            "池化层"
+          ]
+        ],
+        "graph_downstream_edges": [
+          [
+            "池化层",
+            "全连接层"
+          ],
+          [
+            "池化层",
+            "卷积神经网络"
+          ],
+          [
+            "池化层",
+            "平均池化"
+          ],
+          [
+            "池化层",
+            "最大池化"
+          ]
+        ],
+        "low_confidence": false,
+        "out_of_domain": false
+      },
+      "debate": {
+        "verdict_count": 6,
+        "kept_count": 6,
+        "kept_evidence_ids": [
+          "TXT_POOL_DEF_01",
+          "TXT_POOL_ERR_01",
+          "TXT_CONV_PRE_01",
+          "IMG_PATCH_CONV_01",
+          "IMG_PATCH_POOL_01",
+          "IMG_PATCH_POOL_02"
+        ]
+      },
+      "alignment": {
+        "passed": true,
+        "distance": 0.541,
+        "threshold": 0.65,
+        "conflicts": [
+          {
+            "type": "委员会核查拦截",
+            "resources": [
+              "理论教授"
+            ],
+            "distance": 0.35,
+            "suggestion": "事实分(0.65)或相关分(0.8)不符合阈值。建议：自动兜底通过"
+          },
+          {
+            "type": "委员会核查拦截",
+            "resources": [
+              "考官智能体"
+            ],
+            "distance": 0.35,
+            "suggestion": "事实分(0.65)或相关分(0.8)不符合阈值。建议：自动兜底通过"
+          }
+        ],
+        "advice": "【委员会共识合成报告】事实均分: 0.86, 相关均分: 0.80。Agentic校验抛出异常，进入兜底直通防线。\n原图谱校验：所有资源在一致性流形中校验良好，无需回滚。"
+      },
+      "learning_signal": {
+        "accuracy": 0.9,
+        "dwell_seconds": 420,
+        "sandbox_error_rate": 0.18
+      },
+      "strategy_plan": {
+        "course": "机器学习导论",
+        "target": "池化层",
+        "actions": [
+          {
+            "strategy": "spaced_review",
+            "title": "间隔复习队列",
+            "description": "把“最大池化”加入 1 天、3 天、7 天复习队列，每次只做短检索题验证保持率。",
+            "trigger": "固定课程场景下持续巩固薄弱知识点",
+            "priority": 3,
+            "scheduled_after": "1d/3d/7d"
+          }
+        ],
+        "rationale": "策略引擎依据学生画像中的不会原因占比、知识掌握度和互动偏好，优先选择 worked example、提示阶梯、检索练习、间隔复习和元认知校准。"
+      },
+      "profile_after": {
+        "student_id": "synthetic_research",
+        "major": "数学",
+        "target_course": "机器学习导论",
+        "learning_goals": [
+          "科研学术深造"
+        ],
+        "interaction_preferences": [
+          "对比解析",
+          "分步引导",
+          "图示演示",
+          "代码实操"
+        ],
+        "cognitive_style": "代码实操导向",
+        "weak_points": [
+          "最大池化",
+          "平均池化"
+        ],
+        "learning_state_causes": {
+          "interaction_mismatch": {
+            "key": "interaction_mismatch",
+            "label": "讲解方式适配需求",
+            "percentage": 100.0,
+            "confidence": 0.7,
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "根据学生反馈切换讲解形式",
+              "保留学生偏好的图、代码、例子或苏格拉底追问"
+            ]
+          }
+        },
+        "dimension_states": {
+          "knowledge_mastery": {
+            "key": "knowledge_mastery",
+            "label": "知识基础",
+            "score": 0.48,
+            "confidence": 0.62,
+            "status": "基础可支撑下一步学习",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "优先补习【最大池化, 平均池化】的前置依赖概念，打牢基础",
+              "利用自适应微诊断题（CAT）验证【最大池化, 平均池化】的掌握边界"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "misconception_profile": {
+            "key": "misconception_profile",
+            "label": "易错点与误概念",
+            "score": 1.0,
+            "confidence": 0.62,
+            "status": "未发现稳定误概念",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "加入概念对照表，预先辨析相似算法概念的适用边界",
+              "要求学生解释典型错误案例的诱因以防范未然"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "understanding_fluency_transfer": {
+            "key": "understanding_fluency_transfer",
+            "label": "理解-熟练-迁移",
+            "score": 0.48,
+            "confidence": 0.62,
+            "status": "迁移表现待验证",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "提供【最大池化】的Worked Example后，立即推送相似结构变式题以巩固迁移",
+              "要求学生复述【最大池化】在算法场景中的触发和适用条件"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "cognitive_processing": {
+            "key": "cognitive_processing",
+            "label": "认知加工与负荷",
+            "score": 0.55,
+            "confidence": 0.62,
+            "status": "负荷处于可教学区间",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "把当前高负荷任务拆分为不超过 3 步的渐进小块",
+              "利用系统右侧的【图示/脑图】辅助表达，减轻工作记忆负担"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "learning_strategy": {
+            "key": "learning_strategy",
+            "label": "学习策略",
+            "score": 1.0,
+            "confidence": 0.62,
+            "status": "暂未发现明显策略缺口",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "实施‘间隔复习法’，对于易忘点在艾宾浩斯周期临界点进行精准推送",
+              "建议开启检索式问答练习，避免‘看过即学会’的元认知幻觉"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "metacognition": {
+            "key": "metacognition",
+            "label": "元认知与自我调节",
+            "score": 1.0,
+            "confidence": 0.62,
+            "status": "自评校准待继续观察",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "在每道测试题作答前要求自评信心值，做完后进行置信度自动对齐校准",
+              "建议将做错的概念标记为‘待深化复习’，强制区分‘听懂’与‘独立会做’"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "motivation_and_purpose": {
+            "key": "motivation_and_purpose",
+            "label": "动机目标与意义感",
+            "score": 0.81,
+            "confidence": 0.62,
+            "status": "目标明确",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "将抽象的数学推导连接到您的【数学】专业及【机器学习导论】实际应用中",
+              "提供多样化学情路径选择以激发内在学习驱动力"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "affect_resilience": {
+            "key": "affect_resilience",
+            "label": "情绪信心与韧性",
+            "score": 0.72,
+            "confidence": 0.62,
+            "status": "情绪风险暂未升高",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "当连续答错或挫败感偏高时，自动降低首题难度，提供小步子的成功体验来修补信心",
+              "反馈仅指向任务本身的改善方案与下一步具体行动，不做抽象评价"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "interaction_preference": {
+            "key": "interaction_preference",
+            "label": "互动与表达偏好",
+            "score": 0.78,
+            "confidence": 0.62,
+            "status": "已捕捉到有效互动偏好",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "优先适配【对比解析】教学风格，保留符合个人表达倾向的教学媒介",
+              "支持学生对画像雷达图进行手动微调，确认主观状态"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          },
+          "learning_context": {
+            "key": "learning_context",
+            "label": "学习情境与公平支持",
+            "score": 0.72,
+            "confidence": 0.62,
+            "status": "学习情境已部分明确",
+            "evidence_count": 2,
+            "evidence_fragments": [
+              "一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。",
+              "LLM画像抽取补充: 一键生成资源包: 请解释最大池化和平均池化的区别，并给出图示、代码和练习。"
+            ],
+            "recommended_interventions": [
+              "结合【数学】及本周可用备考时间，动态调度自适应学习路径",
+              "按学生的当前设备及网络边界，灵活组织多模态 VisRAG 与纯文本 fallback 格式"
+            ],
+            "last_updated": "2026-07-19T07:05:31+00:00"
+          }
+        },
+        "cognitive_load": 0.45
+      }
+    }
+  }
+]

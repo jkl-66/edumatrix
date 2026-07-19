@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy backend code
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# PDF export requires the browser binary and Debian runtime libraries.
+RUN python -m playwright install --with-deps chromium
 
 COPY . .
 

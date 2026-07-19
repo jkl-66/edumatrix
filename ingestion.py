@@ -156,7 +156,10 @@ class DocumentIngestionPipeline:
 
     def _maybe_persist(self) -> tuple[bool, str]:
         """Persist the underlying index to disk if it is a FaissVectorIndex."""
-        from vector_store_faiss import FaissVectorIndex
+        try:
+            from vector_store_faiss import FaissVectorIndex
+        except ImportError:
+            return False, ""
 
         if not isinstance(self.index, FaissVectorIndex):
             return False, ""

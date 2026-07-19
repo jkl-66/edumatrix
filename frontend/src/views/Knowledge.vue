@@ -376,7 +376,6 @@ async function doCrossModalSearch() {
             <Trash2 :size="12" />
             <span>删除</span>
           </button>
-          </button>
         </div>
       </div>
     </div>

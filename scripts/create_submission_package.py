@@ -15,6 +15,7 @@ ROOT_FILES = [
     "start.bat", "团队协同开发守则.md", "组内分工.md",
 ]
 OUTPUT_FILES = [
+    "trusted_local_smoke.json",
     "EduMatrix_API与数据字典.md", "EduMatrix_完整技术文档总稿.md",
     "EduMatrix_完整技术文档_可提交版.docx", "EduMatrix_本轮整改记录_20260719.md",
     "EduMatrix_比赛答辩演示脚本.md", "EduMatrix_测试说明书.md",
@@ -22,6 +23,7 @@ OUTPUT_FILES = [
     "EduMatrix_部署运维说明书.md", "EduMatrix_需求实现测试追踪矩阵.md",
     "EduMatrix_风险整改清单.md", "EduMatrix_系统设计与实现方案.md",
     "EduMatrix_公开依据与引用清单.md", "EduMatrix_AI编程工具使用说明.md",
+    "EduMatrix_本地代码运行故障诊断说明_20260719.md",
     "EduMatrix_软件杯答辩PPT_待补团队信息.pptx", "EduMatrix_软件杯PPT逐页讲解备注.md",
     "EduMatrix_提交包内容说明.md",
 ]
@@ -37,6 +39,12 @@ def add_tree(archive: zipfile.ZipFile, directory: Path, prefix: str, *, include_
         return
     for path in directory.rglob("*"):
         if not path.is_file():
+            continue
+        if prefix == "scripts" and path.name in {"claude_proxy.py", "proxy.log"}:
+            # Local billing/proxy artifacts may contain third-party credentials
+            # and are never part of a clean evaluator submission.
+            continue
+        if prefix == "outputs/e2e_no_docker" and path.name == "error.png":
             continue
         relative = path.relative_to(directory)
         if any(part in {".venv", "node_modules", "__pycache__", ".git", ".pytest_cache", "dist"} for part in path.parts):
@@ -55,6 +63,11 @@ def build() -> None:
     with zipfile.ZipFile(OUTPUT, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for filename in ROOT_FILES:
             add_file(archive, ROOT / filename, filename)
+        # The backend imports many modules from the repository root. Include
+        # every root-level Python module so a clean submission is runnable.
+        for path in sorted(ROOT.glob("*.py")):
+            if path.name not in ROOT_FILES:
+                add_file(archive, path, path.name)
         for directory in ("app", "scripts", "tests"):
             add_tree(archive, ROOT / directory, directory)
         add_tree(archive, ROOT / "frontend/src", "frontend/src")
@@ -73,9 +86,12 @@ def build() -> None:
         add_file(archive, ROOT / "outputs" / "runtime_security_matrix.json", "outputs/runtime_security_matrix.json")
         archive.writestr(
             "SUBMISSION_PACKAGE_README.txt",
-            "EduMatrix provisional submission package.\n"
-            "Before official submission, add team information, official naming, video and authorization confirmation.\n"
-            "Default evaluator mode: EDUMATRIX_SANDBOX_MODE=disabled.\n",
+            "EduMatrix clean evaluator archive.\n"
+            "Team: Shangshan Huiyi; school: Xi'an Liverpool University; subject: A3.\n"
+            "Before official submission, confirm the latest official naming and third-party authorization.\n"
+            "The team currently confirms that video, technical documentation and PPT are not mandatory official materials.\n"
+            "Default evaluator mode: EDUMATRIX_SANDBOX_MODE=disabled.\n"
+            "Optional research/demo mode: EDUMATRIX_SANDBOX_MODE=trusted_local; this uses a restricted child process without Docker container isolation.\n",
         )
     print(f"created: {OUTPUT}")
     print(f"size_bytes: {OUTPUT.stat().st_size}")

@@ -1,0 +1,106 @@
+{
+  "schema_version": "competitor-matrix-m0-0.2",
+  "total": 412,
+  "unique_source_ids": 412,
+  "by_product": {
+    "LearnForge": 111,
+    "学枢": 170,
+    "智教星": 131
+  },
+  "by_capability": {
+    "CAP-01": {
+      "name": "身份、组织与权限",
+      "count": 1
+    },
+    "CAP-02": {
+      "name": "课程与领域包治理",
+      "count": 32
+    },
+    "CAP-03": {
+      "name": "来源与许可证治理",
+      "count": 0
+    },
+    "CAP-04": {
+      "name": "多格式解析与摄入",
+      "count": 27
+    },
+    "CAP-05": {
+      "name": "检索、引用与知识图谱",
+      "count": 22
+    },
+    "CAP-06": {
+      "name": "画像与认知诊断",
+      "count": 20
+    },
+    "CAP-07": {
+      "name": "目标、计划与学习路径",
+      "count": 38
+    },
+    "CAP-08": {
+      "name": "Agent 编排与任务恢复",
+      "count": 36
+    },
+    "CAP-09": {
+      "name": "个性化资源生成",
+      "count": 66
+    },
+    "CAP-10": {
+      "name": "质量门禁与审核发布",
+      "count": 24
+    },
+    "CAP-11": {
+      "name": "测验、作答与错题诊疗",
+      "count": 31
+    },
+    "CAP-12": {
+      "name": "实操与交互技能工件",
+      "count": 17
+    },
+    "CAP-13": {
+      "name": "学习事件、掌握度与反馈",
+      "count": 14
+    },
+    "CAP-14": {
+      "name": "记忆与上下文治理",
+      "count": 19
+    },
+    "CAP-15": {
+      "name": "学情分析与报告",
+      "count": 25
+    },
+    "CAP-16": {
+      "name": "教师工作台与课程运营",
+      "count": 9
+    },
+    "CAP-17": {
+      "name": "企业岗位标准与培训",
+      "count": 0
+    },
+    "CAP-18": {
+      "name": "评测、声明与证据工程",
+      "count": 8
+    },
+    "CAP-19": {
+      "name": "安全、隐私与合规",
+      "count": 3
+    },
+    "CAP-20": {
+      "name": "可观测性、性能与交付",
+      "count": 20
+    }
+  },
+  "by_disposition": {
+    "adopt": 381,
+    "adjust": 22,
+    "defer": 9,
+    "not_adopt": 0
+  },
+  "needs_human_review": 0,
+  "review_policy": "Only rows with no rule match or a true top-score tie require manual review.",
+  "review_source_ids": [],
+  "invariants": {
+    "expected_total": 412,
+    "all_have_one_primary_capability": true,
+    "all_have_disposition": true
+  }
+}

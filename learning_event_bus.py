@@ -142,6 +142,20 @@ class LearningEventBus:
         if len(self._event_log) > 1000:
             self._event_log = self._event_log[-500:]
 
+        # M1 compatibility layer: preserve the in-process API while recording
+        # a durable, versioned event envelope. Persistence failure must not
+        # break existing subscribers, but is logged for diagnosis.
+        try:
+            from app.database import run_db_op
+            from app.m1_lifecycle import persist_legacy_learning_event
+
+            await run_db_op(persist_legacy_learning_event, event, event_type)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Learning event persistence failed for %s: %s", event_type, exc
+            )
+
         # 并发触发订阅器
         handlers = self._subscribers.get(event_type, [])
         if not handlers:

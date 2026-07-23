@@ -7,6 +7,7 @@ import json
 import re
 
 from config import CONFIG
+from cache_utils import TTLBoundedCache
 from concurrency import AsyncWorkerPool
 from drag_debate import DebateAugmentedRAG
 from instruct_rag import AsyncInstructRAGGenerator, InstructRAGGenerator
@@ -138,7 +139,10 @@ class ProfileProbeAgent:
         self.llm = llm
         # 滑动上下文窗口：保存最近 3 轮的消息对 (user, assistant)
         self._context_window: list[tuple[str, str]] = []
-        self._extraction_cache: dict[str, dict] = {}
+        self._extraction_cache: TTLBoundedCache[str, dict] = TTLBoundedCache(
+            maxsize=CONFIG.cache_max_entries,
+            ttl_seconds=CONFIG.cache_ttl_seconds,
+        )
 
     def update(self, profile: StudentProfile, message: str) -> StudentProfile:
         profile.update_from_message(message)
@@ -283,11 +287,8 @@ class ProfileProbeAgent:
             
         data = data if isinstance(data, dict) else {}
         
-        # 缓存写入：限制缓存项数在 200 以内防止泄漏
-        if data and getattr(self, "_extraction_cache", None) is not None:
-            if len(self._extraction_cache) > 200:
-                # 弹出一个最早项
-                self._extraction_cache.pop(next(iter(self._extraction_cache)))
+        # TTLBoundedCache 同时提供容量上限、过期清理和 LRU 淘汰。
+        if data:
             self._extraction_cache[cache_key] = data
             
         return data
@@ -1320,7 +1321,7 @@ class EduMatrixSwarm:
         self.llm = use_llm
         self.profile_probe = ProfileProbeAgent(use_llm)
         self.planner = ZPDPlannerAgent()
-        self.debate = DebateAugmentedRAG()
+        self.debate = DebateAugmentedRAG(llm=use_llm)
         self.async_generator = AsyncInstructRAGGenerator(use_llm)
         self.factory = AsyncResourceFactory(self.async_generator)
         self.alignment = ManifoldAlignmentVerifier()
@@ -1430,7 +1431,7 @@ class EduMatrixSwarm:
 
             await _trigger_event(event_callback, "progress", {"step": "planner", "message": "正在规划ZPD学习路径与检索知识库...", "progress": 40})
             retrieval = await self.planner.plan_async(self.rag, user_input, profile, doc_constraint=doc_constraint)
-            debate_result = self.debate.clean(retrieval)
+            debate_result = await self.debate.aclean(retrieval)
             TELEMETRY.record_metric(
                 "debate.keep_rate",
                 len(debate_result.clean_evidence) / max(1, len(retrieval.evidence)),

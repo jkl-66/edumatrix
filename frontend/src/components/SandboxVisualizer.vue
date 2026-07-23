@@ -4,6 +4,7 @@
  * 选择图表类型→自动生成代码→运行→显示图像→生成讲解
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import axios from 'axios'
 import { getCodeStatus } from '../api'
 
 const emit = defineEmits(['close'])
@@ -23,6 +24,14 @@ const explanation = ref('')
 const error = ref('')
 const sandboxReady = ref(false)
 const sandboxMessage = ref('正在检查代码沙箱状态...')
+const sandboxMode = ref('disabled')
+const sandboxIsolation = ref('none')
+const isTrustedLocal = computed(() => sandboxMode.value === 'trusted_local')
+const sandboxLabel = computed(() => {
+  if (sandboxMode.value === 'trusted_local') return '本地研究模式'
+  if (sandboxMode.value === 'docker') return 'Docker 模式'
+  return '未启用'
+})
 
 // === 任务 9: Monaco 沙箱编辑器 ===
 const monacoContainerRef = ref(null)
@@ -244,7 +253,6 @@ async function runCode() {
   output.value = ''
   imageUrl.value = ''
   try {
-    const { default: axios } = await import('axios')
     const token = localStorage.getItem('edumatrix_token')
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
     const resp = await axios.post('/api/code/run', {
@@ -275,6 +283,8 @@ async function loadSandboxStatus() {
   try {
     const status = await getCodeStatus()
     sandboxReady.value = Boolean(status.execution_enabled)
+    sandboxMode.value = status.mode || 'disabled'
+    sandboxIsolation.value = status.isolation || 'none'
     sandboxMessage.value = status.message || '代码沙箱当前未启用'
   } catch (statusError) {
     sandboxReady.value = false
@@ -285,7 +295,6 @@ async function loadSandboxStatus() {
 async function generateExplanation() {
   explaining.value = true
   try {
-    const { default: axios } = await import('axios')
     const headers = { Authorization: `Bearer ${localStorage.getItem('edumatrix_token')}`, 'Content-Type': 'application/json' }
     const resp = await axios.post('/api/stream/explain', {
       target_text: `以下是一张${chartTypes.find(c => c.id === activeChart.value)?.label || ''}图表，展示了机器学习相关的数据可视化。请解释这张图表展示了什么，以及从中可以得出什么结论。\n\n图表代码：\n${code.value}`,
@@ -351,10 +360,16 @@ selectChart('line')
           <span class="text-white text-xs">📊</span>
         </div>
         <span class="text-xs font-semibold text-slate-800">可视化分析</span>
+        <span class="text-[10px] text-slate-500">{{ sandboxLabel }}</span>
       </div>
       <button v-if="!inline" @click="close" class="w-6 h-6 rounded-lg hover:bg-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-all">
         <span class="text-sm leading-none">&times;</span>
       </button>
+    </div>
+
+    <div v-if="isTrustedLocal || !sandboxReady" class="px-3 py-2 bg-amber-950/40 border-b border-amber-800/50 text-[10px] text-amber-300">
+      {{ sandboxMessage }}
+      <span v-if="isTrustedLocal">本地研究模式不具备 Docker 容器隔离，仅适用于本机学术研究与比赛演示。</span>
     </div>
 
     <!-- Chart type selector -->

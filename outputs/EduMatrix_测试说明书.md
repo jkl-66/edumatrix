@@ -1,5 +1,7 @@
 # EduMatrix 测试说明书
 
+> **沙箱测试边界**：无 Docker 的核心验收与 `trusted_local` 真实执行是两类证据。前者证明默认学习闭环可运行且代码执行明确关闭；后者证明本机受限子进程可完成研究演示，但不证明容器级隔离。`scripts/trusted_local_smoke.py` 用于后者的启动后 API 验证。
+
 ## 1. 测试目标
 
 验证系统是否能够在给定环境下完成：
@@ -14,7 +16,7 @@
 
 | 项目 | 当前结果 |
 |---|---|
-| Git 基线 | `2952dc1b17d793e5d76f54e1764348ebe50e4d5e` |
+| 验证基线 | `74f8f2715641da20b560571120a66477d300f5de`；结论以 2026-07-20 验证时的最终代码与证据为准 |
 | Python | 3.11.9 |
 | FastAPI | 已安装并可导入 |
 | SQLAlchemy | 已安装并可导入 |
@@ -33,7 +35,7 @@
 npm.cmd run build
 ```
 
-结果：Vite 成功转换 3033 个模块，主 JS 压缩后约 1.91 MB，但存在 KaTeX CSS、Axios 动态导入和大 chunk 警告。
+结果：Vite 成功转换 3076 个模块；KaTeX 已改为本地依赖，Axios 和 ECharts 已按当前构建方式整理，相关构建警告已清除。大体积 chunk 仍属于后续性能优化项。
 
 已执行：
 
@@ -43,13 +45,13 @@ python -m unittest scripts.test_member6_all_tasks -v
 
 结果：62/62 通过。
 
-已执行：
+已执行正式回归：
 
 ```text
-python -m unittest test_edumatrix -v
+python -m pytest -q
 ```
 
-结果：此前基线为 22 个 failure、20 个 error；本轮补齐认证测试主体、核心依赖、FAISS 可选导入和 Docker 离线测试契约后，按 4 组执行的完整集成回归为 80/80 通过。另有安全契约测试 12/12、成员专项测试 62/62、运行时安全矩阵 47/47 通过。联网搜索、arXiv、视频搜索和外部 LLM 在测试中出现超时/降级日志，但对应测试仍通过；本结果不等于真实 Docker 代码执行、PDF 导出、生产并发或外部服务已完成验收。
+结果：`pytest.ini` 将正式入口限定为 `tests/`，避免收集 `scratch/` 实验脚本；FAISS 未安装时对应模块明确跳过。当前工作区结果为 **145 passed、1 skipped**。另有运行时安全矩阵 47/47、无 Docker 浏览器 E2E、`trusted_local` API smoke 和前端 production build 通过。联网搜索、arXiv、视频搜索和外部 LLM 仍可能出现超时/降级日志；本结果不等于真实 Docker 代码执行、PDF 导出、生产并发或外部服务已完成验收。
 
 已执行无 Docker 浏览器 E2E：
 
@@ -57,9 +59,17 @@ python -m unittest test_edumatrix -v
 python scripts/e2e_no_docker.py
 ```
 
-结果：`outputs/e2e_no_docker/report.json` 标记为 `passed`，覆盖临时注册/登录、初始化、仪表盘、对话、学习路径和沙箱禁用状态，并生成 6 张截图。该证据证明默认核心路径可运行，不证明 Docker 代码执行或 PDF 导出。
+结果：`outputs/e2e_no_docker/report.json` 标记为 `passed`，浏览器上下文显式使用 `X-EduMatrix-LLM-Mode: deterministic`，覆盖临时注册/登录、初始化、仪表盘、对话、学习路径和沙箱禁用状态，并生成 6 张截图。该证据证明默认核心路径可运行，不证明 Docker 代码执行或 PDF 导出。
 
-因此不能写成“全量测试 100% 通过”。
+本地可信研究模式 smoke：
+
+```powershell
+.venv\Scripts\python.exe scripts\trusted_local_smoke.py
+```
+
+结果：`outputs/trusted_local_smoke.json` 标记为 `passed`，真实后端返回 `trusted_local_child_process`，安全代码输出 `42`，`import os` 被拦截。该结果不等价于 Docker 容器隔离。
+
+因此可以准确表述为“当前正式自动化测试集 145 passed、1 optional skipped，另有 trusted_local smoke 通过”，不能扩展为 Docker、PDF、外部服务和目标评委机器全部验收通过。
 
 ## 3. 测试层级
 
@@ -112,7 +122,7 @@ python scripts/e2e_no_docker.py
 | AGENT-02 | 同问题三组画像 | 路径/资源不同 | 三组合成画像、固定知识集和结构性对比证据已生成；不等于真实用户效果实验 |
 | AGENT-03 | LLM 辩论 | 使用注入的 LLM | 需按真实 provider 与 deterministic 两种模式实测 |
 | AGENT-04 | LLM 关闭 | 明确 deterministic fallback | 固定本地 deterministic 流程已运行并纳入创新证据 |
-| RAG-03 | 低置信度检索 | 拒答或降级 | 需人工评测 |
+| RAG-03 | 低置信度检索 | 拒答或降级 | 自动化低置信度回归已通过；正式效果指标仍需人工评测 |
 | QUIZ-01 | MCQ 正确 | 快速判分 | 专项结构测试通过 |
 | QUIZ-02 | 主观题异常 JSON | fallback 完整 | 目标代码存在，需完整 API 回归 |
 | CODE-01 | 合法代码 | 返回 stdout/耗时 | Docker 实时代码执行本轮未验证；默认无 Docker 模式明确拒绝执行 |
@@ -121,9 +131,9 @@ python scripts/e2e_no_docker.py
 | CODE-04 | Docker 离线 | 拒绝执行宿主代码 | 已修复；安全契约、集成测试和运行时状态证据通过 |
 | CODE-05 | 死循环 | 超时并杀死任务 | 有逻辑，需 Docker 实测 |
 | DOC-01 | PDF/PPTX/Markdown 上传 | 解析、分块、索引 | 依赖已补齐；PDF/PPTX/DOCX 目标测试通过 |
-| DOC-02 | 超大文件 | 400/413 | 本地上传与远程文件下载已有 20 MB 上限；URL HTML 摄入待补 |
+| DOC-02 | 超大/高页数/压缩炸弹文件 | 400/413 | 已增加 20 MB、页数、压缩包成员/展开体积、压缩比和解析超时限制；目标机压力测试仍需复核 |
 | REPORT-01 | PDF 导出 | 返回 PDF | 浏览器运行能力已由无 Docker E2E 间接确认；PDF 导出本身仍未单独验证 |
-| FRONT-01 | 生产构建 | 资源可加载 | 构建成功，有警告 |
+| FRONT-01 | 生产构建 | 资源可加载 | 构建成功；相关构建警告已清除 |
 
 ## 5. 比赛量化指标测试
 

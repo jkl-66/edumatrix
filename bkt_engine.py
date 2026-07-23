@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import math
+import multiprocessing
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 import numpy as np
@@ -548,7 +550,13 @@ def _get_mds_process_executor() -> concurrent.futures.ProcessPoolExecutor:
         with _MDS_EXECUTOR_LOCK:
             if _MDS_PROCESS_EXECUTOR is None:
                 # Windows 环境下限制最大进程数为 2，避免高并发生成过多空闲 Python 进程
-                _MDS_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=2)
+                # 必须显式绑定当前后端解释器，否则 Windows 可能回退到
+                # sys._base_executable，导致算法 worker 找不到项目依赖。
+                multiprocessing.set_executable(sys.executable)
+                _MDS_PROCESS_EXECUTOR = concurrent.futures.ProcessPoolExecutor(
+                    max_workers=2,
+                    mp_context=multiprocessing.get_context("spawn"),
+                )
     return _MDS_PROCESS_EXECUTOR
 
 

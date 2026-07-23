@@ -8,6 +8,7 @@ from typing import Protocol
 from urllib import request
 
 from config import CONFIG
+from cache_utils import TTLBoundedCache
 
 
 class EmbeddingBackend(Protocol):
@@ -117,7 +118,10 @@ def _tokens(text: str) -> tuple[str, ...]:
 class CachingEmbeddingBackend:
     def __init__(self, backend: EmbeddingBackend):
         self._backend = backend
-        self._cache: dict[str, tuple[float, ...]] = {}
+        self._cache: TTLBoundedCache[str, tuple[float, ...]] = TTLBoundedCache(
+            maxsize=CONFIG.cache_max_entries,
+            ttl_seconds=CONFIG.cache_ttl_seconds,
+        )
         self.name = f"cached-{backend.name}"
         
         # Initialize SQLite DB in workspace root

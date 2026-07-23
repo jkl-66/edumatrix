@@ -1,15 +1,15 @@
 {
   "base_url": "http://127.0.0.1:8000",
-  "started_at": "2026-07-19T14:45:26+0800",
+  "started_at": "2026-07-19T16:23:20+0800",
   "accounts": {
-    "student_a": "matrix_a_1784443526",
-    "student_b": "matrix_b_1784443526"
+    "student_a": "matrix_a_1784449400",
+    "student_b": "matrix_b_1784449400"
   },
   "checks": [
     {
       "name": "unauthenticated profile is rejected",
       "method": "GET",
-      "path": "/api/profile/matrix_a_1784443526",
+      "path": "/api/profile/matrix_a_1784449400",
       "status": 401,
       "expected": [
         401
@@ -22,27 +22,27 @@
     {
       "name": "student A can read own profile",
       "method": "GET",
-      "path": "/api/profile/matrix_a_1784443526",
+      "path": "/api/profile/matrix_a_1784449400",
       "status": 200,
       "expected": [
         200
       ],
       "passed": true,
       "body": {
-        "student_id": "matrix_a_1784443526"
+        "student_id": "matrix_a_1784449400"
       }
     },
     {
       "name": "student B can read own profile",
       "method": "GET",
-      "path": "/api/profile/matrix_b_1784443526",
+      "path": "/api/profile/matrix_b_1784449400",
       "status": 200,
       "expected": [
         200
       ],
       "passed": true,
       "body": {
-        "student_id": "matrix_b_1784443526"
+        "student_id": "matrix_b_1784449400"
       }
     },
     {
@@ -55,13 +55,13 @@
       ],
       "passed": true,
       "body": {
-        "student_id": "matrix_a_1784443526"
+        "student_id": "matrix_a_1784449400"
       }
     },
     {
       "name": "A cannot read B: profile",
       "method": "GET",
-      "path": "/api/profile/matrix_b_1784443526",
+      "path": "/api/profile/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -74,7 +74,7 @@
     {
       "name": "A cannot read B: profile analysis",
       "method": "GET",
-      "path": "/api/profile/matrix_b_1784443526/analysis",
+      "path": "/api/profile/matrix_b_1784449400/analysis",
       "status": 403,
       "expected": [
         403
@@ -87,7 +87,7 @@
     {
       "name": "A cannot read B: learning path",
       "method": "GET",
-      "path": "/api/profile/matrix_b_1784443526/learning-path",
+      "path": "/api/profile/matrix_b_1784449400/learning-path",
       "status": 403,
       "expected": [
         403
@@ -100,7 +100,7 @@
     {
       "name": "A cannot read B: goal recommendations",
       "method": "GET",
-      "path": "/api/profile/matrix_b_1784443526/goal-recommendations",
+      "path": "/api/profile/matrix_b_1784449400/goal-recommendations",
       "status": 403,
       "expected": [
         403
@@ -113,7 +113,7 @@
     {
       "name": "A cannot read B: profile narrative",
       "method": "GET",
-      "path": "/api/profile/matrix_b_1784443526/narrative",
+      "path": "/api/profile/matrix_b_1784449400/narrative",
       "status": 403,
       "expected": [
         403
@@ -126,7 +126,7 @@
     {
       "name": "A cannot read B: recommendations",
       "method": "GET",
-      "path": "/api/profile/matrix_b_1784443526/recommendations",
+      "path": "/api/profile/matrix_b_1784449400/recommendations",
       "status": 403,
       "expected": [
         403
@@ -139,7 +139,7 @@
     {
       "name": "A cannot read B: knowledge list",
       "method": "GET",
-      "path": "/api/knowledge/list?student_id=matrix_b_1784443526",
+      "path": "/api/knowledge/list?student_id=matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -152,7 +152,7 @@
     {
       "name": "A cannot read B: knowledge document",
       "method": "GET",
-      "path": "/api/knowledge/not-a-real-document?student_id=matrix_b_1784443526",
+      "path": "/api/knowledge/not-a-real-document?student_id=matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -165,7 +165,7 @@
     {
       "name": "A cannot read B: quiz history",
       "method": "GET",
-      "path": "/api/quiz/history/matrix_b_1784443526",
+      "path": "/api/quiz/history/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -178,7 +178,7 @@
     {
       "name": "A cannot read B: wrong questions",
       "method": "GET",
-      "path": "/api/quiz/wrong-questions/matrix_b_1784443526",
+      "path": "/api/quiz/wrong-questions/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -191,7 +191,7 @@
     {
       "name": "A cannot read B: wrong concepts",
       "method": "GET",
-      "path": "/api/quiz/wrong-concepts/matrix_b_1784443526",
+      "path": "/api/quiz/wrong-concepts/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -204,7 +204,7 @@
     {
       "name": "A cannot read B: checkin streak",
       "method": "GET",
-      "path": "/api/quiz/checkin/streak/matrix_b_1784443526",
+      "path": "/api/quiz/checkin/streak/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -217,7 +217,7 @@
     {
       "name": "A cannot read B: checkin history",
       "method": "GET",
-      "path": "/api/quiz/checkin/history/matrix_b_1784443526",
+      "path": "/api/quiz/checkin/history/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -230,7 +230,7 @@
     {
       "name": "A cannot read B: flashcard due",
       "method": "GET",
-      "path": "/api/flashcard/due?student_id=matrix_b_1784443526",
+      "path": "/api/flashcard/due?student_id=matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -243,7 +243,7 @@
     {
       "name": "A cannot read B: behavior scope is not a read route",
       "method": "GET",
-      "path": "/api/sessions/matrix_b_1784443526",
+      "path": "/api/sessions/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -256,7 +256,7 @@
     {
       "name": "A cannot read B: conversation history",
       "method": "GET",
-      "path": "/api/history/matrix_b_1784443526",
+      "path": "/api/history/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -269,7 +269,7 @@
     {
       "name": "A cannot read B: progress",
       "method": "GET",
-      "path": "/api/progress/matrix_b_1784443526",
+      "path": "/api/progress/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -282,7 +282,7 @@
     {
       "name": "A cannot read B: review plans",
       "method": "GET",
-      "path": "/api/review/matrix_b_1784443526",
+      "path": "/api/review/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -295,7 +295,7 @@
     {
       "name": "A cannot read B: code history",
       "method": "GET",
-      "path": "/api/code/history/matrix_b_1784443526",
+      "path": "/api/code/history/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -308,7 +308,7 @@
     {
       "name": "A cannot read B: profile PDF",
       "method": "GET",
-      "path": "/api/v1/profile/export?student_id=matrix_b_1784443526",
+      "path": "/api/v1/profile/export?student_id=matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -360,7 +360,7 @@
     {
       "name": "A cannot mutate B: profile update",
       "method": "POST",
-      "path": "/api/profile/matrix_b_1784443526/update",
+      "path": "/api/profile/matrix_b_1784449400/update",
       "status": 403,
       "expected": [
         403
@@ -373,7 +373,7 @@
     {
       "name": "A cannot mutate B: profile update legacy",
       "method": "POST",
-      "path": "/api/profile/matrix_b_1784443526",
+      "path": "/api/profile/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -412,7 +412,7 @@
     {
       "name": "A cannot mutate B: notes create",
       "method": "POST",
-      "path": "/api/notes/matrix_b_1784443526",
+      "path": "/api/notes/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -542,7 +542,7 @@
     {
       "name": "A cannot mutate B: quiz checkin",
       "method": "POST",
-      "path": "/api/quiz/checkin/matrix_b_1784443526",
+      "path": "/api/quiz/checkin/matrix_b_1784449400",
       "status": 403,
       "expected": [
         403
@@ -625,5 +625,5 @@
     "failed_names": []
   },
   "result": "passed",
-  "finished_at": "2026-07-19T14:45:29+0800"
+  "finished_at": "2026-07-19T16:23:26+0800"
 }

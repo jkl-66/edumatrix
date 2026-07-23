@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EduMatrix_A3_评委阅读版_方向A — preview</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; box-sizing: border-box; }
+  body { background: #17191f; color: #cfd4de; font: 13px/1.4 system-ui, sans-serif;
+         height: 100vh; display: flex; flex-direction: column; user-select: none; }
+  header { padding: 8px 14px; display: flex; align-items: center; gap: 12px; }
+  header b { color: #fff; font-weight: 600; }
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center;
+            min-height: 0; padding: 0 12px; cursor: pointer; }
+  #main { max-width: 100%; max-height: 100%; box-shadow: 0 6px 30px rgba(0,0,0,.5);
+           border-radius: 4px; }
+  #rail { display: flex; gap: 6px; overflow-x: auto; padding: 10px 14px; flex: none; }
+  #rail img { height: 62px; border-radius: 3px; opacity: .45; cursor: pointer;
+               border: 2px solid transparent; }
+  #rail img.on { opacity: 1; border-color: #5b8def; }
+  #num { margin-left: auto; font-variant-numeric: tabular-nums; color: #8a93a6; }
+  kbd { background:#2a2e38; border-radius:3px; padding:1px 5px; font-size:11px; color:#9aa3b2; }
+</style></head><body>
+<header><b>EduMatrix_A3_评委阅读版_方向A</b><span>&larr;/&rarr; or click to flip &nbsp;<kbd>F</kbd> fullscreen</span><span id="num"></span></header>
+<div id="stage"><img id="main" alt="slide"></div>
+<div id="rail"></div>
+<script>
+const S = ["slide01.png", "slide02.png", "slide03.png", "slide04.png", "slide05.png", "slide06.png", "slide07.png", "slide08.png", "slide09.png", "slide10.png", "slide11.png", "slide12.png", "slide13.png", "slide14.png", "slide15.png", "slide16.png", "slide17.png", "slide18.png", "slide19.png", "slide20.png"]; let i = 0;
+const main = document.getElementById('main'), rail = document.getElementById('rail'),
+      num = document.getElementById('num');
+S.forEach((src, k) => { const t = document.createElement('img'); t.src = src; t.loading = 'lazy';
+  t.onclick = () => go(k); rail.appendChild(t); });
+function go(k) { i = (k + S.length) % S.length; main.src = S[i];
+  num.textContent = (i + 1) + ' / ' + S.length;
+  [...rail.children].forEach((t, k2) => t.classList.toggle('on', k2 === i));
+  rail.children[i].scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  if (i + 1 < S.length) (new Image()).src = S[i + 1]; }
+document.getElementById('stage').onclick = () => go(i + 1);
+addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') go(i + 1);
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') go(i - 1);
+  else if (e.key === 'Home') go(0); else if (e.key === 'End') go(S.length - 1);
+  else if (e.key.toLowerCase() === 'f') document.documentElement.requestFullscreen?.(); });
+go(0);
+</script></body></html>

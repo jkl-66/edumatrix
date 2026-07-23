@@ -18,6 +18,17 @@ SM2_E_DEFAULT = 2.5     # 默认易度因子
 SM2_I0 = 1              # 初始间隔 (天)
 SM2_I1 = 6              # 首次及格间隔 (天)
 
+
+def _as_utc_datetime(value: str | datetime) -> datetime:
+    """Parse legacy naive ISO strings and normalize them to aware UTC."""
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
 # 质量参数: q={2,4,5}
 # 2 = 困难 (记错了), 4 = 一般 (想了一会儿), 5 = 简单 (立即反应)
 
@@ -34,6 +45,16 @@ def sm2_update_easiness(e: float, q: float) -> float:
     Returns:
         更新后的易度因子 (>= 1.3)
     """
+    try:
+        e = float(e)
+        q = float(q)
+    except (TypeError, ValueError):
+        e, q = SM2_E_DEFAULT, 4.0
+    if not math.isfinite(e):
+        e = SM2_E_DEFAULT
+    if not math.isfinite(q):
+        q = 4.0
+    q = max(0.0, min(5.0, q))
     delta = 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)
     return max(SM2_E_MIN, e + delta)
 
@@ -42,6 +63,13 @@ def calculate_act_r_decay(cognitive_load: float, frustration: float) -> float:
     """根据 ACT-R 理论计算动态记忆衰减率 d (通常范围在 0.3 到 0.7 之间，默认值为 0.5)"""
     # 结合认知负荷与情感状态，利用 Sigmoid 映射到 [0.3, 0.7] 区间
     # 负荷和挫败感越高，大脑的瞬时记忆半衰期越短，表现为衰减率 d 升高
+    try:
+        cognitive_load = float(cognitive_load)
+        frustration = float(frustration)
+    except (TypeError, ValueError):
+        cognitive_load, frustration = 0.45, 0.0
+    cognitive_load = min(1.0, max(0.0, cognitive_load if math.isfinite(cognitive_load) else 0.45))
+    frustration = min(1.0, max(0.0, frustration if math.isfinite(frustration) else 0.0))
     x = (cognitive_load + frustration) - 0.5
     sigmoid_val = 1.0 / (1.0 + math.exp(-6.0 * x))
     d = 0.3 + 0.4 * sigmoid_val
@@ -230,10 +258,10 @@ class SM2Engine:
                 continue
             if card.next_review_at:
                 try:
-                    review_time = datetime.fromisoformat(card.next_review_at)
+                    review_time = _as_utc_datetime(card.next_review_at)
                     if review_time <= now:
                         due.append(card)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OverflowError):
                     due.append(card)
         # 按间隔从短到长排序（紧迫优先）
         due.sort(key=lambda c: c.next_review_at or "")

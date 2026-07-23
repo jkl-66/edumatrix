@@ -27,6 +27,14 @@ const showViz = ref(false)
 const minimized = ref(false)
 const sandboxReady = ref(false)
 const sandboxMessage = ref('正在检查代码沙箱状态...')
+const sandboxMode = ref('disabled')
+const sandboxIsolation = ref('none')
+const isTrustedLocal = computed(() => sandboxMode.value === 'trusted_local')
+const sandboxLabel = computed(() => {
+  if (sandboxMode.value === 'trusted_local') return '本地研究模式'
+  if (sandboxMode.value === 'docker') return 'Docker 模式'
+  return '未启用'
+})
 
 // 代码预设
 const presets = [
@@ -88,6 +96,8 @@ async function loadSandboxStatus() {
   try {
     const status = await getCodeStatus()
     sandboxReady.value = Boolean(status.execution_enabled)
+    sandboxMode.value = status.mode || 'disabled'
+    sandboxIsolation.value = status.isolation || 'none'
     sandboxMessage.value = status.message || '代码沙箱当前未启用'
   } catch (error) {
     sandboxReady.value = false
@@ -148,6 +158,7 @@ onMounted(loadSandboxStatus)
       <div class="flex items-center gap-2">
         <Terminal :size="14" class="text-green-400" />
         <span class="text-xs font-medium text-gray-200">代码沙箱控制台</span>
+        <span class="text-[10px] text-gray-400">{{ sandboxLabel }}</span>
         <span v-if="running" class="flex items-center gap-1 text-[10px] text-yellow-400">
           <Loader2 :size="10" class="animate-spin" /> 运行中...
         </span>
@@ -167,6 +178,9 @@ onMounted(loadSandboxStatus)
 
     <div v-if="!sandboxReady" class="px-3 py-2 bg-amber-950/40 border-b border-amber-800/50 text-[10px] text-amber-300">
       {{ sandboxMessage }}。代码编辑、静态检查和资源查看仍可使用。
+    </div>
+    <div v-if="isTrustedLocal" class="px-3 py-2 bg-amber-950/40 border-b border-amber-800/50 text-[10px] text-amber-300">
+      本地可信研究模式：代码在受限 Python 子进程中运行，不具备 Docker 容器隔离，仅适用于本机学术研究与比赛演示。
     </div>
 
     <!-- 代码预设（仅展开时显示） -->

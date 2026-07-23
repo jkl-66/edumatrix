@@ -1,0 +1,25 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "started_at": "2026-07-23T15:12:04+0800",
+  "mode_expected": "trusted_local",
+  "checks": {
+    "status": {
+      "mode": "trusted_local",
+      "execution_enabled": true,
+      "isolation": "trusted_local_child_process",
+      "security_level": "research_only_no_container_isolation"
+    },
+    "safe_execution": {
+      "passed": true,
+      "output_contains_42": true,
+      "error_present": false
+    },
+    "blocked_os_import": {
+      "passed": true,
+      "output_empty": true,
+      "error_present": true
+    }
+  },
+  "result": "passed",
+  "finished_at": "2026-07-23T15:12:05+0800"
+}

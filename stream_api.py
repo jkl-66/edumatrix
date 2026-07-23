@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.auth import enforce_student_access, get_current_user
+from app.legacy_repositories import LegacyReadRepository
 from swarm_factory import build_swarm_from_headers
 from content_safety import CONTENT_SAFETY
 from models import AgentOutput
@@ -415,16 +416,12 @@ async def stream_chat(request: Request, current_user=Depends(get_current_user)) 
     # 1. 解析 active_doc_ids 并映射到文件名
     if active_doc_ids:
         try:
-            from app.database import DBKnowledgeDocument, run_db_op
+            from app.database import run_db_op
             def fetch_doc_filenames(session):
-                return (
-                    session.query(DBKnowledgeDocument.filename)
-                    .filter(DBKnowledgeDocument.id.in_(active_doc_ids))
-                    .all()
-                )
+                return LegacyReadRepository(session).knowledge_filenames(active_doc_ids)
             records = await run_db_op(fetch_doc_filenames)
             if records:
-                doc_constraints.extend([r[0] for r in records if r[0]])
+                doc_constraints.extend(records)
         except Exception as e:
             print(f"  [stream_api] 解析 active_doc_ids 异常: {e}")
 
@@ -446,11 +443,11 @@ async def stream_chat(request: Request, current_user=Depends(get_current_user)) 
 
     # 3. 匹配并提取 `@` 课件过滤条件 (优先检索数据库以完全兼容文件名空格)
     try:
-        from app.database import DBKnowledgeDocument, run_db_op
+        from app.database import run_db_op
         def fetch_docs(session):
-            return session.query(DBKnowledgeDocument.filename).all()
+            return LegacyReadRepository(session).knowledge_filenames()
         db_records = await run_db_op(fetch_docs)
-        db_filenames = [r[0] for r in db_records] if db_records else []
+        db_filenames = db_records if db_records else []
         db_filenames.sort(key=len, reverse=True) # 优先匹配长名
         for fname in db_filenames:
             ref = f"@{fname}"
@@ -1586,8 +1583,6 @@ async def regenerate_component(request: Request, current_user=Depends(get_curren
         
         # 将生成的资源保存到数据库中以实现统一持久化
         import uuid
-        from app.database import DBNote
-        
         note_id = f"note-{uuid.uuid4().hex[:12]}"
         db_tag = resource_type
         if "代码" in resource_type:
@@ -1601,47 +1596,18 @@ async def regenerate_component(request: Request, current_user=Depends(get_curren
         elif "练习" in resource_type or "题" in resource_type:
             db_tag = "练习题"
 
-        def save_generated_note(session):
-            existing = session.query(DBNote).filter(
-                DBNote.student_id == student_id,
-            ).all()
-            
-            concepts_list = []
-            if "与" in query:
-                concepts_list = [sub.strip() for sub in query.split("与") if sub.strip()]
-            elif "和" in query:
-                concepts_list = [sub.strip() for sub in query.split("和") if sub.strip()]
-            else:
-                concepts_list = [query]
+        if "与" in query:
+            concepts_list = [sub.strip() for sub in query.split("与") if sub.strip()]
+        elif "和" in query:
+            concepts_list = [sub.strip() for sub in query.split("和") if sub.strip()]
+        else:
+            concepts_list = [query]
 
-            target_note = None
-            for n in existing:
-                if any(c in (n.concepts or []) for c in concepts_list) and db_tag in (n.tags or []):
-                    target_note = n
-                    break
-            
-            if target_note:
-                target_note.content = content
-                # 增量合并新概念
-                current_concepts = list(target_note.concepts or [])
-                for c in concepts_list:
-                    if c not in current_concepts:
-                        current_concepts.append(c)
-                target_note.concepts = current_concepts
-                session.commit()
-                return target_note.id
-            else:
-                new_note = DBNote(
-                    id=note_id,
-                    student_id=student_id,
-                    source="adaptive_hub",
-                    content=content,
-                    tags=[db_tag],
-                    concepts=concepts_list
-                )
-                session.add(new_note)
-                session.commit()
-                return note_id
+        def save_generated_note(session):
+            return LegacyReadRepository(session).upsert_generated_note(
+                note_id=note_id, student_id=student_id, content=content,
+                tag=db_tag, concepts=concepts_list,
+            )
 
         saved_note_id = await run_db_op(save_generated_note)
 

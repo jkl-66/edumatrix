@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import zipfile
 from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
@@ -40,6 +41,83 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _VISION_LLM_AVAILABLE: bool | None = None  # 延迟检测缓存
+
+
+class DocumentLimitError(ValueError):
+    """Raised before parsing when a document exceeds a resource limit."""
+
+
+def validate_document_limits(
+    raw: bytes,
+    filename: str,
+    *,
+    max_pages: int | None = None,
+    max_archive_members: int | None = None,
+    max_archive_uncompressed_bytes: int | None = None,
+) -> None:
+    """Validate page and archive expansion limits before invoking parsers."""
+    from config import CONFIG
+
+    if not raw:
+        raise DocumentLimitError("文件内容为空")
+    max_pages = CONFIG.max_document_pages if max_pages is None else max_pages
+    max_archive_members = CONFIG.max_archive_members if max_archive_members is None else max_archive_members
+    max_archive_uncompressed_bytes = (
+        CONFIG.max_archive_uncompressed_bytes
+        if max_archive_uncompressed_bytes is None
+        else max_archive_uncompressed_bytes
+    )
+    ext = Path(filename).suffix.lower()
+
+    if ext in {".docx", ".pptx"}:
+        try:
+            with zipfile.ZipFile(BytesIO(raw)) as archive:
+                infos = archive.infolist()
+                if len(infos) > max_archive_members:
+                    raise DocumentLimitError(
+                        f"文档压缩包包含过多内部文件（上限 {max_archive_members}）"
+                    )
+                expanded_size = sum(max(0, info.file_size) for info in infos)
+                if expanded_size > max_archive_uncompressed_bytes:
+                    raise DocumentLimitError(
+                        f"文档解压后体积超过限制（上限 {max_archive_uncompressed_bytes} bytes）"
+                    )
+                for info in infos:
+                    if info.file_size > max_archive_uncompressed_bytes:
+                        raise DocumentLimitError("文档内部文件超过解压体积限制")
+                    if info.compress_size and info.file_size > info.compress_size * 1000:
+                        raise DocumentLimitError("文档压缩比异常，已拒绝可能的压缩炸弹")
+                if ext == ".pptx":
+                    slide_count = sum(
+                        1
+                        for info in infos
+                        if re.fullmatch(r"ppt/slides/slide\d+\.xml", info.filename)
+                    )
+                    if slide_count > max_pages:
+                        raise DocumentLimitError(f"演示文稿页数超过限制（上限 {max_pages}）")
+        except DocumentLimitError:
+            raise
+        except (zipfile.BadZipFile, OSError) as exc:
+            raise DocumentLimitError(f"文档压缩包损坏或无法读取: {exc}") from exc
+
+    if ext == ".pdf":
+        page_count: int | None = None
+        try:
+            import fitz
+
+            with fitz.open(stream=raw, filetype="pdf") as pdf:
+                page_count = len(pdf)
+        except ImportError:
+            try:
+                import PyPDF2
+
+                page_count = len(PyPDF2.PdfReader(BytesIO(raw)).pages)
+            except Exception:
+                page_count = None
+        except Exception as exc:
+            raise DocumentLimitError(f"PDF 无法读取: {exc}") from exc
+        if page_count is not None and page_count > max_pages:
+            raise DocumentLimitError(f"PDF 页数超过限制（上限 {max_pages}）")
 
 
 def _check_vision_llm() -> bool:

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { listKnowledgeDocuments, uploadKnowledgeDocument, deleteKnowledgeDocument, getKnowledgeDocument, getGraphStats, crossModalSearch } from '../api'
-import { BookOpen, Upload, Trash2, FileText, File, FileImage, FileVideo, Presentation, Tag, Clock, AlertCircle, CheckCircle, Image, Film, ArrowRight, GitBranch, Sparkles, Search, X, Zap, ExternalLink } from '@lucide/vue'
+import { BookOpen, Upload, Trash2, FileText, File, FileImage, Presentation, Tag, Clock, AlertCircle, CheckCircle, Film, GitBranch, Sparkles, Search, X, Zap, ExternalLink, LockKeyhole, Library } from '@lucide/vue'
 import KnowledgeGraphExplorer from '../components/KnowledgeGraphExplorer.vue'
 
 const props = defineProps({ studentId: String })
@@ -30,7 +30,7 @@ async function openDocModal(doc) {
     const full = await getKnowledgeDocument(doc.id, props.studentId || 'default')
     selectedDoc.value = full
 
-    if (!full.multimodal_metadata?.doc_guide) {
+    if (full.scope === 'personal' && !full.multimodal_metadata?.doc_guide) {
       let attempts = 0
       pollTimer = setInterval(async () => {
         attempts++
@@ -170,6 +170,56 @@ function onDragLeave() { dragOver.value = false }
 function onDrop(e) { e.preventDefault(); dragOver.value = false; handleUpload(e) }
 
 const IGNORED_TAGS = new Set(['课程名称', '高校初始课程', '高校课程', '人工智能与机器学习导论', '网页检索'])
+
+const documentGroups = computed(() => {
+  const courseGroups = new Map()
+  const personal = []
+  const legacyPublic = []
+
+  docs.value.forEach((doc) => {
+    if (doc.scope === 'course' && doc.course_id) {
+      if (!courseGroups.has(doc.course_id)) {
+        courseGroups.set(doc.course_id, {
+          id: `course:${doc.course_id}`,
+          kind: 'course',
+          title: doc.course_title,
+          description: doc.course_description,
+          version: doc.course_version,
+          domainPack: doc.course_domain_pack,
+          origin: doc.course_origin,
+          license: doc.course_license,
+          documents: [],
+        })
+      }
+      courseGroups.get(doc.course_id).documents.push(doc)
+    } else if (doc.scope === 'personal') {
+      personal.push(doc)
+    } else {
+      legacyPublic.push(doc)
+    }
+  })
+
+  const groups = [...courseGroups.values()]
+  if (personal.length) {
+    groups.push({
+      id: 'personal',
+      kind: 'personal',
+      title: '我的知识库',
+      description: '仅当前账号可见的上传文档、网页资料和多模态资源。',
+      documents: personal,
+    })
+  }
+  if (legacyPublic.length) {
+    groups.push({
+      id: 'legacy-public',
+      kind: 'legacy',
+      title: '历史公共资料',
+      description: '兼容保留的旧版公共课程文档，后续完成来源复核后再归档或迁移。',
+      documents: legacyPublic,
+    })
+  }
+  return groups
+})
 
 // 任务 8.6: 从文档标签提取知识图谱数据
 const graphNodes = computed(() => {
@@ -359,38 +409,70 @@ async function doCrossModalSearch() {
       <p class="text-xs mt-1 text-[#334155]">上传文档/PPT/视频后，AI 将自动解析并索引，用于学习问答</p>
     </div>
 
-    <!-- 文档卡片网格：玻璃态暗色风格 -->
-    <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div v-for="doc in docs" :key="doc.id" class="knowledge-card bg-white border border-slate-200 rounded-xl p-4 hover:border-cyan-300 hover:shadow-lg hover:shadow-slate-200/70 transition-all duration-300 group cursor-pointer" @click="openDocModal(doc)">
-        <div class="flex items-start gap-3">
-          <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" :class="fileColor(doc.file_type)">
-            <component :is="fileIcon(doc.file_type)" :size="20" />
+    <!-- 课程分组 + 个人文档 + 历史公共资料 -->
+    <div v-else class="space-y-8">
+      <section v-for="group in documentGroups" :key="group.id" class="knowledge-group">
+        <div class="border-y border-slate-200 py-4 mb-4">
+          <div class="flex items-start justify-between gap-4">
+            <div class="flex items-start gap-3 min-w-0">
+              <div class="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                <Library v-if="group.kind === 'course'" :size="18" />
+                <BookOpen v-else :size="18" />
+              </div>
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <h3 class="text-base font-semibold text-slate-900">{{ group.title }}</h3>
+                  <span v-if="group.version" class="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-600">{{ group.version }}</span>
+                  <span v-if="group.domainPack" class="text-[10px] px-2 py-0.5 rounded bg-cyan-50 text-cyan-700">{{ group.domainPack }}</span>
+                </div>
+                <p class="text-xs text-slate-600 mt-1 leading-relaxed">{{ group.description }}</p>
+                <div v-if="group.kind === 'course'" class="mt-2 space-y-1 text-[11px] text-slate-500">
+                  <p><span class="font-medium text-slate-700">来源：</span>{{ group.origin }}</p>
+                  <p class="line-clamp-2"><span class="font-medium text-slate-700">许可：</span>{{ group.license }}</p>
+                </div>
+              </div>
+            </div>
+            <span class="text-xs text-slate-500 shrink-0">{{ group.documents.length }} 个文档</span>
           </div>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-1.5">
-              <h3 class="text-sm font-medium text-[#f3f4f6] truncate">{{ doc.filename }}</h3>
-              <span v-if="isMultimodal(doc)" class="inline-flex items-center gap-0.5 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-[9px] px-1.5 py-0 rounded-full shrink-0">多模态</span>
-            </div>
-            <div class="flex flex-wrap items-center gap-2 mt-1.5">
-              <span class="text-[10px] text-[#64748b] bg-white/[0.04] px-1.5 py-0.5 rounded">{{ (doc.file_type || '').toUpperCase() }}</span>
-              <span class="text-[10px] text-[#475569]">{{ formatSize(doc.file_size) }}</span>
-              <span class="text-[10px] text-[#475569]">{{ doc.chunk_count }} 块</span>
-              <span v-if="doc.multimodal_metadata?.slide_count" class="text-[10px] text-[#475569]">{{ doc.multimodal_metadata.slide_count }} 页</span>
-              <span v-if="doc.multimodal_metadata?.video_duration" class="text-[10px] text-[#475569]">{{ Math.round(doc.multimodal_metadata.video_duration) }}s</span>
-              <span v-if="doc.created_at" class="text-[10px] text-[#475569] flex items-center gap-1"><Clock :size="10" /> {{ ago(doc.created_at) }}</span>
-            </div>
-            <p v-if="doc.content_preview" class="text-[11px] text-[#94a3b8] mt-2 line-clamp-2">{{ doc.content_preview }}</p>
-            <div v-if="doc.tags && doc.tags.length > 0" class="flex flex-wrap gap-1 mt-2">
-              <span v-for="tag in doc.tags.slice(0, 4)" :key="tag" class="inline-flex items-center gap-0.5 bg-[#0ea5e9]/10 text-[#0ea5e9] text-[10px] px-1.5 py-0 rounded-full"><Tag :size="8" /> {{ tag }}</span>
-              <span v-if="doc.tags.length > 4" class="text-[10px] text-[#475569]">+{{ doc.tags.length - 4 }}</span>
-            </div>
-          </div>
-          <button class="inline-flex items-center gap-1 px-2.5 py-1 shrink-0 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-500/80 border border-red-500/20 rounded-lg transition-all" title="删除知识库文件" @click.stop="remove(doc.id, doc.filename)">
-            <Trash2 :size="12" />
-            <span>删除</span>
-          </button>
         </div>
-      </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div v-for="doc in group.documents" :key="doc.id" class="knowledge-card bg-white border border-slate-200 rounded-xl p-4 hover:border-cyan-300 hover:shadow-lg hover:shadow-slate-200/70 transition-all duration-300 group cursor-pointer" @click="openDocModal(doc)">
+            <div class="flex items-start gap-3">
+              <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" :class="fileColor(doc.file_type)">
+                <component :is="fileIcon(doc.file_type)" :size="20" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-1.5">
+                  <h3 class="text-sm font-medium text-[#f3f4f6] truncate">{{ doc.title || doc.filename }}</h3>
+                  <span v-if="isMultimodal(doc)" class="inline-flex items-center gap-0.5 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-[9px] px-1.5 py-0 rounded-full shrink-0">多模态</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 mt-1.5">
+                  <span class="text-[10px] text-[#64748b] bg-white/[0.04] px-1.5 py-0.5 rounded">{{ (doc.file_type || '').toUpperCase() }}</span>
+                  <span v-if="doc.scope === 'course'" class="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">第 {{ doc.chapter_order + 1 }} 章</span>
+                  <span class="text-[10px] text-[#475569]">{{ formatSize(doc.file_size) }}</span>
+                  <span class="text-[10px] text-[#475569]">{{ doc.chunk_count }} 块</span>
+                  <span v-if="doc.multimodal_metadata?.slide_count" class="text-[10px] text-[#475569]">{{ doc.multimodal_metadata.slide_count }} 页</span>
+                  <span v-if="doc.multimodal_metadata?.video_duration" class="text-[10px] text-[#475569]">{{ Math.round(doc.multimodal_metadata.video_duration) }}s</span>
+                  <span v-if="doc.created_at" class="text-[10px] text-[#475569] flex items-center gap-1"><Clock :size="10" /> {{ ago(doc.created_at) }}</span>
+                </div>
+                <p v-if="doc.content_preview" class="text-[11px] text-[#94a3b8] mt-2 line-clamp-2">{{ doc.content_preview }}</p>
+                <div v-if="doc.tags && doc.tags.length > 0" class="flex flex-wrap gap-1 mt-2">
+                  <span v-for="tag in doc.tags.slice(0, 4)" :key="tag" class="inline-flex items-center gap-0.5 bg-[#0ea5e9]/10 text-[#0ea5e9] text-[10px] px-1.5 py-0 rounded-full"><Tag :size="8" /> {{ tag }}</span>
+                  <span v-if="doc.tags.length > 4" class="text-[10px] text-[#475569]">+{{ doc.tags.length - 4 }}</span>
+                </div>
+              </div>
+              <button v-if="doc.deletable" class="inline-flex items-center gap-1 px-2.5 py-1 shrink-0 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-500/80 border border-red-500/20 rounded-lg transition-all" title="删除知识库文件" @click.stop="remove(doc.id, doc.filename)">
+                <Trash2 :size="12" />
+                <span>删除</span>
+              </button>
+              <span v-else class="inline-flex items-center justify-center w-7 h-7 shrink-0 text-slate-400 bg-slate-100 rounded-lg" title="公共课程为只读内容">
+                <LockKeyhole :size="13" />
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
 
     <!-- 成员 3: 跨模态搜索 -->
@@ -482,7 +564,7 @@ async function doCrossModalSearch() {
                title="在新标签页中打开网页原文">
               <ExternalLink :size="12" /> 访问原文
             </a>
-            <button class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/80 text-red-400 hover:text-white border border-red-500/20 text-xs font-medium transition-all shrink-0"
+            <button v-if="selectedDoc.deletable" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/80 text-red-400 hover:text-white border border-red-500/20 text-xs font-medium transition-all shrink-0"
                @click="remove(selectedDoc.id, selectedDoc.filename); closeDocModal()"
                title="删除此文档">
               <Trash2 :size="12" /> 删除文档
@@ -538,7 +620,24 @@ async function doCrossModalSearch() {
             </div>
           </div>
           
-          <!-- 导读未就绪 -->
+          <!-- 预置课程来源与版本 -->
+          <div v-else-if="selectedDoc.scope === 'course'" class="bg-white border border-slate-200 rounded-xl p-5 text-slate-800">
+            <div class="flex items-center gap-2 mb-3">
+              <Library :size="16" class="text-emerald-600" />
+              <h4 class="text-sm font-bold">预置课程文档</h4>
+              <span class="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-600">{{ selectedDoc.course_version }}</span>
+            </div>
+            <p class="text-xs leading-relaxed text-slate-600">{{ selectedDoc.course_description }}</p>
+            <dl class="grid grid-cols-[72px_1fr] gap-x-3 gap-y-2 mt-4 text-xs">
+              <dt class="text-slate-500">课程</dt><dd class="font-medium text-slate-800">{{ selectedDoc.course_title }}</dd>
+              <dt class="text-slate-500">领域包</dt><dd>{{ selectedDoc.course_domain_pack }}</dd>
+              <dt class="text-slate-500">来源</dt><dd>{{ selectedDoc.course_origin }}</dd>
+              <dt class="text-slate-500">文件哈希</dt><dd class="font-mono break-all">{{ selectedDoc.content_hash }}</dd>
+              <dt class="text-slate-500">许可</dt><dd class="leading-relaxed">{{ selectedDoc.course_license }}</dd>
+            </dl>
+          </div>
+
+          <!-- 个人文档导读未就绪 -->
           <div v-else class="bg-[#131926]/90 border border-white/10 rounded-xl p-5 text-center">
             <Sparkles :size="24" class="mx-auto mb-2 text-cyan-400 animate-pulse" />
             <p class="text-sm font-medium text-white">智能导读解析中...</p>

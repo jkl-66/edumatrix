@@ -16,11 +16,14 @@ import xml.etree.ElementTree as ET
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.database import DBWebSearchHistory, run_db_op
+from app.legacy_repositories import LegacyReadRepository
 from app.auth import enforce_student_access, get_current_user
 from document_parser import chunk_document
 from rag_engine import hybrid_rag
 from swarm_factory import build_swarm_from_headers
 from models import Evidence, EvidenceModality
+from cache_utils import TTLBoundedCache
+from config import CONFIG
 
 router = APIRouter(prefix="/api/web", tags=["web_search"])
 
@@ -35,7 +38,10 @@ def _generate_id() -> str:
 
 
 # 搜索缓存（内存）：相同关键词5分钟内复用结果
-_search_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
+_search_cache: TTLBoundedCache[str, tuple[float, list[dict[str, str]]]] = TTLBoundedCache(
+    maxsize=CONFIG.search_cache_max_entries,
+    ttl_seconds=CONFIG.cache_ttl_seconds,
+)
 _SEARCH_CACHE_TTL = 300  # 5分钟
 
 
@@ -604,13 +610,7 @@ async def get_search_history(
 ) -> list[dict[str, Any]]:
     student_id = enforce_student_access(student_id, current_user)
     def fetch_history(session):
-        return (
-            session.query(DBWebSearchHistory)
-            .filter(DBWebSearchHistory.student_id == student_id)
-            .order_by(DBWebSearchHistory.created_at.desc())
-            .limit(limit)
-            .all()
-        )
+        return LegacyReadRepository(session).web_search_history(student_id, limit=limit)
         
     records = await run_db_op(fetch_history)
     return [

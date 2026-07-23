@@ -4,7 +4,7 @@
  * 任务 8.2: 修复内存泄漏（onUnmounted 释放 ECharts + 解绑 resize）
  */
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import * as echarts from 'echarts'
+import { echarts } from '../lib/echarts-radar'
 
 const props = defineProps({
   concepts: { type: Array, default: () => [] },       // [{name, mastery}]

@@ -260,9 +260,8 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
 
 
 def load_display_name(db: Session, username: str) -> str:
-    from app.database import DBUser
-    user = db.query(DBUser).filter(DBUser.username == username).first()
-    return user.display_name if (user and user.display_name) else username
+    from app.legacy_repositories import LegacyReadRepository
+    return LegacyReadRepository(db).display_name(username)
 
 @router.get("/{student_id}")
 async def get_profile(
@@ -294,9 +293,9 @@ async def get_profile(
 
     embeddings = await asyncio.to_thread(_bulk_embed, concepts)
     coordinate_map = await asyncio.to_thread(poincare_to_2d_coordinates, embeddings)
-    from app.database import DBAlignmentLog
     def _fetch_alignment_op(db_session):
-        return db_session.query(DBAlignmentLog).filter(DBAlignmentLog.student_id == student_id).order_by(DBAlignmentLog.timestamp.desc()).first()
+        from app.legacy_repositories import LegacyReadRepository
+        return LegacyReadRepository(db_session).latest_alignment(student_id)
     
     latest_log = await run_db_op(_fetch_alignment_op)
     alignment_data = {
@@ -657,16 +656,12 @@ async def get_profile_analysis(
 
     # === 任务：卡尔曼滤波防抖与时序心智负荷展示数据处理 ===
     # 物理数据库历史重构：从 SQLite 中捞取该学生所有真实的答题记录，用于修复由于老系统序列化漏洞缺失的 BKT 答题历史
-    from app.database import SessionLocal, DBQuizRecord
+    from app.database import SessionLocal
     session = SessionLocal()
     concept_histories = {}
     try:
-        records = (
-            session.query(DBQuizRecord)
-            .filter(DBQuizRecord.student_id == student_id)
-            .order_by(DBQuizRecord.created_at.asc())
-            .all()
-        )
+        from app.legacy_repositories import LegacyReadRepository
+        records = LegacyReadRepository(session).quiz_history(student_id)
         for r in records:
             c = r.target_concept
             if c:
@@ -825,7 +820,6 @@ def resolve_learning_goals_three_tiers(db, profile, concepts: set[str], dag: dic
     - goal_origin_type: 目标的来源类型: 'user' (用户输入), 'document' (课件提取), 'course_default' (当前学习课程骨干)
     """
     import json
-    from app.database import DBKnowledgeDocument
     
     mastery = profile.concept_mastery or {}
     goals = getattr(profile, "learning_goals", []) or []
@@ -836,7 +830,8 @@ def resolve_learning_goals_three_tiers(db, profile, concepts: set[str], dag: dic
         return real_goals, "user"
         
     # 2. 第二优先级：如果用户未指定具体知识点，但上传了新的知识库课件
-    docs = db.query(DBKnowledgeDocument).filter(DBKnowledgeDocument.student_id == profile.student_id).all()
+    from app.legacy_repositories import LegacyReadRepository
+    docs = LegacyReadRepository(db).personal_knowledge_documents(profile.student_id)
     doc_concepts = set()
     for doc in docs:
         if doc.tags:
@@ -1429,17 +1424,13 @@ async def rollback_profile(
     前端 History.vue「跳转到当时认知状态」按钮调用此接口。
     """
     student_id = enforce_student_access(student_id, current_user)
-    from app.database import SessionLocal, DBConversationHistory
+    from app.database import SessionLocal
 
     # ── 1. 从数据库取出目标 conversation 的 profile_snapshot ──
     def _fetch_snapshot(db):
-        row = (
-            db.query(DBConversationHistory)
-            .filter(
-                DBConversationHistory.student_id == student_id,
-                DBConversationHistory.id == body.conversation_id,
-            )
-            .first()
+        from app.legacy_repositories import LegacyReadRepository
+        row = LegacyReadRepository(db).conversation_snapshot(
+            student_id, body.conversation_id
         )
         if not row:
             return None
@@ -1553,12 +1544,8 @@ async def delete_student_concept(
 
     # 2. 删除对应的复习计划数据库记录 (DBReviewPlan)
     def _delete_review_plan_db(session):
-        from app.database import DBReviewPlan
-        session.query(DBReviewPlan).filter(
-            DBReviewPlan.student_id == student_id,
-            DBReviewPlan.concept == target
-        ).delete(synchronize_session=False)
-        session.commit()
+        from app.legacy_repositories import LegacyReadRepository
+        LegacyReadRepository(session).delete_review_plan(student_id, target)
 
     await run_db_op(_delete_review_plan_db)
 

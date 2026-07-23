@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { getReviewPlans, checkinReview, getCheckinStreak, getCheckinHistory, deleteReviewPlan } from '../api'
 import { Calendar, CheckCircle2, Clock, TrendingUp, Flame, BookOpen, Loader2, XCircle, ChevronDown, Search, Trash2 } from '@lucide/vue'
-import * as echarts from 'echarts'
+import { echarts } from '../lib/echarts-line'
 
 const props = defineProps({ studentId: String })
 

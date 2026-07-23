@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import * as echarts from 'echarts'
+import { echarts } from '../lib/echarts-line'
 
 const props = defineProps({ values: { type: Array, default: () => [] } })
 const chartEl = ref(null)

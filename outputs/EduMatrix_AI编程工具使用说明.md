@@ -8,7 +8,7 @@
 
 | 使用环节 | AI 辅助内容 | 验证方式 |
 |---|---|---|
-| 源码审计 | 根据报告和源码定位认证、IDOR、RAG 隔离、沙箱和依赖问题 | 阅读源码、AST 检查、专项测试、80 个集成测试 |
+| 源码审计 | 根据报告和源码定位认证、IDOR、RAG 隔离、沙箱和依赖问题 | 阅读源码、AST 检查、专项测试、正式 pytest 145 passed、1 skipped | 
 | 安全整改 | 提出服务端身份绑定、owner 过滤和无宿主回退方案 | A/B/教师运行时矩阵 47/47，通过安全契约 10/10 |
 | 环境整理 | 归纳 Python、Node、Playwright、Docker 可选模式和环境变量 | 导入检查、健康检查、无 Docker E2E |
 | 测试材料 | 生成测试用例骨架、合成画像和固定知识集 | deterministic 运行、JSON 结果和截图证据 |
@@ -29,8 +29,9 @@
 .venv\Scripts\python.exe -m unittest tests.test_swarm_runtime -v
 .venv\Scripts\python.exe scripts\runtime_security_matrix.py
 .venv\Scripts\python.exe scripts\e2e_no_docker.py
+.venv\Scripts\python.exe scripts\trusted_local_smoke.py
 .venv\Scripts\python.exe scripts\generate_innovation_evidence.py
-.venv\Scripts\python.exe -m unittest test_edumatrix -v
+.venv\Scripts\python.exe -m pytest -q
 ```
 
 ## 5. 最终提交前人工确认

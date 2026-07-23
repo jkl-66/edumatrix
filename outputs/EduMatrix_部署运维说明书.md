@@ -1,8 +1,10 @@
 # EduMatrix 部署与运维说明书
 
+> **部署模式选择**：本项目为学术研究与比赛验收原型，Windows 原生部署即可满足核心功能，不以 Docker 为必选前置。`trusted_local` 仅用于可信本机研究演示，代码在受限子进程中运行但没有容器隔离；生产或不可信代码场景应保持 `disabled` 或改用 `docker`。
+
 ## 1. 适用范围
 
-本文档描述开发、演示和生产化前的部署方法。比赛提交采用“无 Docker 默认运行、Docker 可选增强”的策略：核心学习闭环使用本机 Python/SQLite 即可启动，代码执行沙箱只有在显式设置 `EDUMATRIX_SANDBOX_MODE=docker` 且 Docker daemon 可用时才开启。当前项目主要是单机 SQLite 原型；主要业务接口已加入认证、学生范围和 RAG owner 过滤，但生产多用户部署仍需独立 sandbox worker、完整跨用户回归和容量治理。评委安装顺序见 `outputs/EduMatrix_评委环境安装与复现备忘录.md`。
+本文档描述开发、演示和生产化前的部署方法。比赛提交采用“无 Docker 默认运行、可信本地研究演示可选、Docker 容器隔离增强可选”的策略：核心学习闭环使用本机 Python/SQLite 即可启动；`trusted_local` 仅在可信本机以受限子进程演示代码；`docker` 才提供容器隔离。当前项目主要是单机 SQLite 原型；主要业务接口已加入认证、学生范围和 RAG owner 过滤，但生产多用户部署仍需独立 sandbox worker、完整跨用户回归和容量治理。评委安装顺序见 `outputs/EduMatrix_评委环境安装与复现备忘录.md`。
 
 ## 2. 目录与运行组件
 
@@ -65,6 +67,18 @@ Invoke-WebRequest http://127.0.0.1:8000/api/code/status
 
 该模式不连接 Docker daemon，也不执行宿主 Python 子进程。登录、画像、对话、知识检索、测验、反馈和报告等核心功能可以独立验收；代码运行按钮会被前端禁用，并给出“代码沙箱未启用”的明确状态。
 
+## 4.1 无 Docker 的可信研究演示
+
+如果比赛现场需要展示实时 Python 代码，但不希望安装 Docker，可在可信本机执行：
+
+```powershell
+$env:EDUMATRIX_SANDBOX_MODE="trusted_local"
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.venv\Scripts\python.exe scripts\trusted_local_smoke.py
+```
+
+该模式使用受限 Python 子进程、临时目录、AST 检查、超时和输出上限；它不具备 Docker 容器隔离，只适用于学术研究和比赛演示，不适用于生产或不可信代码。
+
 ## 5. Docker 可选沙箱部署
 
 现有 Dockerfile 使用 Node 20 Alpine 构建前端，再使用 Python 3.11 slim 运行后端；compose 暴露 8000 端口并挂载 `edumatrix_data` volume。
@@ -84,6 +98,7 @@ Invoke-WebRequest http://127.0.0.1:8000/api/health
 - 单进程 Uvicorn 不等于高可用部署；
 - compose 中存在外部 LLM endpoint，需确认网络、密钥和合规性；
 - 生产环境缺少合规 JWT secret 会启动失败；
+- 本地演示也应固定 `EDUMATRIX_AUTH_SECRET_KEY`；留空会在每次开发进程启动时生成临时密钥并使旧 Token 失效；
 - SQLite volume 需要备份、锁竞争和恢复方案。
 
 ### 5.2 生产启动门禁
@@ -93,7 +108,8 @@ Invoke-WebRequest http://127.0.0.1:8000/api/health
 ```text
 EDUMATRIX_ENV=production
 EDUMATRIX_AUTH_SECRET_KEY 已设置且不是默认值
-`EDUMATRIX_SANDBOX_MODE=docker` 时 Docker sandbox 可用，否则仅禁用代码执行；`disabled` 模式不要求 Docker
+`EDUMATRIX_SANDBOX_MODE=trusted_local` 仅用于可信研究演示；`docker` 时 Docker sandbox 可用；`disabled` 模式禁用代码执行且不要求 Docker
+本地 Windows 演示建议 `EDUMATRIX_RELOAD=0`，确保后端和代码执行子进程始终使用同一个 `.venv`；修改依赖后重启后端
 Playwright browser 可用，否则禁用 PDF 导出
 数据库路径可写且备份策略存在
 LLM endpoint/API key 配置完整或明确启用 deterministic mode
@@ -131,12 +147,12 @@ SQLite 备份前应停止写入或使用在线备份 API，不能只复制正在
 | 代码执行不可用 | 沙箱默认为 `disabled`，或 Docker 模式下 daemon 不可用 | 核心验收可继续；需要实时执行时设置 `EDUMATRIX_SANDBOX_MODE=docker` 并启动 Docker。任何模式都不使用宿主 Python 回退 |
 | 用户看到他人内容 | 旧客户端或未覆盖路由的身份边界 | 主要接口已有 JWT/owner 过滤；执行跨用户回归矩阵并查看审计日志 |
 | 数据库 locked | SQLite 并发写入 | 降低并发、缩短事务、迁移 PostgreSQL |
-| 前端公式不显示 | KaTeX CSS 路径不存在 | 将 CSS 纳入 npm 构建并校验静态资源 |
+| 前端公式不显示 | 本地 KaTeX 静态资源未随构建产物发布 | 重新执行 `npm run build`，检查 `dist/assets` 中 KaTeX CSS/字体资源 |
 
 ## 10. 运维禁忌
 
 - 不要启用固定 JWT secret；
-- 不要在 Docker 不可用或沙箱未启用时执行宿主 Python 代码；
+- 不要把 `trusted_local` 称为容器沙箱；生产或不可信代码必须保持 `disabled` 或使用经过隔离设计的 `docker` worker；
 - 不要把 `.env`、API key、真实学生数据打包提交；
 - 不要把 `student_id` 当作授权凭据；
 - 不要直接删除 SQLite 数据库而不备份；

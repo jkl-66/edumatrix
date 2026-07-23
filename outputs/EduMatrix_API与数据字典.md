@@ -1,7 +1,9 @@
 # EduMatrix API 与数据字典
 
-基线：`2952dc1b17d793e5d76f54e1764348ebe50e4d5e`  
-来源：FastAPI 路由源码、SQLAlchemy 模型、前端 API client  这份文件用于支撑主技术文档，不等同于 OpenAPI 在线文档。最终部署后应以 `/docs` 和实际响应为准。
+> **代码状态接口**：`GET /api/code/status` 返回 `mode`、`execution_enabled`、`isolation`、`security_level` 和 `max_output_bytes`。其中 `trusted_local` 的 `isolation` 为 `trusted_local_child_process`，`security_level` 为 `research_only_no_container_isolation`；这些字段用于让前端和评委明确区分本地研究演示与 Docker 容器隔离。
+
+验证基线：Git `74f8f2715641da20b560571120a66477d300f5de`；结论以 2026-07-20 验证时的最终代码与证据为准。  
+来源：FastAPI 路由源码、SQLAlchemy 模型、前端 API client。这份文件用于支撑主技术文档，不等同于 OpenAPI 在线文档。最终部署后应以 `/docs` 和实际响应为准。
 
 ## 1. 通用约定
 
@@ -19,17 +21,20 @@ Authorization: Bearer <JWT>
 Content-Type: application/json
 ```
 
-前端还可能发送以下模型配置头：
+前端还可能发送以下模型配置头（名称以当前 `frontend/src/api/common.js` 为准）：
 
 ```http
-X-Edumatrix-Api-Key: <optional>
-X-Edumatrix-Endpoint: <optional>
-X-Edumatrix-Model: <optional>
+X-EduMatrix-Api-Key: <optional>
+X-EduMatrix-Endpoint: <optional>
+X-EduMatrix-Model: <optional>
+X-EduMatrix-Multimodal-Api-Key: <optional>
+X-EduMatrix-Multimodal-Endpoint: <optional>
+X-EduMatrix-Multimodal-Model: <optional>
 X-Edumatrix-Temperature: <optional>
 X-Edumatrix-Max-Tokens: <optional>
 ```
 
-当前认证行为：`app/auth.py:get_current_user` 在默认配置下 Token 缺失返回 401；只有显式 `EDUMATRIX_DEMO_MODE=1` 才返回或创建 `demo-student`。以下标记为“未绑定”表示当前路由函数没有使用 `Depends(get_current_user)`，不表示前端没有发送 Token。
+当前认证行为：`app/auth.py:get_current_user` 在默认配置下 Token 缺失返回 401；只有显式 `EDUMATRIX_DEMO_MODE=1` 才返回或创建 `demo-student`。当前主要业务路由已经接入 `get_current_user` 或 `enforce_request_student_scope`；公开的健康检查、登录/注册和部分运维/模型测试接口仍应按部署环境限制访问。
 
 ### 1.3 状态分类
 
@@ -82,13 +87,13 @@ X-Edumatrix-Max-Tokens: <optional>
 ### `GET /api/llm/test`
 
 文件：`app/main.py:712`  
-认证：当前未绑定用户  
+认证：公开；正式环境应限制访问或只绑定内网  
 用途：检测外部 LLM 或当前配置。
 
 ### `GET /api/metrics`
 
 文件：`app/main.py:754`  
-认证：当前未绑定用户  
+认证：公开；正式环境应限制访问或只绑定内网  
 用途：返回运行时指标。生产环境应限制访问，避免暴露内部信息。
 
 ## 3. 对话与 Agent 流式 API
@@ -97,7 +102,7 @@ X-Edumatrix-Max-Tokens: <optional>
 
 ### `POST /api/stream/chat`
 
-认证：当前未绑定用户  
+认证：需要 `get_current_user`，并通过 `enforce_student_access` 校验学生范围  
 前端调用：`frontend/src/api/stream.js:streamChat`。  
 请求示例：
 
@@ -130,19 +135,19 @@ X-Edumatrix-Max-Tokens: <optional>
 }
 ```
 
-风险：请求体 `student_id` 当前可以影响画像、历史、资源和数据库写入对象。整改后必须由 JWT `sub` 生成有效学生 ID。
+边界：请求体仍保留 `student_id` 兼容字段，但服务端以 JWT `sub` 和 `enforce_student_access` 为授权依据，普通学生不能覆盖当前身份。
 
 ### `POST /api/stream/regenerate`
 
-认证：当前未绑定用户  
+认证：需要 `get_current_user` 和学生范围校验  
 文件：`stream_api.py:1493`  
 输入：`student_id`、`role`、`resource_type`、`query`、可选 `overview`、`pathway`。  
 用途：针对单个 Agent/资源类型重新生成。  
-风险：可跨用户读取画像和复用缓存。
+边界：兼容字段不能替代 JWT 身份；仍需在外部模型和缓存场景验证不跨用户复用。
 
 ### `POST /api/stream/explain`
 
-认证：当前未绑定用户  
+认证：需要 `get_current_user` 和学生范围校验  
 文件：`stream_api.py:1657`  
 输入：`target_text`、上下文、`student_id`、`follow_up`、`history`。  
 用途：划词或公式的苏格拉底式追问。  
@@ -150,20 +155,20 @@ X-Edumatrix-Max-Tokens: <optional>
 
 ## 4. 画像与学习路径 API
 
-路由前缀：`/api/profile`，文件：`profile_api.py`。以下接口当前大多没有 `get_current_user` 依赖。
+路由前缀：`/api/profile`，文件：`profile_api.py`。当前画像、分析、路径、推荐、回滚和概念删除接口均使用当前用户与学生范围校验；路径参数仅用于兼容前端调用。
 
 | 方法 | 路径 | 用途 | 当前身份状态 |
 |---|---|---|---|
-| GET | `/api/profile/{student_id}` | 画像、坐标、对齐结果 | 未绑定 |
-| POST | `/api/profile/{student_id}/update` | 结构化更新画像 | 未绑定 |
-| GET | `/api/profile/{student_id}/analysis` | 画像分析与诊断 | 未绑定 |
-| GET | `/api/profile/{student_id}/learning-path` | 学习路径 | 未绑定 |
-| GET | `/api/profile/{student_id}/goal-recommendations` | 目标推荐 | 未绑定 |
-| POST | `/api/profile/{student_id}` | 兼容版画像更新 | 未绑定 |
-| GET | `/api/profile/{student_id}/narrative` | 叙事成长报告 | 未绑定 |
-| GET | `/api/profile/{student_id}/recommendations` | 智能资源推荐 | 未绑定 |
-| POST | `/api/profile/{student_id}/rollback` | 按历史快照回滚画像 | 未绑定 |
-| DELETE | `/api/profile/{student_id}/concept/{concept_name}` | 删除概念状态 | 未绑定 |
+| GET | `/api/profile/{student_id}` | 画像、坐标、对齐结果 | 已绑定 `get_current_user` + 范围校验 |
+| POST | `/api/profile/{student_id}/update` | 结构化更新画像 | 已绑定 |
+| GET | `/api/profile/{student_id}/analysis` | 画像分析与诊断 | 已绑定 |
+| GET | `/api/profile/{student_id}/learning-path` | 学习路径 | 已绑定 |
+| GET | `/api/profile/{student_id}/goal-recommendations` | 目标推荐 | 已绑定 |
+| POST | `/api/profile/{student_id}` | 兼容版画像更新 | 已绑定 |
+| GET | `/api/profile/{student_id}/narrative` | 叙事成长报告 | 已绑定 |
+| GET | `/api/profile/{student_id}/recommendations` | 智能资源推荐 | 已绑定 |
+| POST | `/api/profile/{student_id}/rollback` | 按历史快照回滚画像 | 已绑定 |
+| DELETE | `/api/profile/{student_id}/concept/{concept_name}` | 删除概念状态 | 已绑定 |
 
 建议的安全接口形式：
 
@@ -209,7 +214,7 @@ async def get_profile(
 | GET | `/api/flashcard/due` | 获取到期卡片 |
 | GET | `/api/flashcard/all` | 获取全部卡片 |
 
-虽然这些函数包含数据库依赖，但请求体/查询参数中的 `student_id` 仍需与当前登录用户进行一致性校验。
+当前闪卡路由使用 `enforce_request_student_scope`、`get_current_user` 和 `enforce_student_access`；请求体/查询参数中的 `student_id` 仍只是兼容字段，不能成为授权依据。
 
 ## 7. 知识库与 RAG API
 
@@ -217,16 +222,16 @@ async def get_profile(
 
 | 方法 | 路径 | 用途 | 风险/条件 |
 |---|---|---|---|
-| POST | `/api/knowledge/upload` | 上传文档并异步摄入 | 当前无用户依赖，文件一次性读入 |
-| GET | `/api/knowledge/list` | 文档列表 | 当前按客户端 student_id 过滤 |
-| GET | `/api/knowledge/graph/stats` | 图谱统计 | 当前未绑定用户 |
+| POST | `/api/knowledge/upload` | 上传文档并异步摄入 | 已绑定；限制大小、类型、页数、解析时间和 owner |
+| GET | `/api/knowledge/list` | 文档列表 | 已绑定；返回当前 owner 以及 `public/system` |
+| GET | `/api/knowledge/graph/stats` | 图谱统计 | 公开统计接口，正式部署应限制访问范围 |
 | GET | `/api/knowledge/cross-search` | 跨模态搜索 | 依赖向量/图谱路径 |
 | POST | `/api/knowledge/add-web-source` | 添加网页来源 | 需 URL 校验和 SSRF 防护 |
 | POST | `/api/knowledge/download-web-file` | 下载网页文件 | 需大小、协议、重定向限制 |
 | GET | `/api/knowledge/{doc_id}` | 获取文档详情 | 需校验文档 owner |
 | DELETE | `/api/knowledge/{doc_id}` | 删除文档 | 需同步删除索引 |
 
-上传接口建议采用 `Content-Length`、流式写入、总大小、页数、解压缩比、解析超时和后台队列限制。
+上传接口当前已经采用总大小、页数、压缩包成员/展开体积、压缩比和解析超时限制；文件一次性读取仍是后续大文件工程化时的优化点。
 
 ## 8. 代码执行 API
 
@@ -234,7 +239,7 @@ async def get_profile(
 
 ### `POST /api/code/run`
 
-当前认证：未绑定用户。  
+当前认证：需要 `get_current_user` 和学生范围校验。  
 请求：
 
 ```json
@@ -257,13 +262,13 @@ async def get_profile(
 }
 ```
 
-实际代码长度上限是 50,000 字节（50 KB）。Docker 不可用时会进入 `_run_in_subprocess`，生产环境应改为拒绝执行或独立沙箱 worker。
+实际代码长度上限是 50,000 字节（50 KB）。`disabled` 明确拒绝；`trusted_local` 仅用于可信本机研究演示；`docker` 在 daemon 可用且配置正确时提供容器路径，不回退到宿主高权限执行。
 
 ### `GET /api/code/history/{student_id}`
 
-当前认证：未绑定用户。  
+当前认证：需要 `get_current_user` 和学生范围校验。  
 用途：读取代码执行历史。  
-风险：可猜测其他学生 ID 后读取历史。
+边界：服务端使用 `enforce_student_access`，不能仅凭猜测 ID 读取其他学生历史。
 
 ## 9. 行为、网页和动画 API
 
@@ -315,7 +320,7 @@ async def get_profile(
 - `/api/review/{student_id}`；
 - `/api/export-notes-pdf`。
 
-这些接口与新 router 并存，建议在最终产品中统一版本、废弃重复路径并保持认证策略一致。
+这些接口与新 router 并存，当前主要路径已增加认证/范围校验；最终产品仍建议统一版本、逐步废弃重复路径并保持认证策略一致。
 
 ### 教师
 
@@ -323,7 +328,7 @@ async def get_profile(
 - `GET /api/teacher/seed`；
 - `GET /api/teacher/reviews`。
 
-这些接口使用教师依赖，但 `get_current_teacher` 依赖 `get_current_user`，而后者当前缺 Token 会自动进入 demo 学生，因此生产环境必须先修复根依赖。
+这些接口使用教师依赖；生产环境仍应限制教师账号、学生授权关系和运维接口，不能仅依赖前端角色字段。
 
 ## 11. 数据字典
 

@@ -19,7 +19,13 @@ EduMatrix 智教矩阵 - 后端启动入口
 import os
 import sys
 import subprocess
+import multiprocessing
+import multiprocessing.spawn as multiprocessing_spawn
+import time
 import uvicorn
+
+# Windows child processes must continue to use this project's virtual environment.
+multiprocessing.set_executable(sys.executable)
 
 # 强力防御：防止评委或本地电脑开启全局系统代理导致 B站 WAF 阻断
 os.environ["NO_PROXY"] = "bilibili.com,biliapi.net,biliapi.com,baidu.com,bing.com"
@@ -38,33 +44,52 @@ except ImportError:
 
 
 def _free_port(port: int) -> None:
-    """杀掉占用指定端口的旧进程，防止端口冲突导致启动失败。"""
-    import platform
-    if platform.system() == "Windows":
-        try:
-            result = subprocess.run(
-                f'netstat -ano | findstr "LISTENING" | findstr ":{port}"',
-                capture_output=True, text=True, shell=True
-            )
-            killed = set()
-            for line in result.stdout.strip().split("\n"):
-                parts = line.strip().split()
-                if len(parts) >= 5:
-                    pid = parts[-1]
-                    if pid.isdigit() and pid not in killed and int(pid) != 0 and int(pid) != os.getpid():
-                        killed.add(pid)
-                        try:
-                            subprocess.run(["taskkill", "/F", "/PID", pid],
-                                           capture_output=True, timeout=3)
-                            print(f"  [端口] 已清理 PID {pid} 占用的端口 {port}")
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+    """Only clean an old EduMatrix backend; never kill an unrelated Python service."""
+    if os.name != "nt":
+        return
+
+    powershell = f"""
+$connections = @(Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue)
+foreach ($connection in $connections) {{
+    $ownerPid = [int]$connection.OwningProcess
+    $process = Get-CimInstance Win32_Process -Filter \"ProcessId = $ownerPid\" -ErrorAction SilentlyContinue
+    $command = [string]$process.CommandLine
+    if ($command -match 'uvicorn app\\.main:app' -or $command -match 'run\\.py') {{
+        Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+        Write-Output \"KILLED|$ownerPid|$command\"
+    }} else {{
+        Write-Output \"FOREIGN|$ownerPid|$command\"
+    }}
+}}
+"""
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", powershell],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Unable to inspect port {port}: {result.stderr.strip()}")
+
+    foreign = []
+    for line in result.stdout.splitlines():
+        if line.startswith("KILLED|"):
+            _, pid, command = line.split("|", 2)
+            print(f"  [port] stopped old EduMatrix backend PID {pid}: {command[:120]}")
+        elif line.startswith("FOREIGN|"):
+            foreign.append(line)
+    if foreign:
+        raise RuntimeError(
+            f"Port {port} is occupied by a non-EduMatrix process; refusing to terminate it: "
+            + "\\n".join(foreign)
+        )
+    time.sleep(0.4)
 
 HOST = os.getenv("EDUMATRIX_HOST", "0.0.0.0")
 PORT = int(os.getenv("EDUMATRIX_PORT", "8000"))
-RELOAD = os.getenv("EDUMATRIX_RELOAD", "1") == "1"
+# Keep the evaluator/demo process on one interpreter by default. Developers can
+# opt into reload explicitly with EDUMATRIX_RELOAD=1.
+RELOAD = os.getenv("EDUMATRIX_RELOAD", "0") == "1"
 
 
 def main():
@@ -92,7 +117,13 @@ def main():
     print(f"  FAISS:   {'开启' if faiss == '1' else '关闭'}")
     print(f"  地址:    http://{HOST}:{PORT}")
     print(f"  文档:    http://{HOST}:{PORT}/docs")
+    print(f"  Python:  {sys.executable}")
+    print(f"  Child:   {multiprocessing_spawn.get_executable()}")
+    print(f"  Reload:  {RELOAD}")
     print("=" * 56)
+
+    # Replace an old backend before binding the project port.
+    _free_port(PORT)
 
     uvicorn.run(
         "app.main:app",

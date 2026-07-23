@@ -1,7 +1,7 @@
 # EduMatrix 系统设计与实现方案
 
-基线：`2952dc1b17d793e5d76f54e1764348ebe50e4d5e`  
-用途：技术开发说明、架构评审、源码交接和比赛材料支撑
+验证基线：Git `74f8f2715641da20b560571120a66477d300f5de`；结论以 2026-07-20 验证时的最终代码与证据为准。  
+用途：技术实现说明、架构评审和评委复现支撑
 
 ## 1. 设计目标
 
@@ -114,10 +114,10 @@ flowchart TD
   G --> H[get_current_user]
 ```
 
-当前实现的关键偏差是：`OAuth2PasswordBearer(auto_error=False)` 允许没有 Token，`get_current_user` 在没有 Token 时返回或创建 `demo-student`。正确的生产实现应拆成两个明确模式：
+当前实现已经把认证行为拆成两个明确模式：
 
-- demo 模式：显式 `EDUMATRIX_DEMO_MODE=1`，只允许测试账号和非敏感数据；
-- production 模式：没有 Token 直接返回 401，禁止隐式创建用户。
+- demo 模式：显式 `EDUMATRIX_DEMO_MODE=1`，只用于测试账号和非敏感数据；
+- 默认/production 模式：没有 Token 直接返回 401，禁止隐式创建用户。
 
 ### 4.3 画像探针
 
@@ -135,7 +135,7 @@ flowchart TD
 }
 ```
 
-当前数据库有 `profile_evidence` 字段，但各 API 是否都写入完整证据链需要专项测试确认。
+当前数据库有 `profile_evidence` 字段；主要画像、对话、答题和推荐路径已写入或消费画像状态，完整证据链仍应以专项日志和目标环境复测为准。
 
 ### 4.4 ZPD 路径规划
 
@@ -176,7 +176,7 @@ flowchart TD
 }
 ```
 
-当前 `user_index` 是全局对象，用户文档的 owner 过滤不足；最终实现必须把 `owner_id` 作为强制元数据和检索条件。
+当前 `user_index` 是进程内共享对象，但摄入时强制写入 `owner_id`/`visibility`，检索通过 `_visible_user_evidence` 按当前学生过滤，删除时按 owner 清理。启用 FAISS/ChromaDB 等持久化索引后仍需复测删除和重启重建边界。
 
 ### 4.6 证据清洗和辩论
 
@@ -187,13 +187,13 @@ flowchart TD
 - 满足条件时请求 LLM 进行证据辩论；
 - 返回 clean evidence、分数、轨迹和是否通过。
 
-但 `agent_swarm.py:1323` 使用无参 `DebateAugmentedRAG()`，没有将 `use_llm` 注入辩论引擎。应修改为：
+`EduMatrixSwarm` 已将 `use_llm` 注入辩论引擎，当前主异步路径使用：
 
 ```python
 self.debate = DebateAugmentedRAG(llm=use_llm)
 ```
 
-同时把 `drag_debate.py:171-181` 的 `run_until_complete` 改成完全 async 的 `await`，避免在已运行事件循环中抛出 `RuntimeError`。
+并通过异步 `aclean()` 避免在已运行事件循环中嵌套 `run_until_complete`。默认 deterministic 模式仍不等于真实外部模型辩论效果。
 
 ### 4.7 资源工厂
 
@@ -264,7 +264,7 @@ FastAPI 事件循环内不得调用 `run_until_complete`、同步网络请求或
 2. 资源至少包含三种类型，并附引用或明确 fallback 标记。
 3. LLM 不可用时明确显示 deterministic 模式。
 4. 不同用户的画像、代码历史、知识文档和 RAG 证据完全隔离。
-5. Docker 不可用时拒绝代码执行，而不是启动宿主子进程。
+5. `disabled` 模式拒绝代码执行；`trusted_local` 只允许可信本机研究演示并明确无容器隔离；`docker` 模式才提供容器级隔离。
 6. 全量测试能在干净环境运行，失败用例有原因和修复记录。
 7. 生产密钥没有固定默认值。
 8. 依赖和浏览器安装步骤可在新机器复现。

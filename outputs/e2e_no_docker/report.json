@@ -1,21 +1,17 @@
 {
-  "mode": "disabled",
+  "mode": "trusted_local",
   "base_url": "http://127.0.0.1:5173",
-  "started_at": "2026-07-19T14:40:44+0800",
+  "started_at": "2026-07-23T16:04:01+0800",
   "screenshots": [
     "outputs/e2e_no_docker/01-login.png",
-    "outputs/e2e_no_docker/02-dashboard.png",
-    "outputs/e2e_no_docker/03-chat-empty.png",
-    "outputs/e2e_no_docker/04-chat-response.png",
-    "outputs/e2e_no_docker/05-code-sandbox-disabled.png",
-    "outputs/e2e_no_docker/06-learning-path.png"
+    "outputs/e2e_no_docker/error.png"
   ],
   "checks": {
     "health": {
       "status": "ok",
       "version": "1.1.0",
       "service": "EduMatrix 智教矩阵",
-      "llm_provider": "deterministic",
+      "llm_provider": "openai",
       "llm_model": "deepseek-v4-flash",
       "llm_endpoint": "https://api.deepseek.com/v1/chat/completions",
       "llm_api_key_configured": true,
@@ -25,21 +21,22 @@
       "rate_limit_rpm": 120
     },
     "sandbox_status": {
-      "mode": "disabled",
+      "mode": "trusted_local",
       "docker_available": false,
-      "execution_enabled": false,
-      "message": "代码沙箱未启用；核心学习功能可正常使用，设置 EDUMATRIX_SANDBOX_MODE=docker 后才执行代码"
+      "execution_enabled": true,
+      "message": "本地可信研究模式已启用：代码在受限 Python 子进程和临时目录中运行，不具备 Docker 容器隔离，仅适用于本机学术研究与演示",
+      "isolation": "trusted_local_child_process",
+      "security_level": "research_only_no_container_isolation",
+      "max_output_bytes": 100000,
+      "max_visual_bytes": 5000000,
+      "python_executable": "D:\\project-edumatrix\\edumatrix-main\\.venv\\Scripts\\python.exe",
+      "multiprocessing_executable": "D:\\project-edumatrix\\edumatrix-main\\.venv\\Scripts\\python.exe",
+      "process_id": 28984
     },
-    "temporary_student": "e2e_1784443247",
-    "chat_response": {
-      "question": "解释 accuracy 和 recall 的区别，用一个混淆矩阵例子。",
-      "assistant_cards": 1
-    },
-    "frontend_sandbox_guard": {
-      "message_visible": true,
-      "run_button_disabled": true
-    }
+    "llm_mode": "deterministic",
+    "temporary_student": "e2e_1784793855"
   },
-  "result": "passed",
-  "finished_at": "2026-07-19T14:41:16+0800"
+  "result": "failed",
+  "error": "TimeoutError: Locator.wait_for: Timeout 45000ms exceeded.\nCall log:\n  - waiting for locator(\"[aria-label=\\\"正在加载仪表盘\\\"]\") to be detached\n    92 × locator resolved to visible <div data-v-7f773d42=\"\" data-v-7a7a37b1=\"\" aria-label=\"正在加载仪表盘\" class=\"dashboard-skeleton\">…</div>\n",
+  "finished_at": "2026-07-23T16:05:01+0800"
 }

@@ -3,8 +3,10 @@ import json
 import os
 import sys
 
-# 确定物理数据库路径
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "edumatrix.db")
+# Reuse the application's environment-aware database selection. This keeps
+# pytest on edumatrix_test.db while standalone deployment uses edumatrix.db.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app.database import DB_PATH
 
 # 预置种子测验题目，保证答辩演示和单元测试的 100% 稳定性与脱网运行能力
 SEED_QUESTIONS = [

@@ -1,0 +1,52 @@
+{
+  "schema": "edumatrix-m1-acceptance-v1",
+  "generated_at": "2026-07-23T14:48:08.955764+00:00",
+  "base_url": "http://127.0.0.1:8000",
+  "python": "3.11.9",
+  "git": {
+    "revision": "62eb18570a8a26daa48e94e43603de225041efc1",
+    "worktree_dirty": true
+  },
+  "checks": {
+    "backend_health": {
+      "status": "pass",
+      "payload": {
+        "status": "ok",
+        "version": "1.1.0",
+        "service": "EduMatrix 智教矩阵",
+        "llm_provider": "openai",
+        "llm_model": "deepseek-v4-flash",
+        "llm_api_key_configured": true,
+        "embedding_provider": "hash",
+        "concurrent_llm": 8,
+        "rate_limit_rpm": 120
+      }
+    },
+    "llm_connectivity": {
+      "status": "pass",
+      "provider_type": "FallbackAsyncLLMWrapper",
+      "model": "deepseek-v4-flash",
+      "message": "LLM 连通性测试成功"
+    },
+    "stage_acceptance_tests": {
+      "status": "pass",
+      "exit_code": 0,
+      "command": [
+        "D:\\project-edumatrix\\edumatrix-main\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_m1_stage_acceptance.py",
+        "tests/test_m1_internal_inspection.py",
+        "tests/test_m1_profile_evidence.py"
+      ],
+      "output_tail": ".......                                                                  [100%]\n============================== warnings summary ===============================\n.venv\\Lib\\site-packages\\fastapi\\testclient.py:1\n  D:\\project-edumatrix\\edumatrix-main\\.venv\\Lib\\site-packages\\fastapi\\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\napp\\main.py:246\n  D:\\project-edumatrix\\edumatrix-main\\app\\main.py:246: DeprecationWarning: \n          on_event is deprecated, use lifespan event handlers instead.\n  \n          Read more about it in the\n          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).\n          \n    @app.on_event(\"startup\")\n\n.venv\\Lib\\site-packages\\fastapi\\applications.py:4675\n.venv\\Lib\\site-packages\\fastapi\\applications.py:4675\n  D:\\project-edumatrix\\edumatrix-main\\.venv\\Lib\\site-packages\\fastapi\\applications.py:4675: DeprecationWarning: \n          on_event is deprecated, use lifespan event handlers instead.\n  \n          Read more about it in the\n          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).\n          \n    return self.router.on_event(event_type)  # ty: ignore[deprecated]\n\napp\\main.py:279\n  D:\\project-edumatrix\\edumatrix-main\\app\\main.py:279: DeprecationWarning: \n          on_event is deprecated, use lifespan event handlers instead.\n  \n          Read more about it in the\n          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).\n          \n    @app.on_event(\"shutdown\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n7 passed, 5 warnings in 7.42s"
+    }
+  },
+  "manual_acceptance": {
+    "status": "not_required",
+    "reason": "M1 原人工清单条件均有精确、可复现的等价自动证据，按总方案规则不重复执行。",
+    "checklist": "04_M1人工业务验收清单.md"
+  },
+  "automated_status": "pass"
+}

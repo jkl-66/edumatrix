@@ -1,33 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getStudentProfile, getProfileAnalysis, getProfileNarrative, updateStudentProfile, deleteStudentConcept, resetStudentProfile } from '../api'
-
-async function handleResetProfile() {
-  if (studentId.value === 'lzz') {
-    alert('账号 lzz 为核心展示账号，数据受系统保护，禁止清空！')
-    return
-  }
-  if (!confirm('确定要清空重置当前账号的所有学情画像数据与测试历史吗？此操作会将知识点掌握度还原为 100% 空白冷启动状态，方便演示。')) return
-  try {
-    loading.value = true
-    await resetStudentProfile(studentId.value)
-    const [profile, data] = await Promise.all([
-      getStudentProfile(studentId.value),
-      getProfileAnalysis(studentId.value)
-    ])
-    analysis.value = {
-      ...data,
-      raw_profile: profile,
-    }
-    narrative.value = ''
-    alert('已成功清空重置学情数据！当前画像已恢复为完全空白初始状态。')
-  } catch (err) {
-    alert('重置失败: ' + (err.response?.data?.detail || err.message))
-  } finally {
-    loading.value = false
-  }
-}
+import { getStudentProfile, getProfileAnalysis, getProfileNarrative, updateStudentProfile, deleteStudentConcept } from '../api'
 import {
   BrainCircuit, Target, TrendingUp, BookOpen, AlertTriangle,
   User, Lightbulb, BarChart3, Layers, Activity, Zap, Heart,
@@ -90,29 +64,11 @@ const causes = computed(() => analysis.value?.causes || {})
 const weakAnalysis = computed(() => analysis.value?.weak_analysis || [])
 const suggestions = computed(() => analysis.value?.suggestions || [])
 
-const DIMENSION_CHINESE_MAP = {
-  knowledge_mastery: '知识基础与概念掌握度',
-  misconception_profile: '易错点与误概念剖析',
-  understanding_fluency_transfer: '理解-熟练-迁移水平',
-  cognitive_processing: '认知加工与负荷状态',
-  learning_strategy: '学习策略与元认知实践',
-  metacognition: '自我调节与能力校准',
-  motivation_and_purpose: '动机目标与学习意义感',
-  affect_resilience: '情绪信心与挫败韧性',
-  interaction_preference: '互动偏好与表达沟通',
-  learning_context: '学习情境与公平支持',
-}
-
 const dimensionList = computed(() => {
-  return Object.entries(dimensions.value).map(([key, val]) => {
-    const rawLabel = val?.label || key
-    const label = DIMENSION_CHINESE_MAP[key] || DIMENSION_CHINESE_MAP[rawLabel] || (rawLabel && !/^[a-zA-Z_]+$/.test(rawLabel) ? rawLabel : key)
-    return {
-      key,
-      ...val,
-      label,
-    }
-  })
+  return Object.entries(dimensions.value).map(([key, val]) => ({
+    key,
+    ...val,
+  }))
 })
 
 const conceptMastery = computed(() => {
@@ -800,9 +756,6 @@ onUnmounted(() => {
         </button>
         <button class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-all flex items-center gap-1.5" @click="goPath">
           <TrendingUp :size="12" /> 查看学习路径
-        </button>
-        <button class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-all flex items-center gap-1.5" @click="handleResetProfile" title="重置知识点掌握度为空白，方便演示">
-          <Trash2 :size="12" /> 重置空白学情
         </button>
       </div>
     </div>

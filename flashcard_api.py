@@ -22,6 +22,7 @@ from app.crud import (
 )
 from app.database import DBQuizRecord, DBReviewPlan, get_db
 from app.auth import enforce_request_student_scope, enforce_student_access, get_current_user
+from app.legacy_repositories import LegacyReadRepository
 
 router = APIRouter(prefix="/api/flashcard", tags=["flashcard"], dependencies=[Depends(enforce_request_student_scope)])
 
@@ -56,10 +57,7 @@ async def generate_flashcard(
     back = ""
 
     if quiz_id:
-        record = db.query(DBQuizRecord).filter(
-            DBQuizRecord.id == quiz_id,
-            DBQuizRecord.student_id == student_id,
-        ).first()
+        record = LegacyReadRepository(db).quiz_record(quiz_id, student_id)
         if record:
             concept = record.target_concept or "General Concept"
             accuracy = record.accuracy_score or 0.0
@@ -84,10 +82,7 @@ async def generate_flashcard(
     if not concept:
         raise HTTPException(status_code=400, detail="No available concept for flashcard generation")
 
-    existing = db.query(DBReviewPlan).filter(
-        DBReviewPlan.student_id == student_id,
-        DBReviewPlan.concept == concept,
-    ).first()
+    existing = LegacyReadRepository(db).review_plan(student_id, concept)
 
     if existing:
         existing.easiness_factor = existing.easiness_factor or 2.5
@@ -215,15 +210,8 @@ async def get_due_cards(
     """Return due cards directly from DB."""
     student_id = enforce_student_access(student_id, current_user)
     now = _utcnow_naive()
-    plans = (
-        db.query(DBReviewPlan)
-        .filter(
-            DBReviewPlan.student_id == student_id,
-            (DBReviewPlan.next_review_at == None) | (DBReviewPlan.next_review_at <= now)
-        )
-        .order_by(DBReviewPlan.next_review_at.asc())
-        .limit(max_count)
-        .all()
+    plans = LegacyReadRepository(db).due_review_plans(
+        student_id, now=now, limit=max_count
     )
     
     due_cards = []
@@ -261,7 +249,7 @@ async def get_all_cards(
 ) -> dict[str, Any]:
     """Return all cards directly from DB."""
     student_id = enforce_student_access(student_id, current_user)
-    plans = db.query(DBReviewPlan).filter(DBReviewPlan.student_id == student_id).all()
+    plans = LegacyReadRepository(db).all_review_plans(student_id)
     
     cards = []
     for plan in plans:

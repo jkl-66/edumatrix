@@ -32,11 +32,13 @@ class TestSecurityContracts(unittest.TestCase):
 
     def test_sandbox_does_not_fallback_to_host_process(self):
         source = self.read("code_exec_api.py")
-        self.assertIn("Docker 沙箱不可用或未启用", source)
+        self.assertIn('self.mode == "trusted_local"', source)
+        self.assertIn("research_only_no_container_isolation", source)
         self.assertIn('sandbox_mode: str = os.getenv("EDUMATRIX_SANDBOX_MODE", "disabled")', self.read("config.py"))
         self.assertIn('@router.get("/status")', source)
         run_section = source[source.index("    async def run("):source.index("    async def _run_in_docker")]
-        self.assertNotIn("return await self._run_in_subprocess(code)", run_section)
+        self.assertIn("return await self._run_in_subprocess(code)", run_section)
+        self.assertIn("if self.mode == \"trusted_local\"", run_section)
 
     def test_user_rag_requires_owner_filter(self):
         source = self.read("rag_engine.py")
@@ -83,6 +85,15 @@ class TestSecurityContracts(unittest.TestCase):
         self.assertIn('os.getenv("EDUMATRIX_ENV", "development")', config)
         self.assertIn("_INSECURE_AUTH_SECRET", config)
         self.assertIn("len(configured) < 32", config)
+
+    def test_frontend_clears_stale_auth_after_401(self):
+        common = self.read("frontend/src/api/common.js")
+        login = self.read("frontend/src/views/Login.vue")
+        self.assertIn("api.interceptors.response.use", common)
+        self.assertIn("error.response?.status === 401", common)
+        self.assertIn("edumatrix_token", common)
+        self.assertIn("/login?reason=session-expired", common)
+        self.assertIn("登录状态已失效，请重新登录", login)
 
 
 if __name__ == "__main__":

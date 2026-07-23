@@ -2,7 +2,7 @@
 import { ref, onMounted, computed, nextTick, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getLearningPath, getRecommendations } from '../api'
-import * as echarts from 'echarts'
+import { echarts } from '../lib/echarts-graph'
 import {
   BookOpen, BrainCircuit, Target, TrendingUp, ChevronRight,
   ArrowRight, AlertTriangle, CheckCircle2, Layers, Sparkles,

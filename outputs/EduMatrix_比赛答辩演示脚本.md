@@ -1,5 +1,7 @@
 # EduMatrix 比赛答辩演示脚本
 
+> **现场说明**：主流程无需 Docker。若展示实时 Python 代码，使用 `trusted_local` 仅代表本机受限子进程研究演示，必须同时说明“不具备 Docker 容器隔离”；不要把该模式称为生产级安全沙箱。
+
 ## 1. 演示前置条件
 
 演示前必须确认：
@@ -73,11 +75,11 @@
 
 > 资源生成不是单一模型直接输出，而是由不同职责的资源 Agent 并行生成，再由对齐模块检查概念、公式、代码变量和答案的一致性。
 
-注意：当前默认 `DebateAugmentedRAG` 未注入 LLM，未完成修复前不要宣称默认演示已经执行真实三方 LLM 辩论。
+注意：`DebateAugmentedRAG` 已接入当前 Swarm 的 LLM 并由异步 `aclean()` 调用。无外部模型的默认验收仍使用 deterministic 证据清洗，演示时不要把 deterministic 结果宣称为真实三方 LLM 辩论效果。
 
 ### 3:35-4:50 代码实操（可选增强）
 
-默认无 Docker 验收时，本段展示代码生成、AST 静态安全检查和沙箱状态页，不现场运行学生代码。只有评委环境已按安装备忘录启用 Docker 沙箱时，才继续执行下面的实时示例。
+默认无 Docker 验收时，本段展示代码生成、AST 静态安全检查和沙箱状态页。若演示机已按安装备忘录启用 `trusted_local`，可以继续执行本机可信研究演示；若要展示容器级隔离，则使用 Docker 模式。
 
 先执行安全示例：
 
@@ -97,7 +99,7 @@ os.system("echo unsafe")
 
 讲解：
 
-> 系统先做 AST 检查。默认提交模式不启用代码执行，因此不需要 Docker；如果显式启用 Docker，代码才会在无网络、受限资源的容器中执行。沙箱未启用或 Docker 不可用时，系统明确拒绝执行，绝不回退到宿主 Python 子进程。
+> 系统先做 AST 检查。默认提交模式不启用代码执行，因此不需要 Docker；可信研究演示模式会在受限本地 Python 子进程中运行，并明确提示“不具备 Docker 容器隔离”；Docker 模式才是在无网络、受限资源的容器中执行。`disabled` 或 Docker 不可用时系统明确拒绝执行，不会隐式切换模式。
 
 ### 4:50-5:35 测验和反馈
 
@@ -179,7 +181,7 @@ os.system("echo unsafe")
 
 回答：
 
-> 可以。提交包默认使用 `EDUMATRIX_SANDBOX_MODE=disabled`，登录、画像、对话、知识检索、测验、反馈和报告等核心学习闭环可以运行，只有实时代码执行按钮会被禁用。如果要演示代码运行，再设置 `EDUMATRIX_SANDBOX_MODE=docker` 并准备 Docker。任何情况下都不使用宿主 Python subprocess fallback。
+> 可以。提交包默认使用 `EDUMATRIX_SANDBOX_MODE=disabled`，登录、画像、对话、知识检索、测验、反馈和报告等核心学习闭环可以运行。若需要无 Docker 演示代码运行，可在可信演示机设置 `EDUMATRIX_SANDBOX_MODE=trusted_local`，但必须说明它没有容器隔离；若需要更强隔离，再设置 `docker` 并准备 Docker。
 
 ### Q6：你们的数据是真实用户数据吗？
 
@@ -193,7 +195,7 @@ os.system("echo unsafe")
 |---|---|
 | 外部 LLM 失败 | 切换确定性演示并说明 fallback |
 | SSE 中断 | 展示预录制 Agent 事件日志和固定输出 |
-| Docker 不可用 | 继续核心闭环演示，关闭实时代码执行，不使用宿主回退 |
+| Docker 不可用 | 核心闭环继续演示；可信研究演示机可显式使用 `trusted_local`，否则关闭实时代码执行 |
 | PDF 导出失败 | 展示预先生成且来源可追溯的报告截图 |
 | 前端资源加载失败 | 使用构建产物和本地静态演示 |
 | 数据库 locked | 使用只读样例库和单用户演示账号 |

@@ -35,9 +35,25 @@ class DebateAugmentedRAG:
 
     def clean(self, bundle: RetrievalBundle) -> DebateResult:
         # 当 LLM 可用且证据数量适中时，使用 LLM 辩论
-        if self.llm is not None and 1 < len(bundle.evidence) <= 12:
+        import inspect
+        if (
+            self.llm is not None
+            and not inspect.iscoroutinefunction(getattr(self.llm, "generate", None))
+            and 1 < len(bundle.evidence) <= 12
+        ):
             return self._llm_debate_clean(bundle)
         # 否则使用确定性评分函数
+        return self._deterministic_clean(bundle)
+
+    async def aclean(self, bundle: RetrievalBundle) -> DebateResult:
+        """Async entry point; never blocks an active event loop."""
+        import asyncio
+        import inspect
+
+        if self.llm is not None and 1 < len(bundle.evidence) <= 12:
+            if inspect.iscoroutinefunction(getattr(self.llm, "generate", None)):
+                return await self._llm_debate_clean_async(bundle)
+            return await asyncio.to_thread(self._llm_debate_clean, bundle)
         return self._deterministic_clean(bundle)
 
     # ================================================================
@@ -45,7 +61,17 @@ class DebateAugmentedRAG:
     # ================================================================
 
     def _llm_debate_clean(self, bundle: RetrievalBundle) -> DebateResult:
-        """使用 LLM 的 Prover-Challenger-Judge 三轮对话清洗证据。"""
+        return self._build_llm_debate_result(bundle, self._collective_batch_judge(bundle))
+
+    async def _llm_debate_clean_async(self, bundle: RetrievalBundle) -> DebateResult:
+        return self._build_llm_debate_result(
+            bundle, await self._collective_batch_judge_async(bundle)
+        )
+
+    def _build_llm_debate_result(
+        self, bundle: RetrievalBundle, collective_verdict: list[dict[str, Any]]
+    ) -> DebateResult:
+        """Build the verdict from a synchronous or asynchronous LLM result."""
         verdicts: list[DebateVerdict] = []
         clean: list[Evidence] = []
         kept_anchors: set[str] = set()
@@ -169,16 +195,12 @@ class DebateAugmentedRAG:
         )
 
         try:
-            import asyncio
-            # 尝试异步生成，回退同步
+            import inspect
+            # Sync callers deliberately use deterministic scoring for async LLMs.
             if hasattr(self.llm, 'generate'):
-                loop = _get_or_create_loop()
-                if asyncio.iscoroutinefunction(self.llm.generate):
-                    raw = loop.run_until_complete(
-                        self.llm.generate(system_prompt, user_prompt, role="证据辩论裁判")
-                    )
-                else:
-                    raw = self.llm.generate(system_prompt, user_prompt, role="证据辩论裁判")
+                if inspect.iscoroutinefunction(self.llm.generate):
+                    return []
+                raw = self.llm.generate(system_prompt, user_prompt, role="证据辩论裁判")
             else:
                 raw = self.llm.chat(system_prompt, user_prompt)
 
@@ -192,6 +214,35 @@ class DebateAugmentedRAG:
             return parsed
         except Exception as exc:
             print(f"  [DragDebate] LLM 辩论失败，回退确定性评分: {exc}")
+            return []
+
+    async def _collective_batch_judge_async(self, bundle: RetrievalBundle) -> list[dict[str, Any]]:
+        """Run the collective judge without nesting an event loop."""
+        evidence_lines = [
+            f"[{i}] ID={item.id} | 标题={item.title} | 来源={item.source} | "
+            f"类型={item.modality.value} | 标签={','.join(item.tags)} | 锚点={','.join(item.anchors)}"
+            for i, item in enumerate(bundle.evidence)
+        ]
+        system_prompt = (
+            "你是 EduMatrix 的证据辩论裁判委员会主席。请按正方、反方、法官三轮评估教学证据。\n"
+            "正方评估相关性、权威性和教学价值；反方评估矛盾、过时信息和噪声；法官给出 0~1 的最终分。\n"
+            "仅返回 JSON 数组：[{'evidence_id':'...','pro_score':0.0,'con_score':0.0,"
+            "'judge_score':0.0,'reason':'...'}]，不要输出其他文字。"
+        )
+        user_prompt = (
+            f"查询：{bundle.query}\n目标知识点：{bundle.target}\n"
+            f"完整学习路径：{' -> '.join(bundle.graph_context.learning_path)}\n\n"
+            f"待评估证据列表（共{len(bundle.evidence)}条）：\n" + "\n".join(evidence_lines)
+        )
+        try:
+            raw = await self.llm.generate(system_prompt, user_prompt, role="证据辩论裁判")
+            json_match = re.search(r"\[.*?\]", raw, re.DOTALL)
+            if not json_match:
+                return []
+            parsed = json.loads(json_match.group())
+            return parsed if isinstance(parsed, list) else []
+        except Exception as exc:
+            print(f"  [DragDebate] 异步 LLM 辩论失败，回退确定性评分: {exc}")
             return []
 
     # ================================================================
@@ -320,13 +371,3 @@ class DebateAugmentedRAG:
             f"{action} {item.title}：正方相关性 {pro:.2f}，反方噪声/矛盾风险 {con:.2f}，"
             f"法官分 {judge:.2f}。"
         )
-
-
-def _get_or_create_loop():
-    import asyncio
-    try:
-        return asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop

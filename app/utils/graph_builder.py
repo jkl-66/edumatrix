@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import re
 import time
 from collections import defaultdict, deque
@@ -241,6 +242,8 @@ def extract_triplets_from_text(
     """从文本中提取三元组。优先使用 LLM, 降级使用正则规则引擎。"""
     if llm is not None:
         try:
+            if inspect.iscoroutinefunction(getattr(llm, "generate", None)):
+                raise TripletExtractionError("当前图谱构建器为同步入口，异步 LLM 使用规则降级")
             raw = llm.generate(
                 TRIPLET_EXTRACTION_SYSTEM_PROMPT,
                 TRIPLET_EXTRACTION_USER_TEMPLATE.format(chunk_text=chunk_text),

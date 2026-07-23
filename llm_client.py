@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import random
 import re
 import ssl
@@ -35,6 +36,12 @@ class AsyncLLMBackend(Protocol):
 
 
 _shared_httpx_client: Any | None = None
+
+
+def _env_or_config(name: str, fallback: str) -> str:
+    """Treat an explicitly empty environment variable as an intentional override."""
+    value = os.getenv(name)
+    return fallback if value is None else value
 
 
 async def _get_httpx_client() -> Any:
@@ -89,6 +96,18 @@ class AsyncOpenAIChatLLM:
         return self.is_multimodal_fallback or any(
             x in model_lower for x in ["vision", "vl", "vlm", "gpt-4", "claude-3", "gemini", "glm-4v", "glm-4.5v", "glm-4.6v", "glm-5v", "omni"]
         )
+
+    @property
+    def has_external_vision(self) -> bool:
+        return self.has_vision or bool(
+            (self.multimodal_endpoint or _env_or_config("EDUMATRIX_MULTIMODAL_LLM_ENDPOINT", CONFIG.multimodal_llm_endpoint))
+            and (self.multimodal_api_key or _env_or_config("EDUMATRIX_MULTIMODAL_LLM_API_KEY", CONFIG.multimodal_llm_api_key))
+            and (self.multimodal_model or _env_or_config("EDUMATRIX_MULTIMODAL_LLM_MODEL", CONFIG.multimodal_llm_model))
+        )
+
+    @property
+    def external_vision_backend(self) -> "AsyncOpenAIChatLLM | None":
+        return self if self.has_external_vision else None
 
     async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
         estimated_tokens = len(system_prompt + user_prompt) // 2 + 500
@@ -146,9 +165,15 @@ class AsyncOpenAIChatLLM:
         
         if not has_vision and images:
             # Look for configured fallback multimodal variables from CONFIG
-            fallback_endpoint = self.multimodal_endpoint or CONFIG.multimodal_llm_endpoint
-            fallback_api_key = self.multimodal_api_key or CONFIG.multimodal_llm_api_key
-            fallback_model = self.multimodal_model or CONFIG.multimodal_llm_model
+            fallback_endpoint = self.multimodal_endpoint or _env_or_config(
+                "EDUMATRIX_MULTIMODAL_LLM_ENDPOINT", CONFIG.multimodal_llm_endpoint
+            )
+            fallback_api_key = self.multimodal_api_key or _env_or_config(
+                "EDUMATRIX_MULTIMODAL_LLM_API_KEY", CONFIG.multimodal_llm_api_key
+            )
+            fallback_model = self.multimodal_model or _env_or_config(
+                "EDUMATRIX_MULTIMODAL_LLM_MODEL", CONFIG.multimodal_llm_model
+            )
 
             # If not explicitly configured, fallback to Zhipu GLM-4v using ZHIPUAI_API_KEY
             if not fallback_endpoint:
@@ -540,6 +565,50 @@ class AsyncDeterministicEducationLLM:
             await asyncio.sleep(0.02)
 
 
+class MultimodalOnlyAsyncLLM:
+    """Use the local deterministic engine for text and a configured VLM for images.
+
+    This keeps the application usable when an evaluator supplies only a visual
+    model configuration from the Settings page.
+    """
+
+    def __init__(self, vision_backend: AsyncOpenAIChatLLM) -> None:
+        self.vision_backend = vision_backend
+        self.text_backend = AsyncDeterministicEducationLLM()
+
+    @property
+    def has_vision(self) -> bool:
+        return True
+
+    @property
+    def has_external_vision(self) -> bool:
+        return True
+
+    @property
+    def external_vision_backend(self) -> AsyncOpenAIChatLLM:
+        return self.vision_backend
+
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        return await self.text_backend.generate(system_prompt, user_prompt, role=role)
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        role: str,
+        images: list[str] = [],
+    ) -> AsyncGenerator[str, None]:
+        backend = self.vision_backend if images else self.text_backend
+        async for chunk in backend.generate_stream(
+            system_prompt,
+            user_prompt,
+            role=role,
+            images=images,
+        ):
+            yield chunk
+
+
 def build_llm(config: EduMatrixConfig = CONFIG) -> LLMBackend:
     provider = config.llm_provider.lower().strip()
     if provider == "spark":
@@ -575,6 +644,18 @@ class FallbackAsyncLLMWrapper:
     def has_vision(self) -> bool:
         return getattr(self.primary, "has_vision", False) or getattr(self.fallback, "has_vision", False)
 
+    @property
+    def has_external_vision(self) -> bool:
+        return getattr(self.primary, "has_external_vision", False) or getattr(
+            self.fallback, "has_external_vision", False
+        )
+
+    @property
+    def external_vision_backend(self) -> Any | None:
+        return getattr(self.primary, "external_vision_backend", None) or getattr(
+            self.fallback, "external_vision_backend", None
+        )
+
     async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
         try:
             return await self.primary.generate(system_prompt, user_prompt, role=role)
@@ -598,6 +679,15 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
     api_key = overrides.get("api_key", config.llm_api_key)
     endpoint = overrides.get("endpoint", config.llm_endpoint)
     model = overrides.get("model", config.llm_model)
+    def configured(name: str, value: str) -> str | None:
+        override = overrides.get(name)
+        if override is not None:
+            return override
+        return _env_or_config(name, value)
+
+    multimodal_endpoint = configured("multimodal_endpoint", config.multimodal_llm_endpoint)
+    multimodal_api_key = configured("multimodal_api_key", config.multimodal_llm_api_key)
+    multimodal_model = configured("multimodal_model", config.multimodal_llm_model)
     
     primary: AsyncLLMBackend | None = None
     
@@ -619,14 +709,25 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
             temperature=overrides.get("temperature", config.llm_temperature),
             max_tokens=overrides.get("max_tokens", config.llm_max_tokens),
             timeout_seconds=config.llm_timeout,
-            multimodal_endpoint=overrides.get("multimodal_endpoint", config.multimodal_llm_endpoint),
-            multimodal_api_key=overrides.get("multimodal_api_key", config.multimodal_llm_api_key),
-            multimodal_model=overrides.get("multimodal_model", config.multimodal_llm_model),
+            multimodal_endpoint=multimodal_endpoint,
+            multimodal_api_key=multimodal_api_key,
+            multimodal_model=multimodal_model,
             is_multimodal_fallback=overrides.get("is_multimodal_fallback", False),
         )
         
     if primary is not None:
         return FallbackAsyncLLMWrapper(primary, AsyncDeterministicEducationLLM())
+    if multimodal_endpoint and multimodal_api_key and multimodal_model:
+        vision_backend = AsyncOpenAIChatLLM(
+            endpoint=multimodal_endpoint,
+            api_key=multimodal_api_key,
+            model=multimodal_model,
+            temperature=overrides.get("temperature", config.llm_temperature),
+            max_tokens=overrides.get("max_tokens", config.llm_max_tokens),
+            timeout_seconds=config.llm_timeout,
+            is_multimodal_fallback=True,
+        )
+        return MultimodalOnlyAsyncLLM(vision_backend)
     return AsyncDeterministicEducationLLM()
 
 

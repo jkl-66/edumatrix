@@ -15,6 +15,8 @@ from models import (
     StrategyType,
     StudentProfile,
 )
+from cache_utils import TTLBoundedCache
+from config import CONFIG
 from enum import Enum
 import threading
 
@@ -155,6 +157,16 @@ def _animation_index() -> dict[str, dict[str, Any]]:
     if base_dir is None:
         return {}
     return load_animation_resource_index(str(base_dir))
+
+
+def _course_provenance() -> list[dict[str, Any]]:
+    """Load published course/document identity for learning-path evidence."""
+    try:
+        from course_catalog import published_course_provenance
+
+        return published_course_provenance()
+    except Exception:
+        return []
 
 
 def _resource_signal(
@@ -374,6 +386,7 @@ def build_resource_aware_dag(
     for concept in active_dag:
         active_dag[concept] = sorted(_safe_unique(tuple(active_dag[concept])))
 
+    course_sources = _course_provenance()
     metadata = {
         "base_node_count": len(_concepts_from_dag(base_dag)),
         "active_node_count": len(_concepts_from_dag(active_dag)),
@@ -388,6 +401,9 @@ def build_resource_aware_dag(
         "animation_concept_count": len(resource_index),
         "animation_dataset_dir": next((item.get("base_dir", "") for item in resource_index.values() if item.get("base_dir")), ""),
         "edge_sources": {f"{source}->{target}": origin for (source, target), origin in edge_sources.items()},
+        "course_ids": sorted({item["course_id"] for item in course_sources}),
+        "course_document_count": len(course_sources),
+        "course_sources": course_sources,
     }
     return active_dag, metadata
 
@@ -404,7 +420,10 @@ def _concept_embedding_text(concept: str, resource_index: dict[str, dict[str, An
     return " ".join(part for part in parts if part)
 
 
-_EMBEDDING_CACHE: dict[str, tuple[float, ...]] = {}
+_EMBEDDING_CACHE: TTLBoundedCache[str, tuple[float, ...]] = TTLBoundedCache(
+    maxsize=CONFIG.cache_max_entries,
+    ttl_seconds=CONFIG.cache_ttl_seconds,
+)
 
 def _concept_embedding_vectors(
     concepts: set[str],
@@ -1185,6 +1204,9 @@ def build_adaptive_astar_route(
                 "active_node_count": graph_metadata.get("active_node_count", len(concepts)),
                 "rag_edges_added": graph_metadata.get("rag_edges_added", 0),
                 "animation_edges_added": graph_metadata.get("animation_edges_added", 0),
+                "course_ids": graph_metadata.get("course_ids", []),
+                "course_document_count": graph_metadata.get("course_document_count", 0),
+                "course_sources": graph_metadata.get("course_sources", []),
             },
             "reasons": ["当前图谱中没有可生成的前置路线"],
             "constraints": {
@@ -1349,6 +1371,9 @@ def build_adaptive_astar_route(
             "active_node_count": graph_metadata.get("active_node_count", len(concepts)),
             "rag_edges_added": graph_metadata.get("rag_edges_added", 0),
             "animation_edges_added": graph_metadata.get("animation_edges_added", 0),
+            "course_ids": graph_metadata.get("course_ids", []),
+            "course_document_count": graph_metadata.get("course_document_count", 0),
+            "course_sources": graph_metadata.get("course_sources", []),
         },
         "reasons": [
             "按前置依赖边展开搜索（DFS 拓扑展开），保障硬性依赖安全性",

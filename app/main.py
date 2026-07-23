@@ -19,6 +19,7 @@ from config import CONFIG
 from concurrency import AsyncWorkerPool, TokenBucket
 from models import DIMENSION_LABELS, StudentProfile
 from app.database import init_db, DBStudentProfile, DBUser, run_db_op
+from app.identity import normalize_role
 from app.crud import (
     load_student_profile,
     save_student_profile,
@@ -46,6 +47,8 @@ from animation_api import router as animation_router
 from flashcard_api import router as flashcard_router
 from behavior_api import router as behavior_router
 from report_api import router as report_router
+from app.m1_api import router as m1_router
+from app.legacy_repositories import LegacyReadRepository
 from note_engine import LearningProgressAnalyzer, ReviewScheduler
 from export_pdf import generate_note_pdf
 from observability import TELEMETRY
@@ -131,7 +134,7 @@ async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequ
     
     access_token_expires = timedelta(minutes=CONFIG.auth_access_token_expire_minutes)
     access_token = create_access_token(
-        data={"sub": user.username, "role": user.role or "student"}, expires_delta=access_token_expires
+        data={"sub": user.public_id, "uid": user.public_id, "username": user.username, "role": normalize_role(user.role)}, expires_delta=access_token_expires
     )
     return {
         "access_token": access_token,
@@ -140,6 +143,7 @@ async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequ
         "display_name": user.display_name or user.username,
         "role": user.role or "student",
         "student_id": user.username,
+        "user_id": user.public_id,
     }
 
 @app.post("/api/auth/register")
@@ -163,14 +167,14 @@ async def register_user(request: Request):
         raise HTTPException(status_code=400, detail="密码至少4位")
 
     def do_register(session):
-        existing = session.query(DBUser).filter(DBUser.username == username).first()
+        existing = LegacyReadRepository(session).user_by_username(username)
         if existing:
             raise HTTPException(status_code=409, detail="用户名已存在")
         hashed = get_password_hash(password)
         user = DBUser(username=username, hashed_password=hashed, role="student", display_name=display_name)
         session.add(user)
         
-        # 预先创建干净全新的初始学生画像（概念掌握度为空，便于演示与冷启动）
+        # 预先创建学生画像并注入问卷的冷启动初始参数，触发先验协同过滤
         db_profile = DBStudentProfile(
             student_id=username,
             major=major,
@@ -179,6 +183,21 @@ async def register_user(request: Request):
             concept_mastery={},
             bkt_states={}
         )
+        
+        from app.crud import calibrate_student_prior_collaborative
+        from models import StudentProfile
+        temp_prof = StudentProfile(student_id=username)
+        temp_prof.major = major
+        temp_prof.cognitive_style = cognitive_style
+        temp_prof.motivation_type = motivation_type
+        
+        try:
+            calibrate_student_prior_collaborative(session, temp_prof)
+            db_profile.concept_mastery = temp_prof.concept_mastery
+            db_profile.bkt_states = temp_prof.bkt_states
+        except Exception:
+            pass
+            
         session.add(db_profile)
         session.commit()
         
@@ -199,7 +218,7 @@ async def register_user(request: Request):
 
     access_token_expires = timedelta(minutes=CONFIG.auth_access_token_expire_minutes)
     access_token = create_access_token(
-        data={"sub": user.username, "role": "student"}, expires_delta=access_token_expires
+        data={"sub": user.public_id, "uid": user.public_id, "username": user.username, "role": "student"}, expires_delta=access_token_expires
     )
     return {
         "access_token": access_token,
@@ -208,6 +227,19 @@ async def register_user(request: Request):
         "display_name": user.display_name or user.username,
         "role": "student",
         "student_id": user.username,
+        "user_id": user.public_id,
+    }
+
+
+@app.get("/api/auth/me")
+async def read_current_identity(current_user: DBUser = Depends(get_current_user)):
+    """Return the server-authoritative identity represented by the token."""
+    return {
+        "user_id": current_user.public_id,
+        "username": current_user.username,
+        "display_name": current_user.display_name or current_user.username,
+        "role": normalize_role(current_user.role),
+        "is_active": bool(current_user.is_active),
     }
 
 
@@ -228,13 +260,20 @@ async def startup():
     await SANDBOX_RUNNER.start()
     # 自动预置教师账号
     def seed_teacher(session):
-        teacher = session.query(DBUser).filter(DBUser.username == "teacher").first()
+        teacher = LegacyReadRepository(session).user_by_username("teacher")
         if not teacher:
             teacher = DBUser(username="teacher", hashed_password=get_password_hash("admin123"), role="teacher", display_name="教师")
             session.add(teacher)
             session.commit()
             print("  [EduMatrix] Teacher account created: teacher / admin123")
     await run_db_op(seed_teacher)
+    from course_catalog import seed_m0_course
+    course_seed = await run_db_op(seed_m0_course)
+    print(
+        "  [EduMatrix] Baseline course ready: "
+        f"{course_seed['course_id']} / {course_seed['documents']} documents / "
+        f"{course_seed['chunks']} chunks"
+    )
 
 
 @app.on_event("shutdown")
@@ -301,7 +340,7 @@ def _seed_demo_class(db) -> None:
         "stu-ml-003": "我过拟合 and 正则化分不清，训练集分数高就以为模型好，题干长的时候会漏掉验证集条件。",
     }
     for student_id, message in samples.items():
-        db_profile = db.query(DBStudentProfile).filter(DBStudentProfile.student_id == student_id).first()
+        db_profile = LegacyReadRepository(db).student_profile(student_id)
         if not db_profile:
             profile = StudentProfile(student_id=student_id)
             profile.update_from_message(message)
@@ -375,8 +414,8 @@ async def get_teacher_dashboard(
     print("  [Teacher] get_teacher_dashboard called - checking version")
     def fetch_dashboard_data(session):
         _seed_demo_class(session)
-        db_profiles = session.query(DBStudentProfile).all()
-        return [load_student_profile(session, db_prof.student_id) for db_prof in db_profiles]
+        student_ids = LegacyReadRepository(session).student_profile_ids()
+        return [load_student_profile(session, student_id) for student_id in student_ids]
 
     profiles = await run_db_op(fetch_dashboard_data)
     
@@ -541,13 +580,13 @@ async def get_teacher_reviews(
     from app.database import DBStudentProfile
 
     def fetch(session):
-        profiles = session.query(DBStudentProfile).all()
+        student_ids = LegacyReadRepository(session).student_profile_ids()
         result = []
-        for dbp in profiles:
-            plans = get_review_plan(session, dbp.student_id)
+        for student_id in student_ids:
+            plans = get_review_plan(session, student_id)
             if plans:
                 result.append({
-                    "student_id": dbp.student_id,
+                    "student_id": student_id,
                     "review_count": len(plans),
                     "next_review": plans[0].next_review_time.isoformat() if hasattr(plans[0], 'next_review_time') else "",
                     "due_concepts": [p.concept_name for p in plans[:3]] if hasattr(plans[0], 'concept_name') else [],
@@ -627,6 +666,7 @@ app.include_router(animation_router)
 app.include_router(flashcard_router)
 app.include_router(behavior_router)
 app.include_router(report_router)
+app.include_router(m1_router)
 
 
 # === 任务 8.1: 行级/公式苏格拉底即时答疑 (直接挂载在app上，避免模块缓存问题) ===

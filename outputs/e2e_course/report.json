@@ -1,0 +1,46 @@
+{
+  "base_url": "http://127.0.0.1:5173",
+  "started_at": "2026-07-23T17:59:22+0800",
+  "screenshots": [
+    "outputs/e2e_course/01-login.png",
+    "outputs/e2e_course/02-knowledge-course.png",
+    "outputs/e2e_course/03-course-detail.png"
+  ],
+  "checks": {
+    "health": {
+      "status": "ok",
+      "version": "1.1.0",
+      "service": "EduMatrix 智教矩阵",
+      "llm_provider": "openai",
+      "llm_model": "deepseek-v4-flash",
+      "llm_endpoint": "https://api.deepseek.com/v1/chat/completions",
+      "llm_api_key_configured": true,
+      "user_api_key_provided": false,
+      "embedding_provider": "hash",
+      "concurrent_llm": 8,
+      "rate_limit_rpm": 120
+    },
+    "course_group": {
+      "title_visible": true,
+      "document_count": 9,
+      "readonly_count": 9,
+      "source_visible": true,
+      "license_visible": true
+    },
+    "course_detail": {
+      "first_document_title": "RAG 应用开发与幻觉评测实训课",
+      "hash_is_sha256": true,
+      "source_and_license_visible": true
+    },
+    "scope": {
+      "chat_or_external_llm_called": false,
+      "pages_visited": [
+        "/login",
+        "/onboarding",
+        "/knowledge"
+      ]
+    }
+  },
+  "result": "passed",
+  "finished_at": "2026-07-23T17:59:38+0800"
+}

@@ -5,12 +5,14 @@ from app.database import SessionLocal, DBStudentProfile, run_db_op
 from app.utils.recommendation_engine import get_smart_recommendations, CONCEPT_VIDEO_MAP
 from models import Evidence, EvidenceModality
 from rag_engine import hybrid_rag
+from tests.api_test_helpers import auth_headers
 
 
 class TestRecommendationEngine(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         self.student_id = "test-recommendation-student"
+        self.auth_headers = auth_headers(self.client, self.student_id)
 
         # 初始化数据库连接并清除可能残留的旧数据
         self.db = SessionLocal()
@@ -106,7 +108,10 @@ class TestRecommendationEngine(unittest.TestCase):
         self.db.commit()
 
         # 触发 API 请求 (修复前缀错误为 /api/profile)
-        response = self.client.get(f"/api/profile/{self.student_id}/recommendations")
+        response = self.client.get(
+            f"/api/profile/{self.student_id}/recommendations",
+            headers=self.auth_headers,
+        )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIsInstance(data, list)

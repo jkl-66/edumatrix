@@ -30,13 +30,21 @@
 
 已补入 `requirements.txt`：NumPy、PyTorch、OpenAI SDK、Instructor、python-docx、pytest、Playwright 和 Docker SDK。Node 20 与前端 `npm ci`、Docker Engine、Playwright Chromium 浏览器二进制的安装步骤已写入《评委环境安装与复现备忘录》。
 
+### 2.5 最终验收与测试可复现性
+
+- 无 Docker E2E 增加显式 `X-EduMatrix-LLM-Mode: deterministic` 请求头，仅在非生产环境生效，避免评委验收依赖工作区 `.env` 中的外部 LLM；生产环境不会接受该测试降级头。
+- `pytest.ini` 正式入口限定为 `tests/`，不再把 `scratch/` 中的实验脚本当作正式测试；FAISS 缺失时对应可选测试模块明确跳过。
+- 题库种子脚本改为复用 `app.database.DB_PATH`，测试环境写入 `edumatrix_test.db`，独立启动时写入 `edumatrix.db`，避免测试数据污染生产库。
+- 修复无关查询注入通用视频高分证据的问题：out-of-domain 查询不再将固定分数的视频证据写入 RAG 结果，低置信度拒答回归恢复可靠。
+- 旧 API 测试补齐 JWT 测试账号和学生范围；无 Docker 沙箱测试按实际“拒绝执行”状态断言，不伪造代码执行结果。
+
 ## 3. 本轮验证
 
 | 验证 | 结果 |
 |---|---|
 | 修改文件 AST 解析 | 通过 |
 | 应用导入和路由注册 | 通过，44 条路由 |
-| `tests.test_security_contracts` | 以当前文件中的安全契约用例为准，需随最终版本重跑并记录实际数量 |
+| `tests.test_security_contracts` | 10/10 通过 |
 | `scripts.test_member6_all_tasks` | 62/62 通过 |
 | BKT/DKT/ZPD 目标测试 | 通过 |
 | Guided decoding、DOCX 目标测试 | 通过 |
@@ -45,15 +53,14 @@
 | 无 Docker 浏览器 E2E | 注册/登录、初始化、仪表盘、对话、学习路径和沙箱禁用状态通过，详见 `outputs/e2e_no_docker/report.json` |
 | Docker daemon | 当前机器未运行，未进行真实容器代码执行；这是可选增强路径，不阻断核心验收 |
 | Playwright Chromium | 当前机器已用于无 Docker 浏览器 E2E；PDF 导出和目标评委机浏览器仍需单独复核 |
-| 全量 `test_edumatrix` | 单次整套命令受外部/异步路径拖延；拆成 4 组执行共 80 个用例，80/80 通过。该结果不覆盖真实 Docker 执行、PDF 导出、生产并发和目标机清洁复现 |
+| 正式 `pytest -q` | `pytest.ini` 限定 `tests/`，当前工作区 145 passed、1 skipped（可选 FAISS）；另有 trusted_local smoke 通过；不覆盖真实 Docker 执行、PDF 导出、生产并发和目标机清洁复现 |
 
 ## 4. 尚未完成事项
 
 1. 将选定 47 条运行时安全矩阵扩展到全部外部 API、持久化索引和删除场景，并验证 403/404 行为。
-2. 将远程 URL HTML 摄入改为同样的分块上限和响应超时策略。
-3. 将代码沙箱拆为独立 worker，避免生产应用直接持有宿主 Docker 控制面。
-4. 在清洁目标机完成 Dockerfile 构建、可选代码执行和 PDF 导出 smoke test；当前 Dockerfile 已包含 Chromium 安装步骤。
-5. 为比赛三项指标准备可复现的正式标注集；当前已生成合成结构性证据，但不能替代真实用户实验或人工标注结论。
+2. 将代码沙箱拆为独立 worker，避免生产应用直接持有宿主 Docker 控制面。
+3. 在清洁目标机完成 Dockerfile 构建、可选代码执行和 PDF 导出 smoke test；当前 Dockerfile 已包含 Chromium 安装步骤。
+4. 为比赛三项指标准备可复现的正式标注集；当前已生成合成结构性证据，但不能替代真实用户实验或人工标注结论。
 
 ## 5. 对外表述边界
 

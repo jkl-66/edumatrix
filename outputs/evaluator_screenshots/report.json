@@ -1,0 +1,68 @@
+{
+  "mode": "disabled",
+  "base_url": "http://127.0.0.1:5173",
+  "started_at": "2026-07-20T00:34:52+0800",
+  "screenshots": [
+    "outputs/e2e_no_docker/01-login.png",
+    "outputs/e2e_no_docker/02-dashboard.png",
+    "outputs/e2e_no_docker/03-chat-empty.png",
+    "outputs/e2e_no_docker/04-chat-response.png",
+    "outputs/e2e_no_docker/05-code-sandbox-disabled.png",
+    "outputs/e2e_no_docker/06-learning-path.png",
+    "outputs/e2e_no_docker/07-knowledge.png",
+    "outputs/e2e_no_docker/08-student-analysis.png",
+    "outputs/e2e_no_docker/09-settings-multimodal.png"
+  ],
+  "checks": {
+    "health": {
+      "status": "ok",
+      "version": "1.1.0",
+      "service": "EduMatrix 智教矩阵",
+      "llm_provider": "deterministic",
+      "llm_model": "deepseek-v4-flash",
+      "llm_endpoint": "https://api.deepseek.com/v1/chat/completions",
+      "llm_api_key_configured": true,
+      "user_api_key_provided": false,
+      "embedding_provider": "hash",
+      "concurrent_llm": 8,
+      "rate_limit_rpm": 120
+    },
+    "sandbox_status": {
+      "mode": "disabled",
+      "docker_available": false,
+      "execution_enabled": false,
+      "message": "代码执行未启用；核心学习功能可正常使用。设置 EDUMATRIX_SANDBOX_MODE=trusted_local 可进行本机研究演示，设置为 docker 才启用容器隔离",
+      "isolation": "none",
+      "security_level": "execution_disabled",
+      "max_output_bytes": 100000,
+      "max_visual_bytes": 5000000,
+      "python_executable": "D:\\project-edumatrix\\edumatrix-main\\.venv\\Scripts\\python.exe",
+      "multiprocessing_executable": "D:\\project-edumatrix\\edumatrix-main\\.venv\\Scripts\\python.exe",
+      "process_id": 34892
+    },
+    "llm_mode": "deterministic",
+    "temporary_student": "e2e_1784478902",
+    "chat_response": {
+      "question": "解释 accuracy 和 recall 的区别，用一个混淆矩阵例子。",
+      "assistant_cards": 1
+    },
+    "frontend_sandbox_guard": {
+      "message_visible": true,
+      "run_button_disabled": true
+    },
+    "knowledge_page": {
+      "loaded": true,
+      "course_text_visible": true
+    },
+    "profile_analysis_page": {
+      "loaded": true,
+      "analysis_text_visible": true
+    },
+    "settings_page": {
+      "loaded": true,
+      "multimodal_text_visible": true
+    }
+  },
+  "result": "passed",
+  "finished_at": "2026-07-20T00:35:22+0800"
+}

@@ -7,6 +7,8 @@ const showKey = ref(false)
 const saved = ref(false)
 const testing = ref(false)
 const testResult = ref(null)
+const visionTesting = ref(false)
+const visionTestResult = ref(null)
 
 // 任务 9.2: 教学风格与致谢墙
 const teachingStyle = ref(localStorage.getItem('edumatrix_teaching_style') || 'socratic')
@@ -110,16 +112,27 @@ function clearMultimodalKey() {
   save()
 }
 
+function buildConfigHeaders() {
+  const headers = {}
+  if (config.value.apiKey) headers['X-EduMatrix-Api-Key'] = config.value.apiKey
+  if (config.value.endpoint) headers['X-EduMatrix-Endpoint'] = config.value.endpoint
+  if (config.value.model) headers['X-EduMatrix-Model'] = config.value.model
+  if (config.value.multimodalApiKey) headers['X-EduMatrix-Multimodal-Api-Key'] = config.value.multimodalApiKey
+  if (config.value.multimodalEndpoint) headers['X-EduMatrix-Multimodal-Endpoint'] = config.value.multimodalEndpoint
+  if (config.value.multimodalModel) headers['X-EduMatrix-Multimodal-Model'] = config.value.multimodalModel
+  if (config.value.temperature != null) headers['X-EduMatrix-Temperature'] = String(config.value.temperature)
+  if (config.value.maxTokens) headers['X-EduMatrix-Max-Tokens'] = String(config.value.maxTokens)
+  const token = localStorage.getItem('edumatrix_token')
+  if (token) headers.Authorization = `Bearer ${token}`
+  return headers
+}
+
 async function testConnection() {
   testing.value = true
   testResult.value = null
   try {
-    const headers = {}
-    if (config.value.apiKey) headers['X-EduMatrix-Api-Key'] = config.value.apiKey
-    if (config.value.endpoint) headers['X-EduMatrix-Endpoint'] = config.value.endpoint
-    if (config.value.model) headers['X-EduMatrix-Model'] = config.value.model
-
-    const r = await axios.get('/api/llm/test', { headers, timeout: 30000 })
+    save(true)
+    const r = await axios.get('/api/llm/test', { headers: buildConfigHeaders(), timeout: 30000 })
     testResult.value = r.data
   } catch (e) {
     testResult.value = {
@@ -128,6 +141,26 @@ async function testConnection() {
     }
   } finally {
     testing.value = false
+  }
+}
+
+async function testVisionConnection() {
+  visionTesting.value = true
+  visionTestResult.value = null
+  try {
+    save(true)
+    const r = await axios.get('/api/llm/test-vision', {
+      headers: buildConfigHeaders(),
+      timeout: 60000,
+    })
+    visionTestResult.value = r.data
+  } catch (e) {
+    visionTestResult.value = {
+      status: 'error',
+      message: `视觉请求失败: ${e.message || '网络错误'}`,
+    }
+  } finally {
+    visionTesting.value = false
   }
 }
 
@@ -255,7 +288,7 @@ onMounted(load)
         </div>
       </div>
 
-      <div class="pt-2 flex gap-2">
+      <div class="pt-2 flex gap-2 flex-wrap">
         <button class="btn btn-primary flex-1 justify-center" @click="save">
           <Save :size="16" />
           保存配置
@@ -264,6 +297,11 @@ onMounted(load)
           <Loader2 v-if="testing" :size="16" class="animate-spin" />
           <Zap v-else :size="16" />
           测试连接
+        </button>
+        <button class="btn btn-outline flex-1 justify-center" :disabled="visionTesting" @click="testVisionConnection">
+          <Loader2 v-if="visionTesting" :size="16" class="animate-spin" />
+          <Eye v-else :size="16" />
+          测试视觉
         </button>
       </div>
 
@@ -277,6 +315,15 @@ onMounted(load)
         <div v-if="testResult.hint" class="text-gray-500 mt-1">{{ testResult.hint }}</div>
         <div v-if="testResult.response" class="text-gray-500 mt-1 truncate">回复: {{ testResult.response }}</div>
         <div v-if="testResult.endpoint" class="text-gray-400 mt-1">端点: {{ testResult.endpoint }} / {{ testResult.model }}</div>
+      </div>
+      <div v-if="visionTestResult" class="mt-3 p-3 rounded-lg text-xs" :class="visionTestResult.status === 'ok' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : visionTestResult.status === 'warning' ? 'bg-yellow-50 text-yellow-700 border border-yellow-200' : 'bg-red-50 text-red-700 border border-red-200'">
+        <div class="flex items-center gap-1.5 mb-1">
+          <CheckCircle2 v-if="visionTestResult.status === 'ok'" :size="14" />
+          <AlertTriangle v-else :size="14" />
+          <span class="font-medium">{{ visionTestResult.message }}</span>
+        </div>
+        <div v-if="visionTestResult.hint" class="text-gray-500 mt-1">{{ visionTestResult.hint }}</div>
+        <div v-if="visionTestResult.response" class="text-gray-500 mt-1 truncate">回复: {{ visionTestResult.response }}</div>
       </div>
     </div>
 

@@ -30,7 +30,7 @@
 | `outputs/innovation_evidence/` | 代码实测 + 合成演示数据 | 不称为真实用户实验 |
 | `outputs/e2e_no_docker/` | 本地浏览器实测 | 不等于所有评委机器均已验证 |
 | `outputs/runtime_security_matrix.json` | A/B/教师运行时安全实测 | 不等于完整生产渗透测试 |
-| `test_edumatrix.py`、`tests/` | 自动化测试 | 不等于没有任何未知缺陷 |
+| `pytest.ini`、`tests/`、`scripts/test_member6_all_tasks.py`、`scripts/trusted_local_smoke.py` | 自动化测试 | 当前工作区正式 pytest 为 145 passed、1 skipped，trusted_local smoke 已通过；不等于没有任何未知缺陷 |
 | 公开论文和报告 | 外部研究依据 | 不把论文指标写成项目实测指标 |
 
 ## 4. 引用规范

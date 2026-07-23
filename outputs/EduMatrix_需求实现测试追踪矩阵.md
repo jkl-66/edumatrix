@@ -1,6 +1,8 @@
 # EduMatrix 需求—实现—测试—证据追踪矩阵
 
-基线：`2952dc1b17d793e5d76f54e1764348ebe50e4d5e`  
+> **代码执行验收口径**：核心需求按无 Docker、默认禁用代码执行路径追踪；可选研究演示按 `trusted_local` smoke 追踪。后者是受限子进程验证，不等价于 Docker 容器安全隔离。
+
+验证基线：Git `74f8f2715641da20b560571120a66477d300f5de`；结论以 2026-07-20 验证时的最终代码与证据为准。  
 状态定义：已证实 / 部分实现 / 待验证 / 不满足或存在风险
 
 ## 1. 需求追踪总表
@@ -8,7 +10,7 @@
 | ID | 需求/评分点 | 功能实现 | 代码证据 | 测试/运行证据 | 当前状态 | 最终材料 |
 |---|---|---|---|---|---|---|
 | C-01 | 至少 3 个明确 Agent | 9 个 AgentSpec 和对应类 | `agent_swarm.py:34-44` | 静态结构确认 | 已证实（结构） | 主文档 Agent 章节、截图 |
-| C-02 | 分析—生成—校验—决策闭环 | 画像、规划、RAG、资源工厂、对齐、反馈 | `agent_swarm.py:1363-1640` | 集成回归 80/80；无 Docker E2E 覆盖核心注册/对话/路径闭环 | 部分实现（核心路径已证实） | 流程图、事件日志 |
+| C-02 | 分析—生成—校验—决策闭环 | 画像、规划、RAG、资源工厂、对齐、反馈 | `agent_swarm.py`、`stream_api.py` | 正式 pytest 145 passed、1 skipped；无 Docker E2E 覆盖核心注册/对话/路径闭环 | 部分实现（核心路径已证实） | 流程图、事件日志 |
 | C-03 | 3 种以上个性化资源 | 讲义、导图、代码、练习、视频脚本 | `agent_swarm.py:929-938` | 需固定画像输出 | 已证实（任务） | 资源包截图 |
 | C-04 | 学习者先验画像 | 专业、风格、动机、掌握度和历史 | `models.py`、`DBStudentProfile` | 种子/注册代码存在 | 已证实（结构） | 数据字典 |
 | C-05 | 2 组差异化初始数据 | 种子学生、Peer 先验、注册冷启动 | `scripts/seed_students.py`、`app/crud.py` | 固定合成画像与注册冷启动证据已生成 | 已证实（演示数据） | 测试数据包 |
@@ -19,13 +21,13 @@
 | C-10 | 学情可视化 | Dashboard、画像分析、流形、路径 | `frontend/src/views`、`components` | 前端构建通过 | 已证实（前端） | 截图 |
 | C-11 | 多 Agent 协同可视化 | AgentTimeline、SSE 事件 | `AgentTimeline.vue`、`stream.js` | 无 Docker 浏览器 E2E 和截图证据已通过；完整外部 LLM 链仍需复核 | 已证实（默认路径） | 视频时间线 |
 | C-12 | 证据溯源 | evidence/citations/graph context | `rag_engine.py`、`AgentOutput` | 固定本地知识集实际返回 6 条证据并保留 ID/来源；人工事实评测未完成 | 部分实现 | 引用表 |
-| C-13 | 交叉验证/辩论 | `DebateAugmentedRAG` | `drag_debate.py` | 默认 LLM 未注入 | 部分实现，存在缺口 | 代码修复证据 |
-| C-14 | 幻觉率 <5% | 门限、清洗、引用设计 | `rag_engine.py`、`drag_debate.py` | 无合格评测数据 | 待验证 | 评测脚本和报告 |
-| C-15 | 适配准确率 ≥85% | 风格资源排序、画像注入 | `agent_swarm.py`、`learning_strategy.py` | 无人工标注集 | 待验证 | 标注表 |
-| C-16 | 覆盖率 ≥90% | 概念图、题库、路径 | `rag_engine.py`、题库 | 无固定覆盖率计算 | 待验证 | 覆盖率脚本 |
-| C-17 | 代码实操 | AST、Docker 池、输出捕获 | `code_exec_api.py` | 无 Docker 模式明确拒绝；Docker 离线安全契约通过；真实容器执行未验证 | 部分实现（可选能力） | 安全测试 |
+| C-13 | 交叉验证/辩论 | `DebateAugmentedRAG` | `drag_debate.py`、`agent_swarm.py` | LLM 已注入并有异步路径测试；默认 deterministic 仍不是真实模型效果 | 部分实现（真实 provider 需单独验收） | 代码修复证据 |
+| C-14 | 可选研究性评测：事实支持率/幻觉分析 | 门限、清洗、引用设计 | `rag_engine.py`、`drag_debate.py` | 无合格人工标注数据；非当前官方 A3 硬性阈值 | 可选评测 | 评测脚本和报告 |
+| C-15 | 可选研究性评测：画像—资源适配 | 风格资源排序、画像注入 | `agent_swarm.py`、`learning_strategy.py` | 无人工标注集；非当前官方 A3 硬性阈值 | 可选评测 | 标注表 |
+| C-16 | 可选研究性评测：知识点覆盖 | 概念图、题库、路径 | `rag_engine.py`、题库 | 无固定覆盖率计算；非当前官方 A3 硬性阈值 | 可选评测 | 覆盖率脚本 |
+| C-17 | 代码实操 | AST、trusted_local 子进程、Docker 池、输出捕获 | `code_exec_api.py`、`scripts/trusted_local_smoke.py` | 默认 disabled 明确拒绝；trusted_local smoke 已验证输出与 os 导入拦截；真实容器执行未验证 | 部分实现（可选能力） | 安全测试、smoke 报告 |
 | C-18 | 部署运行 | Dockerfile、compose、启动脚本 | `Dockerfile`、`docker-compose.yml`、`outputs/e2e_no_docker/report.json` | 无 Docker 后端/前端核心路径和浏览器 E2E 已通过；Docker 镜像目标机未验收 | 已证实（默认路径；Docker 可选） | 部署日志 |
-| C-19 | 测试说明和单测 | `tests`、`scripts/test_member6_all_tasks.py` | 测试文件及运行报告 | 成员专项 62/62，完整集成 80/80，运行时矩阵 47/47 | 已证实（选定范围） | 测试报告 |
+| C-19 | 测试说明和单测 | `tests`、`scripts/test_member6_all_tasks.py`、`scripts/trusted_local_smoke.py` | 测试文件及运行报告 | 正式 pytest 145 passed、1 skipped，成员专项 62/62，运行时矩阵 47/47，trusted_local smoke 通过 | 已证实（选定范围） | 测试报告 |
 | C-20 | 数据合规 | 脱敏和 owner 设计痕迹 | `DB*`、配置 | 选定跨用户矩阵 47/47，主要路由已认证；全部 API 和正式合规审查仍需复核 | 部分实现/存在剩余风险 | 整改报告 |
 
 ## 2. 功能到 API 追踪

@@ -1,0 +1,865 @@
+{
+ "file": "outputs\\EduMatrix_A3_评委阅读版_方向A.pptx",
+ "mode": "selfread",
+ "findings": [
+  {
+   "slide": 2,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'评委应能从输入画像看到运行、协作状态和反馈结果。' (bottom 5.09in) dips into the reserved footer band — keep content above 5.0in"
+  },
+  {
+   "slide": 2,
+   "text": "FOOTER-ZONE intrusion  AUTO_SHAPE'' (bottom 5.1in) dips into the reserved footer band — keep content above 5.0in"
+  },
+  {
+   "slide": 2,
+   "text": "FOOTER-ZONE intrusion  AUTO_SHAPE'' (bottom 5.01in) dips into the reserved footer band — keep content above 5.0in"
+  },
+  {
+   "slide": 2,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'结论' (bottom 5.01in) dips into the reserved footer band — keep content above 5.0in"
+  },
+  {
+   "slide": 2,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'不是把模型接上页面，而是把能力落到可验收闭环。' (bottom 5.01in) dips into the reserved footer band — keep content above 5.0in"
+  },
+  {
+   "slide": 2,
+   "text": "TEXT PADDING: '35%' (~1 lines) is cramped against (< pad) the card bottom (2.86in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 2,
+   "text": "TEXT PADDING: '45%' (~1 lines) is cramped against (< pad) the card bottom (3.41in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 2,
+   "text": "TEXT PADDING: '10%' (~1 lines) is cramped against (< pad) the card bottom (3.96in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 2,
+   "text": "TEXT PADDING: '10%' (~1 lines) is cramped against (< pad) the card bottom (4.51in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 2,
+   "text": "TEXT PADDING: '不是把模型接上页面，而是把能力落到可验收闭环。' (~2 lines) is cramped against (< pad) the card bottom (5.01in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 3,
+   "text": "OVERFLOW [bottom+0.05] TEXT_BOX '证据 · EduMatrix 完整技术文档 §1、§' — move/shrink it back inside the canvas (or shorten the text if a font swap re-wrapped it)"
+  },
+  {
+   "slide": 3,
+   "text": "FOOTER-ZONE intrusion  AUTO_SHAPE'' (bottom 5.29in) dips into the reserved footer band — keep content above 5.22in"
+  },
+  {
+   "slide": 3,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'记忆点' (bottom 5.29in) dips into the reserved footer band — keep content above 5.22in"
+  },
+  {
+   "slide": 3,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'系统输出的不是一段答案，而是一组带依据、可反馈的学习' (bottom 5.29in) dips into the reserved footer band — keep content above 5.22in"
+  },
+  {
+   "slide": 3,
+   "text": "WIDOW: a lone glyph '觉' stranded on the last line of '文本 · 图谱 · 公式 · 视觉' — widen the box or reword so the last line has company"
+  },
+  {
+   "slide": 4,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'证据 · innovation_evidence/s' (bottom 5.34in) dips into the reserved footer band — keep content above 5.22in"
+  },
+  {
+   "slide": 4,
+   "text": "TEXT PADDING: '合成演示数据，不等于真实用户调研。' (~2 lines) is cramped against (< pad) the card bottom (4.86in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 5,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'证据 · EduMatrix 完整技术文档 §1、§' (bottom 5.34in) dips into the reserved footer band — keep content above 5.22in"
+  },
+  {
+   "slide": 6,
+   "text": "FOOTER-ZONE intrusion  AUTO_SHAPE'' (bottom 5.18in) dips into the reserved footer band — keep content above 5.16in"
+  },
+  {
+   "slide": 6,
+   "text": "TEXT PADDING: 'Vue 3 · SSE · Markdown · 图' (~2 lines) is cramped against (< pad) the card bottom (2.72in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 6,
+   "text": "TEXT PADDING: '认证 · 画像 · 对话 · 知识库 · 报告' (~2 lines) is cramped against (< pad) the card bottom (3.34in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 6,
+   "text": "TEXT PADDING: '画像探针 · ZPD · Hybrid RAG · ' (~2 lines) is cramped against (< pad) the card bottom (3.96in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 6,
+   "text": "TEXT PADDING: 'SQLite/WAL · 索引 · 证据 · 沙箱模' (~2 lines) is cramped against (< pad) the card bottom (4.58in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 6,
+   "text": "WIDOW: a lone glyph '链' stranded on the last line of '四层架构把体验、编排、智能引擎和运行边界连成一条链' — widen the box or reword so the last line has company"
+  },
+  {
+   "slide": 7,
+   "text": "OVERFLOW [bottom+0.05] TEXT_BOX '证据 · agent_swarm.py · 系统设计' — move/shrink it back inside the canvas (or shorten the text if a font swap re-wrapped it)"
+  },
+  {
+   "slide": 7,
+   "text": "UNEVEN CARD HEIGHTS: a row of 3 cards has heights [2.1, 2.1, 2.35] — sibling cards in a row must share ONE height (size the row to the tallest card's content)"
+  },
+  {
+   "slide": 8,
+   "text": "OVERFLOW [bottom+0.05] TEXT_BOX '证据 · outputs/evaluator_scr' — move/shrink it back inside the canvas (or shorten the text if a font swap re-wrapped it)"
+  },
+  {
+   "slide": 8,
+   "text": "FOOTER-ZONE intrusion  AUTO_SHAPE'' (bottom 5.06in) dips into the reserved footer band — keep content above 5.04in"
+  },
+  {
+   "slide": 8,
+   "text": "FOOTER-ZONE intrusion  PICTURE'' (bottom 5.06in) dips into the reserved footer band — keep content above 5.04in"
+  },
+  {
+   "slide": 9,
+   "text": "TEXT PADDING: '更新知识状态' (~1 lines) is cramped against (< pad) the card bottom (3.44in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 9,
+   "text": "TEXT PADDING: '估计能力与题目参数' (~1 lines) is cramped against (< pad) the card bottom (3.96in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 9,
+   "text": "TEXT PADDING: '筛选前置闭包与学习顺序' (~1 lines) is cramped against (< pad) the card bottom (4.48in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 9,
+   "text": "TEXT PADDING: '进入错题与间隔复习' (~1 lines) is cramped against (< pad) the card bottom (5.0in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 9,
+   "text": "ORPHANED PUNCTUATION: the last line of '从“我是谁”到“下一步学什么”。' is just '。' — widen the box / lower the size / reword so the mark stays attached (避头尾)"
+  },
+  {
+   "slide": 10,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'证据 · rag_engine.py · knowl' (bottom 5.34in) dips into the reserved footer band — keep content above 5.12in"
+  },
+  {
+   "slide": 10,
+   "text": "TEXT PADDING: 'visibility = public' (~1 lines) is cramped against (< pad) the card bottom (2.78in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 10,
+   "text": "TEXT PADDING: 'owner = current_user' (~1 lines) is cramped against (< pad) the card bottom (3.44in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 10,
+   "text": "TEXT PADDING: '图片 / 公式 / 页面' (~1 lines) runs PAST the card bottom (4.1in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 10,
+   "text": "TEXT PADDING: '引用 ID · 来源 · 分数 · 置信度' (~2 lines) is cramped against (< pad) the card bottom (4.98in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 11,
+   "text": "OVERLAP 2.35x0.36in  AUTO_SHAPE'' x AUTO_SHAPE'' — move/shrink one so they separate (≥0.12in gap) or nest one fully inside the other"
+  },
+  {
+   "slide": 11,
+   "text": "TEXT COLLISION: '视频/TTS' (~1 lines) overruns into the text below '同题三组合成画像均观察到 5 类资源输出；这是代码实' — add vertical gap or size the box"
+  },
+  {
+   "slide": 12,
+   "text": "OVERFLOW [bottom+0.05] TEXT_BOX '证据 · manifold_alignment.py' — move/shrink it back inside the canvas (or shorten the text if a font swap re-wrapped it)"
+  },
+  {
+   "slide": 12,
+   "text": "TEXT PADDING: '引用与来源' (~1 lines) is cramped against (< pad) the card bottom (3.29in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 12,
+   "text": "TEXT PADDING: '保留证据链，降低置信度' (~1 lines) is cramped against (< pad) the card bottom (3.29in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 12,
+   "text": "TEXT PADDING: '公式与变量' (~1 lines) is cramped against (< pad) the card bottom (3.76in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 12,
+   "text": "TEXT PADDING: '定位责任 Agent，局部重生成' (~1 lines) is cramped against (< pad) the card bottom (3.76in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 12,
+   "text": "TEXT PADDING: '讲义与题目' (~1 lines) is cramped against (< pad) the card bottom (4.23in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 12,
+   "text": "TEXT PADDING: '标记冲突，不静默覆盖' (~1 lines) is cramped against (< pad) the card bottom (4.23in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 12,
+   "text": "TEXT PADDING: '资源状态' (~1 lines) is cramped against (< pad) the card bottom (4.7in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 12,
+   "text": "TEXT PADDING: '让降级结果可识别' (~1 lines) is cramped against (< pad) the card bottom (4.7in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 13,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'证据 · learning_event_bus.py' (bottom 5.34in) dips into the reserved footer band — keep content above 5.12in"
+  },
+  {
+   "slide": 13,
+   "text": "TEXT PADDING: '01' (~1 lines) is cramped against (< pad) the card bottom (2.24in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 13,
+   "text": "TEXT PADDING: '用户 / JWT / 角色' (~1 lines) runs PAST the card bottom (2.24in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 13,
+   "text": "TEXT PADDING: '02' (~1 lines) is cramped against (< pad) the card bottom (2.9in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 13,
+   "text": "TEXT PADDING: '专业 / 目标 / 掌握度' (~1 lines) runs PAST the card bottom (2.9in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 13,
+   "text": "TEXT PADDING: '03' (~1 lines) is cramped against (< pad) the card bottom (3.56in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 13,
+   "text": "TEXT PADDING: '对话 / 答题 / 代码 / 行为' (~1 lines) runs PAST the card bottom (3.56in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 13,
+   "text": "TEXT PADDING: '04' (~1 lines) is cramped against (< pad) the card bottom (4.22in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 13,
+   "text": "TEXT PADDING: '路径 / 错题 / 间隔复习' (~1 lines) runs PAST the card bottom (4.22in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 13,
+   "text": "TEXT PADDING: 'SQLite / WAL 适合当前单机评委验收。' (~2 lines) is cramped against (< pad) the card bottom (5.06in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 15,
+   "text": "FOOTER-ZONE intrusion  TEXT_BOX'证据 · knowledge_api.py · 数据' (bottom 5.34in) dips into the reserved footer band — keep content above 5.12in"
+  },
+  {
+   "slide": 15,
+   "text": "TEXT PADDING: '原始素材与课程切片属于不同层级。' (~2 lines) is cramped against (< pad) the card bottom (4.74in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 16,
+   "text": "TEXT PADDING: 'Endpoint · Model · API Key' (~1 lines) is cramped against (< pad) the card bottom (3.05in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 16,
+   "text": "TEXT PADDING: '图片 / 公式 / VisRAG' (~1 lines) runs PAST the card bottom (3.71in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 16,
+   "text": "TEXT PADDING: '无外部 Key 的核心演示' (~1 lines) runs PAST the card bottom (4.37in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 16,
+   "text": "TEXT PADDING: '没有视觉 API Key 时，不宣称真实视觉识别。' (~2 lines) is cramped against (< pad) the card bottom (5.0in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 16,
+   "text": "ORPHANED PUNCTUATION: the last line of '视觉模型、Endpoint 和 Model 都是显式' is just '。' — widen the box / lower the size / reword so the mark stays attached (避头尾)"
+  },
+  {
+   "slide": 17,
+   "text": "OVERFLOW [bottom+0.05] TEXT_BOX '证据 · code_exec_api.py · tr' — move/shrink it back inside the canvas (or shorten the text if a font swap re-wrapped it)"
+  },
+  {
+   "slide": 17,
+   "text": "FOOTER-ZONE intrusion  AUTO_SHAPE'' (bottom 5.08in) dips into the reserved footer band — keep content above 5.07in"
+  },
+  {
+   "slide": 17,
+   "text": "FOOTER-ZONE intrusion  PICTURE'' (bottom 5.08in) dips into the reserved footer band — keep content above 5.07in"
+  },
+  {
+   "slide": 17,
+   "text": "FOOTER-ZONE intrusion  AUTO_SHAPE'' (bottom 5.08in) dips into the reserved footer band — keep content above 5.07in"
+  },
+  {
+   "slide": 17,
+   "text": "FOOTER-ZONE intrusion  PICTURE'' (bottom 5.08in) dips into the reserved footer band — keep content above 5.07in"
+  },
+  {
+   "slide": 20,
+   "text": "TEXT PADDING: '适配' (~1 lines) is cramped against (< pad) the card bottom (4.57in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 20,
+   "text": "TEXT PADDING: '可信' (~1 lines) is cramped against (< pad) the card bottom (4.57in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 20,
+   "text": "TEXT PADDING: '可见' (~1 lines) is cramped against (< pad) the card bottom (4.57in) — size the card to the text, shorten, or add bottom padding"
+  },
+  {
+   "slide": 20,
+   "text": "TEXT PADDING: '持续' (~1 lines) is cramped against (< pad) the card bottom (4.57in) — size the card to the text, shorten, or add bottom padding"
+  }
+ ],
+ "warnings": [
+  {
+   "slide": 20,
+   "text": "LOW CONTRAST: 'A3' ink #4F9CF5 on fill #F4F7FB — 2.64:1 (< 3:1)"
+  }
+ ],
+ "stats_warnings": [
+  "SIZE SPRAWL: slide 3 uses 5 distinct font sizes (9, 10.5, 11.5, 15, 24) — target ≤3-4 per slide, drawn from the deck's declared type-scale tokens",
+  "SIZE SPRAWL: slide 4 uses 6 distinct font sizes (8, 9, 11.5, 12.5, 17, 24) — target ≤3-4 per slide, drawn from the deck's declared type-scale tokens",
+  "CROWDED: slide 7 occupancy 73% — role bands: cover 25-35 · exec/summary 45-60 · technical/dense 55-70; past ~70% the slide reads crowded — subtract or split, don't shrink",
+  "SIZE SPRAWL: slide 7 uses 6 distinct font sizes (9, 10.5, 11.5, 12.5, 15, 24) — target ≤3-4 per slide, drawn from the deck's declared type-scale tokens",
+  "CROWDED: slide 9 occupancy 74% — role bands: cover 25-35 · exec/summary 45-60 · technical/dense 55-70; past ~70% the slide reads crowded — subtract or split, don't shrink",
+  "SIZE SPRAWL: slide 9 uses 5 distinct font sizes (9, 11.5, 12.5, 17, 24) — target ≤3-4 per slide, drawn from the deck's declared type-scale tokens",
+  "SIZE SPRAWL: slide 10 uses 5 distinct font sizes (8, 9, 11.5, 15.5, 24) — target ≤3-4 per slide, drawn from the deck's declared type-scale tokens",
+  "CROWDED: slide 12 occupancy 71% — role bands: cover 25-35 · exec/summary 45-60 · technical/dense 55-70; past ~70% the slide reads crowded — subtract or split, don't shrink",
+  "CROWDED: slide 14 occupancy 76% — role bands: cover 25-35 · exec/summary 45-60 · technical/dense 55-70; past ~70% the slide reads crowded — subtract or split, don't shrink",
+  "SIZE SPRAWL: slide 14 uses 6 distinct font sizes (9, 10.5, 11.5, 12.5, 17, 24) — target ≤3-4 per slide, drawn from the deck's declared type-scale tokens",
+  "SIZE SPRAWL: slide 15 uses 7 distinct font sizes (8, 9, 11.5, 13, 17, 20, 24) — target ≤3-4 per slide, drawn from the deck's declared type-scale tokens",
+  "CROWDED: slide 16 occupancy 71% — role bands: cover 25-35 · exec/summary 45-60 · technical/dense 55-70; past ~70% the slide reads crowded — subtract or split, don't shrink",
+  "SIZE SPRAWL: slide 18 uses 6 distinct font sizes (9, 10.5, 11.5, 14.5, 18, 24) — target ≤3-4 per slide, drawn from the deck's declared type-scale tokens",
+  "SIZE SPRAWL: slide 20 uses 7 distinct font sizes (8.5, 9.5, 10.5, 12, 15, 16, 28) — target ≤3-4 per slide, drawn from the deck's declared type-scale tokens",
+  "CARD DOMINANCE: 12 of 19 content slides (slides 2, 5, 6, 7, 9, 10, 13, 14, 15, 16, 17, 19) carry their content in large solid panels/cards — the greedy default form; re-form the ones whose idea has a shape (ratio → proportional bar · flip → diagram · division → split · process → roadmap), don't just restyle the boxes"
+ ],
+ "deck": {
+  "body_median_pt": 12.5,
+  "type_drama": 2.48,
+  "size_tokens": 14,
+  "distinct_skeletons": 20,
+  "builds": 0,
+  "transitions": 0,
+  "avg_occupancy": 0.649
+ },
+ "per_slide": [
+  {
+   "slide": 1,
+   "load": 57,
+   "text_cov": 0.382,
+   "ink_cov": 0.557,
+   "max_pt": 31.0,
+   "n_shapes": 24,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    8.5,
+    12.0,
+    16.5,
+    31.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.857,
+   "lum": 0.283,
+   "sat": 0.449,
+   "col_void": 0.104
+  },
+  {
+   "slide": 2,
+   "load": 113,
+   "text_cov": 0.555,
+   "ink_cov": 0.696,
+   "max_pt": 24.0,
+   "n_shapes": 35,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    11.5,
+    20.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.907,
+   "lum": 0.141,
+   "sat": 0.534,
+   "col_void": 0.083
+  },
+  {
+   "slide": 3,
+   "load": 71,
+   "text_cov": 0.457,
+   "ink_cov": 0.634,
+   "max_pt": 24.0,
+   "n_shapes": 38,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    10.5,
+    11.5,
+    15.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.94,
+   "lum": 0.157,
+   "sat": 0.57,
+   "col_void": 0.062
+  },
+  {
+   "slide": 4,
+   "load": 96,
+   "text_cov": 0.401,
+   "ink_cov": 0.532,
+   "max_pt": 24.0,
+   "n_shapes": 33,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    8.0,
+    9.0,
+    11.5,
+    12.5,
+    17.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.864,
+   "lum": 0.128,
+   "sat": 0.548,
+   "col_void": 0.125
+  },
+  {
+   "slide": 5,
+   "load": 65,
+   "text_cov": 0.326,
+   "ink_cov": 0.696,
+   "max_pt": 24.0,
+   "n_shapes": 30,
+   "n_pic": 1,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    8.0,
+    9.0,
+    11.5,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 1,
+   "content_bottom": 0.846,
+   "lum": 0.349,
+   "sat": 0.397,
+   "col_void": 0.083
+  },
+  {
+   "slide": 6,
+   "load": 64,
+   "text_cov": 0.294,
+   "ink_cov": 0.687,
+   "max_pt": 24.0,
+   "n_shapes": 22,
+   "n_pic": 1,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    11.0,
+    14.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 1,
+   "content_bottom": 0.921,
+   "lum": 0.388,
+   "sat": 0.359,
+   "col_void": 0.052
+  },
+  {
+   "slide": 7,
+   "load": 73,
+   "text_cov": 0.535,
+   "ink_cov": 0.729,
+   "max_pt": 24.0,
+   "n_shapes": 39,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    10.5,
+    11.5,
+    12.5,
+    15.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.921,
+   "lum": 0.139,
+   "sat": 0.555,
+   "col_void": 0.031
+  },
+  {
+   "slide": 8,
+   "load": 57,
+   "text_cov": 0.409,
+   "ink_cov": 0.617,
+   "max_pt": 24.0,
+   "n_shapes": 33,
+   "n_pic": 1,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    12.0,
+    14.5,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 1,
+   "content_bottom": 0.9,
+   "lum": 0.178,
+   "sat": 0.493,
+   "col_void": 0.031
+  },
+  {
+   "slide": 9,
+   "load": 70,
+   "text_cov": 0.399,
+   "ink_cov": 0.742,
+   "max_pt": 24.0,
+   "n_shapes": 32,
+   "n_pic": 1,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    11.5,
+    12.5,
+    17.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 1,
+   "content_bottom": 0.889,
+   "lum": 0.384,
+   "sat": 0.366,
+   "col_void": 0.042
+  },
+  {
+   "slide": 10,
+   "load": 57,
+   "text_cov": 0.334,
+   "ink_cov": 0.686,
+   "max_pt": 24.0,
+   "n_shapes": 25,
+   "n_pic": 1,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    8.0,
+    9.0,
+    11.5,
+    15.5,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 1,
+   "content_bottom": 0.907,
+   "lum": 0.401,
+   "sat": 0.362,
+   "col_void": 0.042
+  },
+  {
+   "slide": 11,
+   "load": 71,
+   "text_cov": 0.49,
+   "ink_cov": 0.555,
+   "max_pt": 24.0,
+   "n_shapes": 29,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    10.5,
+    14.5,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.882,
+   "lum": 0.17,
+   "sat": 0.572,
+   "col_void": 0.094
+  },
+  {
+   "slide": 12,
+   "load": 92,
+   "text_cov": 0.644,
+   "ink_cov": 0.709,
+   "max_pt": 24.0,
+   "n_shapes": 41,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    10.5,
+    14.5,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.917,
+   "lum": 0.173,
+   "sat": 0.54,
+   "col_void": 0.031
+  },
+  {
+   "slide": 13,
+   "load": 56,
+   "text_cov": 0.334,
+   "ink_cov": 0.691,
+   "max_pt": 24.0,
+   "n_shapes": 33,
+   "n_pic": 1,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    8.0,
+    9.0,
+    11.5,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 1,
+   "content_bottom": 0.907,
+   "lum": 0.395,
+   "sat": 0.384,
+   "col_void": 0.031
+  },
+  {
+   "slide": 14,
+   "load": 63,
+   "text_cov": 0.413,
+   "ink_cov": 0.757,
+   "max_pt": 24.0,
+   "n_shapes": 27,
+   "n_pic": 1,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    10.5,
+    11.5,
+    12.5,
+    17.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 1,
+   "content_bottom": 0.914,
+   "lum": 0.322,
+   "sat": 0.419,
+   "col_void": 0.031
+  },
+  {
+   "slide": 15,
+   "load": 58,
+   "text_cov": 0.336,
+   "ink_cov": 0.682,
+   "max_pt": 24.0,
+   "n_shapes": 23,
+   "n_pic": 1,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    8.0,
+    9.0,
+    11.5,
+    13.0,
+    17.0,
+    20.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 1,
+   "content_bottom": 0.907,
+   "lum": 0.4,
+   "sat": 0.372,
+   "col_void": 0.042
+  },
+  {
+   "slide": 16,
+   "load": 61,
+   "text_cov": 0.358,
+   "ink_cov": 0.713,
+   "max_pt": 24.0,
+   "n_shapes": 29,
+   "n_pic": 1,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    11.5,
+    16.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 1,
+   "content_bottom": 0.907,
+   "lum": 0.41,
+   "sat": 0.358,
+   "col_void": 0.031
+  },
+  {
+   "slide": 17,
+   "load": 59,
+   "text_cov": 0.436,
+   "ink_cov": 0.686,
+   "max_pt": 24.0,
+   "n_shapes": 26,
+   "n_pic": 2,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    11.5,
+    14.5,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 2,
+   "content_bottom": 0.903,
+   "lum": 0.201,
+   "sat": 0.471,
+   "col_void": 0.073
+  },
+  {
+   "slide": 18,
+   "load": 89,
+   "text_cov": 0.52,
+   "ink_cov": 0.545,
+   "max_pt": 24.0,
+   "n_shapes": 26,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    9.0,
+    10.5,
+    11.5,
+    14.5,
+    18.0,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.914,
+   "lum": 0.152,
+   "sat": 0.551,
+   "col_void": 0.042
+  },
+  {
+   "slide": 19,
+   "load": 87,
+   "text_cov": 0.525,
+   "ink_cov": 0.627,
+   "max_pt": 24.0,
+   "n_shapes": 40,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    8.5,
+    11.5,
+    14.5,
+    24.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.882,
+   "lum": 0.153,
+   "sat": 0.548,
+   "col_void": 0.031
+  },
+  {
+   "slide": 20,
+   "load": 45,
+   "text_cov": 0.314,
+   "ink_cov": 0.44,
+   "max_pt": 28.0,
+   "n_shapes": 24,
+   "n_pic": 0,
+   "n_chart": 0,
+   "build": false,
+   "transition": false,
+   "size_clusters": [
+    8.5,
+    9.5,
+    10.5,
+    12.0,
+    15.0,
+    16.0,
+    28.0
+   ],
+   "notes_words": 0,
+   "notes": "",
+   "n_pic_fg": 0,
+   "content_bottom": 0.892,
+   "lum": 0.233,
+   "sat": 0.467,
+   "col_void": 0.052
+  }
+ ],
+ "counts": {
+  "findings": 76,
+  "warnings": 1
+ }
+}

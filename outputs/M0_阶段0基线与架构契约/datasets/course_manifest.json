@@ -1,0 +1,31 @@
+{
+  "manifest_version": "course-rag-engineering-m0-0.1.0",
+  "generated_at": "2026-07-23T00:00:00+08:00",
+  "course_id": "course-rag-engineering-m0",
+  "title": "RAG 应用开发与幻觉评测实训课",
+  "domain_pack": "domain-rag-0.1",
+  "language": "zh-CN",
+  "content_origin": "EduMatrix 项目组原创比赛基准课程",
+  "license": "Copyright retained by the EduMatrix team; competition evaluation and project demonstration use permitted. External redistribution requires team authorization.",
+  "external_material_policy": "Only license-verified allowlisted material may be added. Repository presence is not approval.",
+  "files": [
+    {"path": "baseline_course/00_课程说明.md", "bytes": 1817, "sha256": "658104036F865B24B3FD7490AA67825FBA7A6CBAEE041C37FA254C936B914BE4"},
+    {"path": "baseline_course/01_来源许可与课程边界.md", "bytes": 1404, "sha256": "724565F9D1B5E87D9AB8EE853A4342EDDA10E0F6E886A4B2339A60DEE2A244D0"},
+    {"path": "baseline_course/02_文档解析与结构保留.md", "bytes": 1177, "sha256": "389DBC7ACF4B37D6F6CBB44AAF9173F1BDF37AD01A857F1477DB17E893CC45B2"},
+    {"path": "baseline_course/03_分块元数据与索引.md", "bytes": 1057, "sha256": "32C97BCC24C7971037C674191FF1A95B789B6F035F5ECBD0EF668F410C1B9F33"},
+    {"path": "baseline_course/04_混合检索与重排.md", "bytes": 1052, "sha256": "87356557B48170661E29A2881359E37E3ED89ED37A96F17637E16A97B04D2836"},
+    {"path": "baseline_course/05_引用约束生成与拒答.md", "bytes": 1058, "sha256": "4E498245CD9A4ED0A7DD1DB82DA20BBCD35850945B8CA2288551A0C44ABD6749"},
+    {"path": "baseline_course/06_画像适配与资源契约.md", "bytes": 1178, "sha256": "8F42CA32DA0D758DCE6E9C6AFFFBE19406C25C1F3CCA0F55D57F0743569475D7"},
+    {"path": "baseline_course/07_幻觉率与覆盖率评测.md", "bytes": 1419, "sha256": "02B80C414611E3D92D36FD2B7A0D828101D0D80140CA9606841E4496A91DB125"},
+    {"path": "baseline_course/08_故障恢复与技能验收.md", "bytes": 1356, "sha256": "4EC6E3C065BD5D894EB272242E35890F8BDEF3B9AD8375B6E19F298671B28877"}
+  ],
+  "candidate_material_pool": {
+    "path": "data/raw/github_repos",
+    "repository_count": 13,
+    "file_count": 3579,
+    "approx_bytes": 1617295194,
+    "status": "CANDIDATE_ONLY",
+    "verified_example": {"repository": "mlcourse-ai", "license": "CC BY-NC-SA 4.0", "license_sha256": "A04E4B6381362123FC0A2E87FE20620B5E4B78F19074B1DD553DEBAD82E5F4B5"},
+    "warning": "Two discovered repositories had no top-level license file during the M0 scan and must not be redistributed until reviewed."
+  }
+}

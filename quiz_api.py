@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from app.database import DBQuizRecord, DBReviewPlan, DBStudentProfile, get_db, run_db_op
 from app.auth import enforce_request_student_scope, enforce_student_access, get_current_user
 from app.crud import load_student_profile, save_student_profile
+from app.legacy_repositories import LegacyReadRepository
 from learning_event_bus import (
     LearningEventBus,
     publish_quiz_event,
@@ -468,22 +469,10 @@ async def generate_quiz(
         difficulty = "easy"
 
     # 4. 尝试从本地种子题库选题 (Hybrid CAT Engine)
-    from app.database import DBQuizItem
-    
     def select_from_item_bank(session):
-        # 查找该知识点的所有预置题
-        candidates = session.query(DBQuizItem).filter(
-            DBQuizItem.concept == target_concept
-        ).all()
-        # 查找已答题目的文本以去重
-        answered = session.query(DBQuizRecord.question).filter(
-            DBQuizRecord.student_id == student_id,
-            DBQuizRecord.student_answer != ""
-        ).all()
-        answered_texts = {a[0].strip() for a in answered if a[0]}
-        
-        available = [c for c in candidates if c.question.strip() not in answered_texts]
-        return available
+        return LegacyReadRepository(session).available_quiz_items(
+            target_concept, student_id
+        )
 
     available_candidates = await run_db_op(select_from_item_bank)
     
@@ -677,10 +666,7 @@ async def evaluate_answer(
         raise HTTPException(status_code=400, detail="答案不能为空")
 
     def fetch_record(session):
-        return session.query(DBQuizRecord).filter(
-            DBQuizRecord.id == quiz_id,
-            DBQuizRecord.student_id == student_id,
-        ).first()
+        return LegacyReadRepository(session).quiz_record(quiz_id, student_id)
 
     quiz_record = await run_db_op(fetch_record)
     if not quiz_record:
@@ -793,8 +779,9 @@ async def evaluate_answer(
 
     # Perform updates in a single thread-safe db transaction
     def perform_eval_updates(session):
+        repository = LegacyReadRepository(session)
         # 重新获取 record 以绑定到当前 session
-        local_record = session.query(DBQuizRecord).filter(DBQuizRecord.id == quiz_id).first()
+        local_record = repository.quiz_record(quiz_id)
         profile = load_student_profile(session, student_id)
         
         # === Q-learning: 记录更新前的状态 ===
@@ -915,12 +902,9 @@ async def evaluate_answer(
                 
             new_beta = new_beta_vec[0]
             
-            from app.database import DBQuizItem
-            session.query(DBQuizItem).filter(DBQuizItem.question == local_record.question).update({
-                "irt_beta": new_beta,
-                "irt_beta_vec": new_beta_vec
-            }, synchronize_session=False)
-            session.commit()
+            repository.update_quiz_item_beta(
+                local_record.question, new_beta, new_beta_vec
+            )
 
         # 写回 IRT 状态（存于 rl_q_table 避免与 KnowledgeTrace 类型冲突）
         if profile.rl_q_table is None:
@@ -949,24 +933,15 @@ async def evaluate_answer(
 
             # === 任务 7.4: 错题自动入库（准确率 < 60%） ===
             if accuracy_score < 0.6:
-                from app.database import DBWrongQuestion
                 # 提取阻断概念
                 blocking_concept = local_record.target_concept or "通用概念"
-                # 检查是否已存在相同概念错题
-                existing = session.query(DBWrongQuestion).filter(
-                    DBWrongQuestion.student_id == student_id,
-                    DBWrongQuestion.concept_name == blocking_concept,
-                    DBWrongQuestion.quiz_record_id == quiz_id,
-                ).first()
-                if not existing:
-                    wrong_q = DBWrongQuestion(
-                        student_id=student_id,
-                        quiz_record_id=quiz_id,
-                        concept_name=blocking_concept,
-                        wrong_reason_category=result.get("next_action", "practice"),
-                    )
-                    session.add(wrong_q)
-
+                created = repository.create_wrong_question_if_missing(
+                    student_id=student_id,
+                    quiz_record_id=quiz_id,
+                    concept=blocking_concept,
+                    reason=result.get("next_action", "practice"),
+                )
+                if created:
                     # 同时更新 profile.weak_points
                     if blocking_concept not in profile.weak_points:
                         profile.weak_points.append(blocking_concept)
@@ -1026,13 +1001,9 @@ async def evaluate_answer(
         if similar_to_source and accuracy_score >= 0.7:
             source_concept = quiz_record.target_concept
             def _lower_review_priority(session):
-                review_plan = session.query(DBReviewPlan).filter(
-                    DBReviewPlan.student_id == student_id,
-                    DBReviewPlan.concept == source_concept,
-                ).first()
-                if review_plan:
-                    review_plan.priority = min(5.0, (review_plan.priority or 1.0) * 1.5)
-                    session.commit()
+                LegacyReadRepository(session).lower_review_priority(
+                    student_id, source_concept
+                )
             await run_db_op(_lower_review_priority)
     except Exception:
         pass
@@ -1100,20 +1071,10 @@ async def adapt_quiz(
         difficulty = "easy"
 
     # === 任务 11: 自适应跟进出题融合本地预置题库 ===
-    from app.database import DBQuizItem
     from mirt_engine import AdaptiveTestEstimator, IRTItemParams
 
     def select_from_item_bank(session):
-        candidates = session.query(DBQuizItem).filter(
-            DBQuizItem.concept == target
-        ).all()
-        answered = session.query(DBQuizRecord.question).filter(
-            DBQuizRecord.student_id == student_id,
-            DBQuizRecord.student_answer != ""
-        ).all()
-        answered_texts = {a[0].strip() for a in answered if a[0]}
-        available = [c for c in candidates if c.question.strip() not in answered_texts]
-        return available
+        return LegacyReadRepository(session).available_quiz_items(target, student_id)
 
     available_candidates = await run_db_op(select_from_item_bank)
     selected_item = None
@@ -1245,13 +1206,7 @@ async def get_quiz_history(
 ) -> list[dict[str, Any]]:
     student_id = enforce_student_access(student_id, current_user)
     def fetch_history(session):
-        return (
-            session.query(DBQuizRecord)
-            .filter(DBQuizRecord.student_id == student_id)
-            .order_by(DBQuizRecord.created_at.desc())
-            .limit(limit)
-            .all()
-        )
+        return LegacyReadRepository(session).quiz_history_desc(student_id, limit)
         
     records = await run_db_op(fetch_history)
     return [
@@ -1299,10 +1254,8 @@ async def generate_similar_quiz(
         raise HTTPException(status_code=400, detail="必须提供 source_quiz_id")
 
     # Step 1: 读取源错题
-    source = db.query(DBQuizRecord).filter(
-        DBQuizRecord.id == source_quiz_id,
-        DBQuizRecord.student_id == student_id,
-    ).first()
+    repository = LegacyReadRepository(db)
+    source = repository.quiz_record(source_quiz_id, student_id)
     if not source:
         raise HTTPException(status_code=404, detail="源错题记录未找到")
 
@@ -1441,20 +1394,10 @@ async def generate_similar_quiz(
         irt_beta=irt_beta,
         irt_gamma=irt_gamma,
     )
-    db.add(db_quiz)
-    db.commit()
+    repository.save_quiz_record(db_quiz)
 
     # Step 5: 关联到源题的 review_plan
-    review_plan = db.query(DBReviewPlan).filter(
-        DBReviewPlan.student_id == student_id,
-        DBReviewPlan.concept == concept,
-    ).first()
-    if review_plan:
-        current_similar = list(review_plan.similar_quiz_ids or [])
-        if new_quiz_id not in current_similar:
-            current_similar.append(new_quiz_id)
-        review_plan.similar_quiz_ids = current_similar
-        db.commit()
+    repository.link_similar_quiz(student_id, concept, new_quiz_id)
 
     return {
         "quiz_id": new_quiz_id,
@@ -1480,33 +1423,24 @@ async def get_wrong_questions(
     current_user=Depends(get_current_user),
 ) -> list[dict]:
     """获取学生的错题列表，支持按概念筛选。"""
-    from app.database import DBWrongQuestion, DBQuizRecord
     student_id = enforce_student_access(student_id, current_user)
 
     def fetch_wrong_questions(session):
-        query = session.query(DBWrongQuestion).filter(
-            DBWrongQuestion.student_id == student_id,
-        )
-        if concept:
-            query = query.filter(DBWrongQuestion.concept_name == concept)
-        records = query.order_by(DBWrongQuestion.pinned.desc(), DBWrongQuestion.created_at.desc()).limit(limit).all()
-
         results = []
-        for r in records:
+        records = LegacyReadRepository(session).wrong_questions(
+            student_id, concept, limit
+        )
+        for r, qr in records:
             quiz_detail = None
-            if r.quiz_record_id:
-                qr = session.query(DBQuizRecord).filter(
-                    DBQuizRecord.id == r.quiz_record_id
-                ).first()
-                if qr:
-                    quiz_detail = {
-                        "question": qr.question[:200],
-                        "student_answer": qr.student_answer[:200],
-                        "correct_answer": qr.correct_answer[:200],
-                        "options": list(qr.options or []),
-                        "accuracy_score": qr.accuracy_score,
-                        "feedback": qr.feedback[:200] if qr.feedback else "",
-                    }
+            if qr:
+                quiz_detail = {
+                    "question": qr.question[:200],
+                    "student_answer": qr.student_answer[:200],
+                    "correct_answer": qr.correct_answer[:200],
+                    "options": list(qr.options or []),
+                    "accuracy_score": qr.accuracy_score,
+                    "feedback": qr.feedback[:200] if qr.feedback else "",
+                }
             results.append({
                 "id": r.id,
                 "quiz_record_id": r.quiz_record_id,
@@ -1528,24 +1462,13 @@ async def get_wrong_concepts(
     current_user=Depends(get_current_user),
 ) -> list[dict]:
     """获取学生的错题概念聚合统计。"""
-    from app.database import DBWrongQuestion
     student_id = enforce_student_access(student_id, current_user)
 
     def fetch_concept_stats(session):
-        from sqlalchemy import func
-        records = (
-            session.query(
-                DBWrongQuestion.concept_name,
-                func.count(DBWrongQuestion.id).label("count"),
-            )
-            .filter(DBWrongQuestion.student_id == student_id)
-            .group_by(DBWrongQuestion.concept_name)
-            .order_by(func.count(DBWrongQuestion.id).desc())
-            .all()
-        )
+        records = LegacyReadRepository(session).wrong_concept_stats(student_id)
         return [
-            {"concept": r.concept_name, "count": r.count}
-            for r in records
+            {"concept": concept_name, "count": count}
+            for concept_name, count in records
         ]
 
     return await run_db_op(fetch_concept_stats)
@@ -1558,18 +1481,14 @@ async def delete_wrong_question(
     current_user=Depends(get_current_user),
 ) -> dict:
     """删除指定的错题记录。"""
-    from app.database import DBWrongQuestion
     student_id = enforce_student_access(student_id, current_user)
 
     def do_delete(session):
-        record = session.query(DBWrongQuestion).filter(
-            DBWrongQuestion.id == wrong_id,
-            DBWrongQuestion.student_id == student_id
-        ).first()
-        if not record:
+        deleted = LegacyReadRepository(session).delete_wrong_question(
+            wrong_id, student_id
+        )
+        if not deleted:
             raise HTTPException(status_code=404, detail="错题记录不存在或无权操作")
-        session.delete(record)
-        session.commit()
         return {"deleted": True, "id": wrong_id}
 
     return await run_db_op(do_delete)
@@ -1582,19 +1501,15 @@ async def toggle_pin_wrong_question(
     current_user=Depends(get_current_user),
 ) -> dict:
     """切换错题的置顶/取消置顶状态。"""
-    from app.database import DBWrongQuestion
     student_id = enforce_student_access(student_id, current_user)
 
     def do_pin(session):
-        record = session.query(DBWrongQuestion).filter(
-            DBWrongQuestion.id == wrong_id,
-            DBWrongQuestion.student_id == student_id
-        ).first()
-        if not record:
+        pinned = LegacyReadRepository(session).toggle_wrong_question_pin(
+            wrong_id, student_id
+        )
+        if pinned is None:
             raise HTTPException(status_code=404, detail="错题记录不存在或无权操作")
-        record.pinned = not record.pinned
-        session.commit()
-        return {"id": wrong_id, "pinned": record.pinned}
+        return {"id": wrong_id, "pinned": pinned}
 
     return await run_db_op(do_pin)
 
@@ -1606,22 +1521,17 @@ async def update_wrong_question_notes(
     current_user=Depends(get_current_user),
 ) -> dict:
     """更新错题的笔记内容。"""
-    from app.database import DBWrongQuestion
-
     payload = await request.json()
     student_id = str(payload.get("student_id", ""))
     student_id = enforce_student_access(student_id, current_user)
     notes = str(payload.get("notes", ""))
 
     def do_update(session):
-        record = session.query(DBWrongQuestion).filter(
-            DBWrongQuestion.id == wrong_id,
-            DBWrongQuestion.student_id == student_id
-        ).first()
-        if not record:
+        updated = LegacyReadRepository(session).update_wrong_question_notes(
+            wrong_id, student_id, notes
+        )
+        if not updated:
             raise HTTPException(status_code=404, detail="错题记录不存在或无权操作")
-        record.notes = notes
-        session.commit()
         return {"id": wrong_id, "notes": notes}
 
     return await run_db_op(do_update)
@@ -1643,6 +1553,7 @@ async def checkin_review(
 
     def do_checkin(session):
         from app.database import DBCheckinLog
+        repository = LegacyReadRepository(session)
 
         # 使用 UTC 时间进行计算以保持数据一致性
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -1651,11 +1562,9 @@ async def checkin_review(
         start_of_today = datetime.combine(today_utc, datetime.min.time())
         end_of_today = datetime.combine(today_utc, datetime.max.time())
 
-        existing_list = session.query(DBCheckinLog).filter(
-            DBCheckinLog.student_id == student_id,
-            DBCheckinLog.checkin_date >= start_of_today,
-            DBCheckinLog.checkin_date <= end_of_today,
-        ).all()
+        existing_list = repository.checkins_between(
+            student_id, start_of_today, end_of_today
+        )
 
         existing = None
         if concept:
@@ -1673,8 +1582,8 @@ async def checkin_review(
 
         if existing:
             existing.duration_minutes += duration_minutes
-            session.commit()
-            return {"checked_in": True, "streak": _calc_streak(session, student_id), "first_today": False}
+            repository.commit()
+            return {"checked_in": True, "streak": _calc_streak(repository, student_id), "first_today": False}
         else:
             log = DBCheckinLog(
                 student_id=student_id,
@@ -1682,9 +1591,8 @@ async def checkin_review(
                 duration_minutes=duration_minutes,
                 concepts_reviewed=[concept] if concept else [],
             )
-            session.add(log)
-            session.commit()
-            return {"checked_in": True, "streak": _calc_streak(session, student_id), "first_today": True}
+            repository.save_checkin(log)
+            return {"checked_in": True, "streak": _calc_streak(repository, student_id), "first_today": True}
 
     return await run_db_op(do_checkin)
 
@@ -1699,7 +1607,7 @@ async def get_checkin_streak(
     student_id = enforce_student_access(student_id, current_user)
 
     def fetch_streak(session):
-        return {"streak": _calc_streak(session, student_id)}
+        return {"streak": _calc_streak(LegacyReadRepository(session), student_id)}
 
     return await run_db_op(fetch_streak)
 
@@ -1711,14 +1619,10 @@ async def get_checkin_history(
     current_user=Depends(get_current_user),
 ) -> list[dict]:
     """获取学生的所有签到打卡记录，支持按特定知识点筛选。"""
-    from app.database import DBCheckinLog
     student_id = enforce_student_access(student_id, current_user)
 
     def fetch_history(session):
-        query = session.query(DBCheckinLog).filter(
-            DBCheckinLog.student_id == student_id
-        )
-        records = query.order_by(DBCheckinLog.checkin_date.asc()).all()
+        records = LegacyReadRepository(session).checkin_history(student_id)
 
         results = []
         for r in records:
@@ -1739,17 +1643,16 @@ async def get_checkin_history(
     return await run_db_op(fetch_history)
 
 
-def _calc_streak(session, student_id: str, tz_offset: int = 8) -> int:
+def _calc_streak(repository, student_id: str, tz_offset: int = 8) -> int:
     """计算连续打卡天数。支持时区偏移，避免跨时区截断 bug。"""
-    from app.database import DBCheckinLog
-    from datetime import date, datetime, timezone, timedelta
+    from datetime import datetime, timezone, timedelta
 
-    records = (
-        session.query(DBCheckinLog.checkin_date)
-        .filter(DBCheckinLog.student_id == student_id)
-        .order_by(DBCheckinLog.checkin_date.desc())
-        .all()
-    )
+    # Keep the legacy Session call shape working while the application uses
+    # repository objects internally.
+    if hasattr(repository, "checkin_dates"):
+        records = repository.checkin_dates(student_id)
+    else:
+        records = LegacyReadRepository(repository).checkin_dates(student_id)
     if not records:
         return 0
 
@@ -1760,8 +1663,9 @@ def _calc_streak(session, student_id: str, tz_offset: int = 8) -> int:
     # 提取唯一的打卡日期，按学生本地时区转换，按降序排列
     unique_dates = sorted(
         list({
-            (r[0] + timedelta(hours=tz_offset)).date() if isinstance(r[0], datetime) else r[0]
-            for r in records if r[0]
+            (value + timedelta(hours=tz_offset)).date()
+            if isinstance(value, datetime) else value
+            for value in records if value
         }),
         reverse=True
     )
@@ -1785,12 +1689,12 @@ async def trigger_database_mcmc_calibration(student_id: str):
     """
     异步后台任务：从数据库拉取答题历史，运行 MCMC 校准三维 MIRT 题目参数，并更新回 quiz_items 表。
     """
-    from app.database import DBQuizRecord, DBQuizItem, DBStudentProfile
     from mirt_engine import mcmc_calibrate_item_parameters, IRTItemParams
     
     def fetch_mcmc_data(session):
+        repository = LegacyReadRepository(session)
+        students, items, records = repository.mcmc_training_rows()
         # 1. 查找所有参与过测验的学生画像，获取其估计的 theta
-        students = session.query(DBStudentProfile).filter(DBStudentProfile.rl_q_table.isnot(None)).all()
         student_list = []
         student_abilities = []
         for s in students:
@@ -1804,7 +1708,6 @@ async def trigger_database_mcmc_calibration(student_id: str):
             return None # 样本不足以运行 MCMC
             
         # 2. 查找所有的本地种子题目
-        items = session.query(DBQuizItem).all()
         if not items:
             return None
             
@@ -1826,11 +1729,9 @@ async def trigger_database_mcmc_calibration(student_id: str):
         item_idx_map = {iid: idx for idx, iid in enumerate(item_ids)}
         
         # 拉取所有的答题记录
-        records = session.query(DBQuizRecord).filter(
-            DBQuizRecord.student_id.in_(student_list)
-        ).all()
-        
         for r in records:
+            if r.student_id not in student_idx_map:
+                continue
             item_match = next((item for item in items if item.question == r.question), None)
             if item_match:
                 s_idx = student_idx_map.get(r.student_id)
@@ -1857,16 +1758,9 @@ async def trigger_database_mcmc_calibration(student_id: str):
     
     # 更新回数据库
     def update_calibrated_items(session):
-        from app.database import DBQuizItem
-        for idx, item_id in enumerate(item_ids):
-            c_item = calibrated[idx]
-            session.query(DBQuizItem).filter(DBQuizItem.id == item_id).update({
-                "irt_alpha_vec": c_item.alpha,
-                "irt_beta_vec": c_item.beta,
-                "irt_alpha": c_item.alpha[0],
-                "irt_beta": c_item.beta[0],
-            }, synchronize_session=False)
-        session.commit()
+        LegacyReadRepository(session).update_calibrated_quiz_items(
+            item_ids, calibrated
+        )
         
     await run_db_op(update_calibrated_items)
     print(f"  [MCMC Calibration] Successfully ran online calibration for {len(item_ids)} questions.")

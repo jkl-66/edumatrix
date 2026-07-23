@@ -1,18 +1,22 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 import {
   BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar,
   Presentation, Clock, GraduationCap, Library, Settings, UserCheck,
-  GitBranch, BarChart3, TrendingUp, LogOut, Users, Flame,
+  GitBranch, BarChart3, TrendingUp, LogOut, Users, Flame, ShieldCheck,
   PanelLeftClose, PanelLeftOpen, Search, Bell, Plus, Sparkles,
 } from '@lucide/vue'
 import { abortAllStreams } from './api'
 import SidebarItem from './components/ui/SidebarItem.vue'
 import UiButton from './components/ui/UiButton.vue'
+import { useContextStore } from './stores/context'
 
 const route = useRoute()
 const router = useRouter()
+const context = useContextStore()
+const { isOperator } = storeToRefs(context)
 
 const getOrInitStudentId = () => {
   let id = localStorage.getItem('edumatrix_student_id')
@@ -77,7 +81,14 @@ const teacherNav = [
   { path: '/settings', label: '设置', group: '系统', icon: Settings },
 ]
 
-const navItems = computed(() => role.value === 'teacher' ? teacherNav : studentNav)
+const operatorNav = [
+  { path: '/internal/objects', label: '对象检查', group: '治理', icon: ShieldCheck },
+]
+
+const navItems = computed(() => {
+  const base = ['teacher', 'admin'].includes(role.value) ? teacherNav : studentNav
+  return isOperator.value ? [...base, ...operatorNav] : base
+})
 
 const pageTitle = computed(() => {
   const map = {
@@ -85,17 +96,18 @@ const pageTitle = computed(() => {
     '/wrong-questions': '错题本', '/notes': '学习笔记', '/review': '复习计划',
     '/revision-calendar': '复习日历', '/history': '对话历史', '/knowledge': '知识库',
     '/profile': '学习画像', '/teacher': '教学看板', '/settings': '设置',
-    '/student-analysis': '学习画像',
+    '/student-analysis': '学习画像', '/internal/objects': '对象检查',
   }
   return map[route.path] || (role.value === 'teacher' ? '教学看板' : 'EduMatrix')
 })
 
-function goHome() { router.push(role.value === 'teacher' ? '/teacher' : '/') }
+function goHome() { router.push(['teacher', 'admin'].includes(role.value) ? '/teacher' : '/') }
 
 function logout() {
   ['edumatrix_token','edumatrix_role','edumatrix_username','edumatrix_display_name','edumatrix_student_id','edumatrix_viewing_student','edumatrix_chat_messages']
     .forEach(k => localStorage.removeItem(k))
   router.push('/login')
+  context.clear()
 }
 function handleCaptureError(e) {
   // 过滤掉 img/video/audio 等媒体资源的加载失败（404等），它们是浏览器正常行为，不属于 Vue 渲染异常

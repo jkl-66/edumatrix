@@ -1,0 +1,46 @@
+{
+  "schema_version": "baseline-profile-0.1",
+  "data_class": "P2-SYNTHETIC",
+  "notice": "All profiles are synthetic and do not represent real students.",
+  "profiles": [
+    {
+      "profile_id": "profile-m0-beginner",
+      "student_id": "student-m0-001",
+      "label": "零基础转入",
+      "background": {"major": "非计算机专业", "python": "初识", "ml": "不了解", "rag_project": "无"},
+      "goal": "在引导下完成一条本地 RAG 最小链路并理解引用",
+      "constraints": {"weekly_hours": 6, "language": "zh-CN", "prefers": ["图示", "短步骤", "即时反馈"], "avoid": ["大段公式", "无解释代码"]},
+      "initial_mastery": {"KP-01": 0.25, "KP-04": 0.15, "KP-08": 0.05, "KP-11": 0.05, "KP-16": 0.10, "KP-25": 0.00},
+      "evidence": ["合成冷启动问卷：不了解向量检索", "合成诊断题：无法区分来源和引用"],
+      "expected_first_path": ["先修-Python/JSON", "KP-01", "KP-04", "KP-08", "KP-11", "KP-16"],
+      "expected_resource": {"difficulty": "L0-L1", "scaffolding": "high", "lecture": "术语+图示+示例", "lab": "复制后逐步修改", "quiz": "识别和单步应用"},
+      "expected_change_after_success": {"KP-01": "+0.25", "KP-04": "+0.20", "KP-08": "+0.15"}
+    },
+    {
+      "profile_id": "profile-m0-theory",
+      "student_id": "student-m0-002",
+      "label": "理论较强、实操薄弱",
+      "background": {"major": "人工智能", "python": "中等", "ml": "扎实", "rag_project": "仅课堂概念"},
+      "goal": "独立完成分块、混合检索和引用约束实验",
+      "constraints": {"weekly_hours": 8, "language": "zh-CN", "prefers": ["实验", "参数对比", "错误诊断"], "avoid": ["重复基础理论"]},
+      "initial_mastery": {"KP-01": 0.70, "KP-04": 0.55, "KP-08": 0.50, "KP-11": 0.65, "KP-16": 0.45, "KP-25": 0.40},
+      "evidence": ["合成诊断题：能解释 embedding", "合成实操：无法定位 owner 过滤失败"],
+      "expected_first_path": ["KP-08", "KP-09", "KP-11", "KP-13", "KP-16", "KP-28"],
+      "expected_resource": {"difficulty": "L1-L2", "scaffolding": "medium", "lecture": "概念压缩+边界", "lab": "参数对照+故障注入", "quiz": "应用和调试"},
+      "expected_change_after_success": {"KP-09": "+0.25", "KP-13": "+0.20", "KP-28": "+0.20"}
+    },
+    {
+      "profile_id": "profile-m0-advanced",
+      "student_id": "student-m0-003",
+      "label": "有项目经验、需要进阶",
+      "background": {"major": "计算机科学", "python": "熟练", "ml": "熟练", "rag_project": "做过基础向量问答"},
+      "goal": "建立可审计评测、故障恢复和企业岗位迁移能力",
+      "constraints": {"weekly_hours": 5, "language": "zh-CN", "prefers": ["复杂案例", "隐藏测试", "成本与风险"], "avoid": ["模板化入门教程"]},
+      "initial_mastery": {"KP-01": 0.90, "KP-04": 0.85, "KP-08": 0.80, "KP-11": 0.85, "KP-16": 0.70, "KP-25": 0.45},
+      "evidence": ["合成项目证据：完成向量库 demo", "合成诊断题：混淆支持率与幻觉率分母"],
+      "expected_first_path": ["KP-18", "KP-20", "KP-24", "KP-25", "KP-28", "KP-29", "KP-31", "KP-32"],
+      "expected_resource": {"difficulty": "L2-L4", "scaffolding": "low", "lecture": "权衡+边界+迁移", "lab": "开放调优+隐藏验收", "quiz": "综合故障和决策"},
+      "expected_change_after_success": {"KP-25": "+0.25", "KP-29": "+0.20", "KP-31": "+0.15"}
+    }
+  ]
+}

@@ -7,7 +7,7 @@
  * 支持关键词模糊检索、高亮两级上下游关联节点。
  */
 import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue'
-import * as echarts from 'echarts'
+import { echarts } from '../lib/echarts-graph'
 import { Search, Filter, ZoomIn, ZoomOut, RotateCw, Info } from '@lucide/vue'
 
 const props = defineProps({

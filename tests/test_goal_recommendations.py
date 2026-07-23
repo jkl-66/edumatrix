@@ -2,11 +2,13 @@ import unittest
 from fastapi.testclient import TestClient
 from app.main import app
 from app.database import SessionLocal, DBStudentProfile
+from tests.api_test_helpers import auth_headers
 
 class TestGoalRecommendations(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         self.student_id = "test-goals-student"
+        self.auth_headers = auth_headers(self.client, self.student_id)
         
         self.db = SessionLocal()
         existing = self.db.query(DBStudentProfile).filter_by(student_id=self.student_id).first()
@@ -35,7 +37,10 @@ class TestGoalRecommendations(unittest.TestCase):
         self.db.close()
 
     def test_goal_recommendations_endpoint(self):
-        response = self.client.get(f"/api/profile/{self.student_id}/goal-recommendations")
+        response = self.client.get(
+            f"/api/profile/{self.student_id}/goal-recommendations",
+            headers=self.auth_headers,
+        )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIsInstance(data, list)

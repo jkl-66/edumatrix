@@ -31,6 +31,61 @@ export function buildHeaders() {
 
 export const api = axios.create({ baseURL: '/api' })
 
+export class EduMatrixApiError extends Error {
+  constructor(status, detail, response = null) {
+    super(detail || `请求失败 (${status || 'network'})`)
+    this.name = 'EduMatrixApiError'
+    this.status = status || 0
+    this.detail = detail || ''
+    this.response = response
+    this.kind = status === 403 ? 'forbidden'
+      : status === 404 ? 'not_found'
+        : status === 409 ? 'conflict'
+          : status === 410 ? 'archived' : status === 401 ? 'unauthorized' : 'unknown'
+  }
+}
+
+export function normalizeApiError(error) {
+  if (error instanceof EduMatrixApiError) return error
+  const status = error?.response?.status || 0
+  const detail = error?.response?.data?.detail || error?.message || '网络请求失败'
+  return new EduMatrixApiError(status, detail, error?.response || null)
+}
+
+const AUTH_STORAGE_KEYS = [
+  'edumatrix_token',
+  'edumatrix_role',
+  'edumatrix_username',
+  'edumatrix_display_name',
+  'edumatrix_student_id',
+  'edumatrix_viewing_student',
+  'edumatrix_onboarded',
+]
+let authRedirecting = false
+
+function clearExpiredAuth() {
+  AUTH_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key))
+  if (!authRedirecting && window.location.pathname !== '/login') {
+    authRedirecting = true
+    window.location.assign('/login?reason=session-expired')
+  }
+}
+
+// A development server may restart with a new JWT secret. Clear stale browser
+// state centrally so protected pages return to login instead of rendering a raw 401.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) clearExpiredAuth()
+    return Promise.reject(normalizeApiError(error))
+  },
+)
+
+export async function getCurrentIdentity() {
+  const r = await api.get('/auth/me', { headers: buildHeaders() })
+  return r.data
+}
+
 export async function healthCheck() {
   const r = await api.get('/health', { headers: buildHeaders() })
   return r.data

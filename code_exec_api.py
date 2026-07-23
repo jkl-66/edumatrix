@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import sys
 import io
+import os
 import time
 import uuid
 import base64
 import traceback
 import asyncio
+from multiprocessing import spawn as multiprocessing_spawn
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.database import DBCodeExecution, run_db_op
+from app.legacy_repositories import LegacyReadRepository
 from app.auth import enforce_student_access, get_current_user
 from config import CONFIG
 
@@ -28,12 +31,39 @@ class SandboxProcessRunner:
         self.pool_size = pool_size
         self.image = image
         self._lock = asyncio.Lock()
-        self.mode = CONFIG.sandbox_mode if CONFIG.sandbox_mode in {"disabled", "docker"} else "disabled"
+        requested_mode = CONFIG.sandbox_mode
+        if requested_mode == "trusted_local" and os.getenv("EDUMATRIX_ENV", "development").strip().lower() in {"production", "prod"}:
+            requested_mode = "disabled"
+        self.mode = requested_mode if requested_mode in {"disabled", "trusted_local", "docker"} else "disabled"
+
+    @property
+    def execution_enabled(self) -> bool:
+        return self.mode == "trusted_local" or (
+            self.mode == "docker" and self.docker_available
+        )
+
+    def status_message(self) -> str:
+        if self.mode == "trusted_local":
+            return (
+                "本地可信研究模式已启用：代码在受限 Python 子进程和临时目录中运行，"
+                "不具备 Docker 容器隔离，仅适用于本机学术研究与演示"
+            )
+        if self.mode == "docker" and self.docker_available:
+            return "Docker 代码沙箱已启用"
+        return (
+            "代码执行未启用；核心学习功能可正常使用。设置 "
+            "EDUMATRIX_SANDBOX_MODE=trusted_local 可进行本机研究演示，"
+            "设置为 docker 才启用容器隔离"
+        )
 
     async def start(self):
-        if self.mode != "docker":
+        if self.mode == "disabled":
             self.docker_available = False
             print("  [Sandbox] Mode=disabled. Code execution is unavailable; Docker is optional.")
+            return
+        if self.mode == "trusted_local":
+            self.docker_available = False
+            print("  [Sandbox] Mode=trusted_local. Restricted child-process execution is enabled for research/demo only; no container isolation.")
             return
         try:
             import docker
@@ -146,8 +176,10 @@ class SandboxProcessRunner:
         if validation_error:
             return "", validation_error, 0.0
 
+        if self.mode == "trusted_local":
+            return await self._run_in_subprocess(code)
         if not self.docker_available:
-            return "", "错误: Docker 沙箱不可用或未启用，已拒绝执行代码（可设置 EDUMATRIX_SANDBOX_MODE=docker）", 0.0
+            return "", self.status_message(), 0.0
         return await self._run_in_docker(code)
 
     async def _run_in_docker(self, code: str) -> tuple[str, str, float]:
@@ -274,9 +306,24 @@ class SandboxProcessRunner:
             f"exec(base64.b64decode('{encoded_wrapper}').decode('utf-8'))"
         )
 
-        import os
-        env = os.environ.copy()
+        import shutil
+        import tempfile
+
+        # Do not expose project secrets or the project import path to the
+        # research child process. This is defense-in-depth, not isolation.
+        secret_markers = (
+            "API_KEY", "SECRET", "TOKEN", "PASSWORD", "DATABASE_URL", "COOKIE", "CREDENTIAL"
+        )
+        env = {
+            key: value for key, value in os.environ.items()
+            if not any(marker in key.upper() for marker in secret_markers)
+        }
+        env.pop("PYTHONPATH", None)
         env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONNOUSERSITE"] = "1"
+        env["EDUMATRIX_SANDBOX_MAX_OUTPUT_BYTES"] = str(CONFIG.sandbox_max_output_bytes)
+        env["EDUMATRIX_SANDBOX_MAX_VISUAL_BYTES"] = str(CONFIG.sandbox_max_visual_bytes)
+        workdir = tempfile.mkdtemp(prefix="edumatrix_trusted_local_")
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -286,6 +333,7 @@ class SandboxProcessRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                cwd=workdir,
             )
 
             try:
@@ -296,10 +344,7 @@ class SandboxProcessRunner:
                 stdout = stdout_bytes.decode('utf-8', errors='replace')
                 stderr = stderr_bytes.decode('utf-8', errors='replace')
 
-                if "===STDERR_SEPARATOR===" in stdout:
-                    part_out, part_err = stdout.split("===STDERR_SEPARATOR===", 1)
-                    stdout = part_out
-                    stderr = part_err + stderr
+                stdout, stderr = self._parse_subprocess_output(stdout, stderr)
 
                 exec_time = time.time() - start_time
                 return stdout, stderr, exec_time
@@ -326,7 +371,8 @@ class SandboxProcessRunner:
                         [sys.executable, "-c", exec_command],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
-                        env=env
+                        env=env,
+                        cwd=workdir,
                     )
                     try:
                         stdout_bytes, stderr_bytes = proc.communicate(timeout=CONFIG.sandbox_timeout)
@@ -365,10 +411,7 @@ class SandboxProcessRunner:
                 stdout = stdout_bytes.decode('utf-8', errors='replace')
                 stderr = stderr_bytes.decode('utf-8', errors='replace')
 
-                if "===STDERR_SEPARATOR===" in stdout:
-                    part_out, part_err = stdout.split("===STDERR_SEPARATOR===", 1)
-                    stdout = part_out
-                    stderr = part_err + stderr
+                stdout, stderr = self._parse_subprocess_output(stdout, stderr)
 
                 exec_time = time.time() - start_time
                 return stdout, stderr, exec_time
@@ -379,19 +422,60 @@ class SandboxProcessRunner:
         except Exception as e:
             exec_time = time.time() - start_time
             return "", f"沙箱子进程启动失败: {e}", exec_time
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    @staticmethod
+    def _parse_subprocess_output(stdout: str, stderr: str) -> tuple[str, str]:
+        """Merge text and image channels without treating image data as text."""
+        if "===STDERR_SEPARATOR===" not in stdout:
+            return stdout, stderr
+        part_out, part_err = stdout.split("===STDERR_SEPARATOR===", 1)
+        visual_marker = "===VISUAL_SEPARATOR==="
+        if visual_marker in part_out:
+            text_out, visual_out = part_out.split(visual_marker, 1)
+            part_out = text_out + visual_out
+        return part_out, part_err + stderr
 
     def _get_wrapper_script(self) -> str:
         return """
 import sys
 import io
+import os
 import traceback
 import builtins
 from contextlib import redirect_stdout, redirect_stderr
 
 code_to_run = sys.stdin.read()
 
-output_buffer = io.StringIO()
-error_buffer = io.StringIO()
+MAX_OUTPUT_BYTES = int(os.environ.get("EDUMATRIX_SANDBOX_MAX_OUTPUT_BYTES", "100000"))
+MAX_VISUAL_BYTES = int(os.environ.get("EDUMATRIX_SANDBOX_MAX_VISUAL_BYTES", "5000000"))
+
+class LimitedBuffer(io.StringIO):
+    def __init__(self, limit):
+        super().__init__()
+        self.limit = max(1024, int(limit))
+        self.size = 0
+        self.truncated = False
+
+    def write(self, value):
+        value = str(value)
+        self.size += len(value.encode("utf-8"))
+        remaining = self.limit - len(self.getvalue().encode("utf-8"))
+        if remaining <= 0:
+            self.truncated = True
+            return len(value)
+        encoded = value.encode("utf-8")
+        if len(encoded) > remaining:
+            super().write(encoded[:remaining].decode("utf-8", errors="ignore"))
+            self.truncated = True
+        else:
+            super().write(value)
+        return len(value)
+
+output_buffer = LimitedBuffer(MAX_OUTPUT_BYTES)
+error_buffer = LimitedBuffer(MAX_OUTPUT_BYTES)
+visual_buffer = LimitedBuffer(MAX_VISUAL_BYTES)
 
 def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     allowed = {
@@ -505,7 +589,7 @@ try:
                 buf.seek(0)
                 img_b64 = base64.b64encode(buf.read()).decode("utf-8")
                 plt_local.close("all")
-                output_buffer.write(f"\\n![可视化输出](data:image/png;base64,{img_b64})")
+                visual_buffer.write(f"\\n![可视化输出](data:image/png;base64,{img_b64})")
             # === 任务 3: Matplotlib 画布内存泄露强杀 ===
             import sys, gc
             for mod_name in list(sys.modules.keys()):
@@ -515,7 +599,16 @@ try:
 except Exception as e:
     error_buffer.write(traceback.format_exc())
 
+if output_buffer.truncated:
+    error_buffer.write("\\n输出已截断：超过本地研究模式的输出上限。")
+if error_buffer.truncated:
+    error_buffer.write("\\n错误输出已截断。")
+if visual_buffer.truncated:
+    error_buffer.write("\\n可视化输出已截断：图片超过本地研究模式的可视化上限。")
+
 sys.stdout.write(output_buffer.getvalue())
+sys.stdout.write("===VISUAL_SEPARATOR===")
+sys.stdout.write(visual_buffer.getvalue())
 sys.stdout.write("===STDERR_SEPARATOR===")
 sys.stdout.write(error_buffer.getvalue())
 """
@@ -540,16 +633,29 @@ SANDBOX_RUNNER = SandboxProcessRunner()
 @router.get("/status")
 async def sandbox_status() -> dict[str, Any]:
     """Expose the optional sandbox capability without requiring Docker."""
-    enabled = SANDBOX_RUNNER.mode == "docker" and SANDBOX_RUNNER.docker_available
-    if enabled:
-        message = "Docker 代码沙箱已启用"
+    enabled = SANDBOX_RUNNER.execution_enabled
+    message = SANDBOX_RUNNER.status_message()
+    if SANDBOX_RUNNER.mode == "trusted_local":
+        isolation = "trusted_local_child_process"
+        security_level = "research_only_no_container_isolation"
+    elif SANDBOX_RUNNER.mode == "docker" and enabled:
+        isolation = "docker_container"
+        security_level = "container_isolation"
     else:
-        message = "代码沙箱未启用；核心学习功能可正常使用，设置 EDUMATRIX_SANDBOX_MODE=docker 后才执行代码"
+        isolation = "none"
+        security_level = "execution_disabled"
     return {
         "mode": SANDBOX_RUNNER.mode,
         "docker_available": SANDBOX_RUNNER.docker_available,
         "execution_enabled": enabled,
         "message": message,
+        "isolation": isolation,
+        "security_level": security_level,
+        "max_output_bytes": CONFIG.sandbox_max_output_bytes,
+        "max_visual_bytes": CONFIG.sandbox_max_visual_bytes,
+        "python_executable": sys.executable,
+        "multiprocessing_executable": multiprocessing_spawn.get_executable(),
+        "process_id": os.getpid(),
     }
 
 
@@ -573,10 +679,10 @@ async def run_code(
     if len(code.encode('utf-8')) > 50000:
         raise HTTPException(status_code=400, detail="恶意代码长度超限，沙箱拒绝运行 (Max 50KB)")
 
-    if SANDBOX_RUNNER.mode != "docker" or not SANDBOX_RUNNER.docker_available:
+    if not SANDBOX_RUNNER.execution_enabled:
         raise HTTPException(
             status_code=503,
-            detail="代码沙箱未启用；核心学习功能可用，设置 EDUMATRIX_SANDBOX_MODE=docker 并启动 Docker 后才执行代码",
+            detail=SANDBOX_RUNNER.status_message(),
         )
 
     # Syntax validation of code before execution
@@ -635,13 +741,7 @@ async def get_code_history(
 ) -> list[dict[str, Any]]:
     student_id = enforce_student_access(student_id, current_user)
     def fetch_history(session):
-        return (
-            session.query(DBCodeExecution)
-            .filter(DBCodeExecution.student_id == student_id)
-            .order_by(DBCodeExecution.created_at.desc())
-            .limit(limit)
-            .all()
-        )
+        return LegacyReadRepository(session).code_history(student_id, limit=limit)
         
     records = await run_db_op(fetch_history)
     return [

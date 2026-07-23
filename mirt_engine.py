@@ -17,6 +17,13 @@ class IRTItemParams:
             self.alpha = [float(self.alpha), float(self.alpha) * 0.8, float(self.alpha) * 0.6]
         if isinstance(self.beta, (int, float)):
             self.beta = [float(self.beta), float(self.beta) + 0.1, float(self.beta) - 0.1]
+        self.alpha = _normalise_vector(self.alpha, default=1.0, minimum=0.05, maximum=5.0)
+        self.beta = _normalise_vector(self.beta, default=0.0, minimum=-6.0, maximum=6.0)
+        try:
+            gamma = float(self.gamma)
+        except (TypeError, ValueError):
+            gamma = 0.25
+        self.gamma = min(0.99, max(0.0, gamma if math.isfinite(gamma) else 0.25))
 
     def to_dict(self) -> dict[str, Any]:
         return {"alpha": self.alpha, "beta": self.beta, "gamma": self.gamma}
@@ -74,6 +81,11 @@ class AdaptiveTestEstimator:
         if isinstance(self.prior_std, (int, float)):
             self.prior_std = [float(self.prior_std), float(self.prior_std), float(self.prior_std)]
 
+        self.theta = _normalise_vector(self.theta, default=0.0, minimum=-8.0, maximum=8.0)
+        self.theta_std = _normalise_vector(self.theta_std, default=1.0, minimum=1e-3, maximum=8.0)
+        self.prior_mean = _normalise_vector(self.prior_mean, default=0.0, minimum=-8.0, maximum=8.0)
+        self.prior_std = _normalise_vector(self.prior_std, default=1.0, minimum=1e-3, maximum=8.0)
+
         if self.theta_cov is None:
             self.theta_cov = [
                 [self.theta_std[0]**2, 0.0, 0.0],
@@ -82,6 +94,8 @@ class AdaptiveTestEstimator:
             ]
 
     def _logistic(self, x: float) -> float:
+        if not math.isfinite(x):
+            return 1.0 if x > 0 else 0.0
         if x > 700:
             return 1.0
         if x < -700:
@@ -129,8 +143,9 @@ class AdaptiveTestEstimator:
     def compute_log_prior(self, theta: list[float]) -> float:
         log_prior = 0.0
         for d in range(3):
-            z = (theta[d] - self.prior_mean[d]) / self.prior_std[d]
-            log_prior += -0.5 * z * z - math.log(self.prior_std[d] * math.sqrt(2.0 * math.pi))
+            std = max(1e-3, abs(float(self.prior_std[d])))
+            z = (theta[d] - self.prior_mean[d]) / std
+            log_prior += -0.5 * z * z - math.log(std * math.sqrt(2.0 * math.pi))
         return log_prior
 
     def compute_log_posterior(self, theta: list[float]) -> float:
@@ -220,7 +235,13 @@ class AdaptiveTestEstimator:
                 + omega[0][2] * (omega[0][1] * omega[1][2] - omega[0][2] * omega[1][1])
             )
             
-        det = max(1e-15, det)
+        if not math.isfinite(det) or det <= 1e-12:
+            self.theta_cov = [
+                [max(1e-5, self.prior_std[0] ** 2), 0.0, 0.0],
+                [0.0, max(1e-5, self.prior_std[1] ** 2), 0.0],
+                [0.0, 0.0, max(1e-5, self.prior_std[2] ** 2)],
+            ]
+            return list(self.prior_std)
         
         # Compute cofactor elements for symmetric inverse
         c00 = omega[1][1] * omega[2][2] - omega[1][2]**2
@@ -235,6 +256,13 @@ class AdaptiveTestEstimator:
             [c01 / det, c11 / det, c12 / det],
             [c02 / det, c12 / det, c22 / det]
         ]
+        if any(not math.isfinite(value) for row in cov for value in row):
+            self.theta_cov = [
+                [max(1e-5, self.prior_std[0] ** 2), 0.0, 0.0],
+                [0.0, max(1e-5, self.prior_std[1] ** 2), 0.0],
+                [0.0, 0.0, max(1e-5, self.prior_std[2] ** 2)],
+            ]
+            return list(self.prior_std)
         
         # Update self.theta_cov
         self.theta_cov = cov
@@ -267,7 +295,7 @@ class AdaptiveTestEstimator:
             - self.theta_cov[0][1] * (self.theta_cov[0][1] * self.theta_cov[2][2] - self.theta_cov[0][2] * self.theta_cov[1][2])
             + self.theta_cov[0][2] * (self.theta_cov[0][1] * self.theta_cov[1][2] - self.theta_cov[0][2] * self.theta_cov[1][1])
         )
-        det_info = 1.0 / max(1e-15, det_cov)
+        det_info = 1.0 / max(1e-15, abs(det_cov) if math.isfinite(det_cov) else 1e-15)
         
         return det_info * (1.0 + g_t_cov_g / (P * (1.0 - P)))
 
@@ -353,6 +381,33 @@ def difficulty_to_beta(label: str) -> float:
     return mapping.get(label.lower(), 0.0)
 
 
+def _normalise_vector(
+    value: Any,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> list[float]:
+    """Return exactly three finite, bounded values for legacy MIRT inputs."""
+    if isinstance(value, (int, float)):
+        values = [value, value, value]
+    elif isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        values = []
+    values = (values + [default, default, default])[:3]
+    result: list[float] = []
+    for raw in values:
+        try:
+            number = float(raw)
+        except (TypeError, ValueError):
+            number = default
+        if not math.isfinite(number):
+            number = default
+        result.append(min(maximum, max(minimum, number)))
+    return result
+
+
 def beta_to_difficulty(beta: float) -> str:
     if beta < -0.5:
         return "easy"
@@ -369,7 +424,13 @@ def estimate_irt_params_from_profile(
     difficulty: str | None = None,
 ) -> IRTItemParams:
     """根据学情画像与题型特征，自适应投射三维 MIRT 题目参数"""
-    alpha_base = 1.0 + 0.5 * math.log(max(attempts, 1) + 1)
+    try:
+        mastery = float(mastery)
+    except (TypeError, ValueError):
+        mastery = 0.5
+    mastery = min(1.0, max(0.0, mastery if math.isfinite(mastery) else 0.5))
+    attempts = max(0, int(attempts or 0))
+    alpha_base = 1.0 + 0.5 * math.log(attempts + 1)
     
     if difficulty:
         b_val = {"easy": -1.0, "medium": 0.0, "hard": 1.0}.get(difficulty.lower(), 0.0)
@@ -377,8 +438,16 @@ def estimate_irt_params_from_profile(
         b_val = (mastery - 0.5) * 3.0
         
     gamma = max(0.05, 0.25 - 0.05 * attempts)
-    if accuracy_history:
-        avg_acc = sum(accuracy_history) / len(accuracy_history)
+    clean_accuracy = []
+    for value in accuracy_history or []:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            clean_accuracy.append(min(1.0, max(0.0, number)))
+    if clean_accuracy:
+        avg_acc = sum(clean_accuracy) / len(clean_accuracy)
         alpha_base += 0.3 * avg_acc
         b_val += (avg_acc - 0.5) * 1.5
 
@@ -402,7 +471,7 @@ def mcmc_calibrate_item_parameters(
     """
     num_students = len(response_matrix)
     num_items = len(initial_items)
-    if num_students == 0 or num_items == 0:
+    if num_students == 0 or num_items == 0 or iterations <= 0:
         return initial_items
 
     calibrated_items = []
@@ -424,8 +493,13 @@ def mcmc_calibrate_item_parameters(
                 resp = response_matrix[i][j]
                 theta = student_abilities[i]
                 z = sum(ai * (ti - bi) for ai, ti, bi in zip(a, theta, b))
-                # 3PL 概率
-                P = current_gamma + (1.0 - current_gamma) * (1.0 / (1.0 + math.exp(-z) if -z < 700 else 0.0))
+                # 3PL 概率，使用稳定 sigmoid，避免极端 z 触发溢出或除零。
+                if z >= 0:
+                    logistic = 1.0 / (1.0 + math.exp(-min(z, 700.0)))
+                else:
+                    exp_z = math.exp(max(z, -700.0))
+                    logistic = exp_z / (1.0 + exp_z)
+                P = current_gamma + (1.0 - current_gamma) * logistic
                 P = max(1e-15, min(1.0 - 1e-15, P))
                 if resp == 1:
                     log_lik += math.log(P)
@@ -465,11 +539,12 @@ def mcmc_calibrate_item_parameters(
         # 2. 烧入期后求平均值作为估计值
         final_alpha = [0.0, 0.0, 0.0]
         final_beta = [0.0, 0.0, 0.0]
-        valid_samples = iterations - burn_in
+        effective_burn_in = min(max(0, int(burn_in)), max(0, iterations - 1))
+        valid_samples = max(1, iterations - effective_burn_in)
         
         for d in range(3):
-            val_alpha = sum(s[d] for s in alpha_samples[burn_in:]) / valid_samples
-            val_beta = sum(s[d] for s in beta_samples[burn_in:]) / valid_samples
+            val_alpha = sum(s[d] for s in alpha_samples[effective_burn_in:]) / valid_samples
+            val_beta = sum(s[d] for s in beta_samples[effective_burn_in:]) / valid_samples
             # 引入夹逼范围，防止冷启动小样本时参数过度发散
             final_alpha[d] = round(max(0.2, min(3.0, val_alpha)), 4)
             final_beta[d] = round(max(-3.0, min(3.0, val_beta)), 4)

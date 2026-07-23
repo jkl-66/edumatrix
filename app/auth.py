@@ -1,5 +1,5 @@
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from jose import JWTError, jwt
@@ -8,6 +8,7 @@ from fastapi.security import OAuth2PasswordBearer
 
 from config import CONFIG
 from app.database import DBUser, run_db_op
+from app.identity import normalize_role
 
 # OAuth2 方案配置
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
@@ -28,9 +29,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     """创建 JWT 访问令牌，包含用户角色"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=CONFIG.auth_access_token_expire_minutes)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=CONFIG.auth_access_token_expire_minutes)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, CONFIG.auth_secret_key, algorithm=CONFIG.auth_algorithm)
     return encoded_jwt
@@ -57,14 +58,23 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> DBU
 
     try:
         payload = jwt.decode(token, CONFIG.auth_secret_key, algorithms=[CONFIG.auth_algorithm])
-        username: str = payload.get("sub")
-        if username is None:
+        public_id: str = payload.get("uid") or payload.get("sub")
+        username: str = payload.get("username")
+        if public_id is None:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
     
     def fetch_user(session):
-        return session.query(DBUser).filter(DBUser.username == username).first()
+        query = session.query(DBUser)
+        user = query.filter(DBUser.public_id == public_id).first()
+        # Compatibility with tokens issued before S1-001. New tokens never use
+        # the username as their authority subject.
+        if user is None and username:
+            user = query.filter(DBUser.username == username).first()
+        if user is None and public_id and not username:
+            user = query.filter(DBUser.username == public_id).first()
+        return user
 
     user = await run_db_op(fetch_user)
     if user is None:
@@ -76,7 +86,7 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> DBU
 
 async def get_current_teacher(user: DBUser = Depends(get_current_user)) -> DBUser:
     """教师权限依赖：仅允许教师角色访问"""
-    if user.role != "teacher":
+    if normalize_role(user.role) not in {"teacher", "admin", "assistant"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="仅教师可访问此接口",

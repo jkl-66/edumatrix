@@ -1,6 +1,9 @@
 import os
 # Ensure mock LLM provider is used during tests to prevent hanging/timeouts
 os.environ["EDUMATRIX_LLM_PROVIDER"] = "mock"
+os.environ["EDUMATRIX_MULTIMODAL_LLM_ENDPOINT"] = ""
+os.environ["EDUMATRIX_MULTIMODAL_LLM_API_KEY"] = ""
+os.environ["EDUMATRIX_MULTIMODAL_LLM_MODEL"] = ""
 
 import unittest
 import json
@@ -9,11 +12,13 @@ from app.main import app
 from app.database import SessionLocal, DBStudentProfile
 from models import Evidence, EvidenceModality
 from rag_engine import hybrid_rag
+from tests.api_test_helpers import auth_headers
 
 class TestMultimodalChat(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         self.student_id = "test-multimodal-student"
+        self.auth_headers = auth_headers(self.client, self.student_id)
         self.db = SessionLocal()
 
         # Clear profile store cache in all cached swarms to ensure test isolation
@@ -21,6 +26,7 @@ class TestMultimodalChat(unittest.TestCase):
         for swarm in _swarm_cache.values():
             if hasattr(swarm, "profile_store"):
                 swarm.profile_store.clear()
+        _swarm_cache.clear()
 
         # Insert test profile
         existing = self.db.query(DBStudentProfile).filter_by(student_id=self.student_id).first()
@@ -54,7 +60,7 @@ class TestMultimodalChat(unittest.TestCase):
             "mode": "chat",
             "images": []
         }
-        response = self.client.post("/api/stream/chat", json=payload)
+        response = self.client.post("/api/stream/chat", json=payload, headers=self.auth_headers)
         self.assertEqual(response.status_code, 200)
         
         # 验证 SSE 格式
@@ -68,13 +74,20 @@ class TestMultimodalChat(unittest.TestCase):
 
     def test_multimodal_homework_qa_socratic(self):
         """测试多模态图片题目答疑与 Socratic 启发式对话"""
+        from unittest.mock import patch
+        from llm_client import AsyncDeterministicEducationLLM
+
         payload = {
             "message": "计算这个池化层输出",
             "student_id": self.student_id,
             "mode": "chat",
             "images": ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="]
         }
-        response = self.client.post("/api/stream/chat", json=payload)
+        with patch(
+            "swarm_factory.build_async_llm",
+            return_value=AsyncDeterministicEducationLLM(),
+        ):
+            response = self.client.post("/api/stream/chat", json=payload, headers=self.auth_headers)
         self.assertEqual(response.status_code, 200)
 
         # 验证返回了包含图片引用的 complete 数据结构
@@ -99,7 +112,7 @@ class TestMultimodalChat(unittest.TestCase):
             "mode": "chat",
             "images": []
         }
-        response = self.client.post("/api/stream/chat", json=payload)
+        response = self.client.post("/api/stream/chat", json=payload, headers=self.auth_headers)
         self.assertEqual(response.status_code, 200)
         
         # Swarm 模式下会有 5 个智能体并行 done 事件
@@ -213,7 +226,7 @@ class TestMultimodalChat(unittest.TestCase):
             "mode": "chat",
             "images": []
         }
-        response1 = self.client.post("/api/stream/chat", json=payload1)
+        response1 = self.client.post("/api/stream/chat", json=payload1, headers=self.auth_headers)
         self.assertEqual(response1.status_code, 200)
 
         # 检查数据库中已记录第一轮对话
@@ -254,7 +267,7 @@ class TestMultimodalChat(unittest.TestCase):
                 yield chunk
 
         with patch.object(AsyncDeterministicEducationLLM, 'generate_stream', mock_generate_stream):
-            response2 = self.client.post("/api/stream/chat", json=payload2)
+            response2 = self.client.post("/api/stream/chat", json=payload2, headers=self.auth_headers)
             self.assertEqual(response2.status_code, 200)
 
         # 验证传递给大模型的 user_prompt 中包含了第一轮的历史对话
@@ -264,3 +277,34 @@ class TestMultimodalChat(unittest.TestCase):
         self.assertIn("什么是梯度下降？", usr_p)
         self.assertIn(first_resp, usr_p)
         self.assertIn("它主要有哪些变体？", usr_p)
+
+    def test_visual_only_settings_are_not_dropped(self):
+        """视觉配置 alone should build a real visual route instead of defaulting to mock text."""
+        from swarm_factory import build_swarm_from_headers
+
+        headers = {
+            "x-edumatrix-multimodal-api-key": "fake-vision-key",
+            "x-edumatrix-multimodal-endpoint": "https://vision.example.test/v1/chat/completions",
+            "x-edumatrix-multimodal-model": "mock-vlm",
+        }
+
+        swarm = build_swarm_from_headers(headers)
+
+        self.assertEqual(type(swarm.llm).__name__, "MultimodalOnlyAsyncLLM")
+        self.assertTrue(getattr(swarm.llm, "has_external_vision", False))
+
+    def test_vision_connection_endpoint_warns_without_external_model(self):
+        """The evaluator-facing visual test must explain missing configuration."""
+        from unittest.mock import patch
+        from llm_client import AsyncDeterministicEducationLLM
+        from swarm_factory import _swarm_cache
+
+        with patch(
+            "swarm_factory.build_async_llm",
+            return_value=AsyncDeterministicEducationLLM(),
+        ):
+            _swarm_cache.clear()
+            response = self.client.get("/api/llm/test-vision", headers=self.auth_headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "warning")

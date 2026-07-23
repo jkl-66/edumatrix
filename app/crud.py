@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import StudentProfile, DimensionState, CauseBreakdown, KnowledgeTrace, AlignmentReport, ProfileEvidence, ProfileEvidenceSource
 from app.database import DBStudentProfile, DBAlignmentLog, DBNote, DBReviewPlan, DBConversationHistory
+from app.m1_profile_evidence import sync_legacy_profile_evidence
 
 def to_dict_safe(obj):
     """递归将 dataclass 转换为字典，安全避免 Enum/类型 循环递归"""
@@ -278,7 +279,7 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     db_profile.dimension_states = to_dict_safe(profile.dimension_states)
     db_profile.learning_state_causes = to_dict_safe(profile.learning_state_causes)
 
-    
+    sync_legacy_profile_evidence(db, db_profile)
     db.commit()
 
 def record_alignment_log(db: Session, student_id: str, report: AlignmentReport, target_concept: str) -> None:

@@ -4,6 +4,10 @@ import shutil
 import tempfile
 import unittest
 
+import pytest
+
+pytest.importorskip("faiss", reason="FAISS is an optional acceleration dependency")
+
 os.environ["EDUMATRIX_LLM_PROVIDER"] = "mock"
 os.environ["EDUMATRIX_EMBEDDING_PROVIDER"] = "hash"
 

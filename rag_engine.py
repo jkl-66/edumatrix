@@ -7,6 +7,7 @@ from typing import Any
 import math
 import re
 import concurrent.futures
+from datetime import datetime, timedelta, timezone
 
 from config import CONFIG
 from embedding_models import EMBEDDINGS
@@ -413,11 +414,42 @@ class HybridRAGPipeline:
         self.user_index.upsert(owned_evidence)
         TELEMETRY.record_metric("user_index.documents_ingested", len(evidence))
 
+    def ingest_course_documents(
+        self,
+        evidence: tuple[Evidence, ...],
+        course_id: str,
+        course_metadata: dict[str, object] | None = None,
+    ) -> None:
+        if not evidence:
+            return
+        if not course_id:
+            raise ValueError("course_id is required for course document ingestion")
+        shared_metadata = course_metadata or {}
+        course_evidence = tuple(
+            replace(
+                item,
+                metadata={
+                    **item.metadata,
+                    **shared_metadata,
+                    "owner_type": "course",
+                    "owner_id": course_id,
+                    "course_id": course_id,
+                    "visibility": "public",
+                },
+            )
+            for item in evidence
+        )
+        self.user_index.upsert(course_evidence)
+        TELEMETRY.record_metric("course_index.documents_ingested", len(evidence))
+
     @staticmethod
     def _visible_user_evidence(items: list[Evidence], owner_id: str) -> list[Evidence]:
-        if not owner_id:
-            return []
-        return [item for item in items if item.metadata.get("owner_id") == owner_id]
+        return [
+            item
+            for item in items
+            if item.metadata.get("visibility") == "public"
+            or (owner_id and item.metadata.get("owner_id") == owner_id)
+        ]
 
     def remove_user_documents(self, source: str, owner_id: str = "") -> None:
         if not owner_id:
@@ -434,9 +466,28 @@ class HybridRAGPipeline:
         if removed > 0:
             TELEMETRY.record_metric("user_index.documents_removed", removed)
 
+    def remove_course_documents(self, source: str, course_id: str) -> None:
+        if not course_id:
+            raise ValueError("course_id is required for course document removal")
+        matching_ids = [
+            item.id
+            for item in self.user_index._items.values()
+            if item.source == source
+            and item.metadata.get("owner_type") == "course"
+            and item.metadata.get("course_id") == course_id
+        ]
+        for item_id in matching_ids:
+            self.user_index._items.pop(item_id, None)
+        if matching_ids:
+            TELEMETRY.record_metric("course_index.documents_removed", len(matching_ids))
+
     def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k, profile: Any | None = None, disable_external: bool = False, doc_constraint: str | list[str] | None = None) -> RetrievalBundle:
         # === 关键修复：延迟加载，打破循环导入 ===
         from web_search_api import search_arxiv
+
+        # Mock mode is an explicit offline contract used by deterministic tests.
+        # External fallback would make those tests depend on DNS and public APIs.
+        disable_external = disable_external or CONFIG.llm_provider.lower() == "mock"
         
         with timed_span(TELEMETRY, "hybrid_rag.retrieve", top_k=top_k):
             # 清洗 query，避免将 "一键生成资源包: " 动作前缀和 "(知识点: ...)" 传入检索与向量搜索中
@@ -520,7 +571,10 @@ class HybridRAGPipeline:
                 candidates.extend(user_results)
 
                 # === 视频推荐数据接入 ===
-                if not disable_external:
+                # Do not inject generic fallback videos for an out-of-domain
+                # query: their fixed score could turn irrelevant evidence into
+                # a false high-confidence retrieval result.
+                if not disable_external and not out_of_domain:
                     try:
                         # 优先采用清洗后的具体查询进行检索，若无结果，再降级使用目标概念进行保底检索
                         videos = _search_videos_sync(cleaned_query, max_results=top_k)
@@ -868,9 +922,17 @@ def check_arxiv_cache(query: str) -> list[dict] | None:
 
 
         qh = _query_hash(query)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            seconds=CONFIG.cache_ttl_seconds
+        )
+        session.query(DBArxivCache).filter(DBArxivCache.cached_at < cutoff).delete(
+            synchronize_session=False
+        )
         cached = session.query(DBArxivCache).filter(
-            DBArxivCache.query_hash == qh
+            DBArxivCache.query_hash == qh,
+            DBArxivCache.cached_at >= cutoff,
         ).order_by(DBArxivCache.cached_at.desc()).limit(10).all()
+        session.commit()
 
         session.close()
 
@@ -925,6 +987,18 @@ def save_arxiv_cache(query: str, results: list[dict]) -> None:
             )
             session.add(entry)
 
+        # Keep this durable RAG cache bounded as well as time-limited.
+        keep_ids = [
+            row.id
+            for row in session.query(DBArxivCache.id)
+            .order_by(DBArxivCache.cached_at.desc())
+            .limit(CONFIG.cache_max_entries)
+            .all()
+        ]
+        if keep_ids:
+            session.query(DBArxivCache).filter(~DBArxivCache.id.in_(keep_ids)).delete(
+                synchronize_session=False
+            )
         session.commit()
         session.close()
     except Exception:

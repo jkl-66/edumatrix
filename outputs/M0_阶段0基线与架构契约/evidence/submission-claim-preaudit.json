@@ -1,0 +1,29 @@
+{
+  "files_scanned": 20,
+  "requires_review": 0,
+  "qualified": 0,
+  "errors": [],
+  "findings": [],
+  "scanned_files": [
+    "outputs/00015352介绍/00_评委阅读说明.md",
+    "outputs/00015352介绍/01_EduMatrix_评委最终技术文档.docx",
+    "outputs/00015352介绍/02_EduMatrix_完整技术文档总稿.md",
+    "outputs/00015352介绍/03_EduMatrix_系统设计与实现方案.md",
+    "outputs/00015352介绍/04_EduMatrix_API与数据字典.md",
+    "outputs/00015352介绍/05_EduMatrix_测试说明书.md",
+    "outputs/00015352介绍/06_EduMatrix_部署运维说明书.md",
+    "outputs/00015352介绍/07_EduMatrix_评委环境安装与复现备忘录.md",
+    "outputs/00015352介绍/08_EduMatrix_需求实现测试追踪矩阵.md",
+    "outputs/00015352介绍/09_EduMatrix_公开依据与引用清单.md",
+    "outputs/00015352介绍/10_EduMatrix_A3.pptx",
+    "outputs/00015352介绍/README.docx",
+    "outputs/00015352介绍/README.md",
+    "outputs/EduMatrix_A3_评委阅读版_方向A.pptx",
+    "outputs/EduMatrix_完整技术文档总稿.md",
+    "outputs/EduMatrix_测试说明书.md",
+    "outputs/EduMatrix_系统设计与实现方案.md",
+    "outputs/EduMatrix_评委最终技术文档.docx",
+    "outputs/EduMatrix_评委阅读说明.md",
+    "outputs/EduMatrix_需求实现测试追踪矩阵.md"
+  ]
+}

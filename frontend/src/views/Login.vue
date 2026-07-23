@@ -1,10 +1,11 @@
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { loginUser, registerUser, getStudentProfile } from '../api'
 import { BrainCircuit, LogIn, User, Lock, Eye, EyeOff, UserPlus } from '@lucide/vue'
 
 const router = useRouter()
+const route = useRoute()
 const isRegister = ref(false)
 
 // Input Fields
@@ -14,7 +15,7 @@ const displayName = ref('')
 const confirmPassword = ref('')
 
 const loading = ref(false)
-const error = ref('')
+const error = ref(route.query.reason === 'session-expired' ? '登录状态已失效，请重新登录' : '')
 const showPwd = ref(false)
 
 async function handleAction() {

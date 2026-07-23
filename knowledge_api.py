@@ -8,8 +8,9 @@ import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request, BackgroundTasks
 
-from app.database import DBKnowledgeDocument, run_db_op
+from app.database import DBCourse, DBCourseDocument, DBKnowledgeDocument, run_db_op
 from app.auth import enforce_student_access, get_current_user
+from app.legacy_repositories import LegacyReadRepository
 from config import CONFIG
 from document_parser import chunk_document, parse_uploaded_file, parse_pptx_slides, parse_pdf_visually
 from rag_engine import hybrid_rag
@@ -182,15 +183,38 @@ async def list_documents(
 ) -> list[dict[str, Any]]:
     student_id = enforce_student_access(student_id, current_user)
     def fetch_docs(session):
-        return (
-            session.query(DBKnowledgeDocument)
-            .filter(DBKnowledgeDocument.student_id.in_([student_id, "public", "system"]))
-            .order_by(DBKnowledgeDocument.created_at.desc())
-            .all()
-        )
-        
-    docs = await run_db_op(fetch_docs)
-    return [
+        return LegacyReadRepository(session).knowledge_library_rows(student_id)
+
+    legacy_documents, course_documents = await run_db_op(fetch_docs)
+    course_rows = [
+        {
+            "id": doc.id,
+            "filename": doc.filename,
+            "file_type": doc.file_type,
+            "file_size": doc.file_size,
+            "title": doc.title,
+            "content_preview": (doc.content or "")[:200],
+            "tags": doc.tags or [],
+            "chunk_count": doc.chunk_count,
+            "is_multimodal": False,
+            "multimodal_metadata": {},
+            "created_at": doc.created_at.isoformat() if doc.created_at else "",
+            "scope": "course",
+            "deletable": False,
+            "course_id": course.id,
+            "course_title": course.title,
+            "course_version": course.version,
+            "course_description": course.description,
+            "course_domain_pack": course.domain_pack,
+            "course_origin": course.content_origin,
+            "course_license": course.license_text,
+            "chapter_order": doc.chapter_order,
+            "content_hash": doc.content_hash,
+            "source_path": doc.source_path,
+        }
+        for doc, course in course_documents
+    ]
+    legacy_rows = [
         {
             "id": doc.id,
             "filename": doc.filename,
@@ -203,9 +227,13 @@ async def list_documents(
             "is_multimodal": doc.is_multimodal,
             "multimodal_metadata": doc.multimodal_metadata or {},
             "created_at": doc.created_at.isoformat() if doc.created_at else "",
+            "scope": "personal" if doc.student_id == student_id else "legacy_public",
+            "deletable": doc.student_id == student_id,
+            "owner_id": doc.student_id,
         }
-        for doc in docs
+        for doc in legacy_documents
     ]
+    return course_rows + legacy_rows
 
 
 
@@ -314,17 +342,12 @@ async def _generate_doc_guide_for_document(doc_id: str, student_id: str, text_co
             guide_data["faqs"] = []
         
         def update_doc_guide(session):
-            doc = session.query(DBKnowledgeDocument).filter(
-                DBKnowledgeDocument.id == doc_id,
-                DBKnowledgeDocument.student_id == student_id,
-            ).first()
-            if doc is None:
+            updated = LegacyReadRepository(session).set_document_guide(
+                doc_id, student_id, guide_data
+            )
+            if not updated:
                 print(f"  [DocGuide] 文档 {doc_id} 不存在，跳过")
                 return
-            meta = dict(doc.multimodal_metadata or {}) if doc.multimodal_metadata else {}
-            meta["doc_guide"] = guide_data
-            doc.multimodal_metadata = meta
-            session.commit()
             print(f"  [DocGuide] 文档 {doc_id} 导读已生成: {guide_data['brief_summary'][:50]}...")
 
         await run_db_op(update_doc_guide)
@@ -632,16 +655,39 @@ async def get_document(
     """获取单个知识库文档的完整详情（含完整文本内容）。"""
     student_id = enforce_student_access(student_id, current_user)
     def fetch_doc(session):
-        return (
-            session.query(DBKnowledgeDocument)
-            .filter(DBKnowledgeDocument.id == doc_id, DBKnowledgeDocument.student_id == student_id)
-            .first()
-        )
+        return LegacyReadRepository(session).knowledge_document_context(doc_id, student_id)
         
-    doc = await run_db_op(fetch_doc)
-    if not doc:
+    result = await run_db_op(fetch_doc)
+    if not result:
         raise HTTPException(status_code=404, detail="文档未找到")
-        
+    scope, doc, course = result
+    if scope == "course":
+        return {
+            "id": doc.id,
+            "filename": doc.filename,
+            "file_type": doc.file_type,
+            "file_size": doc.file_size,
+            "title": doc.title,
+            "content": doc.content or "无文本内容",
+            "tags": doc.tags or [],
+            "chunk_count": doc.chunk_count,
+            "is_multimodal": False,
+            "multimodal_metadata": {},
+            "created_at": doc.created_at.isoformat() if doc.created_at else "",
+            "scope": "course",
+            "deletable": False,
+            "course_id": course.id,
+            "course_title": course.title,
+            "course_version": course.version,
+            "course_description": course.description,
+            "course_domain_pack": course.domain_pack,
+            "course_origin": course.content_origin,
+            "course_license": course.license_text,
+            "chapter_order": doc.chapter_order,
+            "content_hash": doc.content_hash,
+            "source_path": doc.source_path,
+        }
+
     return {
         "id": doc.id,
         "filename": doc.filename,
@@ -654,6 +700,9 @@ async def get_document(
         "is_multimodal": doc.is_multimodal,
         "multimodal_metadata": doc.multimodal_metadata or {},
         "created_at": doc.created_at.isoformat() if doc.created_at else "",
+        "scope": "personal" if doc.student_id == student_id else "legacy_public",
+        "deletable": doc.student_id == student_id,
+        "owner_id": doc.student_id,
     }
 
 
@@ -665,21 +714,11 @@ async def delete_document(
 ) -> dict[str, str]:
     student_id = enforce_student_access(student_id, current_user)
     def do_delete(session):
-        doc = (
-            session.query(DBKnowledgeDocument)
-            .filter(DBKnowledgeDocument.id == doc_id, DBKnowledgeDocument.student_id.in_([student_id, "public", "system"]))
-            .first()
-        )
-        if not doc:
-            return None
-            
-        filename = doc.filename
-        file_type = doc.file_type or "txt"
-        session.delete(doc)
-        session.commit()
-        return filename, file_type
+        return LegacyReadRepository(session).delete_knowledge_document(doc_id, student_id)
 
     res = await run_db_op(do_delete)
+    if res in {"readonly_course", "readonly_public"}:
+        raise HTTPException(status_code=403, detail="公共课程和公共资料为只读内容，学生不能删除")
     if not res:
         raise HTTPException(status_code=404, detail="文档未找到")
 

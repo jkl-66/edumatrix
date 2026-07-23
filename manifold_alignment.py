@@ -7,9 +7,14 @@ import numpy as np
 from embedding_models import EMBEDDINGS
 from embedding_models import cosine_similarity
 from models import AlignmentReport
+from cache_utils import TTLBoundedCache
+from config import CONFIG
 
 
-_EMBED_CACHE: dict[str, tuple[float, ...]] = {}
+_EMBED_CACHE: TTLBoundedCache[str, tuple[float, ...]] = TTLBoundedCache(
+    maxsize=CONFIG.cache_max_entries,
+    ttl_seconds=CONFIG.cache_ttl_seconds,
+)
 
 # 确定性流形投影变换矩阵 W (384x384)，若存在离线训练的对齐矩阵则加载，否则使用确定性兜底矩阵
 import os

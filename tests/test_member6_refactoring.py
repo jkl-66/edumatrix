@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 import asyncio
+import time
 from fastapi.testclient import TestClient
 
 # Ensure environment variables are mock for LLM and Embedding
@@ -18,13 +19,21 @@ from mirt_engine import (
     mcmc_calibrate_item_parameters,
 )
 from quiz_api import _generate_quiz_id
+from tests.api_test_helpers import auth_headers
+from scripts.bootstrap_item_bank import bootstrap
 
 
 class Member6RefactorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         init_db()
+        bootstrap()
         cls.client = TestClient(app)
+        suffix = f"{os.getpid()}_{int(time.time())}"
+        cls.student_id = f"test-member6-{suffix}"
+        cls.eval_student_id = f"test-member6-eval-{suffix}"
+        cls.auth_headers = auth_headers(cls.client, cls.student_id)
+        cls.eval_auth_headers = auth_headers(cls.client, cls.eval_student_id)
 
     def test_sandbox_security_blocks_unsafe_imports(self):
         """验证安全沙箱是否成功阻断了恶意系统导入（防 RCE 逃逸）"""
@@ -64,9 +73,17 @@ class Member6RefactorTests(unittest.TestCase):
         self.assertTrue("安全拦截" in res_raw[1] or "禁用" in res_raw[1])
         self.assertEqual(res_raw[0], "")
 
-        # 验证安全模块 numpy 运行正常
-        self.assertIn("0", res_safe[0])
-        self.assertEqual(res_safe[1], "")
+        # 验证安全模块 numpy 运行正常；研究模式允许可信本机演示，
+        # disabled 模式必须拒绝执行，Docker 模式则验证真实输出。
+        if SANDBOX_RUNNER.mode == "trusted_local":
+            self.assertIn("0", res_safe[0])
+            self.assertEqual(res_safe[1], "")
+        elif SANDBOX_RUNNER.mode == "disabled":
+            self.assertEqual(res_safe[0], "")
+            self.assertTrue(res_safe[1])
+        else:
+            self.assertIn("0", res_safe[0])
+            self.assertEqual(res_safe[1], "")
 
     def test_sandbox_ast_blocks_reflection_and_eval(self):
         """验证 AST 静态验证器拦截双下划线反射逃逸与危险内置函数"""
@@ -101,9 +118,9 @@ class Member6RefactorTests(unittest.TestCase):
 
     def test_run_endpoint_50kb_dos_interception(self):
         """验证 API 路由入口前置 50KB 字节限制拦截，直接返回 400"""
-        payload_large = {"code": "print('hello')" * 10000, "language": "python", "student_id": "test-student"}
+        payload_large = {"code": "print('hello')" * 10000, "language": "python", "student_id": self.student_id}
         # 长度大于 50KB (14 * 10000 = 140000 字节)
-        response = self.client.post("/api/code/run", json=payload_large)
+        response = self.client.post("/api/code/run", json=payload_large, headers=self.auth_headers)
         self.assertEqual(response.status_code, 400)
         self.assertIn("长度超限", response.json()["detail"])
 
@@ -242,7 +259,7 @@ class Member6RefactorTests(unittest.TestCase):
         session = SessionLocal()
         try:
             from app.crud import load_student_profile
-            student_id = "test-eval-student"
+            student_id = self.eval_student_id
             quiz_id = "eval-test-quiz-123"
             
             # Clean up potential leftover record from previous runs
@@ -284,7 +301,11 @@ class Member6RefactorTests(unittest.TestCase):
                 "attempt_number": 1,
                 "duration_seconds": 12
             }
-            response = self.client.post("/api/quiz/evaluate", json=payload)
+            response = self.client.post(
+                "/api/quiz/evaluate",
+                json=payload,
+                headers=self.eval_auth_headers,
+            )
             self.assertEqual(response.status_code, 200)
             
             res_json = response.json()

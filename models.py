@@ -594,8 +594,11 @@ class StudentProfile:
             lines.append("不会原因占比:")
             for cause in sorted(self.learning_state_causes.values(), key=lambda item: item.percentage, reverse=True):
                 fragments = " / ".join(cause.evidence_fragments[:2]) or "暂无直接证据"
+                label = cause.label
+                if cause.key == LearningStateCause.MISCONCEPTION.value:
+                    label = f"{label}（误概念/易混点）"
                 lines.append(
-                    f"- {cause.label}: {cause.percentage:.1f}% "
+                    f"- {label}: {cause.percentage:.1f}% "
                     f"(confidence={cause.confidence:.2f}, evidence={cause.evidence_count})；证据={fragments}"
                 )
         return "\n".join(lines)

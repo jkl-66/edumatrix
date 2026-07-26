@@ -6,7 +6,7 @@ import {
   BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar,
   Presentation, Clock, GraduationCap, Library, Settings, UserCheck,
   GitBranch, BarChart3, TrendingUp, LogOut, Users, Flame, ShieldCheck,
-  PanelLeftClose, PanelLeftOpen, Search, Bell, Plus, Sparkles,
+  PanelLeftClose, PanelLeftOpen, Search, Bell, Plus, Sparkles, Workflow,
 } from '@lucide/vue'
 import { abortAllStreams } from './api'
 import SidebarItem from './components/ui/SidebarItem.vue'
@@ -61,6 +61,7 @@ watch(() => route.path, () => {
 const studentNav = [
   { path: '/', label: '学习仪表盘', group: '总览', icon: LayoutDashboard },
   { path: '/learn', label: '智能对话', group: '学习空间', icon: MessageSquare },
+  { path: '/golden-loop', label: '黄金闭环', group: '学习空间', icon: Workflow },
   { path: '/student-analysis', label: '学习画像', group: '学习空间', icon: UserCheck },
   { path: '/learning-path', label: '学习路径', group: '学习空间', icon: GitBranch },
   { path: '/notes', label: '学习笔记', group: '知识管理', icon: StickyNote },
@@ -96,7 +97,7 @@ const pageTitle = computed(() => {
     '/wrong-questions': '错题本', '/notes': '学习笔记', '/review': '复习计划',
     '/revision-calendar': '复习日历', '/history': '对话历史', '/knowledge': '知识库',
     '/profile': '学习画像', '/teacher': '教学看板', '/settings': '设置',
-    '/student-analysis': '学习画像', '/internal/objects': '对象检查',
+    '/student-analysis': '学习画像', '/internal/objects': '对象检查', '/golden-loop': '单画像黄金闭环',
   }
   return map[route.path] || (role.value === 'teacher' ? '教学看板' : 'EduMatrix')
 })

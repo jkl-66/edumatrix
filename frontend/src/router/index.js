@@ -17,6 +17,7 @@ const WrongQuestionBook = () => import('../views/WrongQuestionBook.vue')
 const RevisionCalendar = () => import('../views/RevisionCalendar.vue')
 const StudentAnalysis = () => import('../views/StudentAnalysis.vue')
 const InternalObjectInspector = () => import('../views/InternalObjectInspector.vue')
+const GoldenLoop = () => import('../views/GoldenLoop.vue')
 
 function requireAuth() {
   const token = localStorage.getItem('edumatrix_token')
@@ -78,6 +79,7 @@ const routes = [
   },
   { path: '/', name: 'Dashboard', component: Dashboard, beforeEnter: requireAuth, meta: { requiresAuth: true } },
   { path: '/learn', name: 'Learn', component: Chat, beforeEnter: requireAuth, meta: { requiresAuth: true, courseScoped: true } },
+  { path: '/golden-loop', name: 'GoldenLoop', component: GoldenLoop, beforeEnter: requireAuth, meta: { requiresAuth: true, courseScoped: true } },
   { path: '/notes', name: 'Notes', component: Notes, beforeEnter: requireAuth },
   { path: '/review', name: 'Review', component: Review, beforeEnter: requireAuth },
   { path: '/teacher', name: 'Teacher', component: Teacher, beforeEnter: requireTeacher, alias: ['/teacher/overview'], meta: { requiresAuth: true, roles: ['teacher', 'admin'] } },

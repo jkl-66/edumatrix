@@ -48,6 +48,7 @@ Thumbs.db
 # Logs
 logs/
 *.log
+.tmp/
 
 # oh-my-agent runtime (local artifacts — do not commit)
 .antigravitycli/

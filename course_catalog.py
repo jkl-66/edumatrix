@@ -44,12 +44,25 @@ def _document_id(course_id: str, relative_path: str) -> str:
     return hashlib.sha256(f"{course_id}:{relative_path}".encode("utf-8")).hexdigest()[:20]
 
 
+def _stable_object_id(kind: str, *parts: str) -> str:
+    identity = ":".join(str(part) for part in parts)
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+    return f"{kind}-{digest}"
+
+
 def _extract_title(content: str, fallback: str) -> str:
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith("# "):
             return stripped[2:].strip() or fallback
     return fallback
+
+
+def _canonical_manifest_bytes(path: Path, raw: bytes) -> bytes:
+    """Return the platform-independent bytes covered by the course manifest."""
+    if path.suffix.lower() in {".md", ".txt", ".csv", ".json"}:
+        return raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return raw
 
 
 def load_m0_course_bundle(manifest_path: Path = MANIFEST_PATH) -> dict[str, Any]:
@@ -60,7 +73,7 @@ def load_m0_course_bundle(manifest_path: Path = MANIFEST_PATH) -> dict[str, Any]
     for chapter_order, item in enumerate(manifest["files"]):
         relative_path = str(item["path"])
         path = M0_DIR / relative_path
-        raw = path.read_bytes()
+        raw = _canonical_manifest_bytes(path, path.read_bytes())
         actual_hash = hashlib.sha256(raw).hexdigest().upper()
         expected_hash = str(item["sha256"]).upper()
         if len(raw) != int(item["bytes"]) or actual_hash != expected_hash:
@@ -184,6 +197,7 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
         )
         if point is None:
             point = DBKnowledgePoint(
+                id=_stable_object_id("kp", gold["domain_id"], item["id"], gold["gold_version"]),
                 domain_pack=gold["domain_id"],
                 code=item["id"],
                 version=gold["gold_version"],
@@ -208,6 +222,7 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
         )
         if source is None:
             source = DBSourceDocument(
+                id=_stable_object_id("src", course["id"], item["id"]),
                 course_id=course["id"], legacy_document_id=item["id"]
             )
             session.add(source)
@@ -232,6 +247,7 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
         )
         if chapter is None:
             chapter = DBChapter(
+                id=_stable_object_id("ch", course["id"], stable_key),
                 course_id=course["id"],
                 source_document_id=source.id,
                 stable_key=stable_key,
@@ -257,6 +273,7 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
         )
         if source_ref is None:
             source_ref = DBSourceRef(
+                id=_stable_object_id("ref", source.id, PARSER_VERSION),
                 source_document_id=source.id,
                 chapter_id=chapter.id,
                 parser_version=PARSER_VERSION,

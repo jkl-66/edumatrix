@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from typing import Any
 
@@ -22,6 +23,24 @@ from app.database import (
     DBTaskEvent,
     DBTaskStep,
 )
+
+
+def _learner_safe_content(artifact_type: str, content: str) -> str:
+    if artifact_type != "tiered_quiz":
+        return content
+    try:
+        from app.m2_contracts import TieredQuizArtifact
+
+        quiz = TieredQuizArtifact.model_validate(json.loads(content))
+        return json.dumps(
+            quiz.learner_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    except Exception:
+        return json.dumps(
+            {"artifact_type": "tiered_quiz", "status": "restricted_invalid_content"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
 
 class M1Repository:
@@ -131,7 +150,8 @@ class M1Repository:
                 "status": artifact.status, "current_version_id": artifact.current_version_id,
                 "creating_task_id": artifact.creating_task_id,
                 "versions": [{"id": version.id, "version_number": version.version_number,
-                              "content": version.content, "content_format": version.content_format,
+                              "content": _learner_safe_content(artifact.artifact_type, version.content),
+                              "content_format": version.content_format,
                               "content_hash": version.content_hash, "metadata": version.metadata_json or {},
                               "created_task_id": version.created_task_id} for version in versions],
                 "relations": [{"id": relation.id, "source_artifact_id": relation.source_artifact_id,

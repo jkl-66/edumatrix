@@ -41,7 +41,11 @@ def seed_rag_domain_pack(session: Any) -> dict[str, int | str]:
     kp_gold = json.loads((M0 / "datasets" / "core_knowledge_points.json").read_text(encoding="utf-8"))
     pack = session.query(DBDomainPack).filter_by(domain_key=kp_gold["domain_id"]).first()
     if pack is None:
-        pack = DBDomainPack(domain_key=kp_gold["domain_id"], title="RAG 工程与幻觉评测")
+        pack = DBDomainPack(
+            id="dp-rag-engineering-m0",
+            domain_key=kp_gold["domain_id"],
+            title="RAG 工程与幻觉评测",
+        )
         session.add(pack)
         session.flush()
     payload = {
@@ -54,7 +58,11 @@ def seed_rag_domain_pack(session: Any) -> dict[str, int | str]:
     }
     version = session.query(DBDomainVersion).filter_by(domain_pack_id=pack.id, version=kp_gold["gold_version"]).first()
     if version is None:
-        version = DBDomainVersion(domain_pack_id=pack.id, version=kp_gold["gold_version"])
+        version = DBDomainVersion(
+            id="dv-rag-kp-0-1",
+            domain_pack_id=pack.id,
+            version=kp_gold["gold_version"],
+        )
         session.add(version)
     for key, value in payload.items():
         setattr(version, key, value)

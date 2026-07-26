@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.database import (
     DBChapter,
     DBChapterKnowledgePoint,
@@ -11,6 +13,7 @@ from app.database import (
 from course_catalog import (
     CHAPTER_KP_CODES,
     PARSER_VERSION,
+    _canonical_manifest_bytes,
     load_m0_course_bundle,
     upsert_course_bundle,
 )
@@ -20,6 +23,10 @@ from tests.api_test_helpers import auth_headers
 
 
 COURSE_ID = "course-rag-engineering-m0"
+
+
+def test_course_manifest_bytes_are_stable_across_windows_line_endings():
+    assert _canonical_manifest_bytes(Path("lesson.md"), b"first\r\nsecond\r\n") == b"first\nsecond\n"
 
 
 def test_course_bundle_projects_to_canonical_sources_idempotently():

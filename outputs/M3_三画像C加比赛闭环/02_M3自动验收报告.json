@@ -1,0 +1,104 @@
+{
+  "schema_version": "m3.acceptance-report.v1",
+  "generated_at": "2026-07-26T16:17:26+08:00",
+  "stage": "M3",
+  "overall_status": "partial",
+  "stage_exit_authorized": false,
+  "scope": "三画像 C+ 比赛闭环与一个受限交互技能工件",
+  "checks": [
+    {
+      "id": "m3-focused-backend",
+      "status": "passed",
+      "command": "python -m pytest -q <all tests/test_m3_*.py>",
+      "result": "31 passed, 8 warnings in 15.30s",
+      "claim_boundary": "结构化替身只证明契约、流程、权限、脱敏、持久化和确定性规则，不证明真实模型语义质量"
+    },
+    {
+      "id": "m2-regression",
+      "status": "passed",
+      "command": "python -m pytest -q <all tests/test_m2_*.py>",
+      "result": "31 passed, 5 warnings in 9.94s"
+    },
+    {
+      "id": "m1-regression",
+      "status": "passed",
+      "command": "python -m pytest -q <all tests/test_m1_*.py>",
+      "result": "44 passed, 5 warnings in 17.47s"
+    },
+    {
+      "id": "frontend-production-build",
+      "status": "passed",
+      "command": "npm.cmd --prefix frontend run build",
+      "result": "3063 modules transformed; production build completed"
+    },
+    {
+      "id": "authenticated-api-e2e",
+      "status": "passed_with_test_doubles",
+      "result": "JWT owner boundary, profile binding, four roles, learner-safe resources, debate, matching, proposed decision, interactive hidden acceptance and SE-4 evidence covered",
+      "claim_boundary": "生成器和审核器使用结构化确定性测试替身"
+    },
+    {
+      "id": "browser-ui",
+      "status": "passed_for_frontend_contract",
+      "result": "desktop 1440x900 and mobile 390x844 rendered; mobile page 390/390 and page head 286/286 with no internal overflow; keyboard Enter refresh retained focus; persisted advanced profile and diagnosis step restored after reload; console contained no errors or warnings"
+    },
+    {
+      "id": "configured-local-model-e2e",
+      "status": "blocked",
+      "result": "diagnosis completed, then local deterministic provider returned non-JSON and generation stopped with 'M3 generator did not return raw JSON'",
+      "required_action": "configure a structured JSON-capable generation and review provider, then rerun all four roles in the browser"
+    },
+    {
+      "id": "full-backend-regression",
+      "status": "failed_external_prerequisites",
+      "command": "python -m pytest -q",
+      "result": "265 passed, 7 failed, 6 warnings in 55.02s",
+      "failures": {
+        "missing_animation_assets": 6,
+        "missing_visrag_patch_assets": 1
+      }
+    },
+    {
+      "id": "project-runtime",
+      "status": "passed",
+      "command": ".venv/Scripts/python.exe scripts/runtime_preflight.py && .venv/Scripts/python.exe -m pytest -q tests/test_runtime_launcher.py",
+      "result": "runtime preflight PASS; 5 passed in 0.80s",
+      "claim_boundary": "本地 `.venv` 使用 system-site-packages 且不进入 Git；证明当前工作区启动器/worker 解释器一致，不替代部署环境安装"
+    },
+    {
+      "id": "visrag-evidence-integrity",
+      "status": "passed_fail_closed",
+      "result": "removed seven builtin image records that referenced nonexistent textbook patches; VisRAG now accepts only traced image evidence backed by an existing file under data/patches",
+      "claim_boundary": "不证明 7 张正式 patch 已部署；缺失资产继续保留为回归失败"
+    },
+    {
+      "id": "cold-start-safety",
+      "status": "passed",
+      "command": "python -m pytest -q tests/test_m3_cold_start.py",
+      "result": "6 passed in 0.22s",
+      "claim_boundary": "验证路径、扫描隔离、原子发布、不完整仓库拒绝和空索引拒绝，不代表远端教材已下载"
+    },
+    {
+      "id": "real-faiss-reproduction",
+      "status": "blocked_external_transfer",
+      "result": "cold-start commands were executed; GitHub metadata was reachable, but repository pack/blob transfers failed or stalled. A codeload probe downloaded 890346 bytes at about 26 KB/s. Ingestion found 0 extractable files/chunks, exited 1, and wrote no empty index",
+      "required_action": "provide a stable/high-throughput source mirror or prebuilt approved textbook data, then rerun collection, ingestion, index loading and retrieval checks"
+    }
+  ],
+  "exit_conditions": {
+    "three_gold_profiles": "passed",
+    "four_role_persistence": "passed",
+    "personalized_resource_contracts": "passed_with_test_doubles",
+    "evidence_debate": "passed_with_test_doubles",
+    "matching_and_proposed_decision": "passed",
+    "restricted_interactive_skill": "passed_in_deterministic_simulation",
+    "authenticated_frontend": "passed",
+    "desktop_mobile_keyboard_restore": "passed",
+    "configured_model_browser_loop": "blocked",
+    "real_faiss_loop": "blocked_external_transfer",
+    "project_runtime": "passed",
+    "visrag_missing_asset_behavior": "passed_fail_closed",
+    "full_regression": "failed"
+  },
+  "next_required_gate": "配置可返回严格 JSON 的真实生成/审核模型，准备真实 data/ 与媒体资源，再执行三画像完整浏览器对照和全量回归"
+}

@@ -18,8 +18,9 @@ import nbformat
 from models import Evidence, EvidenceModality
 from vector_store_faiss import FaissVectorIndex
 
-BASE = Path(r"d:\code\edumatrix")
+BASE = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE / "data"
+RAW_DATA_DIR = DATA_DIR / "raw"
 FAISS_DIR = BASE / "data" / "faiss_indexes"
 FAISS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -370,6 +371,9 @@ def build_category_index(cat_name: str, cat_label: str, files_by_type: dict[str,
     TOTAL_STATS[cat_name]["chunks"] = total_chunks
 
     save_path = FAISS_DIR / f"{cat_name}_index"
+    if total_chunks == 0:
+        print("  -> No extractable chunks; index was not written")
+        return index
     index.save(save_path)
     print(f"  -> Indexed {total_files} files -> {total_chunks} chunks")
     print(f"  -> Saved to {save_path}")
@@ -378,11 +382,16 @@ def build_category_index(cat_name: str, cat_label: str, files_by_type: dict[str,
     return index
 
 
-def classify_files():
-    """Classify all files under data/ into categories."""
+def classify_files(source_dir: Path | None = None):
+    """Classify downloaded cold-start sources without scanning user uploads or indexes."""
+    source_dir = RAW_DATA_DIR if source_dir is None else source_dir
     files_by_ext = defaultdict(list)
-    for fpath in DATA_DIR.rglob("*"):
+    if not source_dir.exists():
+        return {category: {} for category in CATEGORIES}
+    for fpath in source_dir.rglob("*"):
         if not fpath.is_file():
+            continue
+        if any(part.startswith(".") for part in fpath.relative_to(source_dir).parts):
             continue
         ext = fpath.suffix.lower()
         skip_exts = {".gitkeep", ".gitignore", ".png", ".jpg", ".jpeg", ".gif", ".svg"}
@@ -439,4 +448,7 @@ if __name__ == "__main__":
     total_all = sum(s["chunks"] for s in TOTAL_STATS.values())
     total_files = sum(s["files"] for s in TOTAL_STATS.values())
     print(f"  {'TOTAL':20s}: {total_files:4d} files -> {total_all:6d} chunks")
-    print(f"\nIndexes saved to {FAISS_DIR}")
+    if total_all == 0:
+        print("\nNo extractable cold-start sources were found; FAISS indexes were not created.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"\nFAISS indexes created successfully under {FAISS_DIR}")

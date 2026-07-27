@@ -286,7 +286,11 @@ def main() -> int:
             elif source.kind == "direct":
                 download_source(source, force=args.force)
         except Exception as exc:
-            append_event({"event": "download_error", "source": source.key, "error": str(exc)})
+            event = {"event": "download_error", "source": source.key, "error": str(exc)}
+            stderr = getattr(exc, "stderr", None)
+            if stderr:
+                event["stderr"] = stderr[-2000:]
+            append_event(event)
             print(f"[error] {source.key}: {exc}", file=sys.stderr)
 
     write_asset_inventory()
@@ -338,9 +342,42 @@ def clone_source(source: Source, *, force: bool) -> None:
     if target.exists() and force:
         shutil.rmtree(target)
     if target.exists():
+        completed = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "--verify", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(f"incomplete existing repository: {target}")
         append_event({"event": "skip_existing_repo", "source": source.key, "path": str(target)})
         return
-    subprocess.run(["git", "clone", "--depth", "1", source.url, str(target)], check=True)
+
+    partial = target.with_name(f".{target.name}.partial")
+    if partial.exists():
+        shutil.rmtree(partial)
+    try:
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "http.lowSpeedLimit=1024",
+                "-c",
+                "http.lowSpeedTime=60",
+                "clone",
+                "--depth",
+                "1",
+                source.url,
+                str(partial),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        partial.replace(target)
+    except Exception:
+        if partial.exists():
+            shutil.rmtree(partial)
+        raise
     append_event({"event": "cloned_repo", "source": source.key, "path": str(target)})
 
 

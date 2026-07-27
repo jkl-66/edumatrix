@@ -148,11 +148,55 @@ def _create_profile_evidence_table(connection: Any) -> None:
         connection.execute(sa.text(statement))
 
 
+def _install_m4_evaluation_integrity(connection: Any) -> None:
+    required = {"evaluation_annotations", "evaluation_reports"}
+    actual = set(sa.inspect(connection).get_table_names())
+    missing = sorted(required - actual)
+    if missing:
+        raise RuntimeError(f"M4 evaluation migration missing tables: {missing}")
+    for statement in (
+        """CREATE TRIGGER IF NOT EXISTS trg_evaluation_annotation_immutable_update
+        BEFORE UPDATE ON evaluation_annotations BEGIN
+        SELECT RAISE(ABORT, 'evaluation annotation is immutable'); END""",
+        """CREATE TRIGGER IF NOT EXISTS trg_evaluation_annotation_immutable_delete
+        BEFORE DELETE ON evaluation_annotations BEGIN
+        SELECT RAISE(ABORT, 'evaluation annotation is immutable'); END""",
+        """CREATE TRIGGER IF NOT EXISTS trg_evaluation_report_immutable_update
+        BEFORE UPDATE ON evaluation_reports BEGIN
+        SELECT RAISE(ABORT, 'evaluation report is immutable'); END""",
+        """CREATE TRIGGER IF NOT EXISTS trg_evaluation_report_immutable_delete
+        BEFORE DELETE ON evaluation_reports BEGIN
+        SELECT RAISE(ABORT, 'evaluation report is immutable'); END""",
+    ):
+        connection.execute(sa.text(statement))
+
+
+def _install_m5_model_call_integrity(connection: Any) -> None:
+    if "model_calls" not in set(sa.inspect(connection).get_table_names()):
+        raise RuntimeError("M5 model gateway migration missing table: model_calls")
+    for statement in (
+        """CREATE TRIGGER IF NOT EXISTS trg_model_call_state_insert BEFORE INSERT ON model_calls
+        WHEN NEW.status NOT IN ('running','completed','failed')
+          OR NEW.input_tokens < 0 OR NEW.output_tokens < 0 OR NEW.retry_count < 0
+          OR NEW.estimated_cost < 0 OR NEW.duration_ms < 0
+        BEGIN SELECT RAISE(ABORT, 'invalid model call state'); END""",
+        """CREATE TRIGGER IF NOT EXISTS trg_model_call_state_update
+        BEFORE UPDATE OF status,input_tokens,output_tokens,retry_count,estimated_cost,duration_ms ON model_calls
+        WHEN NEW.status NOT IN ('running','completed','failed')
+          OR NEW.input_tokens < 0 OR NEW.output_tokens < 0 OR NEW.retry_count < 0
+          OR NEW.estimated_cost < 0 OR NEW.duration_ms < 0
+        BEGIN SELECT RAISE(ABORT, 'invalid model call state'); END""",
+    ):
+        connection.execute(sa.text(statement))
+
+
 MIGRATIONS = (
     Migration("20260723_001", "M1 unified identity and domain-object baseline", _record_m1_foundation),
     Migration("20260723_002", "M1 role and lifecycle database integrity triggers", _install_integrity_triggers),
     Migration("20260723_003", "M1 immutable evaluation and enterprise tenant integrity", _install_m1_governance_triggers),
     Migration("20260723_004", "M1 normalized profile evidence projection", _create_profile_evidence_table),
+    Migration("20260727_005", "M4 immutable evaluation annotations and reports", _install_m4_evaluation_integrity),
+    Migration("20260727_006", "M5 model gateway call trace integrity", _install_m5_model_call_integrity),
 )
 
 

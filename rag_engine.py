@@ -18,6 +18,9 @@ from observability import TELEMETRY, timed_span
 from vector_store import create_index
 from vector_store import InMemoryVectorIndex, VectorIndex
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+PATCHES_ROOT = PROJECT_ROOT / "data" / "patches"
+
 def _tokens(text: str) -> set[str]:
     lower = text.lower()
     words = set(re.findall(r"[a-zA-Z0-9_+\-.]+|[\u4e00-\u9fff]{2,}", lower))
@@ -263,27 +266,31 @@ class GraphRAG:
 
 class VisRAG:
     def __init__(self, index: VectorIndex | None = None) -> None:
-        file_evidence = load_seed_evidence()
-        if file_evidence:
-            self.patch_db = tuple(e for e in file_evidence if e.modality == EvidenceModality.IMAGE)
-        else:
-            self.patch_db = self._builtin_image_evidence()
-        if not self.patch_db:
-            self.patch_db = self._builtin_image_evidence()
+        self.patch_db = self._verified_image_evidence(load_seed_evidence())
         self.index = index or InMemoryVectorIndex("visrag-image-patches")
         self.index.upsert(self.patch_db)
 
     @staticmethod
-    def _builtin_image_evidence() -> tuple[Evidence, ...]:
-        return (
-            Evidence(id="IMG_PATCH_POOL_01", title="2x2 最大池化矩阵演算图", content="4x4 输入特征图经 2x2 Max Pooling 和 stride=2 变为 2x2 输出矩阵，窗口输出等于局部最大值。", modality=EvidenceModality.IMAGE, source="教材图像切片 PDF:P45", tags=("池化层","Pooling","最大池化","特征图"), anchors=("MaxPool2d","2x2","局部最大值"), metadata={"raw_image_ref":"data/patches/pooling_2x2.png","page":45}),
-            Evidence(id="IMG_PATCH_POOL_02", title="平均池化对照图", content="Average Pooling 对窗口内数值求均值，适合说明它与最大池化的语义差异。", modality=EvidenceModality.IMAGE, source="教材图像切片 PDF:P46", tags=("池化层","平均池化","Pooling"), anchors=("AvgPool2d","mean","均值"), metadata={"raw_image_ref":"data/patches/avg_pooling.png","page":46}),
-            Evidence(id="IMG_PATCH_CONV_01", title="卷积核滑动与步长示意图", content="卷积核在输入特征图上按 stride 滑动，对局部区域做点积累加形成新的特征图。", modality=EvidenceModality.IMAGE, source="教材图像切片 PDF:P42", tags=("卷积核","卷积运算","步长","特征图"), anchors=("kernel","stride","dot product"), metadata={"raw_image_ref":"data/patches/conv_stride.png","page":42}),
-            Evidence(id="IMG_PATCH_MATH_01", title="反向传播链式法则推导", content="保留微积分公式原始排版，展示损失函数对参数求导时的链式法则展开。", modality=EvidenceModality.IMAGE, source="数学手册图像切片 P12", tags=("反向传播","链式法则","偏导数"), anchors=("gradient","partial derivative"), metadata={"raw_image_ref":"data/patches/backprop_math.png","page":12}),
-            Evidence(id="IMG_PATCH_ML_PIPELINE_01", title="机器学习项目流程图", content="机器学习实践通常从数据理解、数据预处理、特征工程开始，随后训练模型、验证泛化能力并迭代选择模型。", modality=EvidenceModality.IMAGE, source="机器学习课程图像切片 ML:P03", tags=("机器学习","数据预处理","特征工程","模型评估"), anchors=("pipeline","train-test split","cross validation"), metadata={"raw_image_ref":"data/patches/ml_pipeline.png","page":3}),
-            Evidence(id="IMG_PATCH_OVERFIT_01", title="过拟合与欠拟合曲线", content="训练误差持续下降而验证误差上升时通常意味着过拟合，可通过正则化、交叉验证和简化模型缓解。", modality=EvidenceModality.IMAGE, source="机器学习课程图像切片 ML:P18", tags=("过拟合","正则化","交叉验证","模型泛化"), anchors=("overfitting","validation error","regularization"), metadata={"raw_image_ref":"data/patches/overfit_curve.png","page":18}),
-            Evidence(id="IMG_PATCH_CONFUSION_01", title="混淆矩阵与分类指标图", content="混淆矩阵展示 TP、FP、FN、TN，可进一步计算 accuracy、precision、recall 和 F1。", modality=EvidenceModality.IMAGE, source="机器学习课程图像切片 ML:P25", tags=("模型评估","混淆矩阵","分类指标","逻辑回归"), anchors=("precision","recall","F1","confusion matrix"), metadata={"raw_image_ref":"data/patches/confusion_matrix.png","page":25}),
-        )
+    def _verified_image_evidence(items: tuple[Evidence, ...]) -> tuple[Evidence, ...]:
+        project_root = PROJECT_ROOT
+        patches_root = PATCHES_ROOT.resolve()
+        verified = []
+        for item in items:
+            if item.modality != EvidenceModality.IMAGE or not item.source.strip():
+                continue
+            raw_ref = str(item.metadata.get("raw_image_ref", "")).strip()
+            if not raw_ref:
+                continue
+            image_path = Path(raw_ref)
+            if not image_path.is_absolute():
+                image_path = project_root / image_path
+            try:
+                image_path.resolve().relative_to(patches_root)
+            except ValueError:
+                continue
+            if image_path.is_file():
+                verified.append(item)
+        return tuple(verified)
 
     def search(self, query: str, top_k: int = 3) -> list[dict[str, object]]:
         ranked = self.search_evidence(query, top_k)

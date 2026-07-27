@@ -155,7 +155,8 @@ def _ensure_benchmark_plan(
     snapshot: DBProfileSnapshot,
     profile: M3GoldProfile,
 ) -> DBPlanVersion:
-    plan_id = f"pd-{profile.archetype}-m3-v1"
+    owner_scope = hashlib.sha256(task.owner_public_id.encode("utf-8")).hexdigest()[:16]
+    plan_id = f"pd-{profile.archetype}-{owner_scope}-m3-v1"
     plan = session.query(DBPlanDraft).filter_by(id=plan_id).first()
     if plan is None:
         plan = DBPlanDraft(
@@ -184,7 +185,7 @@ def _ensure_benchmark_plan(
     version = session.query(DBPlanVersion).filter_by(plan_draft_id=plan.id, version_number=1).first()
     if version is None:
         version = DBPlanVersion(
-            id=f"pv-{profile.archetype}-m3-v1",
+            id=f"pv-{profile.archetype}-{owner_scope}-m3-v1",
             plan_draft_id=plan.id,
             version_number=1,
             profile_snapshot_id=snapshot.id,

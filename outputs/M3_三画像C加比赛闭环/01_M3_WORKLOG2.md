@@ -114,3 +114,51 @@
 - 修改文件：`app/m3_interactive.py`、`tests/test_m3_interactive.py`、M3 索引和本日志。
 - 下一步：增加认证 API 和三画像/四角色/辩论/匹配/交互前端，并执行专项与构建验证。
 - 时间：2026-07-26（Asia/Shanghai）。
+
+## WL2-M3-20260726-010 - 认证 API、三画像竞赛工作台与浏览器验收
+
+- 状态：`PASS`（M3-011）
+- 认证边界：新增 `/api/v1/m3` 路由，创建任务只接受金标 `profile_id` 和幂等键；服务端将不可变画像绑定到当前 JWT owner，后续从正式 `m3.context.verified` 事件恢复上下文，跨 owner 返回 403。
+- 流程接口：覆盖任务创建/恢复、四角色运行、三类资源、原子事实辩论、匹配报告、proposed decision、交互 manifest/session/action/evidence 和脱敏 bundle；学习者输出移除 quiz 答案/解释、Prompt、密钥和画像理由。
+- 多用户修复：基准 plan/version ID 增加 owner 稳定作用域，消除不同用户选择同一画像时的 `benchmark_plan_conflict`，同一 owner 仍幂等复用。
+- 前端：新增 `/competition-loop` 工作台与导航，包含三画像差异、四角色轨、lesson/lab/quiz、辩论裁决、推荐区间/盲区、proposed decision、参数实验、故障诊断、隐藏验收、提示和技能证据状态。
+- 浏览器：1440x900 桌面和 390x844 移动均渲染；移动页面宽度 `390/390`、页头 `286/286`、内部溢出列表为空；键盘 Enter 刷新后焦点仍在刷新按钮，进阶画像和诊断完成状态可从服务端恢复；控制台无 error/warning。
+- 浏览器边界：当前 deterministic provider 在真实生成端点返回非 JSON；浏览器任务停在诊断完成、领域生成待执行，并显示 `M3 generator did not return raw JSON`。这证明失败可见和恢复，不证明真实模型内容质量或完整业务 E2E。
+- 聚焦验证：全部 M3 为 `25 passed, 5 warnings in 15.19s`；M2 回归 `31 passed`；M1 回归 `44 passed`；前端生产构建通过。API 测试的生成/审核使用结构化替身。
+- 修改文件：`app/m3_api.py`、`app/m3_matching.py`、`app/main.py`、`tests/test_m3_api.py`、`frontend/src/api/m3.js`、`frontend/src/api/index.js`、`frontend/src/router/index.js`、`frontend/src/App.vue`、`frontend/src/views/M3CompetitionLoop.vue`、M3 索引和本日志。
+- 下一步：配置严格 JSON 模型并准备真实 FAISS/媒体资源，完成三画像真实浏览器全链路与全量门禁。
+- 时间：2026-07-26（Asia/Shanghai）。
+
+## WL2-M3-20260726-011 - M3 自动验收审计与已知限制
+
+- 状态：`PENDING`（M3-012）
+- 产物：生成 `02_M3自动验收报告.json` 与 `03_M3已知限制.md`，逐项记录通过、替身边界、浏览器证据、外部前置条件和退出授权。
+- 全量结果：`254 passed, 9 failed, 6 warnings in 57.41s`。失败分布为 6 项动画目录/视频、1 项 VisRAG patch 图片、1 项 M0 manifest 字节不匹配、1 项项目 `.venv` 解释器不匹配。
+- 真实检索：未运行教材下载与 FAISS ingestion；交互工件继续明确为安全确定性模拟，不把模拟指标写成真实检索性能。
+- 退出审计：三画像、四角色、个性化资源契约、辩论、匹配/决策、交互工件、认证前端与响应式浏览器证据已具备；配置模型真实闭环、真实 FAISS 和全量回归未满足，故 `stage_exit_authorized=false`。
+- 下一步：M3-012 保持 `PENDING`，不自动进入 M4。
+- 时间：2026-07-26（Asia/Shanghai）。
+
+## WL2-M3-20260726-012 - 冷启动实跑与 FAISS 假阳性防护
+
+- 状态：`PENDING`（M3-012）
+- 冷启动实跑：执行 `python scripts/collect_ml_multimodal_data.py --download`。GitHub `ls-remote` 可达，但多个仓库的 pack/blob 传输返回 128 或长时间无进展；GitHub 官方 codeload 探测成功下载 `890346` 字节，平均仅约 `26 KB/s`，按候选池体量不适合在本轮继续全量下载。
+- 采集器加固：仓库先克隆到隐藏 `.partial` 目录，完成后原子发布；已存在但无有效 `HEAD` 的目录不再静默跳过；失败自动清理 partial，保留 stderr 供事件审计，并增加低速保护。
+- 摄取边界：`ingest_to_faiss.py` 改为仓库相对路径，只扫描 `data/raw`，排除 `data/uploads`、既有索引、`.git` 和 `.partial`；本轮真实执行得到 `0 files -> 0 chunks`，退出码 1，未写入空索引，不宣称 FAISS 成功。
+- 跨平台修复：M0 manifest 测试改用生产代码相同的规范化字节，Windows CRLF 不再造成伪失败。
+- 验证：冷启动/基线聚焦 `16 passed`，M3 全集 `31 passed, 8 warnings in 15.30s`；全量 `261 passed, 8 failed, 6 warnings in 55.11s`。剩余失败为 6 项动画、1 项 VisRAG patch 和 1 项缺少项目 `.venv`，M0 manifest 失败已消除。
+- 数据清理：仅删除本轮失败 clone 产生的残缺 Git 元数据/partial 和 codeload 探测 ZIP；`edumatrix.db` 与用户数据未改回、未删除。
+- 退出结论：真实教材和 FAISS 索引仍未生成，严格 JSON 模型浏览器闭环仍未完成；`stage_exit_authorized=false`，不进入 M4。
+- 时间：2026-07-26（Asia/Shanghai）。
+
+## WL2-M3-20260726-013 - 项目解释器门禁与 VisRAG 伪证据清理
+
+- 状态：`PENDING`（M3-012）
+- 项目运行时：按 `start.bat` 和 `runtime_preflight.py` 契约创建本地 `.venv`，使用项目解释器验证 FastAPI、Uvicorn、Matplotlib、Pandas、scikit-learn；preflight 为 `PASS`，spawn worker/启动器测试 `5 passed`。`.venv` 已被 `.gitignore` 排除。
+- 资产溯源审计：Git 历史、`origin/main` 和仓库脚本均不包含预期 7 张 patch 的权威文件或生成来源；动画测试要求至少 20 个知识点/60 个真实视频，现有 crawler 依赖外部视频平台、`yt-dlp`、下载体量与版权选择，不能生成占位资源。
+- VisRAG fail-closed：删除在无本地图像时自动注册 `教材图像切片 PDF:P45` 等 7 条硬编码证据的回退；现在只接受 image modality、非空 source 且 `raw_image_ref` 确实位于 `data/patches` 的证据。多模态响应不得返回悬空 slide reference。
+- 聚焦验证：VisRAG/多模态聊天 `11 passed`；非资产型 FAISS 持久化 `4 passed, 1 deselected`；冷启动 `6 passed`。
+- 全量验证：使用 `.venv` 得到 `265 passed, 7 failed, 6 warnings in 55.02s`。运行时失败已消失，剩余只有 6 项动画部署和 1 项 patch 部署断言。
+- 模型配置审计：`/api/health` 报告 `llm_provider=deterministic`、`llm_model=deterministic`、endpoint 为空、API key 未配置；进程环境也没有 EduMatrix/OpenAI/Ollama 模型配置。真实 JSON 模型闭环需要外部端点、模型和凭据。
+- 退出结论：没有伪造 patch、视频、模型质量或 FAISS 证据；M3-012 保持 `PENDING`，不进入 M4。
+- 时间：2026-07-26（Asia/Shanghai）。

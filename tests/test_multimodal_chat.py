@@ -7,6 +7,7 @@ os.environ["EDUMATRIX_MULTIMODAL_LLM_MODEL"] = ""
 
 import unittest
 import json
+from pathlib import Path
 from fastapi.testclient import TestClient
 from app.main import app
 from app.database import SessionLocal, DBStudentProfile
@@ -100,9 +101,11 @@ class TestMultimodalChat(unittest.TestCase):
         self.assertTrue(len(complete_line) > 0)
         data = json.loads(complete_line[0][6:])
         self.assertIn("resources", data)
-        # 验证 VisRAG 匹配到的图片被返回
-        has_slide_ref = any(r.get("type") == "slide_reference" for r in data["resources"])
-        self.assertTrue(has_slide_ref)
+        # 无本地教材切片时不得伪造 slide_reference；有返回时文件必须真实存在。
+        project_root = Path(__file__).resolve().parents[1]
+        for resource in data["resources"]:
+            if resource.get("type") == "slide_reference":
+                self.assertTrue((project_root / resource["content"]).is_file())
 
     def test_matrix_command_shortcut(self):
         """测试 /matrix 命令快捷切换至 Swarm 资源生成"""

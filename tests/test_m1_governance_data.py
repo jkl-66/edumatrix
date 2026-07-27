@@ -73,9 +73,12 @@ def test_clean_database_migrations_and_checksum_tampering_failure(tmp_path):
     clean_engine = create_engine(f"sqlite:///{tmp_path / 'clean-m1.db'}")
     Base.metadata.create_all(clean_engine)
     applied = apply_registered_migrations(clean_engine)
-    assert applied == ["20260723_001", "20260723_002", "20260723_003", "20260723_004"]
+    assert applied == ["20260723_001", "20260723_002", "20260723_003", "20260723_004", "20260727_005", "20260727_006"]
     tables = set(inspect(clean_engine).get_table_names())
-    assert {"artifacts", "evaluation_cases", "organizations", "training_cohorts", "profile_evidence_items"} <= tables
+    assert {
+        "artifacts", "evaluation_cases", "evaluation_annotations", "evaluation_reports",
+        "organizations", "training_cohorts", "profile_evidence_items",
+    } <= tables
     with clean_engine.begin() as connection:
         connection.execute(text(
             "UPDATE schema_migrations SET checksum='tampered' WHERE version='20260723_001'"

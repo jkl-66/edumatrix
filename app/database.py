@@ -788,6 +788,36 @@ class DBAgentRun(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class DBModelCall(Base):
+    __tablename__ = "model_calls"
+    id = Column(String(64), primary_key=True, default=lambda: new_public_id("mcall"))
+    trace_id = Column(String(64), nullable=False, index=True)
+    task_id = Column(String(64), ForeignKey("generation_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    owner_public_id = Column(String(64), ForeignKey("users.public_id", ondelete="SET NULL"), nullable=True, index=True)
+    capability = Column(String(64), nullable=False, index=True)
+    prompt_version = Column(String(64), nullable=False)
+    provider = Column(String(64), nullable=False)
+    model = Column(String(128), nullable=False)
+    status = Column(String(32), nullable=False, default="running", index=True)
+    input_summary = Column(JSON, nullable=False, default=dict)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    token_source = Column(String(32), nullable=False, default="estimated")
+    retry_count = Column(Integer, nullable=False, default=0)
+    estimated_cost = Column(Float, nullable=False, default=0.0)
+    duration_ms = Column(Integer, nullable=False, default=0)
+    output_hash = Column(String(64), nullable=False, default="")
+    error_code = Column(String(64), nullable=False, default="")
+    created_at = Column(DateTime, default=_utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('running','completed','failed')", name="ck_model_call_status"),
+        CheckConstraint("input_tokens >= 0 AND output_tokens >= 0", name="ck_model_call_tokens"),
+        CheckConstraint("retry_count >= 0 AND estimated_cost >= 0 AND duration_ms >= 0", name="ck_model_call_metrics"),
+    )
+
+
 class DBQualityCheck(Base):
     __tablename__ = "quality_checks"
     id = Column(String(64), primary_key=True, default=lambda: new_public_id("qc"))
@@ -892,6 +922,50 @@ class DBEvaluationResult(Base):
     created_at = Column(DateTime, default=_utcnow)
 
     __table_args__ = (UniqueConstraint("evaluation_run_id", "evaluation_case_id", name="uq_evaluation_run_case"),)
+
+
+class DBEvaluationAnnotation(Base):
+    __tablename__ = "evaluation_annotations"
+    id = Column(String(64), primary_key=True, default=lambda: new_public_id("eann"))
+    evaluation_result_id = Column(String(64), ForeignKey("evaluation_results.id", ondelete="CASCADE"), nullable=False, index=True)
+    annotation_type = Column(String(32), nullable=False, index=True)
+    annotation_key = Column(String(128), nullable=False)
+    annotator_ref = Column(String(128), nullable=False, index=True)
+    annotation_version = Column(Integer, nullable=False, default=1)
+    supersedes_id = Column(String(64), ForeignKey("evaluation_annotations.id", ondelete="RESTRICT"), nullable=True)
+    payload = Column(JSON, nullable=False)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    content_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "evaluation_result_id", "annotation_type", "annotation_key", "annotator_ref", "annotation_version",
+            name="uq_evaluation_annotation_version",
+        ),
+        CheckConstraint("annotation_version >= 1", name="ck_evaluation_annotation_version"),
+        CheckConstraint("annotation_type IN ('atomic_fact','adaptation','coverage')", name="ck_evaluation_annotation_type"),
+        CheckConstraint("status IN ('draft','final','adjudicated')", name="ck_evaluation_annotation_status"),
+    )
+
+
+class DBEvaluationReport(Base):
+    __tablename__ = "evaluation_reports"
+    id = Column(String(64), primary_key=True, default=lambda: new_public_id("erep"))
+    evaluation_run_id = Column(String(64), ForeignKey("evaluation_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    metric_version = Column(String(64), nullable=False)
+    report_version = Column(Integer, nullable=False, default=1)
+    report_data = Column(JSON, nullable=False)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    approval_ref = Column(String(128), nullable=False, default="")
+    content_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("evaluation_run_id", "metric_version", "report_version", name="uq_evaluation_report_version"),
+        CheckConstraint("report_version >= 1", name="ck_evaluation_report_version"),
+        CheckConstraint("status IN ('draft','approved','superseded')", name="ck_evaluation_report_status"),
+    )
 
 
 class DBOrganization(Base):

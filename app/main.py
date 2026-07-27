@@ -49,6 +49,9 @@ from behavior_api import router as behavior_router
 from report_api import router as report_router
 from app.m1_api import router as m1_router
 from app.m2_api import router as m2_router
+from app.m3_api import router as m3_router
+from app.m4_api import router as m4_router
+from app.m5_api import router as m5_router
 from app.legacy_repositories import LegacyReadRepository
 from note_engine import LearningProgressAnalyzer, ReviewScheduler
 from export_pdf import generate_note_pdf
@@ -669,6 +672,9 @@ app.include_router(behavior_router)
 app.include_router(report_router)
 app.include_router(m1_router)
 app.include_router(m2_router)
+app.include_router(m3_router)
+app.include_router(m4_router)
+app.include_router(m5_router)
 
 
 # === 任务 8.1: 行级/公式苏格拉底即时答疑 (直接挂载在app上，避免模块缓存问题) ===

@@ -7,6 +7,7 @@ from collections import Counter
 from pathlib import Path
 
 from document_parser import chunk_document, parse_uploaded_file
+from course_catalog import _canonical_manifest_bytes
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +25,7 @@ def test_m0_course_manifest_hashes_and_markdown_ingestion():
 
     for item in manifest["files"]:
         path = M0 / item["path"]
-        raw = path.read_bytes()
+        raw = _canonical_manifest_bytes(path, path.read_bytes())
         assert len(raw) == item["bytes"]
         assert hashlib.sha256(raw).hexdigest().upper() == item["sha256"]
 

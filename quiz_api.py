@@ -5,7 +5,7 @@ import os
 import re
 import uuid
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 
@@ -20,6 +20,7 @@ from learning_event_bus import (
 )
 from swarm_factory import build_swarm_from_headers
 from code_exec_api import SANDBOX_RUNNER
+from app.m5_assessment import AssessmentEvidenceInput, record_legacy_assessment_evidence
 
 # 启动时注册默认事件订阅器
 register_default_subscribers()
@@ -952,6 +953,25 @@ async def evaluate_answer(
 
     concept_mastery_updated = await run_db_op(perform_eval_updates)
 
+    # Canonical dual-write: an immediate quiz answer is contact evidence only.
+    def _record_m5_evidence(session):
+        local_record = LegacyReadRepository(session).quiz_record(quiz_id, student_id)
+        base_time = local_record.created_at if local_record and local_record.created_at else datetime(2000, 1, 1)
+        occurred_at = base_time.replace(tzinfo=timezone.utc) + timedelta(seconds=max(0, attempt_number))
+        evidence = AssessmentEvidenceInput(
+            idempotency_key=f"legacy-quiz-{quiz_id}-{attempt_number}",
+            source_type="quiz_attempt", source_object_id=quiz_id,
+            target_object_type="quiz", target_object_id=quiz_id,
+            occurred_at=occurred_at, correct=accuracy_score >= 0.6,
+            confidence=student_confidence,
+            actual_minutes=max(0, int(duration_seconds / 60)) if duration_seconds is not None else None,
+        )
+        evidence_result = record_legacy_assessment_evidence(session, student_id=student_id, evidence=evidence)
+        session.commit()
+        return evidence_result
+
+    canonical_evidence = await run_db_op(_record_m5_evidence)
+
     # MCMC 题库参数校准已移至离线批处理脚本中定时运行
 
     # 获取更新后的 IRT 能力估计状态
@@ -1024,6 +1044,7 @@ async def evaluate_answer(
         "student_confidence": student_confidence,
         "confidence_calibration": abs(student_confidence - accuracy_score),
         "irt": irt_info,
+        "canonical_evidence": canonical_evidence,
     }
 
 

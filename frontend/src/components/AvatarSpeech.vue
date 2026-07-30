@@ -14,12 +14,10 @@ const isMuted = ref(false)
 const isSpeaking = ref(false)
 const isLoading = ref(false)
 
-// --- Audio State ---
-let audioContext = null
-let analyser = null
-let scriptNode = null
-const BUFFER_SIZE = 4096
-let audioStack = [] // Queue of Float32Array chunks
+// Browser-native speech synthesis is intentionally used here. Provider API
+// secrets must never be stored or used by frontend code. A future provider
+// integration must be exposed through an authenticated backend proxy.
+let utterance = null
 
 // --- 任务 7.9: 情感感知语速控制 ---
 const _STRESS_KEYWORDS = ['崩溃','好难','学不会','焦虑','压力大','受不了','想放弃','太难了','完全不懂','绝望']
@@ -31,8 +29,7 @@ function _detectStress(text) {
 }
 
 function _getEmpatheticSpeed(text) {
-  // 高压力时语速减慢至 0.85 倍 (讯飞 speed: 50=正常, 降低到 42)
-  return _detectStress(text) ? 42 : 50
+  return _detectStress(text) ? 0.85 : 1
 }
 
 function _getEmpatheticPrefix(text) {
@@ -51,120 +48,6 @@ function _getEmpatheticPrefix(text) {
 const lastScale = ref(1)
 const smoothScale = ref(1)
 const ALPHA = 0.25
-
-// --- iFLYTEK Config ---
-function getXfConfig() {
-  try {
-    const raw = localStorage.getItem('edumatrix_llm_config')
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      return {
-        xfAppId: (parsed.xfAppId || '').trim(),
-        xfApiKey: (parsed.xfApiKey || '').trim(),
-        xfApiSecret: (parsed.xfApiSecret || '').trim()
-      }
-    }
-  } catch {}
-  return {}
-}
-
-async function hmacSha256(key, message) {
-  const enc = new TextEncoder()
-  const keyData = enc.encode(key)
-  const messageData = enc.encode(message)
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw', keyData, { name: 'HMAC', hash: 'SHA-256' },
-    false, ['sign']
-  )
-  const signature = await crypto.subtle.sign('HMAC', cryptoKey, messageData)
-  return btoa(String.fromCharCode(...new Uint8Array(signature)))
-}
-
-async function getWebsocketUrl() {
-  const cfg = getXfConfig()
-  const apiKey = cfg.xfApiKey
-  const apiSecret = cfg.xfApiSecret
-  if (!apiKey || !apiSecret) throw new Error('iFLYTEK API keys not configured')
-
-  const url = 'wss://tts-api.xfyun.cn/v2/tts'
-  const host = 'tts-api.xfyun.cn'
-  const date = new Date().toUTCString()
-  const requestLine = 'GET /v2/tts HTTP/1.1'
-  const signatureOrigin = `host: ${host}\ndate: ${date}\n${requestLine}`
-  const signature = await hmacSha256(apiSecret, signatureOrigin)
-  const authOrigin = `api_key="${apiKey}", algorithm="hmac-sha256", headers="host date request-line", signature="${signature}"`
-  const authorization = btoa(authOrigin)
-
-  return `${url}?authorization=${encodeURIComponent(authorization)}&date=${encodeURIComponent(date)}&host=${host}`
-}
-
-// --- Audio Playback Engine (Task 5.1: ScriptProcessor) ---
-function initAudio() {
-  if (audioContext) return
-  audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 })
-  analyser = audioContext.createAnalyser()
-  analyser.fftSize = 256
-
-  // ScriptProcessor for streaming buffer management
-  scriptNode = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1)
-  
-  let offset = 0
-  let currentChunk = null
-
-  scriptNode.onaudioprocess = (e) => {
-    const output = e.outputBuffer.getChannelData(0)
-    let written = 0
-    
-    while (written < BUFFER_SIZE) {
-      if (!currentChunk) {
-        if (audioStack.length > 0) {
-          currentChunk = audioStack.shift()
-          offset = 0
-        } else {
-          // No more data, fill with silence
-          output.fill(0, written)
-          if (isSpeaking.value && written === 0 && !isLoading.value) {
-            // Probably finished
-            isSpeaking.value = false
-            emit('finished')
-          }
-          break
-        }
-      }
-
-      const available = currentChunk.length - offset
-      const toWrite = Math.min(available, BUFFER_SIZE - written)
-      output.set(currentChunk.subarray(offset, offset + toWrite), written)
-      
-      written += toWrite
-      offset += toWrite
-
-      if (offset >= currentChunk.length) {
-        currentChunk = null
-      }
-    }
-  }
-
-  scriptNode.connect(analyser)
-  analyser.connect(audioContext.destination)
-}
-
-// Convert PCM16 (base64) to Float32Array
-function pcm16ToFloat32(base64) {
-  const binaryString = window.atob(base64)
-  const len = binaryString.length
-  const bytes = new Uint8Array(len)
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i)
-  }
-  
-  const int16Buffer = new Int16Array(bytes.buffer)
-  const float32Buffer = new Float32Array(int16Buffer.length)
-  for (let i = 0; i < int16Buffer.length; i++) {
-    float32Buffer[i] = int16Buffer[i] / 32768
-  }
-  return float32Buffer
-}
 
 function cleanTextForSpeech(text) {
   if (!text) return ''
@@ -201,70 +84,34 @@ async function startTTS(text) {
   if (!text) return
   const cleanedText = cleanTextForSpeech(text)
   if (!cleanedText) return
-  isLoading.value = true
-  isSpeaking.value = true
-  isPaused.value = false
-  audioStack = []
-  
-  initAudio()
-  if (audioContext.state === 'suspended') await audioContext.resume()
-
-  try {
-    const url = await getWebsocketUrl()
-    const ws = new WebSocket(url)
-    const cfg = getXfConfig()
-
-    ws.onopen = () => {
-      const params = {
-        common: { app_id: cfg.xfAppId },
-        business: {
-          aue: 'raw', // Task 5.1: Raw PCM
-          sfl: 1,
-          tte: 'UTF8',
-          vcn: 'xiaoyan',
-          speed: _getEmpatheticSpeed(cleanedText),
-          volume: 50,
-          pitch: 50,
-          bgs: 0
-        },
-        data: {
-          status: 2,
-          text: btoa(unescape(encodeURIComponent(_getEmpatheticPrefix(cleanedText))))
-        }
-      }
-      ws.send(JSON.stringify(params))
-    }
-
-    ws.onmessage = (e) => {
-      const res = JSON.parse(e.data)
-      if (res.code !== 0) {
-        console.error('TTS Error:', res.message)
-        isLoading.value = false
-        isSpeaking.value = false
-        ws.close()
-        return
-      }
-      
-      if (res.data && res.data.audio) {
-        audioStack.push(pcm16ToFloat32(res.data.audio))
-      }
-
-      if (res.data.status === 2) {
-        ws.close()
-        isLoading.value = false
-      }
-    }
-
-    ws.onerror = (err) => {
-      console.error('WS Error:', err)
-      isLoading.value = false
-      isSpeaking.value = false
-    }
-  } catch (e) {
-    console.error('TTS Setup failed:', e)
+  if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) {
+    console.warn('Browser speech synthesis is unavailable')
+    emit('finished')
+    return
+  }
+  stopTTS()
+  utterance = new SpeechSynthesisUtterance(_getEmpatheticPrefix(cleanedText))
+  utterance.lang = 'zh-CN'
+  utterance.rate = _getEmpatheticSpeed(cleanedText)
+  utterance.volume = isMuted.value ? 0 : 1
+  utterance.onstart = () => {
+    isLoading.value = false
+    isSpeaking.value = true
+  }
+  utterance.onend = () => {
+    isSpeaking.value = false
+    isPaused.value = false
+    utterance = null
+    emit('finished')
+  }
+  utterance.onerror = () => {
     isLoading.value = false
     isSpeaking.value = false
+    isPaused.value = false
+    utterance = null
   }
+  isLoading.value = true
+  window.speechSynthesis.speak(utterance)
 }
 
 // --- Canvas Animation (Task 5.2) ---
@@ -277,11 +124,8 @@ function draw() {
 
   // 1. Calculate Target Scale from Audio Amplitude
   let targetScale = 1
-  if (isSpeaking.value && analyser) {
-    const dataArray = new Uint8Array(analyser.frequencyBinCount)
-    analyser.getByteFrequencyData(dataArray)
-    const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
-    targetScale = 1 + (average / 128) * 2.0 // Adjust sensitivity
+  if (isSpeaking.value && !isPaused.value) {
+    targetScale = 1.15 + 0.15 * Math.sin(Date.now() / 90)
   }
 
   // 2. Task 5.2: First-Order Low-Pass Exponential Smoothing
@@ -336,51 +180,44 @@ function draw() {
 const isPaused = ref(false)
 
 function pauseTTS() {
-  if (audioContext && audioContext.state === 'running') {
-    audioContext.suspend()
+  if ('speechSynthesis' in window && isSpeaking.value && !isPaused.value) {
+    window.speechSynthesis.pause()
     isPaused.value = true
   }
 }
 
 function resumeTTS() {
-  if (audioContext && audioContext.state === 'suspended') {
-    audioContext.resume()
+  if ('speechSynthesis' in window && isPaused.value) {
+    window.speechSynthesis.resume()
     isPaused.value = false
   }
 }
 
 function stopTTS() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel()
   isSpeaking.value = false
   isPaused.value = false
-  audioStack = []
-  if (audioContext) {
-    try {
-      audioContext.close()
-    } catch (e) {}
-    audioContext = null
-    analyser = null
-    scriptNode = null
-  }
+  isLoading.value = false
+  utterance = null
 }
 
 function toggleMute() {
   isMuted.value = !isMuted.value
-  if (audioContext) {
-    if (isMuted.value) audioContext.suspend()
-    else audioContext.resume()
-  }
+  if (utterance) utterance.volume = isMuted.value ? 0 : 1
+  if (isMuted.value) pauseTTS()
+  else resumeTTS()
 }
+
+watch(() => props.text, (text) => {
+  if (props.autoplay && text) startTTS(text)
+})
 
 onMounted(() => {
   draw()
 })
 
 onUnmounted(() => {
-  if (audioContext) {
-    try {
-      audioContext.close()
-    } catch (e) {}
-  }
+  stopTTS()
 })
 
 defineExpose({

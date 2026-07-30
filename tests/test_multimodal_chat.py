@@ -281,8 +281,8 @@ class TestMultimodalChat(unittest.TestCase):
         self.assertIn(first_resp, usr_p)
         self.assertIn("它主要有哪些变体？", usr_p)
 
-    def test_visual_only_settings_are_not_dropped(self):
-        """视觉配置 alone should build a real visual route instead of defaulting to mock text."""
+    def test_client_visual_provider_headers_are_ignored(self):
+        """Provider credentials are backend-managed and never accepted from clients."""
         from swarm_factory import build_swarm_from_headers
 
         headers = {
@@ -293,8 +293,8 @@ class TestMultimodalChat(unittest.TestCase):
 
         swarm = build_swarm_from_headers(headers)
 
-        self.assertEqual(type(swarm.llm).__name__, "MultimodalOnlyAsyncLLM")
-        self.assertTrue(getattr(swarm.llm, "has_external_vision", False))
+        self.assertNotEqual(type(swarm.llm).__name__, "MultimodalOnlyAsyncLLM")
+        self.assertNotEqual(getattr(swarm.llm, "api_key", None), "fake-vision-key")
 
     def test_vision_connection_endpoint_warns_without_external_model(self):
         """The evaluator-facing visual test must explain missing configuration."""

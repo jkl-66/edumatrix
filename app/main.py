@@ -51,7 +51,8 @@ from app.m1_api import router as m1_router
 from app.m2_api import router as m2_router
 from app.m3_api import router as m3_router
 from app.m4_api import router as m4_router
-from app.m5_api import router as m5_router
+from app.m5_api import router as m5_router, runtime_availability
+from app.m8_api import router as m8_router
 from app.legacy_repositories import LegacyReadRepository
 from note_engine import LearningProgressAnalyzer, ReviewScheduler
 from export_pdf import generate_note_pdf
@@ -675,6 +676,7 @@ app.include_router(m2_router)
 app.include_router(m3_router)
 app.include_router(m4_router)
 app.include_router(m5_router)
+app.include_router(m8_router)
 
 
 # === 任务 8.1: 行级/公式苏格拉底即时答疑 (直接挂载在app上，避免模块缓存问题) ===
@@ -732,20 +734,29 @@ async def socratic_explain_direct(
 @app.get("/api/health")
 async def health_check(request: Request):
     from config import CONFIG
-    user_api_key = request.headers.get("x-edumatrix-api-key", "")
-    has_user_key = bool(user_api_key)
+    from sqlalchemy import text as sql_text
+    database_ok = False
+    try:
+        from app.database import engine
+        with engine.connect() as connection:
+            connection.execute(sql_text("SELECT 1"))
+        database_ok = True
+    except Exception:
+        database_ok = False
+    runtime = runtime_availability()
     return {
-        "status": "ok",
+        "status": "ok" if database_ok else "degraded",
         "version": "1.1.0",
         "service": "EduMatrix 智教矩阵",
-        "llm_provider": CONFIG.llm_provider,
-        "llm_model": CONFIG.llm_model,
-        "llm_endpoint": CONFIG.llm_endpoint,
-        "llm_api_key_configured": bool(CONFIG.llm_api_key) or has_user_key,
-        "user_api_key_provided": has_user_key,
-        "embedding_provider": CONFIG.embedding_provider,
-        "concurrent_llm": CONFIG.max_concurrent_llm,
-        "rate_limit_rpm": CONFIG.llm_rate_limit_rpm,
+        "dependencies": {
+            "database": {"available": database_ok},
+            "text_model": {"available": runtime.text_model},
+            "vision_model": {"available": runtime.vision_model},
+            "retrieval": {"available": runtime.retrieval},
+            "sandbox": {"mode": runtime.sandbox_mode, "available": runtime.sandbox_mode != "disabled"},
+            "media_pipeline": {"available": runtime.media_pipeline},
+        },
+        "secrets": {"backend_configured": bool(CONFIG.llm_api_key), "client_keys_accepted": False},
     }
 
 
@@ -755,7 +766,7 @@ async def test_llm_connection(request: Request):
     from llm_client import build_async_llm
     from swarm_factory import build_swarm_from_headers
 
-    swarm_obj = build_swarm_from_headers(request.headers)
+    swarm_obj = build_swarm_from_headers({})
     llm = swarm_obj.llm
 
     llm_type = type(llm).__name__
@@ -763,7 +774,7 @@ async def test_llm_connection(request: Request):
         return {
             "status": "warning",
             "message": "当前使用模拟引擎（DeterministicEducationLLM），未接入真实大模型",
-            "hint": "请在 .env 中设置 EDUMATRIX_LLM_API_KEY 或在浏览器 Settings 页面配置 API Key",
+            "hint": "请由管理员在后端环境中设置 EDUMATRIX_LLM_API_KEY",
             "llm_type": llm_type,
         }
 
@@ -778,15 +789,13 @@ async def test_llm_connection(request: Request):
             "message": "LLM 连通性测试成功",
             "llm_type": llm_type,
             "response": result[:200],
-            "endpoint": CONFIG.llm_endpoint,
             "model": CONFIG.llm_model,
         }
     except Exception as e:
         return {
             "status": "error",
-            "message": f"LLM 调用失败: {str(e)}",
+            "message": "LLM 调用失败",
             "llm_type": llm_type,
-            "endpoint": CONFIG.llm_endpoint,
             "model": CONFIG.llm_model,
         }
 
@@ -1038,7 +1047,18 @@ async def append_reflection(
         quiz_record_id=quiz_record_id,
         wrong_reason=wrong_reason
     )
-    return {"id": note.id, "updated_at": note.updated_at.isoformat()}
+    def _record_reflection_evidence(session):
+        from app.m5_assessment import AssessmentEvidenceInput, record_legacy_assessment_evidence
+        evidence = AssessmentEvidenceInput(
+            idempotency_key=f"legacy-reflection-{note.id}-{quiz_record_id}",
+            source_type="wrong_question_review", source_object_id=quiz_record_id,
+            target_object_type="note", target_object_id=str(note.id),
+        )
+        result = record_legacy_assessment_evidence(session, student_id=student_id, evidence=evidence)
+        session.commit()
+        return result
+    canonical_evidence = await run_db_op(_record_reflection_evidence)
+    return {"id": note.id, "updated_at": note.updated_at.isoformat(), "canonical_evidence": canonical_evidence}
 
 
 @app.post("/api/notes/update/{note_id}", dependencies=[Depends(get_current_user)])

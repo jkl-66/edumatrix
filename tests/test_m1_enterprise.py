@@ -358,3 +358,20 @@ def test_enterprise_write_services_enforce_scope_snapshot_versions_and_audit():
             "job_standard_version.publish",
             "competency_standard_version.publish",
         }
+
+def test_certification_requires_passing_evidence_for_every_mandatory_standard():
+    with SessionLocal() as session:
+        org, learner, admin, level, standard, cohort, assignment = _enterprise_fixture(session)
+        failed = record_skill_evidence(
+            session, organization_id=org.id, learner_public_id=learner.public_id,
+            competency_standard=standard, evidence_type="hidden_test",
+            source_object_id="failed-attempt", result="failed",
+            actor_public_id=admin.public_id, hidden_test_result={"passed": 3, "total": 4},
+        )
+        with pytest.raises(HTTPException) as raised:
+            issue_certification(
+                session, organization_id=org.id, learner_public_id=learner.public_id,
+                job_level=level, evidence_ids=[failed.id], issuer_public_id=admin.public_id,
+            )
+        assert raised.value.status_code == 409
+        assert raised.value.detail["code"] == "certification_evidence_incomplete"

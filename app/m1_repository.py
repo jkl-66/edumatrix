@@ -25,7 +25,7 @@ from app.database import (
 )
 
 
-def _learner_safe_content(artifact_type: str, content: str) -> str:
+def learner_safe_artifact_content(artifact_type: str, content: str) -> str:
     if artifact_type != "tiered_quiz":
         return content
     try:
@@ -41,6 +41,9 @@ def _learner_safe_content(artifact_type: str, content: str) -> str:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+
+
+_learner_safe_content = learner_safe_artifact_content
 
 
 class M1Repository:

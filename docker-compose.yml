@@ -9,12 +9,13 @@ services:
       - edumatrix_data:/app/data
     restart: unless-stopped
     environment:
-      # No API key needed - user configures it in the browser UI
-      - EDUMATRIX_LLM_PROVIDER=openai
+      # Secrets are supplied only by the deployment environment or secret manager.
+      - EDUMATRIX_LLM_PROVIDER=${EDUMATRIX_LLM_PROVIDER:-deterministic}
+      - EDUMATRIX_LLM_API_KEY=${EDUMATRIX_LLM_API_KEY:-}
       - EDUMATRIX_EMBEDDING_PROVIDER=hash
       - EDUMATRIX_USE_FAISS=0
-      - EDUMATRIX_LLM_ENDPOINT=https://windhub.cc/v1/chat/completions
-      - EDUMATRIX_LLM_MODEL=doubao-1-5-pro-32k-250115
+      - EDUMATRIX_LLM_ENDPOINT=${EDUMATRIX_LLM_ENDPOINT:-}
+      - EDUMATRIX_LLM_MODEL=${EDUMATRIX_LLM_MODEL:-deterministic}
       - EDUMATRIX_MAX_CONCURRENT_LLM=8
       - EDUMATRIX_LLM_RATE_LIMIT_RPM=120
       - EDUMATRIX_LLM_RATE_LIMIT_TPM=100000

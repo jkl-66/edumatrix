@@ -537,6 +537,10 @@ class DBPlanDraft(Base):
     course_id = Column(String(128), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True, index=True)
     title = Column(String(256), nullable=False)
     status = Column(String(32), nullable=False, default="draft", index=True)
+    idempotency_key = Column(String(128), nullable=True)
+    current_version_id = Column(String(64), nullable=True, index=True)
+    confirmed_version_id = Column(String(64), nullable=True, index=True)
+    confirmed_at = Column(DateTime, nullable=True)
     lock_version = Column(Integer, nullable=False, default=1)
     archived_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=_utcnow)
@@ -564,7 +568,12 @@ class DBLearningPath(Base):
     course_id = Column(String(128), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True, index=True)
     source_plan_version_id = Column(String(64), ForeignKey("plan_versions.id", ondelete="RESTRICT"), nullable=False, index=True)
     status = Column(String(32), nullable=False, default="active", index=True)
+    supersedes_path_id = Column(String(64), ForeignKey("learning_paths.id", ondelete="SET NULL"), nullable=True, index=True)
+    lock_version = Column(Integer, nullable=False, default=1)
+    paused_at = Column(DateTime, nullable=True)
+    archived_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
     completed_at = Column(DateTime, nullable=True)
 
 
@@ -572,12 +581,19 @@ class DBPathNode(Base):
     __tablename__ = "path_nodes"
     id = Column(String(64), primary_key=True, default=lambda: new_public_id("node"))
     learning_path_id = Column(String(64), ForeignKey("learning_paths.id", ondelete="CASCADE"), nullable=False, index=True)
+    node_key = Column(String(128), nullable=False, default="", index=True)
     sequence = Column(Integer, nullable=False)
     node_type = Column(String(32), nullable=False)
     target_object_id = Column(String(64), nullable=True, index=True)
     title = Column(String(256), nullable=False)
     status = Column(String(32), nullable=False, default="pending", index=True)
     prerequisites = Column(JSON, default=list)
+    is_extension = Column(Boolean, nullable=False, default=False)
+    resource_status = Column(String(32), nullable=False, default="existing")
+    estimate_min_minutes = Column(Integer, nullable=False, default=1)
+    estimate_max_minutes = Column(Integer, nullable=False, default=1)
+    actual_minutes = Column(Integer, nullable=True)
+    blocked_reason = Column(String(256), default="")
     created_at = Column(DateTime, default=_utcnow)
 
     __table_args__ = (UniqueConstraint("learning_path_id", "sequence", name="uq_path_node_sequence"),)
@@ -591,12 +607,65 @@ class DBLearningEvent(Base):
     course_id = Column(String(128), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True, index=True)
     event_type = Column(String(128), nullable=False, index=True)
     schema_version = Column(String(32), nullable=False, default="1.0")
+    idempotency_key = Column(String(128), nullable=True)
+    source = Column(String(64), nullable=False, default="api")
     trace_id = Column(String(64), nullable=False, index=True)
     object_type = Column(String(64), default="")
     object_id = Column(String(64), default="", index=True)
     payload = Column(JSON, default=dict)
     occurred_at = Column(DateTime, default=_utcnow, index=True)
     recorded_at = Column(DateTime, default=_utcnow)
+
+
+class DBLearningEventConsumption(Base):
+    __tablename__ = "learning_event_consumptions"
+    id = Column(String(64), primary_key=True, default=lambda: new_public_id("lec"))
+    learning_event_id = Column(String(64), ForeignKey("learning_events.id", ondelete="CASCADE"), nullable=False, index=True)
+    consumer = Column(String(64), nullable=False)
+    processor_version = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    attempt = Column(Integer, nullable=False, default=1)
+    result = Column(JSON, default=dict)
+    error_code = Column(String(64), default="")
+    created_at = Column(DateTime, default=_utcnow)
+    processed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("learning_event_id", "consumer", "processor_version", name="uq_learning_event_consumer_version"),
+        CheckConstraint("status IN ('pending','processed','failed')", name="ck_learning_event_consumption_status"),
+        CheckConstraint("attempt >= 1", name="ck_learning_event_consumption_attempt"),
+    )
+
+
+class DBTutorContextSession(Base):
+    __tablename__ = "tutor_context_sessions"
+    id = Column(String(64), primary_key=True, default=lambda: new_public_id("tctx"))
+    owner_public_id = Column(String(64), ForeignKey("users.public_id", ondelete="CASCADE"), nullable=False, index=True)
+    course_id = Column(String(128), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True, index=True)
+    idempotency_key = Column(String(128), nullable=False)
+    context_mode = Column(String(32), nullable=False, default="current_resource", index=True)
+    primary_object_type = Column(String(32), nullable=False)
+    primary_object_id = Column(String(64), nullable=False, index=True)
+    context_snapshot = Column(JSON, nullable=False, default=dict)
+    teaching_style = Column(String(32), nullable=False, default="progressive")
+    explanation_depth = Column(String(16), nullable=False, default="standard")
+    guidance_mode = Column(String(16), nullable=False, default="socratic")
+    status = Column(String(16), nullable=False, default="active", index=True)
+    lock_version = Column(Integer, nullable=False, default=1)
+    last_used_at = Column(DateTime, default=_utcnow, index=True)
+    archived_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("owner_public_id", "idempotency_key", name="uq_tutor_context_owner_idempotency"),
+        CheckConstraint(
+            "context_mode IN ('current_resource','current_course','personal_resources','external_allowed')",
+            name="ck_tutor_context_mode",
+        ),
+        CheckConstraint("status IN ('active','archived')", name="ck_tutor_context_status"),
+        CheckConstraint("lock_version >= 1", name="ck_tutor_context_lock_version"),
+    )
 
 
 class DBMemoryItem(Base):
@@ -794,6 +863,7 @@ class DBModelCall(Base):
     trace_id = Column(String(64), nullable=False, index=True)
     task_id = Column(String(64), ForeignKey("generation_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     owner_public_id = Column(String(64), ForeignKey("users.public_id", ondelete="SET NULL"), nullable=True, index=True)
+    course_id = Column(String(128), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True, index=True)
     capability = Column(String(64), nullable=False, index=True)
     prompt_version = Column(String(64), nullable=False)
     provider = Column(String(64), nullable=False)
@@ -815,6 +885,24 @@ class DBModelCall(Base):
         CheckConstraint("status IN ('running','completed','failed')", name="ck_model_call_status"),
         CheckConstraint("input_tokens >= 0 AND output_tokens >= 0", name="ck_model_call_tokens"),
         CheckConstraint("retry_count >= 0 AND estimated_cost >= 0 AND duration_ms >= 0", name="ck_model_call_metrics"),
+    )
+
+
+class DBModelQuotaBucket(Base):
+    __tablename__ = "model_quota_buckets"
+    id = Column(String(64), primary_key=True, default=lambda: new_public_id("mqb"))
+    scope_type = Column(String(16), nullable=False)
+    scope_key = Column(String(256), nullable=False)
+    utc_day = Column(String(10), nullable=False)
+    call_count = Column(Integer, nullable=False, default=0)
+    reserved_tokens = Column(Integer, nullable=False, default=0)
+    reserved_cost = Column(Float, nullable=False, default=0.0)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("scope_type", "scope_key", "utc_day", name="uq_model_quota_bucket_scope_day"),
+        CheckConstraint("scope_type IN ('user','course','model')", name="ck_model_quota_bucket_scope"),
+        CheckConstraint("call_count >= 0 AND reserved_tokens >= 0 AND reserved_cost >= 0", name="ck_model_quota_bucket_values"),
     )
 
 
@@ -1149,6 +1237,34 @@ class DBExternalIdentityMapping(Base):
     bound_at = Column(DateTime, default=_utcnow)
     revoked_at = Column(DateTime, nullable=True)
     __table_args__ = (UniqueConstraint("organization_id", "provider", "external_subject", name="uq_external_identity_subject"),)
+
+
+class DBIntegrationDelivery(Base):
+    __tablename__ = "integration_deliveries"
+    id = Column(String(64), primary_key=True, default=lambda: new_public_id("idel"))
+    organization_id = Column(String(64), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    adapter_type = Column(String(32), nullable=False, index=True)
+    adapter_version = Column(String(32), nullable=False)
+    destination_key = Column(String(128), nullable=False, index=True)
+    idempotency_key = Column(String(128), nullable=False)
+    source_object_type = Column(String(64), nullable=False)
+    source_object_id = Column(String(64), nullable=False, index=True)
+    payload = Column(JSON, nullable=False)
+    payload_hash = Column(String(64), nullable=False)
+    status = Column(String(16), nullable=False, default="pending", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    last_error_code = Column(String(64), default="")
+    next_attempt_at = Column(DateTime, nullable=True, index=True)
+    delivered_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "destination_key", "idempotency_key", name="uq_integration_delivery_idempotency"),
+        CheckConstraint("adapter_type IN ('xapi','webhook','lms','hr')", name="ck_integration_delivery_adapter"),
+        CheckConstraint("status IN ('pending','delivering','delivered','failed','dead_letter')", name="ck_integration_delivery_status"),
+        CheckConstraint("attempt_count >= 0", name="ck_integration_delivery_attempt"),
+    )
 
 class DBQuizRecord(Base):
     """持久化物理表：存储测验记录与置信度反馈"""

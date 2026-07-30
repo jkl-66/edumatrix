@@ -336,6 +336,34 @@ def issue_certification(
     standards = session.query(DBCompetencyStandard).filter_by(job_level_id=job_level.id).order_by(
         DBCompetencyStandard.id
     ).all()
+    now = utcnow()
+    evidence_by_standard: dict[str, list[DBSkillEvidence]] = {}
+    for item in evidence:
+        evidence_by_standard.setdefault(item.competency_standard_id, []).append(item)
+    uncovered = []
+    for standard in standards:
+        if not standard.mandatory:
+            continue
+        required_types = set(standard.evidence_requirements or [])
+        accepted = []
+        for item in evidence_by_standard.get(standard.id, []):
+            hidden = item.hidden_test_result or {}
+            hidden_complete = not hidden.get("total") or hidden.get("passed") == hidden.get("total")
+            valid = item.valid_until is None or item.valid_until >= now
+            type_allowed = not required_types or item.evidence_type in required_types
+            if item.result == "passed" and hidden_complete and valid and type_allowed:
+                accepted.append(item)
+        if not accepted:
+            uncovered.append({
+                "competency_standard_id": standard.id,
+                "required_evidence_types": sorted(required_types),
+                "risk_level": standard.risk_level,
+            })
+    if uncovered:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "certification_evidence_incomplete", "uncovered": uncovered},
+        )
     snapshot = {"job_level_id": job_level.id, "job_level_version": job_level.version,
                 "competencies": [{"id": item.id, "version": item.version} for item in standards]}
     row = DBCertification(

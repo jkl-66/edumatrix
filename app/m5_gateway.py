@@ -14,27 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.database import DBModelCall
 from app.m2_contracts import StrictModel
 from app.m5_capabilities import Capability, CapabilityContract, M5CapabilityError
+from app.m5_policy import GatewayPolicy, ModelRegistration, ModelRef, enforce_daily_quota, reserve_daily_quota, select_model
 
 
 class TextBackend(Protocol):
     async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str: ...
-
-
-class ModelRegistration(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    registration_version: str = Field(min_length=1, max_length=64)
-    provider: str = Field(min_length=1, max_length=64)
-    model: str = Field(min_length=1, max_length=128)
-    tier: str = Field(pattern=r"^(fast|standard|strong|review)$")
-    capabilities: tuple[Capability, ...]
-    supports_json: bool = False
-    supports_vision: bool = False
-    supports_streaming: bool = False
-    context_length: int = Field(ge=1)
-    input_cost_per_million: float = Field(default=0.0, ge=0)
-    output_cost_per_million: float = Field(default=0.0, ge=0)
-    data_region: str = Field(default="unspecified", min_length=1, max_length=64)
 
 
 class PromptSpec(StrictModel):
@@ -68,6 +52,8 @@ class GatewayResult(StrictModel):
     output_tokens: int
     token_source: str
     estimated_cost: float
+    attempted_models: tuple[str, ...] = ()
+    fallback_used: bool = False
 
 
 def _estimate_tokens(text: str) -> int:
@@ -97,6 +83,7 @@ class M5ModelGateway:
         registration: ModelRegistration,
         backend: TextBackend,
         response_model: type[BaseModel] | None = None,
+        policy: GatewayPolicy | None = None,
     ) -> GatewayResult:
         capability = request.contract.locked_capability
         if capability not in registration.capabilities:
@@ -106,6 +93,20 @@ class M5ModelGateway:
 
         trace_id = f"m5-{uuid.uuid4().hex}"
         input_tokens = _estimate_tokens(request.prompt.system_prompt + request.user_prompt)
+        if policy is not None:
+            projected_output_tokens = max(
+                1,
+                (request.contract.output_constraints.max_length or 4096) // 4,
+            )
+            reserve_daily_quota(
+                session,
+                owner_public_id=request.owner_public_id,
+                course_id=request.contract.course_id,
+                registration=registration,
+                policy=policy,
+                estimated_input_tokens=input_tokens,
+                estimated_output_tokens=projected_output_tokens,
+            )
         input_summary = {
             "capability": capability.value,
             "quality_mode": request.contract.quality_mode.value,
@@ -123,6 +124,7 @@ class M5ModelGateway:
             trace_id=trace_id,
             task_id=request.task_id,
             owner_public_id=request.owner_public_id,
+            course_id=request.contract.course_id,
             capability=capability.value,
             prompt_version=f"{request.prompt.key}:{request.prompt.version}",
             provider=registration.provider,
@@ -189,4 +191,52 @@ class M5ModelGateway:
             output_tokens=output_tokens,
             token_source="estimated",
             estimated_cost=cost,
+            attempted_models=(f"{registration.provider}:{registration.model}",),
         )
+
+    async def execute_with_policy(
+        self,
+        session: Any,
+        *,
+        request: GatewayRequest,
+        registrations: tuple[ModelRegistration, ...],
+        policy: GatewayPolicy,
+        backends: dict[tuple[str, str], TextBackend],
+        response_model: type[BaseModel] | None = None,
+    ) -> GatewayResult:
+        selection = select_model(request.contract, registrations=registrations, policy=policy)
+        by_ref = {(item.provider, item.model): item for item in registrations}
+        refs = (
+            ModelRef(provider=selection.registration.provider, model=selection.registration.model),
+            *selection.fallback_models,
+        )
+        attempted = []
+        last_error: M5CapabilityError | None = None
+        for ref in refs:
+            registration = by_ref[(ref.provider, ref.model)]
+            backend = backends.get((ref.provider, ref.model))
+            attempted.append(f"{ref.provider}:{ref.model}")
+            if backend is None:
+                last_error = M5CapabilityError("model_backend_unavailable", "approved model backend is not configured")
+                continue
+            try:
+                result = await self.execute(
+                    session,
+                    request=request,
+                    registration=registration,
+                    backend=backend,
+                    response_model=response_model,
+                    policy=policy,
+                )
+                return result.model_copy(update={
+                    "attempted_models": tuple(attempted),
+                    "fallback_used": len(attempted) > 1,
+                })
+            except M5CapabilityError as exc:
+                last_error = exc
+                if exc.code != "provider_call_failed":
+                    raise
+        raise M5CapabilityError(
+            "all_model_routes_failed",
+            f"all approved model routes failed: {getattr(last_error, 'code', 'unavailable')}",
+        ) from last_error

@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.database import DBCodeExecution, run_db_op
 from app.legacy_repositories import LegacyReadRepository
 from app.auth import enforce_student_access, get_current_user
+from app.m5_assessment import AssessmentEvidenceInput, record_legacy_assessment_evidence
 from config import CONFIG
 
 router = APIRouter(prefix="/api/code", tags=["code_execution"])
@@ -716,9 +717,20 @@ async def run_code(
     
     def save_exec(session):
         session.add(db_exec)
+        session.flush()
+        evidence = AssessmentEvidenceInput(
+            idempotency_key=f"legacy-code-{exec_id}",
+            source_type="code_execution", source_object_id=exec_id,
+            target_object_type="code_execution", target_object_id=exec_id,
+            passed_count=1 if not error else 0, total_count=1, test_scope="public",
+        )
+        evidence_result = record_legacy_assessment_evidence(
+            session, student_id=student_id, evidence=evidence,
+        )
         session.commit()
+        return evidence_result
         
-    await run_db_op(save_exec)
+    canonical_evidence = await run_db_op(save_exec)
 
     return {
         "exec_id": exec_id,
@@ -726,6 +738,7 @@ async def run_code(
         "error": error,
         "execution_time_ms": int(exec_time * 1000),
         "language": language,
+        "canonical_evidence": canonical_evidence,
     }
 
 

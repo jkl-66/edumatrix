@@ -23,6 +23,7 @@ from app.crud import (
 from app.database import DBQuizRecord, DBReviewPlan, get_db
 from app.auth import enforce_request_student_scope, enforce_student_access, get_current_user
 from app.legacy_repositories import LegacyReadRepository
+from app.m5_assessment import AssessmentEvidenceInput, record_legacy_assessment_evidence
 
 router = APIRouter(prefix="/api/flashcard", tags=["flashcard"], dependencies=[Depends(enforce_request_student_scope)])
 
@@ -170,6 +171,17 @@ async def review_flashcard(
         raise HTTPException(status_code=400, detail=str(exc))
 
     adaptation = await build_review_adaptation_payload(concept, quality, plan.mastery)
+    evidence = AssessmentEvidenceInput(
+        idempotency_key=f"legacy-review-{plan.id}-{plan.review_count or 0}",
+        source_type="wrong_question_review",
+        source_object_id=str(plan.id),
+        target_object_type="review_plan",
+        target_object_id=str(plan.id),
+    )
+    canonical_evidence = record_legacy_assessment_evidence(
+        db, student_id=student_id, evidence=evidence,
+    )
+    db.commit()
     
     front = f"【概念重建】请简要叙述「{concept}」的核心直觉、定义以及它所解决的关键问题。"
     back = adaptation.get("card_back") if adaptation.get("triggered") else f"Key points and principle explanation for {concept}."
@@ -196,6 +208,7 @@ async def review_flashcard(
         "interval_new": plan.interval_days,
         "next_review_at": _iso_utc(plan.next_review_at),
         "message": f"Review recorded. Next review interval: {plan.interval_days} days.",
+        "canonical_evidence": canonical_evidence,
     }
 
 

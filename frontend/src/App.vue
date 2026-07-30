@@ -6,7 +6,7 @@ import {
   BookOpen, MessageSquare, LayoutDashboard, StickyNote, Calendar,
   Presentation, Clock, GraduationCap, Library, Settings, UserCheck,
   GitBranch, BarChart3, TrendingUp, LogOut, Users, Flame, ShieldCheck,
-  PanelLeftClose, PanelLeftOpen, Search, Bell, Plus, Sparkles, Workflow,
+  PanelLeftClose, PanelLeftOpen, Search, Bell, Plus, Sparkles, Workflow, FolderOpen,
 } from '@lucide/vue'
 import { abortAllStreams } from './api'
 import SidebarItem from './components/ui/SidebarItem.vue'
@@ -66,6 +66,7 @@ const studentNav = [
   { path: '/student-analysis', label: '学习画像', group: '学习空间', icon: UserCheck },
   { path: '/learning-path', label: '学习路径', group: '学习空间', icon: GitBranch },
   { path: '/notes', label: '学习笔记', group: '知识管理', icon: StickyNote },
+  { path: '/resources', label: '资源中心', group: '知识管理', icon: FolderOpen },
   { path: '/knowledge', label: '知识库', group: '知识管理', icon: Library },
   { path: '/review', label: '复习计划', group: '复习提升', icon: Calendar },
   { path: '/revision-calendar', label: '复习打卡', group: '复习提升', icon: Flame },
@@ -80,6 +81,7 @@ const teacherNav = [
   { path: '/teacher/students', label: '学生管理', group: '教学空间', icon: Users },
   { path: '/teacher/reviews', label: '复习监控', group: '教学空间', icon: Calendar },
   { path: '/teacher/reports', label: '学习报告', group: '教学空间', icon: BarChart3 },
+  { path: '/resources', label: '资源中心', group: '教学空间', icon: FolderOpen },
   { path: '/settings', label: '设置', group: '系统', icon: Settings },
 ]
 
@@ -99,7 +101,7 @@ const pageTitle = computed(() => {
     '/revision-calendar': '复习日历', '/history': '对话历史', '/knowledge': '知识库',
     '/profile': '学习画像', '/teacher': '教学看板', '/settings': '设置',
     '/student-analysis': '学习画像', '/internal/objects': '对象检查', '/golden-loop': '单画像黄金闭环',
-    '/competition-loop': '三画像竞赛闭环',
+    '/competition-loop': '三画像竞赛闭环', '/resources': '资源中心',
   }
   return map[route.path] || (role.value === 'teacher' ? '教学看板' : 'EduMatrix')
 })

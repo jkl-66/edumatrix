@@ -28,6 +28,11 @@ class FailingBackend:
         raise ValueError("provider payload failed")
 
 
+class ProviderFailureBackend:
+    async def generate(self, system_prompt, user_prompt, *, role):
+        raise RuntimeError("provider unavailable")
+
+
 def _session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -96,3 +101,43 @@ def test_m5_gateway_does_not_misclassify_provider_value_errors():
         ))
     row = session.query(DBModelCall).one()
     assert (row.status, row.error_code) == ("failed", "provider_call_failed")
+
+
+def test_m5_gateway_uses_only_policy_approved_same_quality_fallback():
+    from app.m5_policy import GatewayPolicy, ModelRef
+
+    session = _session()
+    primary = _registration(model="strong-primary", tier="strong")
+    fallback = _registration(model="review-fallback", tier="review")
+    policy = GatewayPolicy(
+        policy_version="policy-fallback",
+        allowed_models=(
+            ModelRef(provider="test", model="strong-primary"),
+            ModelRef(provider="test", model="review-fallback"),
+        ),
+        daily_user_call_limit=10,
+    )
+    request = _request().model_copy(update={
+        "contract": CapabilityContract(
+            capability=Capability.ANSWER,
+            quality_mode="verified",
+            course_id="course-policy", domain_pack_id="domain-policy",
+            profile_snapshot_id="profile-policy", target_knowledge_point_ids=("kp-policy",),
+            target_difficulty_band="L2-L3", idempotency_key="m5-fallback-001",
+        ),
+    })
+    result = asyncio.run(M5ModelGateway().execute_with_policy(
+        session,
+        request=request,
+        registrations=(primary, fallback),
+        policy=policy,
+        backends={
+            ("test", "strong-primary"): ProviderFailureBackend(),
+            ("test", "review-fallback"): Backend('{"summary":"fallback succeeded"}'),
+        },
+        response_model=Answer,
+    ))
+    assert result.fallback_used is True
+    assert result.attempted_models == ("test:strong-primary", "test:review-fallback")
+    rows = session.query(DBModelCall).order_by(DBModelCall.created_at).all()
+    assert [row.status for row in rows] == ["failed", "completed"]

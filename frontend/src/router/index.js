@@ -19,6 +19,7 @@ const StudentAnalysis = () => import('../views/StudentAnalysis.vue')
 const InternalObjectInspector = () => import('../views/InternalObjectInspector.vue')
 const GoldenLoop = () => import('../views/GoldenLoop.vue')
 const M3CompetitionLoop = () => import('../views/M3CompetitionLoop.vue')
+const ResourceCenter = () => import('../views/ResourceCenter.vue')
 
 function requireAuth() {
   const token = localStorage.getItem('edumatrix_token')
@@ -82,6 +83,7 @@ const routes = [
   { path: '/learn', name: 'Learn', component: Chat, beforeEnter: requireAuth, meta: { requiresAuth: true, courseScoped: true } },
   { path: '/golden-loop', name: 'GoldenLoop', component: GoldenLoop, beforeEnter: requireAuth, meta: { requiresAuth: true, courseScoped: true } },
   { path: '/competition-loop', name: 'M3CompetitionLoop', component: M3CompetitionLoop, beforeEnter: requireAuth, meta: { requiresAuth: true, courseScoped: true } },
+  { path: '/resources', name: 'ResourceCenter', component: ResourceCenter, beforeEnter: requireAuth, meta: { requiresAuth: true, courseScoped: true } },
   { path: '/notes', name: 'Notes', component: Notes, beforeEnter: requireAuth },
   { path: '/review', name: 'Review', component: Review, beforeEnter: requireAuth },
   { path: '/teacher', name: 'Teacher', component: Teacher, beforeEnter: requireTeacher, alias: ['/teacher/overview'], meta: { requiresAuth: true, roles: ['teacher', 'admin'] } },

@@ -95,6 +95,36 @@ class TestSecurityContracts(unittest.TestCase):
         self.assertIn("/login?reason=session-expired", common)
         self.assertIn("登录状态已失效，请重新登录", login)
 
+    def test_public_health_does_not_accept_or_disclose_model_endpoint(self):
+        main = self.read("app/main.py")
+        compose = self.read("docker-compose.yml")
+        health = main[main.index('@app.get("/api/health")'):main.index('@app.get("/api/llm/test")')]
+        self.assertNotIn("x-edumatrix-api-key", health)
+        self.assertNotIn('\"llm_endpoint\"', health)
+        self.assertIn('\"client_keys_accepted\": False', health)
+        self.assertNotIn("windhub.cc", compose)
+        self.assertIn("EDUMATRIX_LLM_API_KEY=${EDUMATRIX_LLM_API_KEY:-}", compose)
+
+    def test_avatar_speech_never_handles_provider_secrets(self):
+        source = self.read("frontend/src/components/AvatarSpeech.vue")
+        for forbidden in ("xfApiKey", "xfApiSecret", "apiSecret", "tts-api.xfyun.cn", "localStorage", "WebSocket"):
+            self.assertNotIn(forbidden, source)
+        self.assertIn("SpeechSynthesisUtterance", source)
+
+    def test_frontend_never_stores_or_sends_model_credentials(self):
+        common = self.read("frontend/src/api/common.js")
+        settings = self.read("frontend/src/views/Settings.vue")
+        combined = common + settings
+        for forbidden in ("X-EduMatrix-Api-Key", "X-EduMatrix-Multimodal-Api-Key", "multimodalApiKey", "config.apiKey"):
+            self.assertNotIn(forbidden, combined)
+        self.assertIn("localStorage.removeItem('edumatrix_llm_config')", settings)
+
+    def test_swarm_factory_ignores_external_model_configuration_headers(self):
+        source = self.read("swarm_factory.py")
+        for forbidden in ("x-edumatrix-api-key", "x-edumatrix-endpoint", "x-edumatrix-model", "x-edumatrix-multimodal-api-key"):
+            self.assertNotIn(forbidden, source)
+        self.assertIn("Request headers are deliberately ignored", source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,18 +2,18 @@
 
 GitHub 保存当前源码、课程清单、来源记录、已附许可的整理课程及小型练习数据。它不是本机数据库或演示材料的完整备份。
 
-## 首次克隆须补齐的教材
+## 已纳入仓库的教材
 
-`ai_deep_learning_agents_v1/course_manifest.json` 保留本机完整课程定义。NNDL 和 NNDL Practice 的上游未提供可确认的公开再分发许可，本次不上传它们的副本；本机文件保留。不要把 `LICENSES.md` 中的“用户已取得使用许可”当作公开再分发授权。
+用户于 2026-10-24 确认现有素材已具备所需许可，并明确授权公开提交。`curated/ai_deep_learning_agents_v1/course_manifest.json` 中的 NNDL 和 NNDL Practice 教材已纳入仓库，保留原有来源、版本和哈希记录。
 
-启动时会严格校验完整课程，缺少以下四个文件会阻止默认课程初始化，因此克隆后须先从具有合法使用权限的本地工作区复制到 `data/curated/ai_deep_learning_agents_v1/chapters/`，并保持内容与清单哈希一致：
+以下四份运行必需文本位于 `data/curated/ai_deep_learning_agents_v1/chapters/`，克隆后无需另行复制：
 
 - `15_NNDL第二版_神经网络与深度学习理论地图.md`
 - `16_NNDL第二版完整电子书.md`
 - `17_NNDL通识版完整电子书.md`
 - `18_NNDL案例与实践_PyTorch工程实践.md`
 
-完整 PDF 原件同样只保留在本地。上游入口为 <https://github.com/nndl/nndl> 与 <https://github.com/nndl/nndl-practice>；固定版本、源文件和哈希见课程清单。已有整理脚本是 `scripts/build_master_ai_course.py`，依赖 `data/raw/github_repos/` 的上游检出；本次没有重新执行它，也不保证在不同依赖下重建出完全相同的 PDF 抽取文本。
+两份完整电子书的 PDF 原件一并纳入仓库。上游入口为 <https://github.com/nndl/nndl> 与 <https://github.com/nndl/nndl-practice>；固定版本、源文件和哈希见课程清单。已有整理脚本是 `scripts/build_master_ai_course.py`，依赖 `data/raw/github_repos/` 的上游检出；正常运行直接读取已提交的整理文本，无需重新抽取 PDF。
 
 其他收录课程的许可证与署名在各课程目录。AI 课程还附有 `licenses/` 下从本地固定上游检出复制的 D2L Apache-2.0 和 LLM-Beginner MIT 许可全文。仓库根许可证不覆盖第三方素材；历史清单不等于本次独立完成全部许可证审计。
 

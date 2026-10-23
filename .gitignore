@@ -177,8 +177,8 @@ data.zip
 /vendor/whisper.cpp/bin/
 /vendor/whisper.cpp/models/
 
-# Public baseline: local-only textbook copies without confirmed redistribution terms
-/data/curated/ai_deep_learning_agents_v1/chapters/*NNDL*
+# Superseded chapter copy; the manifest uses chapter 18
+/data/curated/ai_deep_learning_agents_v1/chapters/16_NNDL案例与实践_PyTorch工程实践.md
 
 # Transient test runs and archived local notes
 /tests/m8_runtime_fixture/

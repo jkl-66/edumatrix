@@ -1,5 +1,20 @@
 # EduMatrix M2 WORKLOG2
 
+## WL2-M2-20260801-013 - M2-012 真实服务浏览器闭环与阶段正式关闭
+
+- 状态：`PASS`（M2-012；M2 阶段正式关闭）。
+- 隔离策略：数据库新增显式 `EDUMATRIX_DB_PATH` 覆盖能力；验收脚本使用 `outputs/M2_单画像黄金闭环/evidence/browser-e2e/m2_e2e.db`，不读取或修改开发者的 `edumatrix.db`。脚本仅在隔离库中为随机密码初始化的固定基准用户设置临时测试密码，生产种子仍不包含公开默认密码。
+- 真实运行路径：`scripts/e2e_m2_golden_loop.py` 启动真实 FastAPI、Vite 和无头 Chromium，经 `/api/auth/login` 登录固定基准学习者，加载 `/golden-loop`，创建并启动持久任务，生成 lesson/lab_guide/tiered_quiz，执行 schema/source/cross-artifact 三类共 9 项质量检查，提交学习反馈并形成 proposed decision。
+- 恢复与权限：同一浏览器刷新后恢复完成态；停止并重新启动后端后仍从隔离 SQLite 读取完整闭环；新注册普通用户访问固定基准与 owner bundle 均返回 `403`。重启后 API 复核得到 `completed`、3 个资源、9 条质量记录、1 条反馈事件和 1 条候选决策。
+- 真实运行发现与修复：首次运行发现 Vue 将空字符串 `action` 直接绑定 `disabled` 后仍渲染禁用属性，改为 `Boolean(action)`；第二次运行发现默认确定性后端不满足 M2 原始 JSON 契约，补充严格的三类离线结构化工件适配与引用范围回归。两项都通过真实 API/浏览器路径再次验证。
+- 进程治理：Windows 下按受控 PID 回收完整 npm/Vite 进程树；最终运行后 `8000/5173` 均无监听残留。
+- 浏览器证据：`evidence/browser-e2e/report.json` 结果为 `passed`；截图覆盖登录、基准加载、三资源与 9/9 质量门禁、反馈完成、后端重启恢复。关键截图已目视确认内容非空、布局完整、状态与报告一致。
+- 自动验证：全部 M2 为 `32 passed, 5 warnings`；全量后端为 `332 passed, 6 warnings`，无失败、错误或收集异常；`python -m compileall -q app scripts/e2e_m2_golden_loop.py` 通过；前端生产构建成功，`3102 modules transformed`。
+- 声明边界：本次使用 deterministic 模式证明无外部 Key 时的工作流、结构契约、状态机、持久化和权限边界，不作为真实结构化模型质量、真实 FAISS 检索效果或比赛量化指标证据。上述门禁继续由 M3/M4 承担。
+- 修改文件：`app/database.py`、`frontend/src/views/GoldenLoop.vue`、`llm_client.py`、`scripts/e2e_m2_golden_loop.py`、`tests/test_m2_artifacts.py`、M2 索引、本日志及验收证据。
+- 下一步：按既定顺序进入 M3，先准备许可证可核验教材与真实 FAISS，再接入真实结构化模型，最后执行三画像、四角色、辩论审核和交互工件浏览器闭环。
+- 时间：2026-08-01（Asia/Shanghai）。
+
 本日志按实际完成顺序记录 M2 每组代码、测试、限制和下一步。历史记录只追加，不覆盖。
 
 ## WL2-M2-20260726-011 - M2-012 未关闭并按用户指示转入 M3

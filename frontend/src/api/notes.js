@@ -25,6 +25,16 @@ export async function updateNote(noteId, data) {
   return r.data
 }
 
+export async function getNoteVersions(noteId) {
+  const r = await api.get(`/notes/${noteId}/versions`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function restoreNoteVersion(noteId, versionNumber, data) {
+  const r = await api.post(`/notes/${noteId}/versions/${versionNumber}/restore`, data, { headers: buildHeaders() })
+  return r.data
+}
+
 export async function deleteNote(noteId) {
   await api.delete(`/notes/${noteId}`, { headers: buildHeaders() })
 }

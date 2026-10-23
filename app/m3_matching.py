@@ -282,7 +282,12 @@ def build_m3_matching_report(
     owner_public_id: str,
 ) -> M3MatchingReport:
     task = _owned_task(session, task_id, owner_public_id)
-    review_run = session.query(DBAgentRun).filter_by(task_id=task.id, role=M3AgentRole.EVIDENCE_REVIEW.value).first()
+    review_run = (
+        session.query(DBAgentRun)
+        .filter_by(task_id=task.id, role=M3AgentRole.EVIDENCE_REVIEW.value)
+        .order_by(DBAgentRun.created_at.desc(), DBAgentRun.id.desc())
+        .first()
+    )
     if review_run is None or review_run.status != "completed":
         _fail("evidence_review_incomplete", "matching report requires completed evidence review")
     snapshot = session.query(DBProfileSnapshot).filter_by(trace_id=task.trace_id).first()

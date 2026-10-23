@@ -222,6 +222,9 @@ class TestMultimodalChat(unittest.TestCase):
 
     def test_chat_multi_turn_memory(self):
         """测试流式对话多轮对话记忆功能"""
+        from unittest.mock import patch
+        from llm_client import AsyncDeterministicEducationLLM
+
         # 第一轮提问
         payload1 = {
             "message": "什么是梯度下降？",
@@ -229,7 +232,11 @@ class TestMultimodalChat(unittest.TestCase):
             "mode": "chat",
             "images": []
         }
-        response1 = self.client.post("/api/stream/chat", json=payload1, headers=self.auth_headers)
+        with patch(
+            "swarm_factory.build_async_llm",
+            return_value=AsyncDeterministicEducationLLM(),
+        ):
+            response1 = self.client.post("/api/stream/chat", json=payload1, headers=self.auth_headers)
         self.assertEqual(response1.status_code, 200)
 
         # 检查数据库中已记录第一轮对话
@@ -258,9 +265,6 @@ class TestMultimodalChat(unittest.TestCase):
             "images": []
         }
         # 我们使用 unittest.mock 来捕获传递给大模型的 prompts 包含历史记录
-        from unittest.mock import patch
-        from llm_client import AsyncDeterministicEducationLLM
-
         original_stream = AsyncDeterministicEducationLLM.generate_stream
         captured_prompts = []
 
@@ -269,9 +273,13 @@ class TestMultimodalChat(unittest.TestCase):
             async for chunk in original_stream(self_obj, system_prompt, user_prompt, *args, **kwargs):
                 yield chunk
 
-        with patch.object(AsyncDeterministicEducationLLM, 'generate_stream', mock_generate_stream):
-            response2 = self.client.post("/api/stream/chat", json=payload2, headers=self.auth_headers)
-            self.assertEqual(response2.status_code, 200)
+        with patch(
+            "swarm_factory.build_async_llm",
+            return_value=AsyncDeterministicEducationLLM(),
+        ):
+            with patch.object(AsyncDeterministicEducationLLM, 'generate_stream', mock_generate_stream):
+                response2 = self.client.post("/api/stream/chat", json=payload2, headers=self.auth_headers)
+                self.assertEqual(response2.status_code, 200)
 
         # 验证传递给大模型的 user_prompt 中包含了第一轮的历史对话
         self.assertTrue(len(captured_prompts) > 0)
@@ -283,7 +291,7 @@ class TestMultimodalChat(unittest.TestCase):
 
     def test_client_visual_provider_headers_are_ignored(self):
         """Provider credentials are backend-managed and never accepted from clients."""
-        from swarm_factory import build_swarm_from_headers
+        from swarm_factory import _swarm_cache, build_swarm_from_headers
 
         headers = {
             "x-edumatrix-multimodal-api-key": "fake-vision-key",
@@ -291,9 +299,12 @@ class TestMultimodalChat(unittest.TestCase):
             "x-edumatrix-multimodal-model": "mock-vlm",
         }
 
+        _swarm_cache.clear()
+        backend_managed = build_swarm_from_headers({})
         swarm = build_swarm_from_headers(headers)
 
-        self.assertNotEqual(type(swarm.llm).__name__, "MultimodalOnlyAsyncLLM")
+        self.assertIs(swarm, backend_managed)
+        self.assertEqual(type(swarm.llm), type(backend_managed.llm))
         self.assertNotEqual(getattr(swarm.llm, "api_key", None), "fake-vision-key")
 
     def test_vision_connection_endpoint_warns_without_external_model(self):

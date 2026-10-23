@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, DBArtifact, DBClaimCheck, DBDebateRound
+from app.agent_audit import public_agent_audit_payload
 from app.m3_agents import (
     M3AgentRole,
     complete_m3_agent_run,
@@ -112,6 +113,15 @@ def test_claim_debate_persists_separate_arguments_verdicts_and_stop_reasons():
         assert session.query(DBClaimCheck).filter_by(trace_id=task.trace_id).count() == 3
         assert session.query(DBDebateRound).filter_by(trace_id=task.trace_id).count() == 4
         assert session.query(DBArtifact).filter_by(creating_task_id=task.id).count() == 5
+        audit = public_agent_audit_payload(
+            session,
+            task_id=task.id,
+            owner_public_id=context.owner_public_id,
+        )
+        review_item = audit["items"][-1]
+        assert review_item["role"] == "evidence_review"
+        assert "uncertain" in review_item["validation"]
+        assert "cannot be treated as publication-ready" in review_item["revision"]
         for row in session.query(DBDebateRound).filter_by(trace_id=task.trace_id):
             assert row.prover_claim != row.challenger_response
             assert row.judge_decision in {"keep", "revise", "reject", "uncertain"}

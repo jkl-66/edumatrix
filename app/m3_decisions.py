@@ -171,7 +171,12 @@ def build_m3_decision_comparison(
     owner_public_id: str,
 ) -> M3DecisionComparison:
     task = _owned_task(session, task_id, owner_public_id)
-    run = session.query(DBAgentRun).filter_by(task_id=task.id, role=M3AgentRole.DECISION_ORCHESTRATION.value).first()
+    run = (
+        session.query(DBAgentRun)
+        .filter_by(task_id=task.id, role=M3AgentRole.DECISION_ORCHESTRATION.value)
+        .order_by(DBAgentRun.created_at.desc(), DBAgentRun.id.desc())
+        .first()
+    )
     if run is None or run.status not in {"running", "completed"}:
         _fail("decision_role_not_running", "decision orchestration role must be running")
     report_artifact = session.query(DBArtifact).filter_by(
@@ -349,7 +354,12 @@ def persist_m3_decision_comparison(
                 },
             )
             artifact_version_created = True
-    run = session.query(DBAgentRun).filter_by(task_id=task.id, role=M3AgentRole.DECISION_ORCHESTRATION.value).first()
+    run = (
+        session.query(DBAgentRun)
+        .filter_by(task_id=task.id, role=M3AgentRole.DECISION_ORCHESTRATION.value)
+        .order_by(DBAgentRun.created_at.desc(), DBAgentRun.id.desc())
+        .first()
+    )
     if run is not None and run.status == "running":
         complete_m3_agent_run(
             session,
@@ -357,6 +367,18 @@ def persist_m3_decision_comparison(
             owner_public_id=task.owner_public_id,
             role=M3AgentRole.DECISION_ORCHESTRATION,
             output_artifact_version_id=version.id,
+            candidate_summary=f"Compared {len(comparison.candidates)} bounded adaptation candidates.",
+            disagreement=(
+                "Learning evidence contained conflicting signals."
+                if comparison.evidence_state == "conflicting"
+                else "No unresolved evidence conflict remained at decision time."
+            ),
+            validation=f"Decision used {comparison.evidence_state} evidence and rule set {', '.join(comparison.selected_rule_ids)}.",
+            revision=f"Selected adaptation: {comparison.selected_decision_type}.",
+            decision_summary=(
+                f"Proposed {comparison.selected_decision_type} with confidence {comparison.confidence:.2f}; "
+                "no mastery update was applied."
+            ),
         )
     session.flush()
     return decision, artifact, version, decision_created or artifact_version_created

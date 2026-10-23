@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import re
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, HTTPException
@@ -7,6 +10,14 @@ from pydantic import BaseModel
 from app.database import run_db_op
 from app.auth import enforce_student_access, get_current_user
 from app.crud import load_student_profile, save_student_profile
+from app.m5_gateway import StreamingModelCallLifecycle
+from app.legacy_migration_governance import (
+    IdentityProfileHistoryCanonicalReader,
+    observe_legacy_shadow_read,
+    project_model_row,
+    project_model_rows,
+)
+from config import CONFIG
 from learning_strategy import (
     PathPlanner,
     suggest_cross_domain_supports,
@@ -102,6 +113,83 @@ DIMENSION_DIAGNOSIS = {
 }
 
 
+def _profile_has_meaningful_evidence(profile: Any) -> bool:
+    """Return whether a profile contains learner-provided or learning evidence.
+
+    A freshly created profile carries numeric defaults for a few controls so the
+    rest of the application can render safely.  Those defaults are not evidence
+    and must not be turned into a subject-specific analysis or learning curve.
+    """
+    if profile is None:
+        return False
+    evidence_fields = (
+        "profile_evidence",
+        "knowledge_traces",
+        "concept_mastery",
+        "bkt_states",
+        "mental_state_history",
+        "history",
+        "customized_fields",
+        "major",
+        "learning_goals",
+        "interaction_preferences",
+        "cognitive_style",
+    )
+    return any(bool(getattr(profile, field, None)) for field in evidence_fields)
+
+
+def _empty_profile_analysis(profile: Any, display_name: str) -> dict[str, Any]:
+    """Build the honest initial-state payload for a learner without evidence."""
+    dimensions = {
+        key: {
+            "key": key,
+            "label": {
+                "knowledge_mastery": "知识基础与掌握度",
+                "misconception_profile": "易错点与概念理解",
+                "understanding_fluency_transfer": "理解和迁移能力",
+                "cognitive_processing": "处理复杂内容的方式",
+                "learning_strategy": "学习方法",
+                "metacognition": "自我判断和调整",
+                "motivation_and_purpose": "学习目标和动力",
+                "affect_resilience": "信心和抗挫能力",
+                "interaction_preference": "喜欢怎样互动学习",
+                "learning_context": "学习环境和安排",
+            }.get(key, key),
+            "score": None,
+            "level": "pending",
+            "diagnosis": "等待入学诊断或有效学习证据",
+            "evidence": [],
+            "suggestions": [],
+        }
+        for key in DIMENSION_DIAGNOSIS
+    }
+    return {
+        "profile_initialization_state": "awaiting_learning_evidence",
+        "background": {
+            "student_id": getattr(profile, "student_id", ""),
+            "display_name": display_name,
+            "major": getattr(profile, "major", "") or "尚未填写",
+            "target_course": getattr(profile, "target_course", "") or "尚未选择课程",
+            "cognitive_style": getattr(profile, "cognitive_style", "") or "等待诊断",
+            "learning_goals": [],
+            "learning_preferences": [],
+            "motivation_type": "等待诊断",
+            "frustration_index": None,
+            "engagement_level": None,
+        },
+        "dimensions": dimensions,
+        "causes": {},
+        "weak_analysis": [],
+        "suggestions": ["完成入学诊断或一次有效学习任务后，系统会生成个性化画像分析。"],
+        "narrative_report": "完成入学诊断或一次有效学习后，系统会生成个性化成长信笺。",
+        "dashboard_report": "当前还没有可用于分析的学习证据。完成入学诊断或一次有效学习任务后再生成学情报告。",
+        "has_narrative_cache": False,
+        "kalman_concept": None,
+        "kalman_history": [],
+        "mental_state_history": [],
+    }
+
+
 def _build_dimension_analysis(dimension_key: str, state) -> dict[str, Any]:
     """构建单个维度的分析文本"""
     score = state.score if state else 0.5
@@ -129,12 +217,158 @@ def _build_dimension_analysis(dimension_key: str, state) -> dict[str, Any]:
     }
 
 
-def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
-    """分析薄弱点的根因"""
-    weak_points = profile.weak_points or []
-    mastery = profile.concept_mastery or {}
-    causes = profile.learning_state_causes or {}
+def _load_current_course_knowledge_points(
+    db,
+    *,
+    student_id: str,
+    current_user_public_id: str,
+    course_id: str | None = None,
+) -> dict[str, Any]:
+    """Load only active canonical knowledge points for the learner's course.
+
+    Profile fields are legacy/user-entered values and are therefore never used
+    as a course boundary.  An explicit course_id (or a published course
+    resolved from the learner's saved course label) selects the course;
+    chapters and their knowledge-point relations provide the canonical scope.
+    """
+    from app.database import (
+        DBCourse,
+        DBChapter,
+        DBChapterKnowledgePoint,
+        DBKnowledgePoint,
+        DBStudentProfile,
+    )
+
+    course = db.get(DBCourse, str(course_id)) if course_id else None
+    if course is None and not course_id:
+        profile = db.query(DBStudentProfile).filter(
+            DBStudentProfile.student_id == student_id,
+        ).first()
+        saved_title = str(getattr(profile, "target_course", "") or "").strip()
+        if saved_title:
+            course = db.query(DBCourse).filter(
+                DBCourse.title == saved_title,
+                DBCourse.status == "published",
+                DBCourse.visibility == "public",
+            ).order_by(DBCourse.title.asc(), DBCourse.id.asc()).first()
+    if course is None:
+        return {"course_id": "", "course_title": "", "points": []}
+    from course_catalog import course_is_selectable
+    if not course_is_selectable(db, course):
+        return {"course_id": "", "course_title": "", "points": []}
+    if (
+        course.visibility != "public"
+        and course.owner_public_id != current_user_public_id
+    ):
+        return {"course_id": "", "course_title": "", "points": []}
+    rows = (
+        db.query(DBKnowledgePoint)
+        .join(
+            DBChapterKnowledgePoint,
+            DBChapterKnowledgePoint.knowledge_point_id == DBKnowledgePoint.id,
+        )
+        .join(DBChapter, DBChapter.id == DBChapterKnowledgePoint.chapter_id)
+        .filter(
+            DBChapter.course_id == course.id,
+            DBKnowledgePoint.status == "active",
+        )
+        .order_by(DBChapter.position.asc(), DBKnowledgePoint.title.asc(), DBKnowledgePoint.id.asc())
+        .all()
+    )
+    points = []
+    seen_ids: set[str] = set()
+    for row in rows:
+        point_id = str(row.id or "").strip()
+        if not point_id or point_id in seen_ids:
+            continue
+        seen_ids.add(point_id)
+        points.append({
+            "id": point_id,
+            "title": str(row.title or "").strip(),
+            "code": str(row.code or "").strip(),
+        })
+    return {
+        "course_id": str(course.id),
+        "course_title": str(course.title or "").strip() if course else "",
+        "points": points,
+    }
+
+
+def _build_weak_point_analysis(
+    profile,
+    course_points: list[dict[str, str]] | None = None,
+) -> list[dict[str, Any]]:
+    """分析当前课程 canonical 知识点的薄弱点根因。
+
+    ``course_points`` 是调用方按当前课程授权加载的 canonical 范围。没有
+    范围时返回空列表，避免把画像里的普通自然语言当成知识点。
+    """
+    course_points = list(course_points or [])
+    if not course_points:
+        return []
+
+    point_by_key: dict[str, dict[str, str]] = {}
+    ambiguous_keys: set[str] = set()
+
+    def _value(item: Any, key: str, default: Any = None) -> Any:
+        return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+
+    for point in course_points:
+        normalized = {
+            "id": str(_value(point, "id") or "").strip(),
+            "title": str(_value(point, "title") or "").strip(),
+            "code": str(_value(point, "code") or "").strip(),
+        }
+        if not normalized["id"] or not normalized["title"]:
+            continue
+        for key in (normalized["id"], normalized["title"], normalized["code"]):
+            if not key:
+                continue
+            existing = point_by_key.get(key)
+            if existing and existing["id"] != normalized["id"]:
+                ambiguous_keys.add(key)
+            else:
+                point_by_key[key] = normalized
+    for key in ambiguous_keys:
+        point_by_key.pop(key, None)
+
+    weak_points = list(getattr(profile, "weak_points", None) or [])
+    mastery = dict(getattr(profile, "concept_mastery", None) or {})
     from models import LearningStateCause, CAUSE_LABELS
+
+    def _point_from_weak_value(value: Any) -> dict[str, str] | None:
+        if isinstance(value, dict):
+            raw_keys = (
+                value.get("id"), value.get("knowledge_point_id"),
+                value.get("knowledgePointId"), value.get("title"), value.get("code"),
+            )
+        else:
+            raw_keys = (value,)
+        for raw_key in raw_keys:
+            key = str(raw_key or "").strip()
+            if key and key in point_by_key:
+                return point_by_key[key]
+        return None
+
+    def _lookup_mastery(point: dict[str, str]) -> float:
+        trace_values = getattr(profile, "knowledge_traces", None) or {}
+        for key in (point["id"], point["title"], point["code"]):
+            if key in mastery:
+                value = mastery[key]
+                if isinstance(value, dict):
+                    value = value.get("score", value.get("mastery"))
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    pass
+            trace = trace_values.get(key) if isinstance(trace_values, dict) else None
+            if trace is not None:
+                value = trace.get("mastery") if isinstance(trace, dict) else getattr(trace, "mastery", None)
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    pass
+        return 0.0
 
     # 根因映射
     cause_map = {
@@ -148,13 +382,22 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
     }
 
     results = []
-    for point in weak_points:
-        score = mastery.get(point, 0.0)
+    seen_point_ids: set[str] = set()
+    for raw_point in weak_points:
+        point_data = _point_from_weak_value(raw_point)
+        if point_data is None or point_data["id"] in seen_point_ids:
+            continue
+        seen_point_ids.add(point_data["id"])
+        point = point_data["title"]
+        point_keys = tuple(key for key in (point_data["id"], point_data["title"], point_data["code"]) if key)
+        score = _lookup_mastery(point_data)
         
         # 针对每个概念，筛选与之直接相关的证据
+        profile_evidence = list(getattr(profile, "profile_evidence", None) or [])
         concept_evidences = [
-            ev for ev in profile.profile_evidence 
-            if point in ev.text or any(point in f for f in ev.features)
+            ev for ev in profile_evidence
+            if any(key in str(_value(ev, "text", "")) for key in point_keys)
+            or any(any(key in str(feature) for key in point_keys) for feature in (_value(ev, "features", ()) or ()))
         ]
         
         concept_cause_scores = {cause.value: 0.0 for cause in LearningStateCause}
@@ -171,12 +414,15 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
         )
 
         def is_student_voice(ev) -> bool:
-            if ev.source == "student_message":
+            source = _value(ev, "source", "")
+            source = getattr(source, "value", source)
+            text = str(_value(ev, "text", "") or "")
+            if source == "student_message":
                 return True
-            if "LLM画像" in ev.text:
+            if "LLM画像" in text:
                 return True
-            if ev.source == "student_feedback":
-                if any(w in ev.text for w in ("同学", "我们看到", "我们不妨", "系统已为您", "为您调配", "你这个问题", "很高兴", "你好呀")):
+            if source == "student_feedback":
+                if any(w in text for w in ("同学", "我们看到", "我们不妨", "系统已为您", "为您调配", "你这个问题", "很高兴", "你好呀")):
                     return False
                 return True
             return False
@@ -193,7 +439,9 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
                 recency = 1.0 + min(0.35, index * 0.02)
                 
                 # 子句/分句高精度关联提取
-                sub_sentences = [s.strip() for s in re.split(r'[;；,，.。!！?？]', ev.text) if s.strip()]
+                evidence_text = str(_value(ev, "text", "") or "")
+                evidence_features = set(_value(ev, "features", ()) or ())
+                sub_sentences = [s.strip() for s in re.split(r'[;；,，.。!！?？]', evidence_text) if s.strip()]
                 matched_subs = [s for s in sub_sentences if point in s]
                 
                 if matched_subs and len(sub_sentences) > 1:
@@ -207,20 +455,32 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
                     if "图" in matched_text or "代码" in matched_text or "一步步" in matched_text:
                         sub_features.add("interaction_mismatch")
                         
-                    active_features = sub_features.intersection(ev.features)
+                    active_features = sub_features.intersection(evidence_features)
                     if not active_features:
-                        active_features = ev.features
+                        active_features = evidence_features
                 else:
-                    active_features = ev.features
+                    active_features = evidence_features
                     
                 for feature in active_features:
                     if feature in concept_cause_scores:
-                        concept_cause_scores[feature] += ev.weight * ev.confidence * weight_factor * recency
+                        weight = float(_value(ev, "weight", 0.0) or 0.0)
+                        confidence = float(_value(ev, "confidence", 0.0) or 0.0)
+                        concept_cause_scores[feature] += weight * confidence * weight_factor * recency
         
         # 结合该概念的实际知识追踪表现（错误尝试次数）来校准根因
-        trace = profile.knowledge_traces.get(point)
+        trace = next(
+            (
+                (profile.knowledge_traces or {}).get(key)
+                for key in point_keys
+                if isinstance(profile.knowledge_traces, dict)
+                and (profile.knowledge_traces or {}).get(key) is not None
+            ),
+            None,
+        )
         if trace:
-            wrong_attempts = trace.attempts - trace.correct_attempts
+            attempts = trace.get("attempts", 0) if isinstance(trace, dict) else getattr(trace, "attempts", 0)
+            correct_attempts = trace.get("correct_attempts", 0) if isinstance(trace, dict) else getattr(trace, "correct_attempts", 0)
+            wrong_attempts = attempts - correct_attempts
             if wrong_attempts > 0:
                 concept_cause_scores[LearningStateCause.STRATEGY_GAP.value] += wrong_attempts * 0.5
                 concept_cause_scores[LearningStateCause.PREREQUISITE_GAP.value] += wrong_attempts * 0.4
@@ -239,17 +499,6 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
                         "percentage": pct,
                     })
                     
-        # 兜底：如果该概念没有专属特征，则平滑并入全局前两大原因进行适配
-        if not root_causes:
-            sorted_causes = sorted(causes.values(), key=lambda c: c.percentage, reverse=True)
-            for cause in sorted_causes[:2]:
-                if cause.key in cause_map:
-                    root_causes.append({
-                        "cause": cause.label,
-                        "detail": cause_map[cause.key],
-                        "percentage": cause.percentage,
-                    })
-
         results.append({
             "concept": point,
             "mastery": round(score, 2),
@@ -261,7 +510,12 @@ def _build_weak_point_analysis(profile) -> list[dict[str, Any]]:
 
 def load_display_name(db: Session, username: str) -> str:
     from app.legacy_repositories import LegacyReadRepository
-    return LegacyReadRepository(db).display_name(username)
+    value = LegacyReadRepository(db).display_name(username)
+    observe_legacy_shadow_read(
+        db, chain_id="identity-profile-history", legacy_result=value,
+        canonical_loader=lambda: IdentityProfileHistoryCanonicalReader(db).display_name(username),
+    )
+    return value
 
 @router.get("/{student_id}")
 async def get_profile(
@@ -273,6 +527,19 @@ async def get_profile(
     swarm = build_swarm_from_headers(request.headers)
     profile = await run_db_op(load_student_profile, student_id)
     swarm.profile_store[student_id] = profile
+
+    def _profile_snapshot_context(db_session):
+        from app.profile_onboarding import latest_profile_snapshot_for_course, profile_influence_summary
+        from app.database import DBUser
+        owner = db_session.query(DBUser).filter_by(username=student_id).first()
+        row = latest_profile_snapshot_for_course(db_session, owner.public_id if owner else current_user.public_id)
+        return {
+            "id": row.id if row else None,
+            "version": row.profile_version if row else None,
+            "influence": profile_influence_summary(row),
+        }
+
+    snapshot_context = await run_db_op(_profile_snapshot_context)
 
     display_name = await run_db_op(load_display_name, student_id)
 
@@ -295,7 +562,14 @@ async def get_profile(
     coordinate_map = await asyncio.to_thread(poincare_to_2d_coordinates, embeddings)
     def _fetch_alignment_op(db_session):
         from app.legacy_repositories import LegacyReadRepository
-        return LegacyReadRepository(db_session).latest_alignment(student_id)
+        value = LegacyReadRepository(db_session).latest_alignment(student_id)
+        observe_legacy_shadow_read(
+            db_session, chain_id="identity-profile-history", legacy_result=value,
+            canonical_loader=lambda: IdentityProfileHistoryCanonicalReader(db_session).latest_alignment(student_id),
+            legacy_projector=project_model_row,
+            actor_public_id=current_user.public_id,
+        )
+        return value
     
     latest_log = await run_db_op(_fetch_alignment_op)
     alignment_data = {
@@ -306,10 +580,17 @@ async def get_profile(
 
     return {
         "alignment": alignment_data,
+        "profile_initialization_state": (
+            "active" if _profile_has_meaningful_evidence(profile)
+            else "awaiting_learning_evidence"
+        ),
         "student_id": student_id,
+        "profile_snapshot_id": snapshot_context["id"],
+        "profile_version": snapshot_context["version"],
+        "profile_influence": snapshot_context["influence"],
         "display_name": display_name,
         "major": getattr(profile, "major", ""),
-        "target_course": getattr(profile, "target_course", "机器学习导论"),
+        "target_course": getattr(profile, "target_course", ""),
         "cognitive_style": getattr(profile, "cognitive_style", ""),
         "learning_goals": getattr(profile, "learning_goals", [])[:5],
         "weak_points": getattr(profile, "weak_points", [])[:8],
@@ -349,11 +630,65 @@ class NarrativeReportGenerator:
     分别生成温暖鼓励的成长信笺（供学习画像使用）以及科学理性的仪表盘全局分析（供仪表盘使用）。
     """
 
-    def __init__(self, llm: Any) -> None:
+    def __init__(self, llm: Any, *, database_runner=run_db_op) -> None:
         self.llm = llm
+        self.database_runner = database_runner
 
-    async def generate_report(self, profile: Any) -> tuple[str, str]:
+    async def _generate_agent(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        role: str,
+        operation: str,
+        capability: str,
+        owner_public_id: str,
+        trace_id: str,
+    ) -> str:
+        provider = (
+            "deterministic"
+            if self.llm.__class__.__name__ == "AsyncDeterministicEducationLLM"
+            else CONFIG.llm_provider
+        )
+        model = getattr(
+            self.llm,
+            "model",
+            "deterministic" if provider == "deterministic" else CONFIG.llm_model,
+        )
+        lifecycle = StreamingModelCallLifecycle(
+            capability=capability,
+            prompt_key=f"legacy_profile_{operation}",
+            prompt_version="1.0",
+            provider=provider or "unknown",
+            model=model or "unknown",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            owner_public_id=owner_public_id,
+            trace_id=trace_id,
+            input_summary={"operation": operation, "profile_payload_included": False},
+            database_runner=self.database_runner,
+        )
+        await lifecycle.start()
+        try:
+            output = await self.llm.generate(system_prompt, user_prompt, role=role)
+        except asyncio.CancelledError:
+            await asyncio.shield(lifecycle.fail("client_disconnected"))
+            raise
+        except Exception:
+            await lifecycle.fail(f"profile_{operation}_provider_failed")
+            raise
+        await lifecycle.complete(output)
+        return output
+
+    async def generate_report(
+        self,
+        profile: Any,
+        *,
+        owner_public_id: str,
+        trace_id: str | None = None,
+    ) -> tuple[str, str]:
         """运行多-agent 评估工作流，生成定制叙事报告 (narrative_report) 与仪表盘学情分析报告 (dashboard_report)。"""
+        trace_id = trace_id or f"m5-profile-analysis-{uuid.uuid4().hex}"
         # Step 1: 模拟 数据分析师 (Data Analyst Agent) 抽取核心指标
         mastery_summary = ", ".join(f"{c}: {round(m * 100)}%" for c, m in list(profile.concept_mastery.items())[:6])
         causes_summary = ", ".join(f"{c.label}: {round(c.percentage)}%" for c in list(profile.learning_state_causes.values())[:3])
@@ -375,7 +710,17 @@ class NarrativeReportGenerator:
             "格式要求：简短列出 2-3 条基于认知特征的突破性学习建议。"
         )
         try:
-            tutor_advice = await self.llm.generate(tutor_system, analyst_prompt, role="教师评估")
+            tutor_advice = await self._generate_agent(
+                system_prompt=tutor_system,
+                user_prompt=analyst_prompt,
+                role="教师评估",
+                operation="teacher_evaluation",
+                capability="evaluate",
+                owner_public_id=owner_public_id,
+                trace_id=trace_id,
+            )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             tutor_advice = "建议专注于前置概念复习，利用图示与代码实操结合，逐步缓解当前较高的认知负荷。"
 
@@ -409,36 +754,49 @@ class NarrativeReportGenerator:
             f"【教师建议】：\n{tutor_advice}"
         )
 
-        try:
-            import asyncio
-            import re
-            
-            # 并行调用 LLM 从而优化页面加载性能
-            narrative_task = self.llm.generate(storyteller_system, storyteller_user, role="叙事故事生成")
-            dashboard_task = self.llm.generate(dashboard_system, storyteller_user, role="仪表盘诊断生成")
-            
-            narrative, dashboard = await asyncio.gather(narrative_task, dashboard_task)
-            
-            # 清洗特殊表情字符和空行，保证仪表盘展示效果纯净
-            dashboard = re.sub(r'[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]', '', dashboard)
-            dashboard = "\n".join([line.strip() for line in dashboard.split("\n") if line.strip()])
-            
-            return f"### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n{narrative}", dashboard
-        except Exception:
-            fallback_narrative = (
-                "### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n"
-                "亲爱的同学：\n\n"
-                "看到你在机器学习世界里的探索，系统能感受到你对未知的渴望。目前你在知识图谱中的多个核心概念上已经开始了旅程，"
-                "遇到一时的不理解或高负荷是知识建构过程中的必经风景，如同登山时背包需要稍微整理。建议你在接下来的日子里，"
-                "先从前置概念的基础小册和代码实操着手，我们会一直在右侧的画板和沙箱中陪伴你，一步步走向熟练。加油！"
-            )
-            fallback_dashboard = (
-                "根据当前的学情监测数据，您的机器学习核心概念体系构建已初具规模（部分核心节点掌握度达90%以上），但在局部节点存在认知负荷过载倾向（当前心智负荷监测值高于0.6）。\n"
-                "通过关联分析与最近答题记录，推断此学习障碍并非由于概念本身的抽象度导致，而是前置数学知识点（如微积分中偏导数求导与线性代数中的矩阵相乘逻辑）的掌握不够稳固，因而在算法推导时产生了冗余的解译开销，引发了工作记忆过载。\n"
-                "建议您在后续学习中采取以下具体干预策略：\n"
-                "首先，回溯学习相关的数学前置讲义以消除依赖阻塞，实现认知对齐；其次，利用系统右侧的隔离代码沙箱（Sandbox）执行算法逻辑验证，通过具象的控制台输出来分担抽象推导压力，从而有效降低即时工作记忆负荷，优化知识重构效率。"
-            )
-            return fallback_narrative, fallback_dashboard
+        narrative_result, dashboard_result = await asyncio.gather(
+            self._generate_agent(
+                system_prompt=storyteller_system,
+                user_prompt=storyteller_user,
+                role="叙事故事生成",
+                operation="narrative",
+                capability="answer",
+                owner_public_id=owner_public_id,
+                trace_id=trace_id,
+            ),
+            self._generate_agent(
+                system_prompt=dashboard_system,
+                user_prompt=storyteller_user,
+                role="仪表盘诊断生成",
+                operation="dashboard_diagnosis",
+                capability="evaluate",
+                owner_public_id=owner_public_id,
+                trace_id=trace_id,
+            ),
+            return_exceptions=True,
+        )
+        if isinstance(narrative_result, asyncio.CancelledError):
+            raise narrative_result
+        if isinstance(dashboard_result, asyncio.CancelledError):
+            raise dashboard_result
+
+        fallback_narrative = (
+            "亲爱的同学：\n\n"
+            "看到你在机器学习世界里的探索，系统能感受到你对未知的渴望。目前你在知识图谱中的多个核心概念上已经开始了旅程，"
+            "遇到一时的不理解或高负荷是知识建构过程中的必经风景，如同登山时背包需要稍微整理。建议你在接下来的日子里，"
+            "先从前置概念的基础小册和代码实操着手，我们会一直在右侧的画板和沙箱中陪伴你，一步步走向熟练。加油！"
+        )
+        fallback_dashboard = (
+            "根据当前的学情监测数据，您的机器学习核心概念体系构建已初具规模（部分核心节点掌握度达90%以上），但在局部节点存在认知负荷过载倾向（当前心智负荷监测值高于0.6）。\n"
+            "通过关联分析与最近答题记录，推断此学习障碍并非由于概念本身的抽象度导致，而是前置数学知识点（如微积分中偏导数求导与线性代数中的矩阵相乘逻辑）的掌握不够稳固，因而在算法推导时产生了冗余的解译开销，引发了工作记忆过载。\n"
+            "建议您在后续学习中采取以下具体干预策略：\n"
+            "首先，回溯学习相关的数学前置讲义以消除依赖阻塞，实现认知对齐；其次，利用系统右侧的隔离代码沙箱（Sandbox）执行算法逻辑验证，通过具象的控制台输出来分担抽象推导压力，从而有效降低即时工作记忆负荷，优化知识重构效率。"
+        )
+        narrative = fallback_narrative if isinstance(narrative_result, Exception) else narrative_result
+        dashboard = fallback_dashboard if isinstance(dashboard_result, Exception) else dashboard_result
+        dashboard = re.sub(r'[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]', '', dashboard)
+        dashboard = "\n".join(line.strip() for line in dashboard.split("\n") if line.strip())
+        return f"### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n{narrative}", dashboard
 
 class ProfileUpdateRequest(BaseModel):
     major: str | None = None
@@ -529,6 +887,8 @@ async def update_profile(
             p.narrative_report = ""
 
     await run_db_op(save_student_profile, profile)
+    from app.next_core_memory import sync_profile_subscriptions_for_student
+    await run_db_op(sync_profile_subscriptions_for_student, username=student_id)
 
     try:
         from learning_event_bus import LearningEventBus, ProfileUpdatedEvent
@@ -562,6 +922,7 @@ async def update_profile(
 async def get_profile_analysis(
     student_id: str,
     request: Request,
+    course_id: str | None = None,
     current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """获取学生画像的多维度文本分析报告"""
@@ -572,12 +933,22 @@ async def get_profile_analysis(
 
     display_name = await run_db_op(load_display_name, student_id)
 
+    if not _profile_has_meaningful_evidence(profile):
+        return _empty_profile_analysis(profile, display_name)
+
+    course_scope = await run_db_op(
+        _load_current_course_knowledge_points,
+        student_id=student_id,
+        current_user_public_id=str(getattr(current_user, "public_id", "") or ""),
+        course_id=course_id,
+    )
+
     # 1. 学生背景概览
     background = {
         "student_id": student_id,
         "display_name": display_name,
         "major": profile.major or profile.major_preference or "未设置",
-        "target_course": profile.target_course or "未设置",
+        "target_course": course_scope["course_title"] or profile.target_course or "未设置",
         "cognitive_style": profile.cognitive_style or "未诊断",
         "learning_goals": profile.learning_goals[:5] if profile.learning_goals else [],
         "learning_preferences": profile.interaction_preferences[:5] if profile.interaction_preferences else [],
@@ -609,7 +980,7 @@ async def get_profile_analysis(
         }
 
     # 4. 薄弱点根因分析
-    weak_analysis = _build_weak_point_analysis(profile)
+    weak_analysis = _build_weak_point_analysis(profile, course_scope["points"])
 
     # 5. 个性化教学建议汇总 (自适应分层提炼)
     summary_suggestions = []
@@ -662,6 +1033,11 @@ async def get_profile_analysis(
     try:
         from app.legacy_repositories import LegacyReadRepository
         records = LegacyReadRepository(session).quiz_history(student_id)
+        observe_legacy_shadow_read(
+            session, chain_id="identity-profile-history", legacy_result=records,
+            canonical_loader=lambda: IdentityProfileHistoryCanonicalReader(session).quiz_history(student_id),
+            legacy_projector=project_model_rows,
+        )
         for r in records:
             c = r.target_concept
             if c:
@@ -832,6 +1208,11 @@ def resolve_learning_goals_three_tiers(db, profile, concepts: set[str], dag: dic
     # 2. 第二优先级：如果用户未指定具体知识点，但上传了新的知识库课件
     from app.legacy_repositories import LegacyReadRepository
     docs = LegacyReadRepository(db).personal_knowledge_documents(profile.student_id)
+    observe_legacy_shadow_read(
+        db, chain_id="identity-profile-history", legacy_result=docs,
+        canonical_loader=lambda: IdentityProfileHistoryCanonicalReader(db).personal_knowledge_documents(profile.student_id),
+        legacy_projector=project_model_rows,
+    )
     doc_concepts = set()
     for doc in docs:
         if doc.tags:
@@ -1069,6 +1450,8 @@ async def get_learning_path(
     finally:
         db.close()
 
+    # This GET path is read-only; an ownerless review keeps planning deterministic
+    # without creating a model-call audit record on every page visit.
     adaptive_route = await asyncio.to_thread(
         PATH_PLANNER.plan,
         mastery,
@@ -1078,6 +1461,7 @@ async def get_learning_path(
         cognitive_load=cognitive_load,
         frustration=frustration,
         max_steps=8,
+        owner_public_id=None,
     )
     
     # === 唯一主攻锚点计算 (Active Learning Anchor) ===
@@ -1339,6 +1723,8 @@ async def update_profile(
 
     profile._refresh_dynamic_profile()
     await run_db_op(save_student_profile, profile)
+    from app.next_core_memory import sync_profile_subscriptions_for_student
+    await run_db_op(sync_profile_subscriptions_for_student, username=student_id)
 
     try:
         from learning_event_bus import LearningEventBus, ProfileUpdatedEvent
@@ -1372,13 +1758,22 @@ async def get_profile_narrative(
         profile = await run_db_op(load_student_profile, student_id)
         swarm.profile_store[student_id] = profile
 
+    if not _profile_has_meaningful_evidence(profile):
+        return {
+            "narrative_report": "完成入学诊断或一次有效学习后，系统会生成个性化成长信笺。",
+            "profile_initialization_state": "awaiting_learning_evidence",
+        }
+
     cached_report = getattr(profile, "narrative_report", "")
     if cached_report:
         return {"narrative_report": cached_report}
 
     # 如果无缓存，生成并保存
     generator = NarrativeReportGenerator(swarm.llm)
-    narrative_report, dashboard_report = await generator.generate_report(profile)
+    narrative_report, dashboard_report = await generator.generate_report(
+        profile,
+        owner_public_id=current_user.public_id,
+    )
     profile.narrative_report = narrative_report
     profile.dashboard_report = dashboard_report
     await run_db_op(save_student_profile, profile)
@@ -1431,6 +1826,14 @@ async def rollback_profile(
         from app.legacy_repositories import LegacyReadRepository
         row = LegacyReadRepository(db).conversation_snapshot(
             student_id, body.conversation_id
+        )
+        observe_legacy_shadow_read(
+            db, chain_id="identity-profile-history", legacy_result=row,
+            canonical_loader=lambda: IdentityProfileHistoryCanonicalReader(db).conversation_snapshot(
+                student_id, body.conversation_id,
+            ),
+            legacy_projector=project_model_row,
+            actor_public_id=current_user.public_id,
         )
         if not row:
             return None
@@ -1486,6 +1889,8 @@ async def rollback_profile(
 
     # ── 4. 持久化回滚后的画像 ──
     await run_db_op(save_student_profile, profile)
+    from app.next_core_memory import sync_profile_subscriptions_for_student
+    await run_db_op(sync_profile_subscriptions_for_student, username=student_id)
 
     # ── 5. 同步更新 Swarm 全局缓存中的所有副本 ──
     from swarm_factory import _swarm_cache
@@ -1551,6 +1956,8 @@ async def delete_student_concept(
 
     # 3. 持久化保存删除后的画像
     await run_db_op(save_student_profile, profile)
+    from app.next_core_memory import sync_profile_subscriptions_for_student
+    await run_db_op(sync_profile_subscriptions_for_student, username=student_id)
 
     # 4. 强力同步更新 Swarm 全局缓存中的所有副本
     from swarm_factory import _swarm_cache

@@ -243,6 +243,18 @@ function selectChart(id) {
   explanation.value = ''
 }
 
+function readableRunError(error, fallback = '请求失败') {
+  const detail = error?.response?.data?.detail ?? error?.detail
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (detail && typeof detail === 'object') {
+    const message = detail.message || detail.error || detail.detail
+    if (typeof message === 'string' && message.trim()) return message
+  }
+  const responseError = error?.response?.data?.error
+  if (typeof responseError === 'string' && responseError.trim()) return responseError
+  return typeof error?.message === 'string' && error.message.trim() ? error.message : fallback
+}
+
 async function runCode() {
   if (!sandboxReady.value) {
     error.value = sandboxMessage.value
@@ -263,7 +275,7 @@ async function runCode() {
     const result = resp.data
     // 兼容 status_code / error 返回结构
     if (result.error) {
-      error.value = result.error
+      error.value = readableRunError({ detail: result.error }, '代码运行失败')
     } else {
       output.value = result.output || ''
       // 如果后端在输出流中嵌入了图片 Markdown 语法
@@ -274,7 +286,7 @@ async function runCode() {
       }
     }
   } catch (e) {
-    error.value = e.response?.data?.detail || e.message || '请求失败'
+    error.value = readableRunError(e)
   }
   running.value = false
 }

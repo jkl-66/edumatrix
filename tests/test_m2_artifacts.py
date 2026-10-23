@@ -18,6 +18,7 @@ from app.m2_artifacts import (
 from app.m2_baseline import seed_m2_baseline
 from app.m2_contracts import M2Capability
 from app.m2_tasks import create_golden_task, start_golden_task, start_task_step
+from llm_client import AsyncDeterministicEducationLLM
 
 
 def _question(question_id: str, bloom: str, context) -> dict:
@@ -162,6 +163,30 @@ def test_three_structured_generations_persist_formal_versions_and_hide_quiz_answ
         engine.dispose()
 
 
+def test_offline_deterministic_backend_honors_all_m2_structured_contracts():
+    engine, session, baseline, _task = _seeded_session()
+    generator = M2StructuredArtifactGenerator(AsyncDeterministicEducationLLM())
+    try:
+        artifacts = [
+            asyncio.run(generator.generate(session, capability=capability, context=baseline.generation_context))
+            for capability in M2Capability
+        ]
+        assert [artifact.artifact_type for artifact in artifacts] == ["lesson", "lab_guide", "tiered_quiz"]
+        lesson_refs = {ref for section in artifacts[0].sections for ref in section.source_ref_ids}
+        lab_refs = {ref for step in artifacts[1].steps for ref in step.source_ref_ids}
+        quiz_refs = {
+            ref
+            for tier in artifacts[2].tiers
+            for question in tier.questions
+            for ref in question.source_ref_ids
+        }
+        expected_refs = set(baseline.generation_context.source_ref_ids)
+        assert lesson_refs == lab_refs == quiz_refs == expected_refs
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_invalid_generator_json_and_out_of_scope_source_fail_without_artifact():
     engine, session, baseline, task = _seeded_session()
     context = baseline.generation_context
@@ -174,7 +199,7 @@ def test_invalid_generator_json_and_out_of_scope_source_fail_without_artifact():
                     session, capability=M2Capability.LESSON, context=context
                 )
             )
-        assert raised.value.code == "artifact_schema_invalid"
+        assert raised.value.code == "invalid_generator_json"
 
         class MarkdownLLM:
             async def generate(self, system_prompt, user_prompt, *, role):
@@ -186,7 +211,7 @@ def test_invalid_generator_json_and_out_of_scope_source_fail_without_artifact():
                     session, capability=M2Capability.LESSON, context=context
                 )
             )
-        assert raised.value.code == "invalid_generator_json"
+        assert raised.value.code == "artifact_schema_invalid"
 
         payloads = _payloads(context)
         payloads["理论教授"]["sections"][0]["source_ref_ids"] = ["ref-outside-context"]

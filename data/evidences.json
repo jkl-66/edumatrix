@@ -1,0 +1,82 @@
+{
+  "schema_version": "edumatrix.visual-evidence-seed.v1",
+  "evidences": [
+    {
+      "id": "IMG_PATCH_POOL_01",
+      "title": "2x2 最大池化窗口与特征图",
+      "content": "2x2 最大池化在每个局部窗口保留最大值，展示输入特征图、窗口和降采样输出。",
+      "modality": "image",
+      "source": "EduMatrix 项目组原创教学图:data/patches/pooling_2x2.png",
+      "tags": ["池化层", "最大池化", "特征图", "PyTorch"],
+      "anchors": ["MaxPool2d", "2x2", "降采样"],
+      "sha256": "bed6442576d11c963da5252695191475c3293ba00654e885d0529891774c5ba1",
+      "metadata": {"raw_image_ref": "data/patches/pooling_2x2.png", "license": "EduMatrix team original competition material"}
+    },
+    {
+      "id": "IMG_PATCH_AVG_POOL_01",
+      "title": "平均池化计算示意",
+      "content": "平均池化对局部窗口求均值，与最大池化的取最大值策略形成对照。",
+      "modality": "image",
+      "source": "EduMatrix 项目组原创教学图:data/patches/avg_pooling.png",
+      "tags": ["池化层", "平均池化", "特征图"],
+      "anchors": ["AvgPool2d", "均值", "降采样"],
+      "sha256": "dc73f84031d0a3154ef6e43f886ae4f4662bc04ac3d2df5f9ac5b4b81ee63704",
+      "metadata": {"raw_image_ref": "data/patches/avg_pooling.png", "license": "EduMatrix team original competition material"}
+    },
+    {
+      "id": "IMG_PATCH_CONV_STRIDE_01",
+      "title": "卷积核步长与输出特征图",
+      "content": "卷积核按步长在输入上滑动，步长影响输出特征图尺寸和采样密度。",
+      "modality": "image",
+      "source": "EduMatrix 项目组原创教学图:data/patches/conv_stride.png",
+      "tags": ["卷积", "卷积核", "步长", "特征图"],
+      "anchors": ["stride", "kernel", "output shape"],
+      "sha256": "af4dd70266ceb152f98635e27decec4e7ac69d685779c62dc339623c624ae45b",
+      "metadata": {"raw_image_ref": "data/patches/conv_stride.png", "license": "EduMatrix team original competition material"}
+    },
+    {
+      "id": "IMG_PATCH_BACKPROP_01",
+      "title": "反向传播链式法则",
+      "content": "反向传播使用链式法则把损失梯度从输出端逐层传回参数。",
+      "modality": "image",
+      "source": "EduMatrix 项目组原创教学图:data/patches/backprop_math.png",
+      "tags": ["反向传播", "链式法则", "梯度"],
+      "anchors": ["backpropagation", "chain rule", "gradient"],
+      "sha256": "f396b8d696fce56d15adace86f00303024f9eb8a08e4c296e5b383358397b9a9",
+      "metadata": {"raw_image_ref": "data/patches/backprop_math.png", "license": "EduMatrix team original competition material"}
+    },
+    {
+      "id": "IMG_PATCH_ML_PIPELINE_01",
+      "title": "机器学习项目流程",
+      "content": "从数据准备、特征处理、训练、评估到部署反馈的机器学习工程流程。",
+      "modality": "image",
+      "source": "EduMatrix 项目组原创教学图:data/patches/ml_pipeline.png",
+      "tags": ["机器学习", "数据准备", "模型训练", "模型评估"],
+      "anchors": ["pipeline", "training", "evaluation"],
+      "sha256": "50838d55c760e44c061e7a417932ad5f18028737d9f589518f3bc303c24dbad2",
+      "metadata": {"raw_image_ref": "data/patches/ml_pipeline.png", "license": "EduMatrix team original competition material"}
+    },
+    {
+      "id": "IMG_PATCH_OVERFIT_01",
+      "title": "训练与验证曲线中的过拟合",
+      "content": "训练误差继续下降而验证误差反弹时，模型可能开始过拟合。",
+      "modality": "image",
+      "source": "EduMatrix 项目组原创教学图:data/patches/overfit_curve.png",
+      "tags": ["过拟合", "训练曲线", "验证曲线", "泛化"],
+      "anchors": ["overfitting", "validation loss", "generalization"],
+      "sha256": "0acdc60313aacd94297a6f78943436b6fe4d4b4e9df88869995290f4f321f598",
+      "metadata": {"raw_image_ref": "data/patches/overfit_curve.png", "license": "EduMatrix team original competition material"}
+    },
+    {
+      "id": "IMG_PATCH_CONFUSION_01",
+      "title": "混淆矩阵与分类结果",
+      "content": "混淆矩阵按真实类别和预测类别组织结果，用于理解精确率、召回率和错误类型。",
+      "modality": "image",
+      "source": "EduMatrix 项目组原创教学图:data/patches/confusion_matrix.png",
+      "tags": ["混淆矩阵", "分类评估", "精确率", "召回率"],
+      "anchors": ["confusion matrix", "precision", "recall"],
+      "sha256": "27a53eb96295670c2a05695445a96ee8f84a5d3cf311bf9c62953f32d0766b7e",
+      "metadata": {"raw_image_ref": "data/patches/confusion_matrix.png", "license": "EduMatrix team original competition material"}
+    }
+  ]
+}

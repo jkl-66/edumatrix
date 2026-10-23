@@ -1,0 +1,61 @@
+:root {
+  --font-sans: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-display: "Noto Serif SC", "SimSun", serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "Cascadia Code", Consolas, monospace;
+
+  --color-page: #f5f7f7;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f1f4f4;
+  --color-surface-muted: #e7ecee;
+  --color-text: #06141b;
+  --color-text-secondary: #4a5c6a;
+  --color-text-muted: #60727c;
+  --color-border: #dce2e3;
+  --color-border-strong: #ccd0cf;
+  --color-accent: #11212d;
+  --color-accent-soft: #edf1f2;
+  --color-success: #3f5b6a;
+  --color-success-soft: #edf2f3;
+  --color-warning: #8a6428;
+  --color-warning-soft: #faf4e8;
+  --color-danger: #9b3a3a;
+  --color-danger-soft: #fbefef;
+
+  --font-size-title: 24px;
+  --font-size-section: 18px;
+  --font-size-body: 15px;
+  --font-size-control: 15px;
+  --font-size-supporting: 14px;
+  --line-height-title: 1.35;
+  --line-height-heading: 1.3;
+  --line-height-body: 1.65;
+
+  --font-size-page-title: 24px;
+  --font-size-page-title-compact: 20px;
+
+  --radius-control: 6px;
+  --radius-panel: 8px;
+  --radius-card: 14px;
+  --shadow-popover: 0 16px 40px rgb(23 23 23 / 12%);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-panel-inline: 24px;
+  --space-panel-block: 20px;
+  --space-row-inline: 16px;
+  --space-state-block: 32px;
+  --space-control-inline: 12px;
+
+  --nav-width: 224px;
+  --topbar-height: 56px;
+  --content-max: 1440px;
+  --control-height: 40px;
+  --control-height-compact: 36px;
+}

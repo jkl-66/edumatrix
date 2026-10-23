@@ -112,10 +112,23 @@ class CapabilityContract(StrictModel):
 
 class RuntimeAvailability(StrictModel):
     text_model: bool = False
+    deterministic_text_model: bool = False
     vision_model: bool = False
     retrieval: bool = False
     media_pipeline: bool = False
     sandbox_mode: Literal["disabled", "trusted_local", "docker", "external_lab"] = "disabled"
+
+    @property
+    def text_generation_available(self) -> bool:
+        return self.text_model or self.deterministic_text_model
+
+    @property
+    def generation_mode(self) -> Literal["external_model", "deterministic_demo", "unavailable"]:
+        if self.text_model:
+            return "external_model"
+        if self.deterministic_text_model:
+            return "deterministic_demo"
+        return "unavailable"
 
 
 class CapabilityStatus(StrictModel):
@@ -183,7 +196,7 @@ def capability_statuses(runtime: RuntimeAvailability) -> tuple[CapabilityStatus,
     statuses = []
     for capability in Capability:
         blockers = []
-        if not runtime.text_model:
+        if not runtime.text_generation_available:
             blockers.append("text_model_unavailable")
         if capability == Capability.VIDEO and not runtime.media_pipeline:
             blockers.append("media_pipeline_unavailable")
@@ -204,7 +217,7 @@ def route_capability(request: RoutingRequest, runtime: RuntimeAvailability) -> R
                 invokes_model=request.natural_action, reason_code="risky_action_confirmation_required",
                 requires_confirmation=True, estimated_cost_class="low" if request.natural_action else "none",
             )
-        if request.natural_action and not runtime.text_model:
+        if request.natural_action and not runtime.text_generation_available:
             return RouteDecision(
                 capability=capability, route_level=level, status="unavailable", invokes_model=True,
                 reason_code="intent_model_unavailable", blockers=("text_model_unavailable",),

@@ -11,13 +11,13 @@ import uuid
 
 ROLE_ADMIN = "admin"
 ROLE_TEACHER = "teacher"
-ROLE_ASSISTANT = "assistant"
 ROLE_STUDENT = "student"
-ROLE_VISITOR = "visitor"
+ROLE_ASSISTANT = "assistant"  # legacy fixture vocabulary; never a formal account role
+ROLE_VISITOR = "visitor"  # legacy fixture vocabulary; never a formal account role
 
-VALID_ROLES = frozenset(
-    {ROLE_ADMIN, ROLE_TEACHER, ROLE_ASSISTANT, ROLE_STUDENT, ROLE_VISITOR}
-)
+VALID_ROLES = frozenset({ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT})
+LEGACY_ROLES = frozenset({ROLE_ASSISTANT, ROLE_VISITOR})
+KNOWN_ROLES = VALID_ROLES | LEGACY_ROLES
 
 
 def new_public_id(kind: str) -> str:
@@ -30,7 +30,6 @@ def new_public_id(kind: str) -> str:
 
 def normalize_role(role: str | None) -> str:
     value = str(role or ROLE_STUDENT).strip().lower()
-    if value not in VALID_ROLES:
+    if value not in KNOWN_ROLES:
         raise ValueError(f"unsupported role: {role}")
     return value
-

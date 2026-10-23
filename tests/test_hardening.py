@@ -6,7 +6,10 @@ from io import BytesIO
 from unittest.mock import patch
 from zipfile import ZipFile
 import unittest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from app.database import Base, DBUser
 from cache_utils import TTLBoundedCache
 from code_exec_api import SandboxProcessRunner
 from config import CONFIG
@@ -76,7 +79,23 @@ class TestHardening(unittest.TestCase):
             graph_context=GraphContext("机器学习", ("机器学习",), (), ()),
             evidence=evidence,
         )
-        result = asyncio.run(DebateAugmentedRAG(llm=Judge()).aclean(bundle))
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        session.add(DBUser(
+            public_id="hardening-debate-owner", username="hardening-owner",
+            hashed_password="test", role="student", is_active=True,
+        ))
+        session.commit()
+
+        async def database_runner(operation, *args):
+            return operation(session, *args)
+
+        result = asyncio.run(DebateAugmentedRAG(llm=Judge()).aclean(
+            bundle,
+            owner_public_id="hardening-debate-owner",
+            database_runner=database_runner,
+        ))
         self.assertEqual(len(result.clean_evidence), 2)
         self.assertTrue(all(item["method"] == "llm_debate" for item in result.trajectory))
 

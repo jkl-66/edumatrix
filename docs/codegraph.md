@@ -1,5 +1,7 @@
 # 🗺️ EduMatrix 智教矩阵系统代码图谱 (Code Graph)
 
+> 历史静态快照：以下 102 个模块统计和文件位置已过时。当前功能入口见 [PROJECT_MAP.md](PROJECT_MAP.md)，自有源码与配置索引见 [code-index.csv](code-index.csv)。
+
 本项目使用 Python AST 静态分析引擎自动提取并生成了本代码图谱，清晰展示了系统的模块划分、依赖关系、类与核心方法。本设计旨在帮助评审专家及开发团队快速理解系统底层的模块拓扑结构。
 
 ## 📈 系统整体统计 (System Stats)

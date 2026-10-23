@@ -152,12 +152,13 @@ def test_learning_path_graph_metadata_preserves_course_and_document_identity():
         {"RAG工程": []}, resource_index={}, include_rag=False
     )
 
-    assert len(provenance) == 9
-    assert metadata["course_ids"] == [COURSE_ID]
-    assert metadata["course_document_count"] == 9
-    assert {item["course_id"] for item in metadata["course_sources"]} == {COURSE_ID}
-    assert len({item["document_id"] for item in metadata["course_sources"]}) == 9
-    assert all(item["source_path"] for item in metadata["course_sources"])
+    baseline_provenance = [item for item in provenance if item["course_id"] == COURSE_ID]
+    baseline_sources = [item for item in metadata["course_sources"] if item["course_id"] == COURSE_ID]
+    assert len(baseline_provenance) == 9
+    assert COURSE_ID in metadata["course_ids"]
+    assert metadata["course_document_count"] >= 9
+    assert len({item["document_id"] for item in baseline_sources}) == 9
+    assert all(item["source_path"] for item in baseline_sources)
 
 
 def test_learning_path_api_exposes_the_same_course_and_document_ids():
@@ -171,10 +172,13 @@ def test_learning_path_api_exposes_the_same_course_and_document_ids():
 
     assert response.status_code == 200, response.text
     graph_fusion = response.json()["adaptive_route"]["graph_fusion"]
-    assert graph_fusion["course_ids"] == [COURSE_ID]
-    assert graph_fusion["course_document_count"] == 9
-    assert len(graph_fusion["course_sources"]) == 9
-    assert len({item["document_id"] for item in graph_fusion["course_sources"]}) == 9
+    baseline_sources = [
+        item for item in graph_fusion["course_sources"] if item["course_id"] == COURSE_ID
+    ]
+    assert COURSE_ID in graph_fusion["course_ids"]
+    assert graph_fusion["course_document_count"] >= 9
+    assert len(baseline_sources) == 9
+    assert len({item["document_id"] for item in baseline_sources}) == 9
 
 
 def test_course_upsert_does_not_touch_legacy_knowledge_documents():

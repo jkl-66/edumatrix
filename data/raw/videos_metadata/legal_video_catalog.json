@@ -1,0 +1,101 @@
+{
+  "schema_version": "fc.video-catalog.v1",
+  "catalog_version": "2026.08.04",
+  "catalog_policy": {
+    "distribution": "metadata_only",
+    "network_behavior": "The catalog is local-first. It never downloads, mirrors, or retransmits third-party video.",
+    "license_boundary": "Each entry records the known source and license state. Entries without an explicit distributable license remain link-only references."
+  },
+  "items": [
+    {
+      "source_key": "ml-engineering-course-videos",
+      "title": "ML Engineering course video index",
+      "url": "https://ml-course.github.io/master/",
+      "source_author": "ML Course 页面维护者（详见来源页）",
+      "source_type": "公开课程页面",
+      "license_status": "reference_only_unverified",
+      "license_label": "媒体分发许可未核验：仅保存公开页面链接，不导入、不镜像、不分发视频",
+      "license_url": "https://ml-course.github.io/master/",
+      "duration_minutes": null,
+      "language": "English",
+      "topics": ["机器学习工程", "数据预处理", "模型训练", "评估", "部署意识"],
+      "course_node": "machine_learning_project_pipeline",
+      "selection_rationale": "覆盖从数据到部署的项目流水线，可与课程知识点及实践任务进行链接。"
+    },
+    {
+      "source_key": "mlcourse-ai-videos",
+      "title": "mlcourse.ai video and slide links",
+      "url": "https://github.com/Yorko/mlcourse.ai",
+      "source_author": "Yorko Dorogush 与 mlcourse.ai 贡献者（详见仓库）",
+      "source_type": "公开 GitHub 课程仓库",
+      "license_status": "repository_license_required",
+      "license_label": "仓库内容与外链视频许可须按来源仓库及视频平台页面分别核验；目录仅提供链接元数据，不导入、不镜像、不分发视频",
+      "license_url": "https://github.com/Yorko/mlcourse.ai",
+      "duration_minutes": null,
+      "language": "English",
+      "topics": ["经典机器学习", "探索性分析", "可视化", "决策树", "逻辑回归", "集成学习", "聚类"],
+      "course_node": "classical_ml_practice",
+      "selection_rationale": "课程章节与 Notebook 素材对应，便于后续以章节为边界进行教学资源关联。"
+    },
+    {
+      "source_key": "vu-ml-videos",
+      "title": "Machine Learning @ VU lecture videos",
+      "url": "https://mlvu.github.io/",
+      "source_author": "Machine Learning @ VU 课程团队（详见来源页）",
+      "source_type": "公开高校课程页面",
+      "license_status": "reference_only_unverified",
+      "license_label": "未获得视频分发授权证明：仅跳转课程页面，不下载或复制媒体文件",
+      "license_url": "https://mlvu.github.io/",
+      "duration_minutes": null,
+      "language": "English",
+      "topics": ["机器学习理论", "线性模型", "概率模型", "决策树", "神经网络", "模型评估"],
+      "course_node": "introductory_ml_theory",
+      "selection_rationale": "适合补充理论节点，且可与讲义、练习单一起作为来源说明展示。"
+    },
+    {
+      "source_key": "uva-ml1-videos",
+      "title": "UvA Machine Learning 1 lectures",
+      "url": "https://uvaml1.github.io/",
+      "source_author": "University of Amsterdam Machine Learning 1 课程团队（详见来源页）",
+      "source_type": "公开高校课程页面",
+      "license_status": "reference_only_unverified",
+      "license_label": "公开页面可引用；视频内容许可未核验，系统不缓存、不转存、不分发",
+      "license_url": "https://uvaml1.github.io/",
+      "duration_minutes": null,
+      "language": "English",
+      "topics": ["线性回归", "分类", "贝叶斯", "核方法", "聚类"],
+      "course_node": "prml_style_ml",
+      "selection_rationale": "覆盖机器学习基础课程的核心概念，可作为知识图谱节点的外部参考入口。"
+    },
+    {
+      "source_key": "lmu-iml-videos",
+      "title": "LMU Interpretable Machine Learning videos",
+      "url": "https://slds-lmu.github.io/iml/",
+      "source_author": "LMU Statistical Learning and Data Science 课程团队（详见来源页）",
+      "source_type": "公开高校课程页面",
+      "license_status": "reference_only_unverified",
+      "license_label": "仅登记公开来源元数据；外部视频的复制、转码与分发未获系统授权",
+      "license_url": "https://slds-lmu.github.io/iml/",
+      "duration_minutes": null,
+      "language": "English",
+      "topics": ["可解释机器学习", "特征重要性", "部分依赖图", "SHAP", "误差分析"],
+      "course_node": "interpretability_and_teacher_dashboard",
+      "selection_rationale": "能连接教师侧的解释性分析场景，帮助展示模型解释与教学诊断之间的关系。"
+    },
+    {
+      "source_key": "bilibili-watermelon-book-reference",
+      "title": "Bilibili 西瓜书 lecture playlist metadata",
+      "url": "https://www.bilibili.com/video/BV1ks2bYGETs/",
+      "source_author": "视频发布者及平台页面标注作者（以来源页为准）",
+      "source_type": "公开视频平台页面",
+      "license_status": "platform_link_only",
+      "license_label": "平台外链参考：不下载、不录制、不镜像；使用者须在平台页面核验版权与使用条件",
+      "license_url": "https://www.bilibili.com/video/BV1ks2bYGETs/",
+      "duration_minutes": null,
+      "language": "Chinese",
+      "topics": ["决策树", "贝叶斯", "线性模型", "支持向量机", "集成学习", "聚类"],
+      "course_node": "watermelon_book_reference",
+      "selection_rationale": "提供中文术语参考入口，但始终以平台原页与权利声明为准。"
+    }
+  ]
+}

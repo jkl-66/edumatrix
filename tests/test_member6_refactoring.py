@@ -260,7 +260,7 @@ class Member6RefactorTests(unittest.TestCase):
         try:
             from app.crud import load_student_profile
             student_id = self.eval_student_id
-            quiz_id = "eval-test-quiz-123"
+            quiz_id = f"eval-test-quiz-{student_id}"
             
             # Clean up potential leftover record from previous runs
             session.query(DBQuizRecord).filter(DBQuizRecord.id == quiz_id).delete()
@@ -312,6 +312,11 @@ class Member6RefactorTests(unittest.TestCase):
             self.assertIn("accuracy_score", res_json)
             self.assertIn("feedback", res_json)
             self.assertIn("irt", res_json)
+            self.assertIn("canonical_assessment", res_json)
+            canonical = res_json["canonical_assessment"]
+            self.assertTrue(canonical["question_id"].startswith("aq_legacy_"))
+            self.assertTrue(canonical["question_version_id"])
+            self.assertTrue(canonical["attempt_id"])
             
             # 验证 theta 是 3D 向量形式
             theta = res_json["irt"].get("theta")

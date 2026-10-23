@@ -2,33 +2,93 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { echarts } from '../lib/echarts-line'
 
-const props = defineProps({ values: { type: Array, default: () => [] } })
+const props = defineProps({ points: { type: Array, default: () => [] } })
 const chartEl = ref(null)
 let chart
 
 function renderChart() {
-  if (!chartEl.value) return
+  if (!chartEl.value || !props.points.length) {
+    chart?.clear()
+    return
+  }
   chart ||= echarts.init(chartEl.value)
-  const values = props.values.length ? props.values : [24, 31, 38, 44, 52, 58, 66]
   chart.setOption({
-    animationDuration: 900,
-    grid: { left: 8, right: 8, top: 16, bottom: 8, containLabel: true },
-    tooltip: { trigger: 'axis', borderWidth: 0, backgroundColor: '#172033', textStyle: { color: '#fff', fontSize: 11 } },
-    xAxis: { type: 'category', boundaryGap: false, data: ['周一', '周二', '周三', '周四', '周五', '周六', '今天'], axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#9aa3b2', fontSize: 10, margin: 14 } },
-    yAxis: { type: 'value', min: 0, max: 100, splitNumber: 4, axisLabel: { show: false }, axisLine: { show: false }, splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.13)' } } },
+    animationDuration: 300,
+    grid: { left: 8, right: 12, top: 18, bottom: 8, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      borderWidth: 0,
+      backgroundColor: '#11212d',
+      textStyle: { color: '#ffffff', fontSize: 14 },
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: props.points.map(item => item.label),
+      axisLine: { lineStyle: { color: '#ccd0cf' } },
+      axisTick: { show: false },
+      axisLabel: { color: '#60727c', fontSize: 14, margin: 12 },
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 100,
+      splitNumber: 4,
+      axisLabel: { color: '#60727c', fontSize: 14, formatter: '{value}%' },
+      axisLine: { show: false },
+      splitLine: { lineStyle: { color: '#dce2e3', type: 'dashed' } },
+    },
     series: [{
-      type: 'line', smooth: 0.42, symbol: 'circle', symbolSize: 7, data: values,
-      lineStyle: { width: 3, color: '#66736a' }, itemStyle: { color: '#fff', borderColor: '#66736a', borderWidth: 2 },
-      areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(102,115,106,.22)' }, { offset: 1, color: 'rgba(102,115,106,0)' }]) },
+      type: 'line',
+      smooth: 0.2,
+      symbol: 'circle',
+      symbolSize: 7,
+      data: props.points.map(item => item.value),
+      lineStyle: { width: 2, color: '#253745' },
+      itemStyle: { color: '#ffffff', borderColor: '#253745', borderWidth: 2 },
     }],
-  })
+  }, true)
 }
 
 function resize() { chart?.resize() }
-onMounted(() => { renderChart(); window.addEventListener('resize', resize) })
-watch(() => props.values, renderChart, { deep: true })
-onUnmounted(() => { window.removeEventListener('resize', resize); chart?.dispose() })
+
+onMounted(() => {
+  renderChart()
+  window.addEventListener('resize', resize)
+})
+watch(() => props.points, renderChart, { deep: true })
+onUnmounted(() => {
+  window.removeEventListener('resize', resize)
+  chart?.dispose()
+})
 </script>
 
-<template><div ref="chartEl" class="learning-trend-chart" /></template>
+<template>
+  <div
+    v-if="points.length"
+    ref="chartEl"
+    class="learning-trend-chart"
+    role="img"
+    aria-label="有效学习事件形成的掌握变化折线图"
+  />
+  <div v-else class="learning-trend-chart learning-trend-chart--empty">
+    暂无可用于趋势计算的已处理学习证据。
+  </div>
+</template>
 
+<style scoped>
+.learning-trend-chart {
+  width: 100%;
+  height: 224px;
+}
+
+.learning-trend-chart--empty {
+  display: grid;
+  place-items: center;
+  color: var(--color-text-muted);
+  border-block: 1px solid var(--color-border);
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: center;
+}
+</style>

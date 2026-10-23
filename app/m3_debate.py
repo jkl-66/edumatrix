@@ -155,7 +155,12 @@ async def conduct_m3_debate(
     if not 1 <= max_rounds <= 4:
         _fail("invalid_round_limit", "max_rounds must be between 1 and 4")
     task = _owned_task(session, task_id, owner_public_id)
-    run = session.query(DBAgentRun).filter_by(task_id=task.id, role=M3AgentRole.EVIDENCE_REVIEW.value).first()
+    run = (
+        session.query(DBAgentRun)
+        .filter_by(task_id=task.id, role=M3AgentRole.EVIDENCE_REVIEW.value)
+        .order_by(DBAgentRun.created_at.desc(), DBAgentRun.id.desc())
+        .first()
+    )
     if run is None or run.status != "running":
         _fail("evidence_review_not_running", "evidence review role must be running")
     if not claims or len({claim.claim_id for claim in claims}) != len(claims):
@@ -231,7 +236,12 @@ def persist_m3_debate_report(
     task = _owned_task(session, report.task_id, owner_public_id)
     if report.trace_id != task.trace_id:
         _fail("report_trace_mismatch", "debate report trace does not match task")
-    run = session.query(DBAgentRun).filter_by(task_id=task.id, role=M3AgentRole.EVIDENCE_REVIEW.value).first()
+    run = (
+        session.query(DBAgentRun)
+        .filter_by(task_id=task.id, role=M3AgentRole.EVIDENCE_REVIEW.value)
+        .order_by(DBAgentRun.created_at.desc(), DBAgentRun.id.desc())
+        .first()
+    )
     if run is None or run.status not in {"running", "completed"}:
         _fail("evidence_review_not_running", "evidence review role must be running")
     content = _canonical_json(report.model_dump(mode="json"))
@@ -313,6 +323,21 @@ def persist_m3_debate_report(
             owner_public_id=owner_public_id,
             role=M3AgentRole.EVIDENCE_REVIEW,
             output_artifact_version_id=version.id,
+            candidate_summary=f"Reviewed {len(report.results)} atomic claims across generated resources.",
+            disagreement=(
+                f"{sum(result.final_verdict != 'keep' for result in report.results)} claims required challenge, revision or rejection."
+            ),
+            validation=f"Cross-check result: {report.overall_status}; cited evidence remained inside the proposed source scope.",
+            revision=(
+                "Candidates requiring revision remain retained and cannot be treated as publication-ready."
+                if report.overall_status != "passed"
+                else "No content revision was required by the final verdicts."
+            ),
+            decision_summary=(
+                "Evidence review passed; continue to decision orchestration."
+                if report.overall_status == "passed"
+                else "Resolve the recorded review findings before publication."
+            ),
         )
     session.flush()
     return artifact, version, True

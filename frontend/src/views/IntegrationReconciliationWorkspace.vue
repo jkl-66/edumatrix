@@ -1,0 +1,62 @@
+<script setup>
+import { computed, onMounted, ref } from 'vue'
+import { AlertTriangle, BadgeCheck, CloudOff, DatabaseZap, FileCheck2, RefreshCw, RotateCcw, ShieldCheck } from '@lucide/vue'
+import { createIntegrationReconciliationRun, decideIntegrationRepair, getIntegrationReconciliation } from '../api/integrationReconciliation'
+
+const workspace = ref({ organizations: [], selected: null })
+const loading = ref(true), action = ref(''), error = ref(''), notice = ref('')
+const selected = computed(() => workspace.value.selected)
+const preview = computed(() => selected.value?.preview || null)
+const latestRun = computed(() => selected.value?.runs?.[0] || null)
+const adapterOrder = ['sso', 'hr', 'lms', 'lrs', 'webhook']
+const adapterNames = { sso: 'SSO 身份', hr: 'HR 主数据', lms: 'LMS 交换', lrs: 'xAPI / LRS', webhook: '签名 Webhook' }
+
+function detailText(value) { return typeof value === 'string' ? value : value?.message || value?.code || '操作失败' }
+async function load() { loading.value = true; error.value = ''; try { workspace.value = await getIntegrationReconciliation() } catch (e) { error.value = detailText(e.detail || e.message) } finally { loading.value = false } }
+async function run(key, command, message) { action.value = key; error.value = ''; notice.value = ''; try { await command(); notice.value = message; await load() } catch (e) { error.value = detailText(e.detail || e.message) } finally { action.value = '' } }
+async function freezeRun() {
+  const runKey = `reconciliation-${preview.value.preview_hash.slice(0, 16)}`
+  await run('freeze', () => createIntegrationReconciliationRun({ organization_id: preview.value.organization_id, run_key: runKey, expected_preview_hash: preview.value.preview_hash }), '当前预览已冻结为不可变对账运行')
+}
+async function decide(runItem, gap, repairAction) {
+  const reasons = { requeue: '管理员确认本地适配器已恢复，显式重入队', acknowledge: '已复核该演示差异并保留审计记录', dismiss: '确认该差异属于预期的本地模拟边界' }
+  await run(`${runItem.id}:${gap.key}`, () => decideIntegrationRepair(runItem.id, { discrepancy_key: gap.key, action: repairAction, reason: reasons[repairAction], expected_lock_version: runItem.lock_version }), repairAction === 'requeue' ? '死信已显式重入队，原失败历史保留' : '不可变修复决策已记录')
+}
+function versionSummary(adapter) {
+  const rows = preview.value?.mapping_versions?.[adapter] || []
+  if (!rows.length) return '未建立映射'
+  const first = rows[0]
+  return `v${first.version || first.version_number || first.adapter_version || first.signature_version || '1'} · ${rows.length} 项`
+}
+function decisionFor(runItem, key) { return runItem.decisions?.find((item) => item.discrepancy_key === key) }
+function gapTitle(gap) { return gap.kind === 'count_mismatch' ? '源端与目标数量不一致' : gap.kind === 'mapping_missing' ? '缺少映射版本' : '投递失败或死信' }
+onMounted(load)
+</script>
+
+<template>
+  <div class="recon-page">
+    <header class="page-header"><div><p class="eyebrow"><DatabaseZap :size="14" /> FC4 integration control</p><h1>字段映射与同步对账</h1><p>统一查看 SSO、HR、LMS、LRS 与 Webhook 的映射版本、源目标数量、失败项和显式修复记录。</p></div><button class="icon-button" aria-label="刷新集成对账" title="刷新" @click="load"><RefreshCw :size="17" /></button></header>
+    <div v-if="error" class="message error"><AlertTriangle :size="16" />{{ error }}</div><div v-if="notice" class="message success"><BadgeCheck :size="16" />{{ notice }}</div><div v-if="loading" class="message loading"><RefreshCw :size="16" class="spin" />正在恢复对账状态</div>
+    <section v-if="!loading && preview" class="boundary"><CloudOff :size="18" /><div><strong>{{ preview.truthfulness.data_label }}</strong><span>{{ preview.truthfulness.disclaimer }}</span></div></section>
+    <section v-if="!loading && !selected" class="empty"><ShieldCheck :size="38" /><h2>尚无可管理的演示组织</h2><p>先在企业培训工作台初始化冻结合成组织。</p><RouterLink class="primary" to="/enterprise-training">前往企业培训</RouterLink></section>
+    <template v-else-if="!loading && preview">
+      <section class="preview-band"><div><span>预览语义</span><strong class="read-only">只读 · 尚未写入</strong></div><div><span>预览哈希</span><code>{{ preview.preview_hash.slice(0, 18) }}...</code></div><div><span>当前差异</span><strong>{{ preview.discrepancies.length }} 项</strong></div><button class="primary" :disabled="Boolean(action)" @click="freezeRun"><FileCheck2 :size="15" />冻结对账运行</button></section>
+
+      <section class="section"><div class="heading"><div><h2>五类适配器映射与计数</h2><p>映射版本与源端预览来自当前持久化事实；此步骤不执行同步写入。</p></div><span>write_performed = {{ preview.write_performed }}</span></div>
+        <div class="adapter-grid"><article v-for="adapter in adapterOrder" :key="adapter"><div class="adapter-head"><strong>{{ adapterNames[adapter] }}</strong><span :class="{ missing: !preview.mapping_versions[adapter]?.length }">{{ versionSummary(adapter) }}</span></div><div class="count-flow"><div><small>源端</small><strong>{{ preview.count_snapshot[adapter].source }}</strong></div><span>→</span><div><small>目标端</small><strong>{{ preview.count_snapshot[adapter].target }}</strong></div></div><code>{{ JSON.stringify(preview.source_preview[adapter]) }}</code></article></div>
+      </section>
+
+      <section class="section"><div class="heading"><div><h2>冻结运行与修复决策</h2><p>所有动作只针对冻结差异；决定一经写入不可修改，死信只能显式重入队。</p></div><span>{{ selected.runs.length }} 次运行</span></div>
+        <div v-if="!latestRun" class="inline-empty">冻结当前只读预览后，才能处理具体差异。</div>
+        <template v-else><div class="run-facts"><div><span>运行键</span><code>{{ latestRun.run_key }}</code></div><div><span>状态</span><strong>{{ latestRun.status === 'open' ? '处理中' : '已解决' }}</strong></div><div><span>乐观锁版本</span><strong>{{ latestRun.lock_version }}</strong></div><div><span>快照</span><code>{{ latestRun.snapshot_hash.slice(0, 14) }}...</code></div></div>
+          <div class="gap-list"><article v-for="gap in latestRun.discrepancies" :key="gap.key" :class="gap.severity"><div class="gap-main"><span>{{ adapterNames[gap.adapter] || gap.adapter }}</span><strong>{{ gapTitle(gap) }}</strong><code>{{ gap.key }}</code><small v-if="gap.kind === 'count_mismatch'">源 {{ gap.source_count }} / 目标 {{ gap.target_count }}</small><small v-else-if="gap.kind === 'delivery_failure'">{{ gap.status }} · 尝试 {{ gap.attempt_count }} 次 · {{ gap.error_code }}</small></div><div v-if="decisionFor(latestRun, gap.key)" class="decision"><BadgeCheck :size="15" /><span><strong>已记录 {{ decisionFor(latestRun, gap.key).action }}</strong><small>{{ decisionFor(latestRun, gap.key).reason }}</small><code>{{ decisionFor(latestRun, gap.key).evidence_hash.slice(0, 14) }}...</code></span></div><div v-else class="actions"><button v-if="gap.repair_actions.includes('requeue')" class="danger" :disabled="Boolean(action)" @click="decide(latestRun, gap, 'requeue')"><RotateCcw :size="14" />显式重入队</button><button v-if="gap.repair_actions.includes('acknowledge')" class="secondary" :disabled="Boolean(action)" @click="decide(latestRun, gap, 'acknowledge')">确认差异</button><button v-if="gap.repair_actions.includes('dismiss')" class="quiet" :disabled="Boolean(action)" @click="decide(latestRun, gap, 'dismiss')">标记预期</button></div></article></div>
+        </template>
+      </section>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.recon-page{max-width:1320px;margin:0 auto;padding:4px 2px 42px;color:#20272a}.page-header{display:flex;justify-content:space-between;align-items:flex-start;padding:24px 2px 20px;border-bottom:1px solid #dce2e5}.page-header h1{font-size:24px;font-weight:750;margin:6px 0}.page-header>div>p:last-child{font-size:13px;color:#667177}.eyebrow{display:flex;align-items:center;gap:7px;color:#1f6370;font-size:11px;font-weight:700;text-transform:uppercase}.icon-button{width:36px;height:36px;display:grid;place-items:center;border:1px solid #d8dfe2;background:#fff;border-radius:7px}.message{display:flex;align-items:center;gap:8px;padding:11px 14px;margin-top:12px;font-size:11px}.message.error{background:#fff1ef;color:#963f35}.message.success{background:#eef8f1;color:#276046}.message.loading{background:#f4f7f8;color:#56646a}.boundary{display:flex;align-items:center;gap:10px;padding:12px 15px;background:#fff8e6;border-bottom:1px solid #e4d7ad;color:#65511f}.boundary div{display:flex;flex-wrap:wrap;gap:5px 14px}.boundary strong{font-size:11px}.boundary span{font-size:10px;color:#78693f}.preview-band{display:grid;grid-template-columns:1fr 1.5fr .7fr auto;align-items:center;background:#f6f9fa;border-bottom:1px solid #dce2e5}.preview-band>div{padding:14px 18px;border-right:1px solid #e0e6e8}.preview-band span,.run-facts span{display:block;font-size:9px;color:#77858a}.preview-band strong,.preview-band code{font-size:11px}.preview-band button{margin:0 14px}.read-only{color:#246246}.section{padding:25px 0;border-bottom:1px solid #dce2e5}.heading{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:14px}.heading h2{font-size:15px}.heading p{font-size:10px;color:#748087;margin-top:4px}.heading>span{font-size:9px;color:#47717a;border:1px solid #c8d8dc;border-radius:5px;padding:5px 8px}.adapter-grid{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid #dce2e5}.adapter-grid article{min-width:0;padding:14px;border-right:1px solid #e2e8ea}.adapter-grid article:last-child{border:0}.adapter-head{min-height:46px;display:flex;flex-direction:column}.adapter-head strong{font-size:11px}.adapter-head span{font-size:8px;color:#2c684b;margin-top:4px}.adapter-head .missing{color:#98483d}.count-flow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;padding:10px 0;border-top:1px solid #e5eaec;border-bottom:1px solid #e5eaec}.count-flow div{text-align:center}.count-flow small{display:block;font-size:8px;color:#77858a}.count-flow strong{font-size:17px}.adapter-grid article>code{display:block;max-height:54px;margin-top:9px;font-size:7px;line-height:1.45;color:#748087;overflow:hidden;overflow-wrap:anywhere}.run-facts{display:grid;grid-template-columns:1.5fr .6fr .6fr 1fr;background:#f6f9fa;border:1px solid #dce2e5}.run-facts div{min-width:0;padding:11px 14px;border-right:1px solid #e2e8ea}.run-facts div:last-child{border:0}.run-facts strong,.run-facts code{font-size:9px;overflow-wrap:anywhere}.gap-list{border:1px solid #dce2e5;border-top:0}.gap-list article{display:grid;grid-template-columns:minmax(220px,1fr) 1.4fr;align-items:center;gap:14px;padding:13px;border-bottom:1px solid #e3e8ea}.gap-list article:last-child{border:0}.gap-list article.error{border-left:3px solid #a44b3f}.gap-main{display:flex;min-width:0;flex-direction:column}.gap-main>span{font-size:8px;color:#2e6872}.gap-main strong{font-size:10px;margin:2px 0}.gap-main code,.gap-main small{font-size:8px;color:#77858a;overflow-wrap:anywhere}.actions{display:flex;justify-content:flex-end;gap:7px}.decision{display:flex;justify-self:end;align-items:center;gap:8px;color:#276046}.decision span{display:flex;flex-direction:column}.decision strong{font-size:9px}.decision small,.decision code{font-size:8px;color:#698078}.primary,.secondary,.danger,.quiet{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:6px;padding:8px 10px;font-size:10px;font-weight:650;cursor:pointer;text-decoration:none}.primary{background:#245f69;color:#fff}.secondary{background:#eaf2f4;color:#285d67}.danger{background:#fff0ed;color:#93463d}.quiet{background:#f2f4f5;color:#59666b}.primary:disabled,.secondary:disabled,.danger:disabled,.quiet:disabled{opacity:.5;cursor:not-allowed}.inline-empty{padding:28px;text-align:center;border:1px dashed #d1dadd;color:#78858a;font-size:10px}.empty{min-height:380px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:9px;color:#748087}.empty h2{font-size:16px;color:#20272a}.empty p{font-size:10px}.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:900px){.preview-band{grid-template-columns:1fr 1fr}.preview-band button{margin:12px}.adapter-grid{grid-template-columns:1fr}.adapter-grid article{border-right:0;border-bottom:1px solid #e2e8ea}.run-facts{grid-template-columns:1fr 1fr}.gap-list article{grid-template-columns:1fr}.actions,.decision{justify-self:stretch}.actions{flex-direction:column}.actions button{width:100%}}@media(max-width:500px){.page-header h1{font-size:21px}.preview-band,.run-facts{grid-template-columns:1fr}.preview-band>div,.run-facts div{border-right:0;border-bottom:1px solid #e2e8ea}.heading{align-items:flex-start;flex-direction:column}.boundary{align-items:flex-start}.adapter-grid article>code{max-height:70px}.gap-list article{padding:12px}.decision{justify-self:start}}
+</style>

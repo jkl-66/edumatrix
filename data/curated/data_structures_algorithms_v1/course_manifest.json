@@ -1,0 +1,814 @@
+{
+  "schema_version": "edumatrix.course-version-manifest.v1",
+  "manifest_version": "course-data-structures-algorithms-engineering-1.0.0",
+  "generated_at": "2026-08-31T00:00:00+08:00",
+  "course_id": "course-data-structures-algorithms-engineering-v1",
+  "title": "数据结构与算法工程实践：从基础结构到算法设计与岗位刷题",
+  "subject": "计算机科学 / 数据结构与算法",
+  "description": "以中文《Hello 算法》为主教材，覆盖复杂度、线性结构、树、堆、图、排序查找、回溯、贪心、动态规划和工程题型。",
+  "domain_pack": "domain-data-structures-algorithms-engineering-v1",
+  "knowledge_point_version": "data-structures-algorithms-kp-1.0.0",
+  "language": "zh-CN",
+  "content_origin": "Hello 算法中文文档固定 commit；章节正文、来源角色和知识点映射均保留可追溯元数据。",
+  "license": "CC BY-NC-SA 4.0；署名、非商业、相同方式共享并标注改编。详见 LICENSE-AND-ATTRIBUTION.upstream.md。",
+  "visibility": "public",
+  "status": "published",
+  "tags": [
+    "副课程",
+    "数据结构",
+    "算法",
+    "中文教材",
+    "岗位实践"
+  ],
+  "source_roles": {
+    "primary": "Hello 算法中文章节",
+    "theory": "OI Wiki（待补充的理论扩展位）",
+    "practice": "labuladong（待补充的题型扩展位）",
+    "career": "CS-Notes（待补充的岗位扩展位）"
+  },
+  "claim_boundary": "基于固定公开中文教材的课程工程演示；不宣称行业认证。",
+  "external_material_policy": "启动和运行不联网；OI Wiki、labuladong、CS-Notes 作为后续可审核扩展来源，不混入本版主答案。",
+  "source_audit": {
+    "approved_repository_count": 1,
+    "repositories": [
+      {
+        "key": "hello-algo",
+        "url": "https://github.com/krahets/hello-algo",
+        "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9"
+      }
+    ]
+  },
+  "processing": {
+    "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+    "deterministic": true,
+    "network_required": false,
+    "external_model_used": false,
+    "source_language": "zh-CN"
+  },
+  "knowledge_points": [
+    {
+      "code": "DSA-KP-01",
+      "title": "算法问题建模",
+      "level": "foundation",
+      "prerequisites": []
+    },
+    {
+      "code": "DSA-KP-02",
+      "title": "时间与空间复杂度",
+      "level": "foundation",
+      "prerequisites": [
+        "DSA-KP-01"
+      ]
+    },
+    {
+      "code": "DSA-KP-03",
+      "title": "数组与字符串",
+      "level": "foundation",
+      "prerequisites": [
+        "DSA-KP-02"
+      ]
+    },
+    {
+      "code": "DSA-KP-04",
+      "title": "链表与指针操作",
+      "level": "foundation",
+      "prerequisites": [
+        "DSA-KP-03"
+      ]
+    },
+    {
+      "code": "DSA-KP-05",
+      "title": "栈与队列",
+      "level": "foundation",
+      "prerequisites": [
+        "DSA-KP-04"
+      ]
+    },
+    {
+      "code": "DSA-KP-06",
+      "title": "哈希表与冲突处理",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-03"
+      ]
+    },
+    {
+      "code": "DSA-KP-07",
+      "title": "LRU 缓存设计",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-05",
+        "DSA-KP-06"
+      ]
+    },
+    {
+      "code": "DSA-KP-08",
+      "title": "树与二叉树遍历",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-05"
+      ]
+    },
+    {
+      "code": "DSA-KP-09",
+      "title": "二叉搜索树与平衡",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-08"
+      ]
+    },
+    {
+      "code": "DSA-KP-10",
+      "title": "Trie 前缀树",
+      "level": "advanced",
+      "prerequisites": [
+        "DSA-KP-06",
+        "DSA-KP-08"
+      ]
+    },
+    {
+      "code": "DSA-KP-11",
+      "title": "堆与优先队列",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-08"
+      ]
+    },
+    {
+      "code": "DSA-KP-12",
+      "title": "Top-K 与任务调度",
+      "level": "advanced",
+      "prerequisites": [
+        "DSA-KP-11"
+      ]
+    },
+    {
+      "code": "DSA-KP-13",
+      "title": "图表示与遍历",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-08"
+      ]
+    },
+    {
+      "code": "DSA-KP-14",
+      "title": "BFS、DFS 与拓扑排序",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-13"
+      ]
+    },
+    {
+      "code": "DSA-KP-15",
+      "title": "最短路与连通性",
+      "level": "advanced",
+      "prerequisites": [
+        "DSA-KP-14"
+      ]
+    },
+    {
+      "code": "DSA-KP-16",
+      "title": "比较排序",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-02",
+        "DSA-KP-03"
+      ]
+    },
+    {
+      "code": "DSA-KP-17",
+      "title": "归并、快速与堆排序",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-16"
+      ]
+    },
+    {
+      "code": "DSA-KP-18",
+      "title": "线性排序与稳定性",
+      "level": "advanced",
+      "prerequisites": [
+        "DSA-KP-16"
+      ]
+    },
+    {
+      "code": "DSA-KP-19",
+      "title": "二分查找与边界",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-16"
+      ]
+    },
+    {
+      "code": "DSA-KP-20",
+      "title": "哈希查找与双指针",
+      "level": "advanced",
+      "prerequisites": [
+        "DSA-KP-06",
+        "DSA-KP-19"
+      ]
+    },
+    {
+      "code": "DSA-KP-21",
+      "title": "递归与分治",
+      "level": "core",
+      "prerequisites": [
+        "DSA-KP-02",
+        "DSA-KP-03"
+      ]
+    },
+    {
+      "code": "DSA-KP-22",
+      "title": "回溯与剪枝",
+      "level": "advanced",
+      "prerequisites": [
+        "DSA-KP-05",
+        "DSA-KP-21"
+      ]
+    },
+    {
+      "code": "DSA-KP-23",
+      "title": "贪心策略",
+      "level": "advanced",
+      "prerequisites": [
+        "DSA-KP-16",
+        "DSA-KP-21"
+      ]
+    },
+    {
+      "code": "DSA-KP-24",
+      "title": "动态规划建模",
+      "level": "advanced",
+      "prerequisites": [
+        "DSA-KP-21"
+      ]
+    },
+    {
+      "code": "DSA-KP-25",
+      "title": "背包、区间与路径 DP",
+      "level": "advanced",
+      "prerequisites": [
+        "DSA-KP-24"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "chapter_order": 0,
+      "title": "编程与算法导论",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_introduction/algorithms_are_everywhere.md;docs/chapter_introduction/index.md;docs/chapter_introduction/summary.md;docs/chapter_introduction/what_is_dsa.md",
+      "source_type": "md",
+      "source_bytes": 10033,
+      "source_sha256": "75d89ab71293cd6d0debbc05548348677bcd211fe77ccd2018a01838bd305be7",
+      "path": "chapters/00_编程与算法导论.md",
+      "bytes": 10488,
+      "sha256": "c98cf72540badc3b57ad89ec9404e9820e336205af20d40c19e4b2285cc03418",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-01"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_introduction",
+      "chapter_position": 0,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 4,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 1,
+      "title": "复杂度分析与性能边界",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_computational_complexity/exercises.md;docs/chapter_computational_complexity/index.md;docs/chapter_computational_complexity/iteration_and_recursion.md;docs/chapter_computational_complexity/performance_evaluation.md;docs/chapter_computational_complexity/space_complexity.md;docs/chapter_computational_complexity/summary.md;docs/chapter_computational_complexity/time_complexity.md",
+      "source_type": "md",
+      "source_bytes": 80765,
+      "source_sha256": "f62199356050d0cd69cd81ccc5109dcd0aa1a3f3f88c5d27eef0c0ab606bc991",
+      "path": "chapters/01_复杂度分析与性能边界.md",
+      "bytes": 81241,
+      "sha256": "59119f528908f6e62761ff09bb27fde773ec2be25d7fba561ff7db6be092bed1",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-02"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_computational_complexity",
+      "chapter_position": 1,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 7,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 2,
+      "title": "数组、字符串与链表",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_array_and_linkedlist/array.md;docs/chapter_array_and_linkedlist/exercises.md;docs/chapter_array_and_linkedlist/index.md;docs/chapter_array_and_linkedlist/linked_list.md;docs/chapter_array_and_linkedlist/list.md;docs/chapter_array_and_linkedlist/ram_and_cache.md;docs/chapter_array_and_linkedlist/summary.md",
+      "source_type": "md",
+      "source_bytes": 79110,
+      "source_sha256": "dcad8c55c3f6dda3b6a7859715440b5560d8ea2bf7fbbf1d20491e691993752c",
+      "path": "chapters/02_数组、字符串与链表.md",
+      "bytes": 79579,
+      "sha256": "695b89f0d9d06a55b9f30aaf41fa10861d9bf299923fc78d60da4aede8694b0a",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-03",
+        "DSA-KP-04"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_array_and_linkedlist",
+      "chapter_position": 2,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 7,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 3,
+      "title": "栈、队列与双端队列",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_stack_and_queue/deque.md;docs/chapter_stack_and_queue/exercises.md;docs/chapter_stack_and_queue/index.md;docs/chapter_stack_and_queue/queue.md;docs/chapter_stack_and_queue/stack.md;docs/chapter_stack_and_queue/summary.md",
+      "source_type": "md",
+      "source_bytes": 48908,
+      "source_sha256": "ed366b676ea34d0c35bb96109c0cfb050fba6e04ec3b57dce761d5106aec2856",
+      "path": "chapters/03_栈、队列与双端队列.md",
+      "bytes": 49372,
+      "sha256": "db66022e44ba923c717d3a9794c762ac6212480ce38a2d2fcde72befc83c8842",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-05"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_stack_and_queue",
+      "chapter_position": 3,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 6,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 4,
+      "title": "哈希表与缓存结构",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_hashing/exercises.md;docs/chapter_hashing/hash_algorithm.md;docs/chapter_hashing/hash_collision.md;docs/chapter_hashing/hash_map.md;docs/chapter_hashing/index.md;docs/chapter_hashing/summary.md",
+      "source_type": "md",
+      "source_bytes": 56763,
+      "source_sha256": "c0b2d38fdf8c6517d54f5009b0c6354a552677d3ddb23c8e424df165d5e8d972",
+      "path": "chapters/04_哈希表与缓存结构.md",
+      "bytes": 57216,
+      "sha256": "63c6ec5c0cedefbc45e45bfc3bd84b9bb2e9e110f901004d07ce2df16da3feac",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-06",
+        "DSA-KP-07"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_hashing",
+      "chapter_position": 4,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 6,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 5,
+      "title": "树、二叉搜索树与遍历",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_tree/array_representation_of_tree.md;docs/chapter_tree/avl_tree.md;docs/chapter_tree/binary_search_tree.md;docs/chapter_tree/binary_tree.md;docs/chapter_tree/binary_tree_traversal.md;docs/chapter_tree/exercises.md;docs/chapter_tree/index.md;docs/chapter_tree/summary.md",
+      "source_type": "md",
+      "source_bytes": 62383,
+      "source_sha256": "1f00759b796245388597c60897dab88af710d4364259ae4cf3f83e42781d7e1c",
+      "path": "chapters/05_树、二叉搜索树与遍历.md",
+      "bytes": 62839,
+      "sha256": "b3656d3374f45a759b805c4543cb348cbc4c93e5fe0d5c8c5e16eb9d30222ab1",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-08",
+        "DSA-KP-09",
+        "DSA-KP-10"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_tree",
+      "chapter_position": 5,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 8,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 6,
+      "title": "堆、优先队列与 Top-K",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_heap/build_heap.md;docs/chapter_heap/exercises.md;docs/chapter_heap/heap.md;docs/chapter_heap/index.md;docs/chapter_heap/summary.md;docs/chapter_heap/top_k.md",
+      "source_type": "md",
+      "source_bytes": 31812,
+      "source_sha256": "2fa55ad2906fec73e876136b90817da15f682b99e76c924cb1812ab5ab273495",
+      "path": "chapters/06_堆、优先队列与 Top-K.md",
+      "bytes": 32265,
+      "sha256": "e4d0761ed4b8a335c6ab49f12de5814af7662efbfcf5b026bb47c3350bf02c41",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-11",
+        "DSA-KP-12"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_heap",
+      "chapter_position": 6,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 6,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 7,
+      "title": "图表示、搜索与最短路",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_graph/exercises.md;docs/chapter_graph/graph.md;docs/chapter_graph/graph_operations.md;docs/chapter_graph/graph_traversal.md;docs/chapter_graph/index.md;docs/chapter_graph/summary.md",
+      "source_type": "md",
+      "source_bytes": 23548,
+      "source_sha256": "a0f226997c7e753894e3267475617fbdb4a32f6a52d8e566ec252292550f77a4",
+      "path": "chapters/07_图表示、搜索与最短路.md",
+      "bytes": 24005,
+      "sha256": "e3abddc196536e26e2017436bed48610319b3b33a2e95318107298da83d441b7",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-13",
+        "DSA-KP-14",
+        "DSA-KP-15"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_graph",
+      "chapter_position": 7,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 6,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 8,
+      "title": "排序算法与稳定性",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_sorting/bubble_sort.md;docs/chapter_sorting/bucket_sort.md;docs/chapter_sorting/counting_sort.md;docs/chapter_sorting/exercises.md;docs/chapter_sorting/heap_sort.md;docs/chapter_sorting/index.md;docs/chapter_sorting/insertion_sort.md;docs/chapter_sorting/merge_sort.md;docs/chapter_sorting/quick_sort.md;docs/chapter_sorting/radix_sort.md;docs/chapter_sorting/selection_sort.md;docs/chapter_sorting/sorting_algorithm.md;docs/chapter_sorting/summary.md",
+      "source_type": "md",
+      "source_bytes": 45404,
+      "source_sha256": "8f3d9cb6da3b8c06c9ea7bf128b53da5c47359eebb8535fff16f93b028bc8a56",
+      "path": "chapters/08_排序算法与稳定性.md",
+      "bytes": 45857,
+      "sha256": "503994220fe30b72db888b495838a860f90e1b97fbfd24059845b0e12bd63f91",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-16",
+        "DSA-KP-17",
+        "DSA-KP-18"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_sorting",
+      "chapter_position": 8,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 13,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 9,
+      "title": "查找、二分与边界",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_searching/binary_search.md;docs/chapter_searching/binary_search_edge.md;docs/chapter_searching/binary_search_insertion.md;docs/chapter_searching/exercises.md;docs/chapter_searching/index.md;docs/chapter_searching/replace_linear_by_hashing.md;docs/chapter_searching/searching_algorithm_revisited.md;docs/chapter_searching/summary.md",
+      "source_type": "md",
+      "source_bytes": 25998,
+      "source_sha256": "759e35a2c61ae9e2612e13b4c43e2f75bde22c74802f6c52cb993900fb7287c5",
+      "path": "chapters/09_查找、二分与边界.md",
+      "bytes": 26453,
+      "sha256": "c0d9cd99c8b84ed4b4e6140076cd79e035ad5ca84b9b1786fdc5640c992ba733",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-19",
+        "DSA-KP-20"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_searching",
+      "chapter_position": 9,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 8,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 10,
+      "title": "递归、分治与组合构造",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_divide_and_conquer/binary_search_recur.md;docs/chapter_divide_and_conquer/build_binary_tree_problem.md;docs/chapter_divide_and_conquer/divide_and_conquer.md;docs/chapter_divide_and_conquer/exercises.md;docs/chapter_divide_and_conquer/hanota_problem.md;docs/chapter_divide_and_conquer/index.md;docs/chapter_divide_and_conquer/summary.md",
+      "source_type": "md",
+      "source_bytes": 25494,
+      "source_sha256": "a2385239e88bb427795780cf639f770f34de8e71bf75423a49538f13668e1882",
+      "path": "chapters/10_递归、分治与组合构造.md",
+      "bytes": 25964,
+      "sha256": "ef9c7ef38a3954fe442996bae5030158d572d80d9e8fb8cd5d49e159988b9d45",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-21"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_divide_and_conquer",
+      "chapter_position": 10,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 7,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 11,
+      "title": "回溯、剪枝与搜索",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_backtracking/backtracking_algorithm.md;docs/chapter_backtracking/exercises.md;docs/chapter_backtracking/index.md;docs/chapter_backtracking/n_queens_problem.md;docs/chapter_backtracking/permutations_problem.md;docs/chapter_backtracking/subset_sum_problem.md;docs/chapter_backtracking/summary.md",
+      "source_type": "md",
+      "source_bytes": 44486,
+      "source_sha256": "d29016917eb84d87c3c8701919c94cd04d865d7a7b79d565abf6dce0c7d4ac0c",
+      "path": "chapters/11_回溯、剪枝与搜索.md",
+      "bytes": 44944,
+      "sha256": "90ed291bc1fd2dbe57fc9362cf8e1d547bc5b00f4bfe575838b3b4bfec73e930",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-22"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_backtracking",
+      "chapter_position": 11,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 7,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 12,
+      "title": "贪心算法与可证明选择",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_greedy/exercises.md;docs/chapter_greedy/fractional_knapsack_problem.md;docs/chapter_greedy/greedy_algorithm.md;docs/chapter_greedy/index.md;docs/chapter_greedy/max_capacity_problem.md;docs/chapter_greedy/max_product_cutting_problem.md;docs/chapter_greedy/summary.md",
+      "source_type": "md",
+      "source_bytes": 25704,
+      "source_sha256": "a5f2068d1379ec160b33bba51ca2b056dc72c516036c2b3b7eec207ae671aaea",
+      "path": "chapters/12_贪心算法与可证明选择.md",
+      "bytes": 26162,
+      "sha256": "71dc1b5d203c27c3813426d6e64997bc5d0b59e0eec7fe8af8a7dadcbe8f3ba3",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-23"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_greedy",
+      "chapter_position": 12,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 7,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    },
+    {
+      "chapter_order": 13,
+      "title": "动态规划与状态设计",
+      "repository_key": "hello-algo",
+      "repository_url": "https://github.com/krahets/hello-algo",
+      "git_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+      "source_path": "docs/chapter_dynamic_programming/dp_problem_features.md;docs/chapter_dynamic_programming/dp_solution_pipeline.md;docs/chapter_dynamic_programming/edit_distance_problem.md;docs/chapter_dynamic_programming/exercises.md;docs/chapter_dynamic_programming/index.md;docs/chapter_dynamic_programming/intro_to_dynamic_programming.md;docs/chapter_dynamic_programming/knapsack_problem.md;docs/chapter_dynamic_programming/summary.md;docs/chapter_dynamic_programming/unbounded_knapsack_problem.md",
+      "source_type": "md",
+      "source_bytes": 54532,
+      "source_sha256": "d558da722ba8288fe350cf0170d11e22b0b59f1bbb6d0ccb011bc9932af7c5a6",
+      "path": "chapters/13_动态规划与状态设计.md",
+      "bytes": 55000,
+      "sha256": "c74261d17e50b8b7a4b7f63f86b69a048554fcf0621f20d54c8362a475f3653d",
+      "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Krahets / Hello 算法贡献者"
+      ],
+      "knowledge_point_codes": [
+        "DSA-KP-24",
+        "DSA-KP-25"
+      ],
+      "source_role": "中文主教材",
+      "chapter_key": "hello-algo:chapter_dynamic_programming",
+      "chapter_position": 13,
+      "conversion": {
+        "strategy": "frozen_git_markdown_concatenation",
+        "source_file_count": 9,
+        "external_links_imported": 0,
+        "binary_assets_imported": 0
+      }
+    }
+  ]
+}

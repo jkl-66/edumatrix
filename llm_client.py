@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -35,7 +36,139 @@ class AsyncLLMBackend(Protocol):
         ...
 
 
+class StructuredModelContentError(RuntimeError):
+    """The provider returned no public assistant content for a structured call."""
+
+
+def extract_openai_message_content(message: Any) -> str:
+    """Extract public text from common OpenAI-compatible message shapes.
+
+    Reasoning fields are intentionally not inspected: they are private model
+    traces and must never become user-visible structured output.
+    """
+    if not isinstance(message, dict):
+        raise StructuredModelContentError("模型返回的消息结构无效")
+
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, dict):
+        text = content.get("text")
+        return text.strip() if isinstance(text, str) else ""
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts).strip()
+    return ""
+
+
+def extract_structured_json_from_reasoning(reasoning: Any) -> str:
+    """Recover only a final JSON object when a provider omits public content.
+
+    Some OpenAI-compatible reasoning deployments place the final structured
+    answer in ``reasoning_content`` and leave ``content`` empty. We never
+    return the reasoning text; only a standalone object that can pass the
+    normal JSON/schema validator is recovered.
+    """
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        return ""
+    text = reasoning.strip()
+    decoder = json.JSONDecoder()
+    candidates = []
+    for start, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            value, end = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            candidates.append((end, text[start:start + end]))
+    if candidates:
+        return max(candidates, key=lambda item: item[0])[1]
+    return ""
+
+
+def parse_json_object(raw: str) -> dict[str, Any]:
+    """Parse one JSON object, accepting only an optional complete Markdown fence."""
+    if not isinstance(raw, str):
+        raise TypeError("structured model output must be text")
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) < 3 or lines[-1].strip() != "```":
+            raise ValueError("structured model output has an incomplete Markdown fence")
+        if lines[0].strip().lower() not in {"```", "```json"}:
+            raise ValueError("structured model output uses an unsupported Markdown fence")
+        text = "\n".join(lines[1:-1]).strip()
+    value = json.loads(text)
+    if not isinstance(value, dict):
+        raise ValueError("structured model output must be a JSON object")
+    return value
+
+
+def apply_thinking_mode(
+    payload: dict[str, Any],
+    mode: str | None,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
+    """Apply provider thinking controls only when explicitly configured.
+
+    DeepSeek's OpenAI-compatible endpoint enables reasoning with ``thinking``;
+    deployments that expose an effort control additionally receive the explicit
+    ``reasoning_effort`` value.  ``max`` is intentionally preserved instead of
+    silently collapsing to a boolean enabled/disabled setting.
+    """
+    normalized = (mode or "").strip().lower()
+    effort = (reasoning_effort or "").strip().lower()
+    if normalized == "max":
+        payload["thinking"] = {"type": "enabled"}
+        payload["reasoning_effort"] = "max"
+    elif normalized in {"enabled", "disabled"}:
+        payload["thinking"] = {"type": normalized}
+    if effort:
+        payload["reasoning_effort"] = effort
+    return payload
+
+
+def describe_structured_output(raw: Any) -> dict[str, Any]:
+    """Return non-content diagnostics for a rejected structured response."""
+    if not isinstance(raw, str):
+        return {"type": type(raw).__name__, "length": 0}
+    text = raw.strip()
+    return {
+        "type": "str",
+        "length": len(text),
+        "starts_fence": text.startswith("```"),
+        "ends_fence": text.endswith("```"),
+        "contains_think": "<think>" in text.lower() or "</think>" in text.lower(),
+        "first_nonspace": text[:1],
+        "last_nonspace": text[-1:] if text else "",
+        "first_object_at": text.find("{"),
+        "last_object_at": text.rfind("}"),
+    }
+
+
+def requires_json_object(system_prompt: str) -> bool:
+    normalized = system_prompt.lower()
+    return (
+        "json schema" in normalized
+        or "return json only" in normalized
+        or "只输出 json" in normalized
+        or "仅输出 json" in normalized
+        or "只输出符合 json" in normalized
+        or "只输出一个符合给定 json" in normalized
+    )
+
+
 _shared_httpx_client: Any | None = None
+_shared_httpx_loop: Any | None = None
 
 
 def _env_or_config(name: str, fallback: str) -> str:
@@ -45,8 +178,9 @@ def _env_or_config(name: str, fallback: str) -> str:
 
 
 async def _get_httpx_client() -> Any:
-    global _shared_httpx_client
-    if _shared_httpx_client is None:
+    global _shared_httpx_client, _shared_httpx_loop
+    current_loop = asyncio.get_running_loop()
+    if _shared_httpx_client is None or _shared_httpx_loop is not current_loop:
         import httpx
         limits = httpx.Limits(
             max_keepalive_connections=CONFIG.max_concurrent_llm * 2,
@@ -58,6 +192,7 @@ async def _get_httpx_client() -> Any:
             timeout=httpx.Timeout(CONFIG.llm_timeout, connect=10.0),
             headers={"Content-Type": "application/json"},
         )
+        _shared_httpx_loop = current_loop
     return _shared_httpx_client
 
 
@@ -69,6 +204,8 @@ class AsyncOpenAIChatLLM:
     temperature: float = 0.3
     max_tokens: int = 8192
     timeout_seconds: int = 120
+    thinking_mode: str = ""
+    reasoning_effort: str = ""
     multimodal_endpoint: str | None = None
     multimodal_api_key: str | None = None
     multimodal_model: str | None = None
@@ -130,6 +267,9 @@ class AsyncOpenAIChatLLM:
                     "temperature": self.temperature,
                     "max_tokens": self.max_tokens,
                 }
+                if requires_json_object(system_prompt):
+                    payload["response_format"] = {"type": "json_object"}
+                apply_thinking_mode(payload, self.thinking_mode, self.reasoning_effort)
                 headers = {
                     "Authorization": f"Bearer {self.api_key}",
                 }
@@ -140,7 +280,14 @@ class AsyncOpenAIChatLLM:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                content = data["choices"][0]["message"]["content"].strip()
+                message = data["choices"][0]["message"]
+                content = extract_openai_message_content(message)
+                if not content and requires_json_object(system_prompt):
+                    content = extract_structured_json_from_reasoning(
+                        message.get("reasoning_content") if isinstance(message, dict) else None
+                    )
+                if not content:
+                    raise StructuredModelContentError("模型未返回可用的结构化正文")
                 usage = data.get("usage", {})
                 prompt_tokens = usage.get("prompt_tokens", 0)
                 completion_tokens = usage.get("completion_tokens", 0)
@@ -239,6 +386,7 @@ class AsyncOpenAIChatLLM:
                 "max_tokens": self.max_tokens,
                 "stream": True,
             }
+            apply_thinking_mode(payload, self.thinking_mode, self.reasoning_effort)
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
             }
@@ -312,7 +460,10 @@ class OpenAIChatLLM:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
+            content = extract_openai_message_content(data["choices"][0]["message"])
+            if not content:
+                raise StructuredModelContentError("模型未返回可用正文")
+            return content
         except Exception as exc:
             raise RuntimeError(f"OpenAI API 调用失败: {exc}") from exc
 
@@ -514,14 +665,294 @@ class AsyncSparkClient:
         return await loop.run_in_executor(None, functools.partial(self._sync_generate, system_prompt, user_prompt))
 
 
+def _deterministic_m2_artifact(user_prompt: str) -> dict[str, Any] | None:
+    """Produce contract-valid M2 fixtures for offline workflow demonstrations."""
+    try:
+        request = json.loads(user_prompt)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    capability = str(request.get("capability", ""))
+    context = request.get("context") or {}
+    target_ids = [str(item) for item in context.get("target_knowledge_point_ids") or []]
+    source_ids = [str(item) for item in context.get("source_ref_ids") or []]
+    if not target_ids or not source_ids:
+        return None
+    target_id = target_ids[0]
+    source_id = source_ids[0]
+    profile = request.get("profile_summary") or {}
+    target = profile.get("target_knowledge_point") or {}
+    title = str(target.get("title") or target.get("code") or "可追溯知识学习")
+
+    if capability == "lesson.generate_verified":
+        return {
+            "artifact_type": "lesson",
+            "schema_version": "m2.lesson.v1",
+            "title": f"{title}：原理与证据边界",
+            "objective": "理解核心方法，并能将结论逐项绑定到已验证课程来源。",
+            "prerequisites": ["理解基本检索与生成流程"],
+            "sections": [
+                {
+                    "heading": "核心机制",
+                    "body_markdown": "先从受控课程材料检索证据，再基于证据形成回答；无法定位来源的结论应保留不确定性。",
+                    "knowledge_point_ids": target_ids,
+                    "source_ref_ids": source_ids,
+                },
+                {
+                    "heading": "验证方法",
+                    "body_markdown": "将回答拆分为原子事实，逐项检查来源、适用边界与上下文一致性。",
+                    "knowledge_point_ids": target_ids,
+                    "source_ref_ids": source_ids,
+                },
+            ],
+            "retrieval_questions": ["每个结论由哪个 source_ref 支持？", "哪些结论需要降级为不确定？"],
+            "summary": "检索、生成、引用核验和边界声明共同构成可追溯闭环。",
+        }
+    if capability == "lab_guide.generate_verified":
+        return {
+            "artifact_type": "lab_guide",
+            "schema_version": "m2.lab_guide.v1",
+            "title": f"{title}：来源核验实验",
+            "objective": "完成一次可回滚的来源引用核验。",
+            "environment": ["Python 3.11+", "EduMatrix 冻结课程数据"],
+            "safety_boundary": "只读取当前课程的冻结来源，不访问外部网络，不执行破坏性命令。",
+            "steps": [
+                {
+                    "step_number": 1,
+                    "title": "装配受控上下文",
+                    "instruction": "读取当前知识点和来源引用，确认均属于已验证上下文。",
+                    "command_or_action": f"verify-context --knowledge-point {target_id} --source {source_id}",
+                    "expected_result": "上下文校验返回 verified。",
+                    "rollback": "丢弃本次临时上下文，不修改冻结来源。",
+                    "risk_level": "low",
+                    "source_ref_ids": source_ids,
+                },
+                {
+                    "step_number": 2,
+                    "title": "核验原子事实",
+                    "instruction": "逐项比对回答中的事实与来源片段，标记 supported 或 unsupported。",
+                    "command_or_action": "verify-claims --dry-run",
+                    "expected_result": "每项事实均具有明确裁决和来源定位。",
+                    "rollback": "删除本次临时核验报告。",
+                    "risk_level": "low",
+                    "source_ref_ids": source_ids,
+                },
+            ],
+            "acceptance_criteria": ["所有确定性结论均有来源", "unsupported 事实均被显式标记"],
+            "failure_branches": [
+                {
+                    "symptom": "来源无法定位",
+                    "likely_cause": "引用不属于当前 verified 上下文",
+                    "recovery_steps": ["停止生成", "重新装配上下文", "再次执行来源校验"],
+                }
+            ],
+        }
+    if capability == "tiered_quiz.generate_verified":
+        def question(identifier: str, bloom: str, prompt: str) -> dict[str, Any]:
+            return {
+                "id": identifier,
+                "prompt": prompt,
+                "knowledge_point_ids": target_ids,
+                "bloom_level": bloom,
+                "difficulty_basis": "考查来源绑定、证据核验与边界判断。",
+                "scoring_rule": "结论、来源和边界均正确得 2 分。",
+                "answer_key": "先定位受控来源，再逐项核验原子事实；证据不足时保留不确定性。",
+                "explanation": "可靠回答必须同时满足事实正确、来源可定位和适用边界清晰。",
+                "source_ref_ids": source_ids,
+            }
+        return {
+            "artifact_type": "tiered_quiz",
+            "schema_version": "m2.tiered_quiz.v1",
+            "title": f"{title}：分阶能力测验",
+            "instructions": "依次完成基础、应用和进阶题，回答时说明来源与边界。",
+            "tiers": [
+                {"level": "foundation", "questions": [question("q-foundation", "understand", "为什么回答需要绑定课程来源？")]},
+                {"level": "application", "questions": [question("q-application", "apply", "如何核验一个包含三个事实的回答？")]},
+                {"level": "advanced", "questions": [question("q-advanced", "analyze", "证据冲突时应如何裁决并说明不确定性？")]},
+            ],
+            "pass_rules": {"foundation": "2 分", "application": "2 分", "advanced": "2 分"},
+        }
+    return None
+
+
+def _deterministic_m3_artifact(user_prompt: str) -> dict[str, Any] | None:
+    """Produce request-bound M3 resources and reviews for offline demonstrations."""
+    try:
+        request = json.loads(user_prompt)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    request = request.get("original_request", request)
+
+    claim = request.get("claim")
+    if isinstance(claim, dict) and request.get("required_schema"):
+        source_ids = [str(item) for item in claim.get("proposed_source_ref_ids") or []]
+        if not source_ids:
+            return None
+        return {
+            "prover": {
+                "support_status": "supported",
+                "evidence_ref_ids": source_ids,
+                "applicable_conditions": ["owner/course/version filter remains enabled"],
+                "rationale": "冻结来源可在当前范围内支持该原子事实。",
+            },
+            "challenger": {
+                "issue_types": ["none"],
+                "evidence_ref_ids": source_ids,
+                "rationale": "未发现超出当前来源范围的确定性主张。",
+            },
+            "judge": {
+                "verdict": "keep",
+                "rationale": "本地确定性审查仅确认来源范围和结构契约，不替代专家判断。",
+                "evidence_ref_ids": source_ids,
+                "confidence": 0.8,
+            },
+        }
+
+    context = request.get("context") or {}
+    profile = request.get("profile") or {}
+    personalization = profile.get("personalization")
+    source_ids = [str(item) for item in context.get("source_ref_ids") or []]
+    knowledge_ids = [str(item) for item in context.get("target_knowledge_point_ids") or []]
+    if not isinstance(personalization, dict) or not source_ids or not knowledge_ids:
+        return None
+
+    profile_id = str(profile.get("source_profile_id") or "profile")
+    if profile_id.endswith("beginner"):
+        lesson_body = "先解释检索、候选和重排术语，再用短步骤比较参数变化。"
+        step_count, advanced_bloom = 4, "analyze"
+    elif profile_id.endswith("theory"):
+        lesson_body = "压缩基础理论，重点比较 owner 过滤、参数控制和故障定位。"
+        step_count, advanced_bloom = 3, "evaluate"
+    else:
+        lesson_body = "分析召回、排序、成本、版本隔离和迁移场景之间的工程权衡。"
+        step_count, advanced_bloom = 2, "create"
+
+    def question(identifier: str, bloom: str) -> dict[str, Any]:
+        return {
+            "id": identifier,
+            "prompt": f"{profile_id} 如何调优检索并保持课程隔离？",
+            "knowledge_point_ids": knowledge_ids,
+            "bloom_level": bloom,
+            "difficulty_basis": str(personalization.get("difficulty_band") or "evidence-bound"),
+            "scoring_rule": "参数、证据和隔离边界均正确得分。",
+            "answer_key": "先过滤课程范围，再检索与重排，最后用冻结查询验收。",
+            "explanation": "不能关闭 owner/course 过滤来换取表面指标。",
+            "source_ref_ids": source_ids,
+        }
+
+    bundle = {
+        "lesson": {
+            "artifact_type": "lesson",
+            "schema_version": "m3.lesson.v1",
+            "title": f"{profile_id} 混合检索讲义",
+            "objective": "调优混合检索并保持数据隔离。",
+            "prerequisites": ["Python/JSON"] if profile_id.endswith("beginner") else [],
+            "sections": [{
+                "heading": "检索调优",
+                "body_markdown": lesson_body,
+                "knowledge_point_ids": knowledge_ids,
+                "source_ref_ids": source_ids,
+            }],
+            "retrieval_questions": ["top-k 改变会影响什么？"],
+            "summary": "参数变化必须绑定证据、版本和隔离验收。",
+            "personalization": personalization,
+        },
+        "lab_guide": {
+            "artifact_type": "lab_guide",
+            "schema_version": "m3.lab_guide.v1",
+            "title": f"{profile_id} 检索调优实操",
+            "objective": "对冻结查询执行可回滚的参数实验。",
+            "environment": ["冻结课程来源", "本地确定性演示环境"],
+            "safety_boundary": "owner/course/version 过滤不可关闭。",
+            "steps": [{
+                "step_number": index,
+                "title": f"步骤 {index}",
+                "instruction": "调整一个变量并记录结果。",
+                "command_or_action": f"set top_k={index + 2}",
+                "expected_result": "结果保存参数、版本和来源。",
+                "rollback": "恢复上一个参数快照。",
+                "risk_level": "low",
+                "source_ref_ids": source_ids,
+            } for index in range(1, step_count + 1)],
+            "acceptance_criteria": ["指标可复现", "跨 owner 泄露为 0"],
+            "failure_branches": [{
+                "symptom": "课程过滤后无结果",
+                "likely_cause": "查询范围或索引版本错误",
+                "recovery_steps": ["核对 owner/course/version", "恢复正确索引"],
+            }],
+            "personalization": personalization,
+        },
+        "tiered_quiz": {
+            "artifact_type": "tiered_quiz",
+            "schema_version": "m3.tiered_quiz.v1",
+            "title": f"{profile_id} 检索调优测验",
+            "instructions": "依次完成基础、应用和进阶题。",
+            "tiers": [
+                {"level": "foundation", "questions": [question("q-foundation", "understand")]},
+                {"level": "application", "questions": [question("q-application", "apply")]},
+                {"level": "advanced", "questions": [question("q-advanced", advanced_bloom)]},
+            ],
+            "pass_rules": {"foundation": "2 分", "application": "2 分", "advanced": "2 分"},
+            "personalization": personalization,
+        },
+    }
+    artifact_type = request.get("artifact_type")
+    return bundle.get(artifact_type) if artifact_type else bundle
+
+
 class DeterministicEducationLLM:
     def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        if "意图分类" in role:
+            casual_markers = ("天气", "吃了吗", "讲个笑话", "你是谁")
+            is_academic = not any(marker in user_prompt for marker in casual_markers)
+            return json.dumps({
+                "is_academic": is_academic,
+                "reason": "这是一个学习问题" if is_academic else "这是一次日常交流",
+                "reply": "" if is_academic else (
+                    "## 智能答疑 / 系统说明\n\n"
+                    "您好！我是 EduMatrix 智能自适应助教。可以向我提问机器学习、数学或编程问题。"
+                ),
+            }, ensure_ascii=False)
         if "学术概念实体消解与指代对齐助手" in system_prompt or "学术概念实体消解与指代对齐助手" in role:
             if "池化层" in user_prompt and ("这个" in user_prompt or "它" in user_prompt):
                 return "池化层"
             return "None"
         if "画像抽取器" in role:
             return _profile_json(user_prompt)
+        if "JSON Schema" in system_prompt:
+            structured = _deterministic_m2_artifact(user_prompt)
+            if structured is None:
+                structured = _deterministic_m3_artifact(user_prompt)
+            if structured is not None:
+                return json.dumps(structured, ensure_ascii=False)
+        if "【已验证的 M5 学习上下文】" in system_prompt:
+            # M5 prompts include retrieved snippets that may mention a
+            # different topic from the learner's latest question.  Let the
+            # explicit, recognizable question take the same precedence as
+            # normal chat.  A short follow-up such as ``为什么更稳定？`` has
+            # no standalone topic and is intentionally answered from the
+            # frozen source snippet it is referring to.
+            current_question = _extract_current_question(user_prompt)
+            if current_question and _has_standalone_question_focus(current_question):
+                return _deterministic_chat_answer(user_prompt)
+            match = re.search(r"\[([^\]]+)\]\s+([^\n]+)", user_prompt)
+            if match:
+                _source_ref_id, quote = match.groups()
+                if not any(term in quote for term in ("混合检索", "关键词检索", "向量检索")):
+                    return (
+                        "## 接着刚才的问题\n\n"
+                        f"上一段的关键意思是：{quote}\n\n"
+                        "先把其中的对象、成立条件和结论对应起来，再用一个最小例子检查它在当前情形下是否成立。"
+                        "如果你希望继续深入，可以补充想比较的对象、指标或一组具体数据。"
+                    )
+                return (
+                    "## 为什么它通常更稳\n\n"
+                    "混合检索更稳定的原因不是某一种检索方式始终更强，而是它把关键词检索的精确术语召回与向量检索的语义召回结合起来，"
+                    "再用统一分数或重排器整理候选。这样可以减少单一检索方式在术语变化、同义表达或精确标识符场景中的偏差。"
+                    "但这种优势仍需在固定测试问题上比较 Recall@K，不能从一次成功回答推断所有场景都更好。\n\n"
+                    "你可以下一步分别运行关键词、向量和混合检索，比较同一组 query 的 Recall@K 与首个正确块位置。"
+                )
+        if role in {"学习伙伴", "助教", "EduMatrix 学习伙伴"} or "学习伙伴" in role or "助教" in role or "辩手" in role:
+            return _deterministic_chat_answer(user_prompt)
         topic = _guess_topic(user_prompt)
         if "理论教授" in role:
             return _lecture(topic, user_prompt)
@@ -539,7 +970,7 @@ class DeterministicEducationLLM:
             return _simplified_explanation(topic, user_prompt)
         if "路径规划师" in role:
             return f"学习路径建议：先补齐前置概念，再学习 {topic} 的定义、计算流程、代码实现和易错点。"
-        return f"{role} 已基于检索证据处理主题：{topic}。"
+        return f"我们可以从“{topic}”的核心含义、工作过程和一个具体例子开始。请告诉我你最想先解决哪一部分。"
 
 
 class AsyncDeterministicEducationLLM:
@@ -688,6 +1119,15 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
     multimodal_endpoint = configured("multimodal_endpoint", config.multimodal_llm_endpoint)
     multimodal_api_key = configured("multimodal_api_key", config.multimodal_llm_api_key)
     multimodal_model = configured("multimodal_model", config.multimodal_llm_model)
+    allow_fallback = overrides.get("allow_fallback")
+    if allow_fallback is None:
+        # A configured live provider must fail honestly.  Deterministic output
+        # remains available only through an explicit deterministic provider or
+        # an explicit operator opt-in to fallback.
+        allow_fallback = (
+            os.getenv("EDUMATRIX_ALLOW_LLM_FALLBACK", "0") == "1"
+            and os.getenv("EDUMATRIX_DISABLE_LLM_FALLBACK", "0") != "1"
+        )
     
     primary: AsyncLLMBackend | None = None
     
@@ -709,12 +1149,16 @@ def build_async_llm(config: EduMatrixConfig = CONFIG, **overrides) -> AsyncLLMBa
             temperature=overrides.get("temperature", config.llm_temperature),
             max_tokens=overrides.get("max_tokens", config.llm_max_tokens),
             timeout_seconds=config.llm_timeout,
+            thinking_mode=overrides.get("thinking_mode", config.llm_thinking_mode),
+            reasoning_effort=overrides.get("reasoning_effort", config.llm_reasoning_effort),
             multimodal_endpoint=multimodal_endpoint,
             multimodal_api_key=multimodal_api_key,
             multimodal_model=multimodal_model,
             is_multimodal_fallback=overrides.get("is_multimodal_fallback", False),
         )
         
+    if primary is not None and not allow_fallback:
+        return primary
     if primary is not None:
         return FallbackAsyncLLMWrapper(primary, AsyncDeterministicEducationLLM())
     if multimodal_endpoint and multimodal_api_key and multimodal_model:
@@ -739,8 +1183,100 @@ def call_spark_api(prompt: str, role: str = "助手") -> str:
     return DEFAULT_LLM.generate(f"你现在是 EduMatrix 系统的{role}", prompt, role=role)
 
 
+_CURRENT_QUESTION_MARKERS = (
+    "学生当前提问",
+    "学生当前问题",
+    "学生问题",
+    "当前学生追问",
+    "学生追问",
+    "用户当前问题",
+    "用户问题",
+    "当前问题",
+)
+_CURRENT_QUESTION_BOUNDARY = re.compile(
+    r"\n\s*(?:"
+    r"课程证据|已验证来源|背景知识库匹配证据|已解析附件|图片解析出的内容|"
+    r"学习者画像适配计划|学习上下文|课程上下文|检索上下文|"
+    r"课程协作上下文|专业协作上下文|Subject Expert 草稿|Challenger 摘要|"
+    r"Evidence Verifier 结果|Pedagogical 编排|公开 claims|课程 grounding|"
+    r"专家草稿|反驳摘要|核验结论|这是中断前已保存的回答|"
+    r"历史对话|会话历史|最近会话|目标内容|上文|下文|learner_adaptation|"
+    r"请(?:开始|提供|给出|直接)|===|$"
+    r")",
+    re.MULTILINE,
+)
+
+
+def _extract_current_question(prompt: str) -> str:
+    """Extract the learner's latest question from a mixed model prompt.
+
+    Chat prompts deliberately include history, retrieved evidence and profile
+    instructions.  Those sections are useful context but must never outrank
+    the explicitly marked current question when a deterministic answer is
+    selected.  Return an empty string when the caller did not provide a
+    current-question marker so resource-generation prompts can keep their
+    existing target-field behavior.
+    """
+    text = str(prompt or "")
+    if not text:
+        return ""
+    marker_pattern = "|".join(re.escape(marker) for marker in _CURRENT_QUESTION_MARKERS)
+    matches = list(re.finditer(rf"(?:{marker_pattern})\s*[：:]\s*", text))
+    if not matches:
+        return ""
+    remainder = text[matches[-1].end():].lstrip()
+    boundary = _CURRENT_QUESTION_BOUNDARY.search(remainder)
+    if boundary:
+        remainder = remainder[:boundary.start()]
+    # Keep a question readable even when the caller supplied line breaks or
+    # an accidental Markdown quote around the message.
+    return re.sub(r"\s+", " ", remainder).strip(" `\t\r\n")
+
+
+def _has_standalone_question_focus(question: str) -> bool:
+    """Return whether a marked question carries its own answerable focus.
+
+    A deterministic M5 answer may receive a short follow-up such as
+    ``为什么更稳定？`` after a frozen source quote. That follow-up is
+    intentionally answered from the frozen quote. A complete question,
+    including a topic that is not in the small deterministic vocabulary,
+    must instead win over the retrieved context.
+    """
+    normalized = re.sub(r"\s+", " ", str(question or "")).strip(" `\t\r\n")
+    if not normalized:
+        return False
+
+    # Known topics and explicit identifiers are always self-contained, even
+    # when the rest of the question is short (for example ``left 怎么移？``).
+    if _guess_topic(normalized) != "目标知识点" or re.search(r"[A-Za-z][A-Za-z0-9_./-]*", normalized):
+        return True
+
+    compact = normalized.rstrip("？?。.!！")
+    compact = re.sub(r"^(?:请问|请|那|那么|所以|然后|再问)\s*", "", compact)
+    compact = re.sub(
+        r"^(?:什么是|什么叫|解释一下|解释|说明|介绍|如何|怎么|怎样|为什么|为何|能否|是否|哪些|何时)\s*",
+        "",
+        compact,
+    )
+    # Predicate-only follow-ups have no subject to route on and should keep
+    # using the source quote from the immediately preceding turn.
+    if re.fullmatch(
+        r"(?:更|最|很|不|比较|还)?(?:稳定|重要|复杂|简单|好|快|慢|合适|合理|准确|可靠|清晰|有用|这样|那样)(?:吗|呢|啊|呀)?",
+        compact,
+    ):
+        return False
+    # Very short Chinese fragments are normally deictic follow-ups (``怎么
+    # 办？``/``为什么？``), not a new independently scoped question.
+    return len(compact) >= 4
+
+
 def _guess_topic(text: str) -> str:
-    target_match = re.search(r"(?<!学习)目标=([^;；\n]+)|GraphRAG目标知识点[：:]\s*([^\n]+)", text)
+    full_text = str(text or "")
+    current_question = _extract_current_question(full_text)
+    # A marked current question is authoritative.  Only prompts without that
+    # marker fall back to explicit resource target fields or their full body.
+    source_text = current_question or full_text
+    target_match = re.search(r"(?<!学习)目标=([^;；\n]+)|GraphRAG目标知识点[：:]\s*([^\n]+)", source_text)
     if target_match:
         target = next((group for group in target_match.groups() if group), "").strip()
         if target:
@@ -751,13 +1287,377 @@ def _guess_topic(text: str) -> str:
         "决策树", "支持向量机", "过拟合", "正则化", "交叉验证",
         "机器学习", "监督学习", "模型评估", "前向传播", "损失函数",
         "欠拟合", "激活函数", "Transformer", "注意力机制",
-        "神经网络", "卷积神经网络", "混淆矩阵",
+        "神经网络", "卷积神经网络", "混淆矩阵", "二分查找", "循环不变量",
+        "混合检索", "向量检索", "关键词检索", "学习率",
+        "闭区间", "开区间", "left", "right",
     )
     sorted_words = sorted(words, key=len, reverse=True)
     for word in sorted_words:
-        if word in text:
+        if word in source_text:
             return word
     return "目标知识点"
+
+
+def _deterministic_chat_answer(prompt: str) -> str:
+    """Give a domain-grounded answer when no external model is available.
+
+    The deterministic path is used in the demo and as the honest local
+    fallback.  It should still feel like a real teaching response: answer the
+    latest question, show the reasoning chain, and leave the learner with a
+    concrete way to verify the idea.  Keep topic branches separate so a
+    follow-up about boundaries cannot accidentally reuse the first-turn
+    invariant explanation verbatim.
+    """
+    full_text = str(prompt or "").strip()
+    text = _extract_current_question(full_text) or full_text
+    # Casual messages must remain conversational even when the conversation
+    # is attached to a course.  The canonical route now classifies them as
+    # general chat; this branch keeps the deterministic fallback aligned with
+    # that decision instead of emitting an academic template.
+    if any(marker in text for marker in ("讲个笑话", "天气怎么样", "天气如何", "吃了吗", "你是谁", "心情不错")):
+        if "讲个笑话" in text:
+            return "当然可以：程序员去面试，面试官问‘你会什么语言？’他说‘我会沉默，因为 bug 还没复现。’\n\n如果你想继续学习，可以随时问我一个机器学习、数据结构或编程问题。"
+        if "你是谁" in text:
+            return "我是 EduMatrix 的学习伙伴，负责陪你理解课程概念、检查代码和安排下一步练习。你可以直接告诉我现在最想弄懂的知识点。"
+        return "收到！希望你的状态继续保持得不错。想学习时可以直接抛给我一个具体问题，我会按你的节奏一起拆解。"
+    if (
+        any(marker in text for marker in ("错答", "答错", "纠正", "改答"))
+        and any(marker in text for marker in ("费曼", "代码", "实验"))
+        and any(marker in text for marker in ("反思", "掌握", "薄弱点", "认知负荷"))
+    ):
+        score_match = re.search(r"(?:智能组卷|组卷|测验|考试)[^。；，,\n]{0,12}?(\d{1,3})\s*分", text)
+        score_evidence = (
+            f"你明确提到本轮智能组卷是 {score_match.group(1)} 分。这个结果说明知识还没有稳定迁移到独立作答，"
+            "尤其要回查错题对应的边界条件和题型转换；它不能抹掉前面已经完成的代码、实验和复述证据。"
+            if score_match
+            else "你没有给出本轮组卷的具体分数，所以我不会猜测掌握率；应以正式报告中的错题知识点和逐题解析判断迁移薄弱处。"
+        )
+        return (
+            "## 先给判断\n\n"
+            "这组行为呈现的不是‘已经全会’或‘完全不会’，而是很典型的正在形成稳定能力：你能接收反馈、执行程序、控制实验变量并重新组织概念，"
+            "但在脱离支架后的综合判断上仍有薄弱环节。最合适的下一步不是把整章重学一遍，而是把错题暴露出的边界条件做一次短而集中的迁移训练。\n\n"
+            "### 哪些能力已经形成\n\n"
+            "1. **错答后能够纠正**：说明你能利用反馈修正判断，具备恢复能力。它证明‘会根据证据改’，但不等于首次独立作答已经稳定。\n"
+            "2. **代码真实运行完成**：说明你已经把部分概念转成了可执行步骤，形成了程序性掌握。下一步应解释关键参数为何这样设置，而不只是得到正确输出。\n"
+            "3. **交互实验中调节参数并观察变化**：说明你能做基本变量控制，知道用结果曲线或指标检查假设。要继续确认每次只改变一个变量，并能预测变化方向。\n"
+            "4. **费曼复述后有改进**：说明你能发现表达缺口并重组概念关系。真正稳定的标准是换一个例子仍能讲清前提、过程、结论和反例。\n\n"
+            "### 目前仍然薄弱的地方\n\n"
+            f"{score_evidence}\n\n"
+            "优先检查三类错误：是否漏看题目的适用前提；是否混用了相似概念的边界；是否能在代码、图表和文字表述之间来回转换。"
+            "这三类问题比单纯记忆定义更容易造成‘看懂了但一做就错’。\n\n"
+            "### 认知负荷、参与度与受挫感怎么理解\n\n"
+            "连续完成测验、代码、实验和费曼复述，说明本轮参与度较高；多种表征快速切换也会暂时提高认知负荷。"
+            "你在错答后继续纠正并完成后续任务，说明受挫没有演变成退出，但不能据此断言受挫感为零。普通对话本身也不会直接写入掌握度，"
+            "最终画像应只引用这些已经提交的可信学习事件。\n\n"
+            "### 下一轮 30 分钟巩固计划\n\n"
+            "- **8 分钟：错因归类。** 每道错题只标一个主因：前提遗漏、边界混淆、计算失误或迁移失败，并写出触发这个判断的题干词。\n"
+            "- **10 分钟：边界对照。** 为薄弱概念写一组‘成立 / 不成立’最小例子，明确只改变了哪个条件，以及结论为什么随之变化。\n"
+            "- **8 分钟：无支架迁移。** 关掉解析完成一道同构题，再把解法改写成三到五行伪代码或口头步骤。\n"
+            "- **4 分钟：低负荷收束。** 用一句定义、一个关键边界、一个自检问题做结束记录；24 小时后只复测错题和边界题。\n\n"
+            "达标条件不是立即全对，而是：能在新题中主动说出适用前提，首次作答正确率提高，并能解释代码或实验结果为何支持结论。"
+        )
+    # Prefer the learner's explicit question over unrelated concepts that may
+    # appear in retrieved course context.  Without this guard, a prompt about
+    # binary-search invariants can be hijacked by a context paragraph that
+    # happens to mention hybrid retrieval first.
+    # Code requests need a runnable, testable answer rather than the prose
+    # invariant explanation.  Keep this branch before the generic binary
+    # search branches so a request that mentions both "边界" and "代码" is
+    # routed to the code-specific response.
+    if "二分查找" in text and any(token in text for token in ("代码", "可运行", "实现", "Python", "python")):
+        return (
+            "## 直接回答\n\n"
+            "下面给出闭区间 `[left, right]` 版本的 Python 实现。它假设输入数组已经按升序排列；如果数组无序，必须先排序，"
+            "但排序本身会改变总体复杂度和原始下标。\n\n"
+            "```python\n"
+            "def binary_search(nums, target):\n"
+            "    left, right = 0, len(nums) - 1\n"
+            "    while left <= right:\n"
+            "        # 用这种写法避免 left + right 在极大下标时溢出\n"
+            "        mid = left + (right - left) // 2\n"
+            "        if nums[mid] == target:\n"
+            "            return mid\n"
+            "        if nums[mid] < target:\n"
+            "            left = mid + 1\n"
+            "        else:\n"
+            "            right = mid - 1\n"
+            "    return -1\n"
+            "```\n\n"
+            "### 输入、输出与不变量\n\n"
+            "输入是升序列表 `nums` 和目标值 `target`；输出是目标首次命中的下标，找不到时返回 `-1`。"
+            "循环不变量是：每轮开始时，若目标存在，它仍位于 `[left, right]`。`mid` 已经比较过，所以排除左半边时写 `left = mid + 1`，"
+            "排除右半边时写 `right = mid - 1`，不能写成 `left = mid` 或 `right = mid`。\n\n"
+            "### 三个边界测试\n\n"
+            "1. `binary_search([2, 5, 8, 12, 17], 2) == 0`：命中第一个元素；\n"
+            "2. `binary_search([2, 5, 8, 12, 17], 17) == 4`：命中最后一个元素；\n"
+            "3. `binary_search([2, 5, 8, 12, 17], 6) == -1`：目标位于两个元素之间，循环结束时 `left > right`。\n\n"
+            "还应测试空数组、单元素命中/未命中、目标小于最小值和大于最大值。时间复杂度为 O(log n)，迭代实现的额外空间复杂度为 O(1)。"
+            "如果你贴出自己的版本，我可以按每一轮的 left、right、mid 逐行检查。"
+        )
+    if "循环不变量" in text or "不变量" in text or ("二分查找" in text and "边界条件" in text):
+        return (
+            "## 直接回答\n\n"
+            "先给结论：二分查找的循环不变量是——每一轮循环开始时，如果目标值存在，它一定仍在当前搜索区间内。"
+            "这句话不是口号，而是证明代码正确性的关键条件；每次移动边界都必须保证它继续成立。\n\n"
+            "### 1. 闭区间的含义\n\n"
+            "采用 [left, right] 时，左右端点都可能是候选位置，所以初始值通常是 left = 0、right = n - 1，"
+            "循环条件写成 left <= right。计算 mid = left + (right - left) // 2 后，mid 已经被比较过："
+            "若 target < nums[mid]，mid 以及右侧都不可能再是答案，安全更新为 right = mid - 1；"
+            "若 target > nums[mid]，mid 以及左侧都不可能再是答案，安全更新为 left = mid + 1；"
+            "若相等则返回 mid。\n\n"
+            "### 2. 用一个具体数组检查不变量\n\n"
+            "在 nums = [2, 5, 8, 12, 17, 23] 中查找 17：第一次区间是 [0, 5]，mid = 2，nums[mid] = 8，"
+            "因为 17 > 8，下一轮变为 [3, 5]；第二次 mid = 4，命中 17。注意下一轮区间仍然包含答案，"
+            "这正是不变量在每次迭代后的可观察证据。若查找 6，区间会依次缩小为 [0, 1]、[1, 1]，"
+            "最后变成 [1, 0]，left > right 表示候选集合为空，才能返回 -1。\n\n"
+            "### 3. 终止性与复杂度\n\n"
+            "每一轮都会排除 mid 及其一侧的元素，区间长度严格变短，因此不会无限循环。"
+            "时间复杂度是 O(log n)，空间复杂度是 O(1)（迭代写法）。如果数组没有排序，"
+            "这个不变量从一开始就不成立，必须先排序或改用适合无序数据的方案。\n\n"
+            "### 4. 最常见的错误\n\n"
+            "不要把闭区间的 right = mid - 1 与开区间 [left, right) 的 right = mid 混用；"
+            "不要在已经比较过 mid 后仍写 left = mid 或 right = mid，某些长度为 1 或 2 的区间会原地不动；"
+            "也不要只在命中时返回而遗漏退出后的‘未找到’分支。\n\n"
+            "### 5. 自检练习\n\n"
+            "请分别用目标值 2、23、6 记录每轮的 left、right、mid，并检查每次区间是否仍覆盖可能的答案。"
+            "如果你把代码贴出来，我可以按这张迭代表逐行核对边界、不变量和终止条件。"
+        )
+    if (
+        ("二分查找" in text and any(token in text for token in ("left", "right", "mid")))
+        or ("闭区间" in text and ("left" in text or "right" in text))
+        or ("开区间" in text and ("left" in text or "right" in text))
+        or all(token in text for token in ("left", "right", "mid"))
+    ):
+        return (
+            "## 直接回答\n\n"
+            "你这次问的是二分查找中 left 和 right 的移动规则。它们不是凭感觉向中间靠拢，"
+            "而是由区间定义和已经比较过的 mid 决定；二分查找的循环不变量仍然是：目标若存在，"
+            "必须留在下一轮区间中。\n\n"
+            "### 闭区间 [left, right] 的三条规则\n\n"
+            "1. `target < nums[mid]`：目标只能在 mid 左侧，`right = mid - 1`。减 1 是因为 mid 已经比较过，"
+            "不需要再次保留。\n"
+            "2. `target > nums[mid]`：目标只能在 mid 右侧，`left = mid + 1`。加 1 同样是在排除已经确认的 mid。\n"
+            "3. `target == nums[mid]`：直接返回 mid，不再移动边界。\n\n"
+            "循环通常写 `while left <= right`。当 left == right 时，区间里还剩最后一个候选，"
+            "必须再检查一次；当更新后 left = right + 1，区间才真正为空。\n\n"
+            "### 迭代示例\n\n"
+            "对 `nums = [2, 5, 8, 12, 17, 23]` 查找 12：初始 `[0, 5]`，mid = 2，8 < 12，"
+            "所以 left 从 0 跳到 3，区间变成 `[3, 5]`；下一轮 mid = 4，17 > 12，"
+            "所以 right 从 5 退到 3，区间变成 `[3, 3]`；最后 mid = 3 命中。"
+            "这个例子同时说明了为什么不能写 `left = mid` 或 `right = mid`：当区间只剩一个元素时，"
+            "边界可能保持不变，循环就不会结束。\n\n"
+            "### 不要混用两种区间\n\n"
+            "闭区间使用 `right = n - 1`、`left <= right`、排除 mid 时加减 1；"
+            "半开区间 `[left, right)` 使用 `right = n`、`left < right`，当目标小于 mid 时通常写 `right = mid`。"
+            "两套写法都正确，但初始化、循环条件和更新必须成套出现。\n\n"
+            "### 代码自检清单\n\n"
+            "检查四件事：数组是否有序；mid 是否能在大数下安全计算；每次更新是否严格缩短区间；"
+            "未找到时是否返回明确结果。闭区间迭代版本的时间复杂度为 O(log n)，额外空间为 O(1)。"
+            "你可以再试目标值小于最小值、大于最大值和数组为空这三个边界案例，逐行写出 left/right，"
+            "就能确认实现没有遗漏。"
+        )
+    if any(token in text for token in ("池化层", "最大池化", "平均池化", "卷积神经网络")) or ("卷积" in text and "池化" in text):
+        return (
+            "## 直接回答\n\n"
+            "池化层不是为了替代卷积，而是在卷积提取局部特征后做下采样：减少空间尺寸和计算量，扩大后续神经元的有效感受野，"
+            "并让特征对小幅平移更稳定。它也会丢失部分精细位置，目标检测或分割任务不能不加分析地大量池化。\n\n"
+            "### 2×2 最大池化示例\n\n"
+            "对输入矩阵 `[[1, 3, 2, 4], [5, 6, 1, 2], [0, 2, 8, 1], [3, 1, 2, 7]]` 使用 `kernel=2、stride=2`。"
+            "左上窗口 `[ [1,3], [5,6] ]` 的最大值是 6；右上窗口最大值是 4；左下窗口最大值是 3；右下窗口最大值是 8，"
+            "所以输出为 `[[6, 4], [3, 8]]`。输出高宽计算为 `floor((4-2)/2)+1 = 2`。\n\n"
+            "### 最大池化与平均池化\n\n"
+            "最大池化保留最强响应，适合突出边缘或纹理是否出现；平均池化保留窗口平均趋势，输出更平滑。"
+            "`stride` 大于 1 才会真正下采样，`padding` 会改变边缘尺寸；不要把池化理解成‘学习参数’，标准池化本身没有可训练权重。\n\n"
+            "### 常见误区与练习\n\n"
+            "不要把卷积核大小、步幅和池化窗口混为一谈，也不要只看输出尺寸而忽略通道数（池化通常不改变通道数）。"
+            "你可以把 stride 改为 1，手算输出尺寸和重叠窗口，再比较最大池化、平均池化对边缘信息的影响。"
+        )
+    if any(token in text for token in ("自注意力", "Q、K、V", "Q,K,V", "Q、K", "缩放因子")) or ("Q" in text and "K" in text and "V" in text):
+        return (
+            "## 直接回答\n\n"
+            "自注意力让序列中的每个位置根据其他位置动态决定‘应该关注谁’。Q（Query）表示当前查询，K（Key）表示可被匹配的特征，"
+            "V（Value）是被加权汇总的内容；同一序列通常通过三组线性投影得到 Q、K、V。\n\n"
+            "### 计算步骤\n\n"
+            "1. 计算相似度矩阵 `S = QKᵀ`；\n"
+            "2. 用 `sqrt(d_k)` 除以 S，得到 scaled scores，避免维度变大时点积方差过高；\n"
+            "3. 对每一行做 softmax，把分数变成和为 1 的注意力权重；\n"
+            "4. 用权重乘 V，得到 `Attention(Q,K,V)=softmax(QKᵀ/sqrt(d_k))V`。\n\n"
+            "### 一个可核对的直觉例子\n\n"
+            "句子中‘它’需要判断指代对象时，‘它’对应位置的 Q 会与其他位置的 K 比较；与真正对象更相似的位置获得更大权重，"
+            "最终从对应 V 汇总更多信息。padding mask 会屏蔽补齐位置，causal mask 会阻止当前位置看到未来 token。\n\n"
+            "### 常见误区与复杂度\n\n"
+            "Q、K、V 不是三种词性标签，也不是直接从词典查出的固定向量；它们由当前层参数投影而来。缩放因子不是可学习温度，"
+            "而是稳定 softmax 梯度的数值处理。长度为 n、隐藏维度为 d 时，标准自注意力的分数矩阵带来 O(n²d) 的时间和 O(n²) 的注意力矩阵空间。"
+            "练习时可以写一个 3 个 token 的小矩阵，逐行验证 softmax 权重之和为 1。"
+        )
+    if "混合检索" in text or ("关键词" in text and "向量" in text):
+        if any(token in text for token in ("Python", "python", "代码", "可运行")):
+            return (
+                "## 可直接运行的示例\n\n"
+                "下面用三篇候选文档模拟两路召回分数。示例先分别做 min-max 归一化，再改变关键词权重；"
+                "向量权重始终等于 `1 - keyword_weight`。运行不需要第三方库。\n\n"
+                "```python\n"
+                "documents = {\n"
+                "    'A': {'keyword': 1.0, 'vector': 0.2},  # 精确命中术语\n"
+                "    'B': {'keyword': 0.6, 'vector': 0.9},  # 词面和语义都较好\n"
+                "    'C': {'keyword': 0.1, 'vector': 0.8},  # 主要依靠语义命中\n"
+                "}\n\n"
+                "def min_max(values):\n"
+                "    low, high = min(values), max(values)\n"
+                "    if high == low:\n"
+                "        return [0.0 for _ in values]\n"
+                "    return [(value - low) / (high - low) for value in values]\n\n"
+                "def rank(keyword_weight):\n"
+                "    if not 0.0 <= keyword_weight <= 1.0:\n"
+                "        raise ValueError('keyword_weight must be between 0 and 1')\n"
+                "    vector_weight = 1.0 - keyword_weight\n"
+                "    names = list(documents)\n"
+                "    keyword_scores = min_max([documents[name]['keyword'] for name in names])\n"
+                "    vector_scores = min_max([documents[name]['vector'] for name in names])\n"
+                "    fused = []\n"
+                "    for name, keyword, vector in zip(names, keyword_scores, vector_scores):\n"
+                "        score = keyword_weight * keyword + vector_weight * vector\n"
+                "        fused.append((name, round(score, 3)))\n"
+                "    return sorted(fused, key=lambda item: (-item[1], item[0]))\n\n"
+                "for weight in (0.8, 0.5, 0.2):\n"
+                "    print(f'keyword={weight:.1f}, vector={1-weight:.1f}: {rank(weight)}')\n"
+                "```\n\n"
+                "### 预期输出怎么读\n\n"
+                "关键词权重为 0.8 时，A 的精确术语命中占优势，顺序是 A、B、C；权重各为 0.5 时，B 的两路综合表现最好，"
+                "顺序变为 B、A、C；关键词权重降到 0.2 后，C 凭较高语义分超过 A，顺序变为 B、C、A。"
+                "这说明权重改变的不是文档原始内容，而是两类证据在最终分数中的贡献。\n\n"
+                "### 这个示例刻意简化了什么\n\n"
+                "真实系统中的 BM25 和余弦相似度分布可能很偏，单次查询内的 min-max 也容易受极值影响；两路候选还可能不完全重合。"
+                "生产方案通常要在独立验证集上比较 Recall@K、MRR、延迟和无证据率，并考虑 RRF 或 reranker。"
+                "请至少再测试两种边界：某一路所有分数相同，以及某篇文档只被一路召回；不能为了提高分数而关闭课程和版本隔离。"
+            )
+        if any(token in text for token in ("严格推导", "评分归一化", "候选合并", "边界条件", "逐步说明")):
+            return (
+                "## 1. 输入与符号\n\n"
+                "给定查询 `q` 和文档集合 `D`。关键词检索为文档 `d_i` 产生 BM25 分数 `b_i`，向量检索产生余弦相似度 `c_i`。"
+                "两者不能直接相加，因为数值范围和分布不同。先分别取前 `k_b`、`k_c` 个候选，并保留各自的文档标识、课程和版本。\n\n"
+                "### 2. 评分归一化\n\n"
+                "一种可解释写法是 `b'_i=(b_i-min(b))/(max(b)-min(b))`，`c'_i` 同理。若某一路 `max=min`，分母为零，"
+                "不能继续套公式；可以把该路视为没有区分度，或改用按排名计算的 RRF。余弦分数可能为负，也必须在归一化策略中明确处理。\n\n"
+                "### 3. 候选合并与融合\n\n"
+                "候选集合取并集 `C = C_b ∪ C_c`，同一文档按稳定 ID 去重。只在关键词路出现的文档令 `c'_i=0`，只在向量路出现的文档令 `b'_i=0`。"
+                "给定 `0≤λ≤1`，基础融合分数是 `F_i = λb'_i + (1-λ)c'_i`。λ 越大越强调精确词面，越小越强调语义覆盖。"
+                "若使用 RRF，则可写成 `F_i = 1/(K+r_b(i)) + 1/(K+r_c(i))`，避免直接比较原始分数。\n\n"
+                "### 4. 重排与最终输出\n\n"
+                "先按 `F_i` 取前 `m` 个候选，再由 reranker 对 `(q,d_i)` 计算更精细的相关性 `g_i`。"
+                "最终分数可以是 `S_i=αF_i+(1-α)g_i`，也可以完全采用重排顺序；两种策略必须在验证集上固定，不能逐次随意切换。"
+                "输出前还要执行 owner、course、version 和可见性过滤，并把最终文档绑定到可定位片段。\n\n"
+                "### 5. 边界条件与正确性检查\n\n"
+                "空查询、一路无结果、两路分数完全相同、候选重复、余弦为负、过滤后为空，都是必须定义的状态。"
+                "过滤时机也有取舍：权限过滤必须在返回前严格完成；若过早截断候选，可能降低召回，若过晚才校验权限，则可能产生越界风险。"
+                "工程上应固定金标准查询集，比较 Recall@K、MRR、nDCG、平均延迟与无证据拒答率，并用未参与调参的数据验证 λ 和 α。\n\n"
+                "因此，混合检索的严格流程是：同一输入上的两路召回 → 可比较的分数或排名 → 稳定 ID 并集去重 → 融合取候选 → 重排 → 权限与来源绑定。"
+                "任何一步缺失，都可能让最终排序看似有分数、实际上不可解释或不可复现。"
+            )
+        if any(token in text for token in ("生活类比", "直观", "类比")):
+            return (
+                "## 把它想成图书馆里两位配合找书的人\n\n"
+                "你去图书馆说：‘我想找一本讲神经网络训练不稳定、参数总来回震荡的书。’第一位馆员只看书名、索引词和编号，"
+                "他很擅长找到标题里明确写着‘学习率’或‘梯度下降’的书；这像关键词检索，遇到函数名、版本号、课程术语时又快又准。\n\n"
+                "第二位馆员会先理解你的意思：你虽然没说‘学习率过大’，但描述的是‘参数震荡、训练不收敛’。"
+                "他能把表达不同、含义相近的书也找出来；这像向量检索，擅长同义表达和上下文相似。\n\n"
+                "### 为什么不能只留一位\n\n"
+                "只让第一位找，‘PyTorch 2.4 的 AdamW’这种精确名称很可靠，但你换成口语‘训练为什么一直抖’，他可能漏掉。"
+                "只让第二位找，覆盖面更大，却可能把‘振荡信号处理’这种语义相近但课程不相关的内容带进来。"
+                "混合检索就是让两位各交一份候选清单，再由第三位负责人按统一标准合并、去重和重排。\n\n"
+                "### 一次完整找书过程\n\n"
+                "先把同一个问题同时交给两位馆员；然后把‘书名精确命中’和‘语义相似’这两种不同尺度的分数换到可比较范围；"
+                "接着按当前任务分配权重：查版本号时偏关键词，描述现象时偏语义；最后检查课程、版本和阅读权限，再把真正相关的书放到前面。"
+                "它不是把两摞书随便堆起来，而是一次有规则的候选合并和复核。\n\n"
+                "### 用一个反例检验理解\n\n"
+                "查询‘BERT 位置编码’时，关键词路若已精确命中教材章节，盲目提高向量权重可能引入其他 Transformer 章节；"
+                "查询‘模型为什么记住训练集却不会做新题’时，语义路能把没有原词但讲‘过拟合’的材料召回。"
+                "两种查询需要不同侧重，这正是混合的价值。\n\n"
+                "真正评价它时，要用一组包含精确术语、口语改写和错别字的查询，比较 Recall@5、MRR、首个正确结果位置和延迟。"
+                "如果现有课程内容里找不到能回答问题的信息，就应直接说明还缺什么，而不是让任一位馆员凭印象补一本不存在的书。"
+            )
+        return (
+            "## 直接回答\n\n"
+            "混合检索把两路互补的召回结果放到同一个排序流程中：关键词检索保留精确术语、函数名、版本号和专有编号，"
+            "向量检索补足同义表达、口语描述和上下文相近但词面不同的内容。它解决的是‘精确性’与‘覆盖面’之间的折中，"
+            "不是简单把两个列表拼在一起。\n\n"
+            "### 一次请求经过什么步骤\n\n"
+            "先对同一 query 分别执行关键词召回和向量召回；然后把 BM25、相似度等不同量纲的分数归一化；"
+            "接着按加权融合或 Reciprocal Rank Fusion 合并候选，再用 reranker 做重排（结合题意、课程范围和知识点关系重新排序）；"
+            "最后保留当前课程与当前版本内的相关内容。这样既能保留精确命中，也能避免语义相近的噪声排在最前。\n\n"
+            "### 如何判断它真的更好\n\n"
+            "不要只看一次回答。固定一组包含术语、同义表达、错别字和跨语言缩写的查询集，记录 Recall@5、MRR、"
+            "首个正确内容位置、平均延迟和无法确认的比例；同时检查是否把其他课程或其他版本的内容混入答案。"
+            "如果关键词召回已经精确命中专有名词，可以降低向量分支的权重；如果用户使用自然语言描述，再提高语义召回权重。\n\n"
+            "### 一个可执行的小实验\n\n"
+            "准备 10 条已知正确结果的查询，分别运行关键词、向量和混合三种方案，保存 top-5 结果与耗时，"
+            "再以 0.2 为步长调整融合权重。选出 Recall 与延迟都能接受的点后，用一组未参与调参的查询复验。"
+            "无论分数多高，都不能关闭课程隔离或凭空补造内容；信息不够时应明确告诉学习者还需要补充什么。"
+        )
+    if "梯度下降" in text or "学习率" in text:
+        return (
+            "## 直接回答\n\n"
+            "梯度下降沿损失函数梯度的反方向更新参数：`θ ← θ − η∇L(θ)`，其中 η 是学习率。"
+            "梯度告诉我们当前位置上升最快的方向，减去它就会朝损失更小的方向移动；学习率决定每一步迈多大。\n\n"
+            "### 学习率过大或过小会怎样\n\n"
+            "η 过大时，参数可能跨过最低点，在训练曲线上表现为损失上下震荡、突然变成 NaN，甚至持续发散；"
+            "η 过小时，损失下降很慢，训练许多轮仍停在原地。合适的学习率通常表现为训练损失稳定下降，"
+            "验证损失也在合理范围内改善，而不是只有训练集越来越好。\n\n"
+            "### 一套可复现的排查顺序\n\n"
+            "先固定随机种子、批大小和数据划分，记录前几轮的 loss、梯度范数和验证指标；"
+            "再用当前值的 0.1 倍、0.3 倍、1 倍和 3 倍做小范围对照。若曲线发散，先降低 η 并检查输入尺度；"
+            "若下降过慢，可适度提高 η、使用 warm-up 或选择带动量的 SGD/Adam。每次只改一个变量，"
+            "并用验证集而不是训练集决定最终方案。\n\n"
+            "### 还要注意什么\n\n"
+            "学习率并不能修复错误标签、未归一化特征或损失函数写错等问题；梯度为零也可能来自激活函数饱和。"
+            "建议把训练曲线、配置和数据版本一起保存，方便定位是优化器、数据还是模型结构导致的变化。\n\n"
+            "### 一个数值化的小例子\n\n"
+            "设当前参数 θ=2、梯度 ∇L=3、学习率 η=0.1，则更新后 θ=2−0.1×3=1.7；"
+            "如果把 η 改成 1，步长会放大十倍，可能直接越过低谷。实际调参时先用一个小批量确认梯度方向正确，"
+            "再比较不同学习率下的训练/验证曲线，并在记录中注明批大小、优化器和随机种子。"
+        )
+    if "Kubernetes" in text or "Deployment" in text or "就绪探针" in text or "滚动更新" in text:
+        return (
+            "## 直接回答\n\n"
+            "Kubernetes Deployment 通过 ReplicaSet 管理一组相同 Pod，并用滚动更新逐步把旧版本替换成新版本。"
+            "就绪探针（readinessProbe）决定 Pod 是否加入 Service 的可用端点；它失败时 Pod 可以继续运行，但不会接收新流量。"
+            "这与存活探针（livenessProbe）不同：存活探针失败通常会触发容器重启。\n\n"
+            "### 一次安全发布的检查顺序\n\n"
+            "1. 在 Deployment 中设置 `spec.strategy.rollingUpdate.maxUnavailable` 和 `maxSurge`，控制发布期间不可用和额外 Pod 数量；\n"
+            "2. 为应用配置就绪探针，检查真正代表‘可以接流量’的健康端点，而不是只检查进程存在；\n"
+            "3. 用 `kubectl rollout status deployment/<name>` 等待新 ReplicaSet 达到期望副本数，并观察错误率、延迟和资源使用；\n"
+            "4. 若新版本异常，执行 `kubectl rollout undo deployment/<name>` 回到上一个 Revision，再检查事件和日志。\n\n"
+            "### 容易踩坑的地方\n\n"
+            "探针初始延迟过短会让冷启动应用反复被摘流量；只设置 liveness 而没有 readiness 可能把尚未完成初始化的 Pod 暴露出去；"
+            "数据库迁移若不可向后兼容，也不能只依赖 Deployment 回滚，因为旧代码可能无法读取新 schema。生产环境还应配合 PodDisruptionBudget、"
+            "资源 requests/limits、发布暂停点和可观测性告警。这部分属于扩展工程知识；如果你有实际部署配置，我可以继续逐项检查。"
+        )
+    topic = _guess_topic(text)
+    if topic == "目标知识点":
+        question_hint = re.sub(r"\s+", " ", text).strip(" `\t\r\n")
+        question_hint = question_hint.rstrip("？?。.!！")
+        return (
+            "## 直接回答\n\n"
+            f"我理解你想讨论的是“{question_hint[:120]}”。这个问题目前还缺少决定答案的具体对象或条件，所以先给你一套能直接往下推进的分析方法。\n\n"
+            "先明确问题中的对象、目标和适用前提，再把过程或推导拆开；最后用一个正常例子和一个边界情形检查结论。"
+            "若问题涉及代码，还应分别说明输入、输出、状态变化和复杂度。\n\n"
+            "你可以补充公式、代码、数据或希望达到的岗位场景。我拿到这些信息后，会继续给出分步骤解释、最小例子、常见错误和练习。\n\n"
+            "如果这是一个决策问题，还要说明评价指标、限制条件和可接受的失败代价；如果是工程问题，"
+            "则需要把方案拆成输入、处理、输出、监控和回滚五个环节。你可以先提供当前尝试和一个反例，"
+            "我会据此判断是概念缺口、边界条件遗漏，还是实现细节导致的现象，并给出下一步可执行检查。"
+        )
+    return (
+        "## 直接回答\n\n"
+        f"关于“{topic}”，建议先把问题拆成对象、条件、过程和结果四部分。先确认定义和适用前提，"
+        "再用一个最小例子走完过程，随后比较边界情况，最后用反例或测试数据检查结论是否仍然成立。\n\n"
+        "先明确输入、输出和适用前提，再把过程拆成可观察的步骤；如果涉及代码，应说明运行环境、状态变化和复杂度；"
+        "如果涉及公式，应解释每个符号、推导假设和量纲。\n\n"
+        "### 可执行的核对方式\n\n"
+        "用一个最小例子走完过程，再用一个反例或极端输入检查边界；记录你观察到的中间状态，避免只凭最终结果判断正确。"
+        "如果问题属于工程决策，还要比较指标、资源限制、失败代价、监控信号和回滚方案。\n\n"
+        "你可以补充代码、公式、数据或目标岗位场景，"
+        "我会据此给出更具体的分步解释、最小实现、常见误区和下一步练习。"
+    )
 
 
 def _profile_json(prompt: str) -> str:
@@ -842,11 +1742,11 @@ def _lecture(topic: str, prompt: str) -> str:
             "2. 按 stride 移动窗口。\n"
             "3. 对每个窗口取 max 得到输出矩阵中的一个元素。\n\n"
             "常见误区：最大池化不是卷积，不学习参数；平均池化取均值，最大池化取最大值，二者不能混用。\n\n"
-            "画像驱动支持：若学生反馈\u201c最大池化和平均池化总混\u201d，先做反例辨析；"
+            "学习建议：若你总把最大池化和平均池化混在一起，先做反例辨析；"
             "若反馈\u201c题干长会漏条件\u201d，先列窗口大小、stride、池化类型三项条件清单；"
             "若反馈\u201c看答案才懂\u201d，先给局部提示，再让学生独立完成一个 2x2 窗口。"
         )
-    return f"# {topic}讲义\n\n基于检索证据，先说明前置概念，再解释核心机制、计算步骤和常见误区。"
+    return f"# {topic}讲义\n\n先说明需要掌握的前置概念，再解释核心机制、计算步骤，并用例子辨析常见误区。"
 
 
 def _code(topic: str) -> str:

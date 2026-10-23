@@ -99,6 +99,11 @@ def test_deployment_preflight_is_truthful_and_contains_no_secret_values():
     assert report["schema_version"] == "m8.deployment-preflight.v1"
     assert report["status"] in {"ready", "not_ready"}
     assert report["generation_allowed"] == (not report["blockers"])
+    assert report["checks"]["data_initialization"]["published_courses"] >= 0
+    assert report["checks"]["retrieval"]["backend"] in {"canonical_hash", "faiss"}
+    assert report["checks"]["generation_runtime"]["mode"] in {
+        "real_model", "deterministic_demo", "unavailable",
+    }
     encoded = json.dumps(report)
     assert "llm_endpoint" not in encoded
     assert "api_key" not in encoded

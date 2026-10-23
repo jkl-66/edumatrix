@@ -6,6 +6,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import (
     Base,
+    DBAssessmentQuestion,
+    DBAssessmentQuestionVersion,
     DBChapter,
     DBCourse,
     DBLearningEvent,
@@ -25,7 +27,9 @@ from app.m5_learning import (
     propose_plan_revision,
     record_learning_event,
     today_work_items,
+    multi_course_schedule,
     transition_path,
+    _mastery_state,
 )
 
 
@@ -77,10 +81,10 @@ def _draft(session, key="plan-key-001", spec=None):
     )
 
 
-def _event(key, event_type, object_id="chapter-1", payload=None):
+def _event(key, event_type, object_id="chapter-1", payload=None, source="frontend"):
     return LearningEventInput(
         idempotency_key=key, event_type=event_type, course_id=COURSE,
-        object_type="chapter", object_id=object_id, source="frontend",
+        object_type="chapter", object_id=object_id, source=source,
         occurred_at=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc),
         payload=payload or {},
     )
@@ -198,18 +202,34 @@ def test_events_are_idempotent_and_only_strong_unblocked_evidence_completes():
 
     blocked, _ = record_learning_event(
         session, owner_public_id=OWNER,
-        event=_event("event-strong-002", "delayed_retest_passed", "chapter-2"),
+        trusted_source=True,
+        event=_event(
+            "event-strong-002", "delayed_retest_passed", "chapter-2",
+            {"correct": True, "delay_hours": 24, "attempt_id": "attempt-blocked"},
+            "backend",
+        ),
     )
     assert process_path_event(session, event=blocked).result["prerequisite_blocked"] is True
 
     passed, _ = record_learning_event(
-        session, owner_public_id=OWNER,
-        event=_event("event-strong-001", "code_tests_passed", payload={"passed_count": 2, "total_count": 2}),
+        session, owner_public_id=OWNER, trusted_source=True,
+        event=_event(
+            "event-strong-001", "code_tests_passed",
+            payload={
+                "passed_count": 2, "total_count": 2,
+                "test_scope": "hidden", "run_id": "run-strong-001",
+            },
+            source="sandbox",
+        ),
     )
     process_path_event(session, event=passed)
     passed_second, _ = record_learning_event(
-        session, owner_public_id=OWNER,
-        event=_event("event-strong-003", "teacher_confirmed", "chapter-2", {"scope": "chapter"}),
+        session, owner_public_id=OWNER, trusted_source=True,
+        event=_event(
+            "event-strong-003", "teacher_confirmed", "chapter-2",
+            {"scope": "chapter", "teacher_public_id": "usr-teacher"},
+            "teacher",
+        ),
     )
     process_path_event(session, event=passed_second)
     assert path.status == "completed"
@@ -232,4 +252,87 @@ def test_today_work_excludes_completed_and_prerequisite_blocked_nodes():
 
     session.query(DBPathNode).filter_by(learning_path_id=path.id, node_key="node-1").one().status = "completed"
     assert [item["node_key"] for item in today_work_items(session, owner_public_id=OWNER)] == ["node-2"]
+
+
+def test_today_completion_receipt_stays_on_today_and_next_node_waits_for_next_day():
+    session = _session()
+    session.get(DBCourse, COURSE).status = "published"
+    plan, _, _ = _draft(session, spec=_spec(
+        _node("node-1", "chapter-1"),
+        _node("node-2", "chapter-2", prerequisites=("node-1",)),
+    ))
+    path = confirm_plan(session, plan=plan, owner_public_id=OWNER, expected_lock_version=1)
+    event, _ = record_learning_event(
+        session,
+        owner_public_id=OWNER,
+        trusted_source=True,
+        event=LearningEventInput(
+            idempotency_key="today-completion-001",
+            event_type="code_tests_passed",
+            course_id=COURSE,
+            object_type="chapter",
+            object_id="chapter-1",
+            source="sandbox",
+            occurred_at=datetime.now(timezone.utc),
+            payload={"passed_count": 2, "total_count": 2, "test_scope": "hidden", "run_id": "run-today-001"},
+        ),
+    )
+    process_path_event(session, event=event)
+
+    today = list(today_work_items(session, owner_public_id=OWNER))
+    assert [item["node_key"] for item in today] == ["node-1"]
+    assert today[0]["status"] == "completed"
+
+    day_one = multi_course_schedule(session, owner_public_id=OWNER, selected_day=1)
+    assert [item["node_key"] for item in day_one["selected"]["tasks"]] == ["node-1"]
+    assert day_one["selected"]["tasks"][0]["status"] == "completed"
+    day_two = multi_course_schedule(session, owner_public_id=OWNER, selected_day=2)
+    assert [item["node_key"] for item in day_two["selected"]["tasks"]] == ["node-2"]
+
+
+def test_plan_assessment_node_requires_a_frozen_available_question_version():
+    session = _session()
+    question = DBAssessmentQuestion(
+        id="assessment-question", owner_public_id=OWNER, course_id=COURSE,
+        question_type="single_choice", origin="manual", status="approved",
+    )
+
+
+    session.add(question)
+    session.flush()
+    version = DBAssessmentQuestionVersion(
+        id="assessment-version", question_id=question.id, version_number=1,
+        prompt="Choose B", options=["A", "B"], answer_key={"choice": "B"},
+        scoring_rule={"type": "exact"}, content_hash="d" * 64,
+        created_by_public_id=OWNER,
+    )
+    session.add(version)
+    session.flush()
+    question.current_version_id = version.id
+    assessment = PlanNodeSpec(
+        node_key="assessment-node", node_type="assessment", target_object_id=version.id,
+        title="Delayed retest", resource_status="existing",
+        estimate_min_minutes=5, estimate_max_minutes=10,
+    )
+    plan, _, created = _draft(session, key="assessment-plan", spec=_spec(assessment))
+    assert created is True and plan.status == "draft"
+    bad = assessment.model_copy(update={"target_object_id": "missing-version"})
+    with pytest.raises(M5LearningError, match="assessment version is unavailable"):
+        _draft(session, key="assessment-plan-bad", spec=_spec(bad))
+
+
+def test_weak_flag_overrides_contradictory_known_label_for_path_projection():
+    profile = {
+        "mastery": {"kp-weak": {"status": "known", "score": 0.0, "evidence_item_count": 1, "source_ref_ids": ["ref-1"]}},
+        "weak_ids": {"kp-weak"}, "mastered_ids": set(), "unknown_ids": set(),
+    }
+    assert _mastery_state("kp-weak", profile=profile)[0] == "weak"
+
+
+def test_known_label_without_high_score_does_not_skip_path_node():
+    profile = {
+        "mastery": {"kp-developing": {"status": "known", "score": 0.35, "evidence_item_count": 2, "source_ref_ids": ["ref-1"]}},
+        "weak_ids": set(), "mastered_ids": set(), "unknown_ids": set(),
+    }
+    assert _mastery_state("kp-developing", profile=profile)[0] == "developing"
 

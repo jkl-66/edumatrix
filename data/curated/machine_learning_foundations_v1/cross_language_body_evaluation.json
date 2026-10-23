@@ -1,0 +1,20 @@
+{
+  "schema_version": "edumatrix.cross-language-body-evaluation.v1",
+  "dataset_version": "ml-foundations-zh-query-en-body-1.0.0",
+  "course_id": "course-machine-learning-foundations-v1",
+  "course_manifest_version": "course-ml-foundations-1.0.0",
+  "body_marker": "## 精选教材内容",
+  "chunk_chars": 500,
+  "chunk_overlap_chars": 100,
+  "pass_rank_threshold": 3,
+  "cases": [
+    {"id": "ZHEN-001", "query": "字典如何通过键读取对应值并加入新的键值对", "relevant_document": "00_Python机器学习编程基础.md"},
+    {"id": "ZHEN-002", "query": "数组改变形状时为什么元素总数必须保持不变", "relevant_document": "01_NumPy数组与向量化计算.md"},
+    {"id": "ZHEN-003", "query": "按行列标签选择表格数据与按整数位置选择有什么区别", "relevant_document": "02_Pandas表格数据处理.md"},
+    {"id": "ZHEN-004", "query": "如何用相关系数矩阵和热力图检查变量关系", "relevant_document": "03_探索性数据分析.md"},
+    {"id": "ZHEN-005", "query": "训练前为什么要处理缺失值、类别变量和数值尺度", "relevant_document": "04_数据准备概览.md"},
+    {"id": "ZHEN-006", "query": "有标签学习和无标签学习的核心区别是什么", "relevant_document": "05_机器学习基本范式.md"},
+    {"id": "ZHEN-007", "query": "为什么决策树不能直接接收类别字符串以及应如何编码", "relevant_document": "08_决策树分类.md"},
+    {"id": "ZHEN-008", "query": "主成分的解释方差占比如何帮助选择降维维数", "relevant_document": "11_主成分分析.md"}
+  ]
+}

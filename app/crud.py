@@ -1,5 +1,7 @@
 import sys
 import os
+import asyncio
+import json
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 
@@ -9,6 +11,93 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models import StudentProfile, DimensionState, CauseBreakdown, KnowledgeTrace, AlignmentReport, ProfileEvidence, ProfileEvidenceSource
 from app.database import DBStudentProfile, DBAlignmentLog, DBNote, DBReviewPlan, DBConversationHistory
 from app.m1_profile_evidence import sync_legacy_profile_evidence
+
+
+class ReviewModelError(RuntimeError):
+    """A review answer or explanation could not be produced by the required model."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+async def generate_review_model_json(
+    *,
+    operation: str,
+    system_prompt: str,
+    user_prompt: str,
+    role: str,
+    owner_public_id: str,
+    course_id: str | None = None,
+    trace_id: str | None = None,
+    input_summary: dict[str, object] | None = None,
+    response_validator=None,
+    model_call_context: dict | None = None,
+) -> tuple[dict, str, str]:
+    """Call the configured DeepSeek review model with no deterministic fallback."""
+    from app.m5_legacy_calls import audited_legacy_text_call, model_identity
+    from llm_client import DEFAULT_ASYNC_LLM, parse_json_object
+
+    backend = DEFAULT_ASYNC_LLM
+    provider, model = model_identity(backend)
+    thinking_mode = str(getattr(backend, "thinking_mode", "") or "").strip().lower()
+    reasoning_effort = str(getattr(backend, "reasoning_effort", "") or "").strip().lower()
+    if (
+        provider == "deterministic"
+        or model != "deepseek-v4-flash"
+        or thinking_mode not in {"enabled", "max"}
+        or reasoning_effort != "max"
+        or backend.__class__.__name__ == "FallbackAsyncLLMWrapper"
+        or os.getenv("EDUMATRIX_ALLOW_LLM_FALLBACK", "0") == "1"
+    ):
+        raise ReviewModelError(
+            "review_model_configuration_invalid",
+            "复习工具要求使用 deepseek-v4-flash、thinking enabled、reasoning_effort=max 且禁止 fallback。",
+        )
+
+    context = model_call_context or {}
+    database_runner = context.get("database_runner")
+    session_factory = context.get("session_factory")
+    if database_runner is None and session_factory is not None:
+        async def database_runner(operation_fn, *args):
+            session = session_factory()
+            try:
+                return await asyncio.to_thread(operation_fn, session, *args)
+            finally:
+                session.close()
+
+    def validate(raw: str):
+        try:
+            parsed = response_validator(raw) if response_validator is not None else parse_json_object(raw)
+        except Exception as exc:
+            raise ReviewModelError("review_model_output_invalid", "复习模型输出不是可用的结构化内容。") from exc
+        if not isinstance(parsed, dict) or not parsed:
+            raise ReviewModelError("review_model_output_invalid", "复习模型输出为空或结构不完整。")
+        return parsed
+
+    try:
+        raw = await audited_legacy_text_call(
+            backend,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            role=role,
+            operation=operation,
+            capability="answer",
+            owner_public_id=owner_public_id,
+            course_id=course_id,
+            trace_id=trace_id,
+            input_summary={"model": model, "provider": provider, **(input_summary or {})},
+            response_validator=validate,
+            database_runner=database_runner,
+        )
+    except ReviewModelError:
+        raise
+    except Exception as exc:
+        raise ReviewModelError("review_model_call_failed", "复习模型调用失败，请重试。") from exc
+    try:
+        return validate(raw), model, provider
+    except ReviewModelError:
+        raise
 
 def to_dict_safe(obj):
     """递归将 dataclass 转换为字典，安全避免 Enum/类型 循环递归"""
@@ -299,29 +388,34 @@ def record_alignment_log(db: Session, student_id: str, report: AlignmentReport, 
     db.commit()
 
 
-def create_note(db: Session, student_id: str, source: str, content: str, tags: list[str] | None = None, concepts: list[str] | None = None) -> DBNote:
-    import hashlib
-    note_id = hashlib.sha256(f"{student_id}:{content[:64]}:{datetime.utcnow().isoformat()}".encode()).hexdigest()[:16]
-    
-    processed_concepts = []
-    if concepts:
-        for c in concepts:
-            if "与" in c:
-                processed_concepts.extend([sub.strip() for sub in c.split("与") if sub.strip()])
-            elif "和" in c:
-                processed_concepts.extend([sub.strip() for sub in c.split("和") if sub.strip()])
-            else:
-                processed_concepts.append(c)
+def create_note(
+    db: Session,
+    student_id: str,
+    source: str,
+    content: str,
+    tags: list[str] | None = None,
+    concepts: list[str] | None = None,
+    source_metadata: dict | None = None,
+    note_id: str | None = None,
+    idempotency_key: str | None = None,
+    actor=None,
+    task_id: str | None = None,
+) -> DBNote:
+    from app.note_workspace import create_note_record
 
-    db_note = DBNote(
-        id=note_id,
+    db_note, _ = create_note_record(
+        db,
         student_id=student_id,
         source=source,
         content=content,
-        tags=tags or [],
-        concepts=processed_concepts,
+        tags=tags,
+        concepts=concepts,
+        source_metadata=source_metadata,
+        note_id=note_id,
+        idempotency_key=idempotency_key,
+        actor=actor,
+        task_id=task_id,
     )
-    db.add(db_note)
     db.commit()
     db.refresh(db_note)
     return db_note
@@ -356,27 +450,29 @@ def update_note(
     tags: list[str] | None = None,
     concepts: list[str] | None = None,
     student_id: str | None = None,
+    expected_version: int | None = None,
+    idempotency_key: str | None = None,
+    actor=None,
+    change_type: str = "saved",
+    task_id: str | None = None,
 ) -> DBNote | None:
-    query = db.query(DBNote).filter(DBNote.id == note_id)
-    if student_id:
-        query = query.filter(DBNote.student_id == student_id)
-    db_note = query.first()
+    from app.note_workspace import update_note_record
+
+    db_note, _ = update_note_record(
+        db,
+        note_id=note_id,
+        student_id=student_id,
+        content=content,
+        tags=tags,
+        concepts=concepts,
+        expected_version=expected_version,
+        idempotency_key=idempotency_key,
+        actor=actor,
+        change_type=change_type,
+        task_id=task_id,
+    )
     if not db_note:
         return None
-    db_note.content = content
-    if tags is not None:
-        db_note.tags = tags
-    if concepts is not None:
-        processed_concepts = []
-        for c in concepts:
-            if "与" in c:
-                processed_concepts.extend([sub.strip() for sub in c.split("与") if sub.strip()])
-            elif "和" in c:
-                processed_concepts.extend([sub.strip() for sub in c.split("和") if sub.strip()])
-            else:
-                processed_concepts.append(c)
-        db_note.concepts = processed_concepts
-    db_note.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(db_note)
     return db_note
@@ -458,24 +554,45 @@ def append_wrong_question_reflection(db: Session, student_id: str, concept: str,
                 existing_note = n
                 break
             
+    operation_key = f"wrong-question-reflection-{quiz_record_id}"
     if existing_note:
-        existing_note.content += reflection_md
-        existing_note.updated_at = datetime.utcnow()
+        from app.database import DBLearningEvent
+        from app.note_workspace import update_note_record
+
+        replay = db.query(DBLearningEvent).filter_by(
+            legacy_student_id=student_id,
+            idempotency_key=f"note:wrong_question_reflection:{operation_key}"[:128],
+        ).first()
+        if replay is not None:
+            return existing_note
+        existing_note, _ = update_note_record(
+            db,
+            note_id=existing_note.id,
+            student_id=student_id,
+            content=existing_note.content + reflection_md,
+            tags=list(existing_note.tags or []),
+            concepts=list(existing_note.concepts or []),
+            expected_version=existing_note.lock_version,
+            idempotency_key=operation_key,
+            actor=None,
+            change_type="wrong_question_reflection",
+        )
         db.commit()
         db.refresh(existing_note)
         return existing_note
     else:
-        import hashlib
-        note_id = hashlib.sha256(f"{student_id}:{concept}:{datetime.utcnow().isoformat()}".encode()).hexdigest()[:16]
-        new_note = DBNote(
-            id=note_id,
+        from app.note_workspace import create_note_record
+
+        new_note, _ = create_note_record(
+            db,
             student_id=student_id,
             source="错题本反思",
             content=f"# {concept} 错题集\n\n该笔记由错题本反思自动初始化。{reflection_md}",
             tags=["错题整理", "反思"],
             concepts=[concept],
+            source_metadata={"source_type": "wrong_question_reflection", "quiz_record_id": quiz_record_id},
+            idempotency_key=operation_key,
         )
-        db.add(new_note)
         db.commit()
         db.refresh(new_note)
         return new_note
@@ -676,8 +793,15 @@ def apply_review_feedback(db: Session, student_id: str, concept: str, quality: f
     return plan
 
 
-async def build_review_adaptation_payload(concept: str, quality: int, mastery: float | None = None) -> dict:
-    """Create a deterministic card-morphing payload for difficult reviews."""
+async def build_review_adaptation_payload(
+    concept: str,
+    quality: int,
+    mastery: float | None = None,
+    *,
+    owner_public_id: str | None = None,
+    model_call_context: dict | None = None,
+) -> dict:
+    """Generate the real difficult-review explanation and mindmap with DeepSeek."""
     mastery_score = max(0.0, min(1.0, float(mastery if mastery is not None else 0.3)))
     if quality != 2:
         return {
@@ -692,39 +816,47 @@ async def build_review_adaptation_payload(concept: str, quality: int, mastery: f
             "stream_chunks": [],
         }
 
-    from llm_client import DEFAULT_LLM, get_concept_rich_adaptation
-    import json
-    import asyncio
+    if not owner_public_id:
+        raise ReviewModelError("review_model_owner_required", "缺少复习模型调用的学习者身份。")
+    context = model_call_context or {}
+    system_prompt = (
+        "你是 EduMatrix 的复习 Visualizer Agent。困难反馈必须输出真实、可追溯的降维解释和思维导图。"
+        "只输出 JSON，不要 Markdown 围栏；JSON 必须包含 explanation（中文直觉解释与最小行动建议）和 mermaid（合法 Mermaid mindmap 或 graph）。"
+    )
+    user_prompt = (
+        f"概念: {concept}\n"
+        f"当前掌握度: {mastery_score:.2f}\n"
+        "请先用生活化直觉解释，再指出一个最小练习；思维导图至少包含概念、关键关系和一个常见误区。"
+    )
 
-    rich_data = get_concept_rich_adaptation(concept, mastery_score)
-    simplified = rich_data["explanation"]
-    mermaid = rich_data["mermaid"]
-    llm_backend = "VisualizerAgent"
+    def validate_adaptation(raw: str) -> dict:
+        parsed = json.loads(raw.strip())
+        explanation = str(parsed.get("explanation") or "").strip()
+        mermaid = str(parsed.get("mermaid") or "").strip()
+        if len(explanation) < 12 or not mermaid or not any(
+            marker in mermaid.lower() for marker in ("mindmap", "graph", "flowchart")
+        ):
+            raise ValueError("review adaptation output is unusable")
+        return {"explanation": explanation, "mermaid": mermaid}
 
-    try:
-        llm_backend = getattr(DEFAULT_LLM, "__class__", type(DEFAULT_LLM)).__name__
-        generated = await asyncio.to_thread(
-            DEFAULT_LLM.generate,
-            "你是 EduMatrix 的 Visualizer Agent 和 Director Agent。学生复习反馈为困难，请把概念降维成生活化解释。",
-            (
-                f"概念: {concept}\n"
-                f"当前掌握度: {mastery_score:.2f}\n"
-                "请输出一段不超过 120 字的中文解释，先讲直觉，再给最小行动建议。"
-            ),
-            role="概念可视化导师",
-        )
-        if generated and len(generated.strip()) >= 12 and "已基于检索证据处理主题" not in generated:
-            try:
-                parsed = json.loads(generated.strip())
-                if isinstance(parsed, dict) and "explanation" in parsed and "mermaid" in parsed:
-                    simplified = parsed["explanation"]
-                    mermaid = parsed["mermaid"]
-                else:
-                    simplified = generated.strip()
-            except Exception:
-                simplified = generated.strip()
-    except Exception:
-        pass
+    generated, model, provider = await generate_review_model_json(
+        operation="review_adaptation",
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        role="概念可视化导师",
+        owner_public_id=owner_public_id,
+        course_id=context.get("course_id"),
+        trace_id=context.get("trace_id"),
+        input_summary={
+            "quality": quality,
+            "mastery_band": "low" if mastery_score < 0.5 else "medium",
+            "concept_payload_included": False,
+        },
+        response_validator=validate_adaptation,
+        model_call_context=context,
+    )
+    simplified = generated["explanation"]
+    mermaid = generated["mermaid"]
     card_back = simplified + "\n\n" + mermaid
     stream_chunks = [card_back[i : i + 28] for i in range(0, len(card_back), 28)]
     return {
@@ -733,7 +865,12 @@ async def build_review_adaptation_payload(concept: str, quality: int, mastery: f
         "quality": quality,
         "mastery": round(mastery_score, 2),
         "mode": "generative_morphing",
-        "llm_backend": llm_backend,
+        "llm_backend": model,
+        "model": model,
+        "provider": provider,
+        "reasoning_effort": "max",
+        "thinking": "enabled",
+        "allow_fallback": False,
         "title": f"「{concept}」降维解释已生成",
         "simplified_explanation": simplified,
         "mermaid": mermaid,
@@ -741,7 +878,7 @@ async def build_review_adaptation_payload(concept: str, quality: int, mastery: f
         "stream_chunks": stream_chunks,
         "agent_trace": [
             "Director Agent: 检测到困难反馈，切换为降维解释模式。",
-            f"Visualizer Agent: 已通过 {llm_backend} 生成降维解释与 Mermaid 思维对比图。",
+            f"Visualizer Agent: 使用 {model} 生成降维解释与 Mermaid 思维导图。",
             "Profile Agent: 已下调该概念掌握度，并写入薄弱点列表。",
             "Planner Agent: 下一次学习路径会重新考虑该薄弱点。",
         ],
@@ -771,7 +908,10 @@ def get_conversation_history(db: Session, student_id: str, limit: int = 30) -> l
     return (
         db.query(DBConversationHistory)
         .filter(DBConversationHistory.student_id == student_id)
-        .order_by(DBConversationHistory.created_at.desc())
+        .order_by(
+            DBConversationHistory.created_at.desc(),
+            DBConversationHistory.id.desc(),
+        )
         .limit(limit)
         .all()
     )

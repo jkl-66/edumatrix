@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Sequence
@@ -20,7 +21,22 @@ def load_evidence_from_file(path: str | Path) -> tuple[Evidence, ...]:
         items = data
     else:
         return ()
-    return tuple(_parse_evidence(item) for item in items)
+    evidence = []
+    for item in items:
+        parsed = _parse_evidence(item)
+        expected_hash = str(item.get("sha256", "")).strip().lower()
+        if expected_hash:
+            raw_ref = str(parsed.metadata.get("raw_image_ref", "")).strip()
+            target = Path(raw_ref)
+            if not target.is_absolute():
+                target = Path.cwd() / target
+            if not target.is_file():
+                continue
+            actual_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+            if actual_hash != expected_hash:
+                continue
+        evidence.append(parsed)
+    return tuple(evidence)
 
 
 def _parse_evidence(item: dict) -> Evidence:

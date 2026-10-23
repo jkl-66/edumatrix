@@ -34,7 +34,10 @@ os.environ["NO_PROXY"] = "bilibili.com,biliapi.net,biliapi.com,baidu.com,bing.co
 try:
     from dotenv import load_dotenv
     _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    if os.path.exists(_env_path):
+    _dotenv_disabled = os.getenv("PYTHON_DOTENV_DISABLED", "").strip().lower() in {"1", "true", "yes"}
+    if _dotenv_disabled:
+        print("[dotenv] 已按 PYTHON_DOTENV_DISABLED 跳过 .env 加载")
+    elif os.path.exists(_env_path):
         load_dotenv(_env_path)
         print(f"[dotenv] 已加载: {_env_path}")
     else:
@@ -104,11 +107,11 @@ def main():
 
     if api_key:
         print(f"  LLM:     {provider} / {model}")
-        print(f"  端点:    {endpoint}")
-        print(f"  API Key: {api_key[:12]}...{api_key[-4:]}" if len(api_key) > 16 else f"  API Key: {api_key}")
+        print(f"  端点:    {'已配置' if endpoint else '使用提供商默认值'}")
+        print("  API Key: 已配置（仅后端读取）")
     else:
         print("  LLM:     DeterministicEducationLLM (模拟模式)")
-        print("           请在 .env 中设置 EDUMATRIX_LLM_API_KEY 或在浏览器 Settings 页面配置")
+        print("           如需真实模型，请在后端 .env 中设置 EDUMATRIX_LLM_* 环境变量")
 
     emb = os.getenv("EDUMATRIX_EMBEDDING_PROVIDER", "hash")
     print(f"  嵌入:    {emb}")

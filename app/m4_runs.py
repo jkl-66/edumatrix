@@ -23,6 +23,7 @@ class BlindCaseOutput(StrictModel):
     error_code: str = Field(default="", max_length=128)
     citation_count: int = Field(default=0, ge=0)
     locatable_citation_count: int = Field(default=0, ge=0)
+    evidence: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def citation_counts_are_consistent(self) -> "BlindCaseOutput":

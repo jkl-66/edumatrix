@@ -85,7 +85,7 @@ function parseSegments(text, previousSegments = []) {
     }
     
     // --- 检测 ``` (代码块) ---
-    const fenceMatch = remaining.match(/^```(\w*)\s*\n?/)
+    const fenceMatch = remaining.match(/^```([A-Za-z0-9_+#.-]*)\s*\n?/)
     if (fenceMatch && fenceMatch[0].toLowerCase().includes('mermaid') === false) {
       const start = pos + fenceMatch[0].length
       const endTag = remaining.indexOf('```', fenceMatch[0].length)
@@ -228,46 +228,169 @@ function renderMath(math, display) {
   
   // Fallback if KaTeX is not loaded
   return display 
-    ? `<div class="my-3.5 p-4 bg-gray-50/75 border border-gray-100 rounded-xl text-center font-serif text-sm overflow-x-auto select-all shadow-inner text-gray-800">${escapeHtml(cleanMath)}</div>`
-    : `<span class="font-serif italic bg-gray-50/75 px-1.5 py-0.5 rounded text-xs select-all text-gray-800 border border-gray-100/50">${escapeHtml(cleanMath)}</span>`
+    ? `<div class="inc-math-fallback">${escapeHtml(cleanMath)}</div>`
+    : `<span class="inc-math-inline">${escapeHtml(cleanMath)}</span>`
 }
 
-// 渲染普通文本（支持行内公式 $...$）
+// 渲染行内 Markdown。先把代码和公式替换成占位符，避免后续强调/链接
+// 规则误处理其中的字符；所有用户文本在进入这里前都经过 escapeHtml。
+function renderInlineMarkdown(content) {
+  let html = escapeHtml(String(content || ''))
+  const placeholders = []
+  const placeholder = (value) => {
+    const token = `\u0000inc-inline-${placeholders.length}\u0000`
+    placeholders.push(value)
+    return token
+  }
+
+  html = html.replace(/`([^`\n]+)`/g, (_, code) => (
+    placeholder(`<code class="inc-inline-code">${code}</code>`)
+  ))
+  html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => (
+    placeholder(renderMath(math.trim(), false))
+  ))
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, href) => (
+    `<a class="inc-link" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`
+  ))
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/~~(.+?)~~/g, '<del>$1</del>')
+  html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
+
+  return html.replace(/\u0000inc-inline-(\d+)\u0000/g, (_, index) => placeholders[Number(index)] || '')
+}
+
+// 渲染普通文本。这里只实现回答中实际使用的 Markdown 子集，避免引入
+// 第二套 Markdown 依赖，同时保持流式分段的稳定 key 和安全转义。
 function renderTextBlock(content) {
   if (!content) return ''
-  
-  let html = escapeHtml(content)
-  
-  // 行内公式 $...$
-  html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => {
-    return renderMath(math.trim(), false)
-  })
-  
-  // 段落、换行等基本 Markdown
-  html = html
-    .replace(/\n\n+/g, '</p><p class="my-1.5">')
-    .replace(/\n/g, '<br>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-  
-  return `<p class="my-1.5">${html}</p>`
+
+  const learnerText = String(content)
+    .replace(/(?:运行|模型|生成|回答)模式\s*[:：]?\s*[A-Za-z0-9_.-]+/gi, '')
+    .replace(/(?:知识点\s*)?(?:内部编号|哈希|指纹)\s*[:：]?\s*[A-Za-z0-9_.-]*/gi, '')
+    .replace(/依据课程来源|根据课程来源|基于课程来源/g, '')
+    .replace(/本地确定性演示/g, '可复现演示')
+    .replace(/本地确定性/g, '可复现')
+    .replace(/确定性/g, '可复现性')
+    .replace(/上下文重点/g, '本轮重点')
+    .replace(/冻结课程来源/g, '已选课程内容')
+    .replace(/课程来源/g, '课程内容')
+    .replace(/来源版本/g, '材料范围')
+    .replace(/来源片段/g, '相关片段')
+    .replace(/证据不足/g, '现有信息还不够')
+    .replace(/证据链/g, '核对过程')
+    .replace(/学习证据/g, '学习记录')
+    .replace(/评分证据/g, '评分记录')
+    .replace(/证据/g, '可核对信息')
+    .replace(/来源/g, '参考材料')
+    .replace(/课文/g, '学习内容')
+    .replace(/依据/g, '理由')
+    .replace(/约束条件/g, '限制条件')
+    .replace(/约束/g, '限制')
+    .replace(/\b(?:demo-)?(?:kp|source|event|trace|run|claim|chat|task)-[a-z0-9-]{4,}\b/gi, '')
+    .replace(/\bf\d+\.[a-z0-9_.-]+\.v\d+\b/gi, '')
+    .replace(/\b[a-f0-9]{24,}\b/gi, '')
+    .replace(/\b(?:deterministic_local|llm_grounded|reasoning_content)\b/gi, '')
+    .replace(/\b(?:source[_ -]?ref(?:[_ -]?id)?|knowledge[_ -]?point[_ -]?id|context[_ -]?fingerprint|content[_ -]?hash|rubric[_ -]?version|generation[_ -]?mode|run[_ -]?id|message[_ -]?id|event[_ -]?id)\b\s*[:=：]?\s*[A-Za-z0-9_.:-]*/gi, '')
+    .replace(/\[(?:S|A)\d+\]|\[source[_ -]?ref\]/gi, '')
+  const lines = learnerText.replace(/\r\n?/g, '\n').split('\n')
+  const blocks = []
+  let paragraph = []
+  let listType = ''
+  let listItems = []
+  let quoteLines = []
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return
+    const body = paragraph.map(line => renderInlineMarkdown(line)).join('<br>')
+    blocks.push(`<p class="inc-paragraph">${body}</p>`)
+    paragraph = []
+  }
+  const flushList = () => {
+    if (!listItems.length) return
+    const tag = listType === 'ol' ? 'ol' : 'ul'
+    const className = listType === 'ol' ? 'inc-list inc-list--ordered' : 'inc-list'
+    const marker = listType === 'ol' ? (index) => `${index + 1}.` : () => '•'
+    blocks.push(`<${tag} class="${className}">${listItems.map((item, index) => (
+      `<li><span class="inc-list-marker" aria-hidden="true">${marker(index)}</span><span class="inc-list-content">${item}</span></li>`
+    )).join('')}</${tag}>`)
+    listType = ''
+    listItems = []
+  }
+  const flushQuote = () => {
+    if (!quoteLines.length) return
+    const body = quoteLines.map(line => renderInlineMarkdown(line)).join('<br>')
+    blocks.push(`<blockquote class="inc-blockquote">${body}</blockquote>`)
+    quoteLines = []
+  }
+  const flushAll = () => {
+    flushParagraph()
+    flushList()
+    flushQuote()
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd()
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/)
+    const unordered = line.match(/^\s*[-*+]\s+(.+)$/)
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/)
+    const quote = line.match(/^\s*>\s?(.*)$/)
+    const divider = /^\s*(?:\*\s*){3,}$|^\s*(?:-\s*){3,}$|^\s*(?:_\s*){3,}$/.test(line)
+
+    if (!line.trim()) {
+      flushAll()
+      continue
+    }
+    if (heading) {
+      flushAll()
+      const level = Math.min(heading[1].length, 4)
+      blocks.push(`<h${level} class="inc-heading inc-heading--${level}">${renderInlineMarkdown(heading[2])}</h${level}>`)
+      continue
+    }
+    if (divider) {
+      flushAll()
+      blocks.push('<hr class="inc-divider">')
+      continue
+    }
+    if (unordered || ordered) {
+      flushParagraph()
+      flushQuote()
+      const nextType = ordered ? 'ol' : 'ul'
+      if (listType && listType !== nextType) flushList()
+      listType = nextType
+      listItems.push(renderInlineMarkdown((ordered || unordered)[1]))
+      continue
+    }
+    if (quote) {
+      flushParagraph()
+      flushList()
+      quoteLines.push(quote[1])
+      continue
+    }
+
+    flushList()
+    flushQuote()
+    paragraph.push(line)
+  }
+
+  flushAll()
+  return blocks.join('')
 }
 
 // 渲染代码块
 function renderCodeBlock(content, lang) {
   const escaped = escapeHtml(content)
-  return `<div class="code-block-wrapper my-3 rounded-xl overflow-hidden border border-gray-200/80 bg-slate-900 shadow-sm">
-    ${lang ? `<div class="flex items-center justify-between px-4 py-1.5 bg-slate-800 border-b border-slate-700/60">
-      <span class="text-[10px] font-mono text-slate-400">${escapeHtml(lang)}</span>
+  return `<div class="code-block-wrapper">
+    ${lang ? `<div class="code-block-heading">
+      <span>${escapeHtml(lang)}</span>
     </div>` : ''}
-    <pre class="p-4 overflow-x-auto text-xs leading-relaxed text-slate-200 font-mono"><code>${escaped}</code></pre>
+    <pre><code>${escaped}</code></pre>
   </div>`
 }
 
 // 渲染行间公式
 function renderMathBlock(content) {
   const math = content.replace(/^\$\$/, '').replace(/\$\$$/, '').trim()
-  return `<div class="math-block my-3 py-3 px-4 bg-gray-50/60 rounded-xl border border-gray-100 overflow-x-auto flex justify-center">
+  return `<div class="math-block">
     ${renderMath(math, true)}
   </div>`
 }
@@ -275,11 +398,11 @@ function renderMathBlock(content) {
 // 渲染 Mermaid 块
 function renderMermaidBlock(content) {
   const escapedCode = encodeURIComponent(content.trim())
-  return `<div class="mermaid-block my-3 p-4 bg-white border border-gray-200 rounded-xl shadow-sm max-w-full overflow-x-auto">
-    <div class="inc-mermaid w-full flex justify-center" data-code="${escapedCode}">
-      <div class="flex flex-col items-center justify-center gap-2 py-4 text-gray-400 select-none">
-        <div class="w-5 h-5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
-        <span class="text-[10px] text-indigo-500 font-semibold animate-pulse">绘制思维导图中...</span>
+  return `<div class="mermaid-block">
+    <div class="inc-mermaid" data-code="${escapedCode}">
+      <div class="inc-mermaid-loading">
+        <span class="inc-spinner"></span>
+        <span>绘制思维导图中...</span>
       </div>
     </div>
   </div>`
@@ -292,9 +415,9 @@ function renderSkeleton(type) {
     [BlockType.MATH_BLOCK]: '公式渲染中...',
     [BlockType.MERMAID_BLOCK]: '思维导图绘制中...',
   }
-  return `<div class="skeleton-block my-2 p-3 bg-gray-50/80 rounded-xl border border-dashed border-gray-200 animate-pulse flex items-center gap-2">
-    <div class="w-4 h-4 rounded-full bg-gray-200 animate-spin"></div>
-    <span class="text-[11px] text-gray-400">${labels[type] || '内容加载中...'}</span>
+  return `<div class="skeleton-block">
+    <span class="inc-spinner"></span>
+    <span>${labels[type] || '内容加载中...'}</span>
   </div>`
 }
 
@@ -357,32 +480,221 @@ defineExpose({ getLastIncompleteIndex })
 <style scoped>
 .incremental-md-renderer {
   width: 100%;
-  line-height: 1.6;
+  color: #06141b;
+  font-size: 15px;
+  line-height: 1.75;
 }
 
-/* KaTeX 渲染完成后样式 */
-.math-block :deep(.katex) {
+.incremental-md-renderer :deep(.inc-paragraph) {
+  margin: 0 0 12px;
+}
+
+.incremental-md-renderer :deep(.inc-paragraph:last-child) {
+  margin-bottom: 0;
+}
+
+.incremental-md-renderer :deep(.inc-heading) {
+  margin: 22px 0 10px;
+  color: #132b39;
+  font-weight: 680;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.incremental-md-renderer :deep(.inc-heading:first-child) {
+  margin-top: 2px;
+}
+
+.incremental-md-renderer :deep(.inc-heading--1) {
+  font-size: 1.28rem;
+}
+
+.incremental-md-renderer :deep(.inc-heading--2) {
+  font-size: 1.16rem;
+}
+
+.incremental-md-renderer :deep(.inc-heading--3),
+.incremental-md-renderer :deep(.inc-heading--4) {
+  font-size: 1rem;
+}
+
+.incremental-md-renderer :deep(.inc-list) {
+  margin: 8px 0 16px;
+  padding-left: 0;
+  list-style: none;
+}
+
+.incremental-md-renderer :deep(.inc-list li) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-left: 0;
+}
+
+.incremental-md-renderer :deep(.inc-list li + li) {
+  margin-top: 7px;
+}
+
+.incremental-md-renderer :deep(.inc-list-marker) {
+  flex: 0 0 20px;
+  color: #60727c;
+  text-align: right;
+  font-weight: 600;
+}
+
+.incremental-md-renderer :deep(.inc-list-content) {
+  min-width: 0;
+  flex: 1;
+}
+
+.incremental-md-renderer :deep(.inc-blockquote) {
+  margin: 14px 0;
+  border-left: 3px solid #9aabb2;
+  border-radius: 0 8px 8px 0;
+  padding: 10px 14px;
+  color: #4a5b63;
+  background: #f5f7f7;
+}
+
+.incremental-md-renderer :deep(.inc-divider) {
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid #dce2e3;
+}
+
+.incremental-md-renderer :deep(.inc-inline-code) {
+  border: 1px solid #dce2e3;
+  border-radius: 4px;
+  padding: 2px 5px;
+  color: #17384a;
+  background: #f1f5f5;
+  font-family: var(--font-mono);
+  font-size: 0.91em;
+}
+
+.incremental-md-renderer :deep(.inc-link) {
+  color: #315c7d;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.incremental-md-renderer :deep(del) {
+  color: #7d8588;
+}
+
+.incremental-md-renderer :deep(.inc-math-inline) {
+  display: inline-block;
+  border: 1px solid #dce2e3;
+  border-radius: 4px;
+  padding: 0 4px;
+  background: #f5f7f7;
+  font-family: var(--font-display);
+  font-size: 14px;
+}
+
+.incremental-md-renderer :deep(.inc-math-fallback),
+.incremental-md-renderer :deep(.math-block) {
+  margin: 14px 0;
+  overflow-x: auto;
+  border: 1px solid #dce2e3;
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: #f5f7f7;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 14px;
+}
+
+.incremental-md-renderer :deep(.math-block .katex) {
   font-size: 1.05em;
 }
 
-.mermaid-block {
-  transition: opacity 0.3s ease;
+.incremental-md-renderer :deep(.code-block-wrapper) {
+  margin: 14px 0;
+  overflow: hidden;
+  border: 1px solid #253745;
+  border-radius: 8px;
+  background: #11212d;
 }
 
-/* 骨架屏过渡 */
-.skeleton-block {
-  transition: all 0.2s ease;
+.incremental-md-renderer :deep(.code-block-heading) {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  padding: 0 14px;
+  border-bottom: 1px solid #344957;
+  color: #ccd0cf;
+  background: #06141b;
+  font-family: var(--font-mono);
+  font-size: 14px;
 }
 
-/* 代码块 */
-.code-block-wrapper pre {
+.incremental-md-renderer :deep(.code-block-wrapper pre) {
+  margin: 0;
+  overflow-x: auto;
+  padding: 16px;
+  color: #eef2f2;
+  background: #11212d;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.7;
   scrollbar-width: thin;
-  scrollbar-color: #4a5568 transparent;
+  scrollbar-color: #60727c transparent;
 }
 
-/* 增量块入场动画 */
+.incremental-md-renderer :deep(.mermaid-block) {
+  margin: 14px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #dce2e3;
+  border-radius: 8px;
+  padding: 16px;
+  background: #ffffff;
+}
+
+.incremental-md-renderer :deep(.inc-mermaid) {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+}
+
+.incremental-md-renderer :deep(.inc-mermaid-loading),
+.incremental-md-renderer :deep(.skeleton-block) {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: #60727c;
+  font-size: 14px;
+}
+
+.incremental-md-renderer :deep(.skeleton-block) {
+  margin: 10px 0;
+  justify-content: flex-start;
+  border: 1px dashed #ccd0cf;
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #f5f7f7;
+}
+
+.incremental-md-renderer :deep(.inc-spinner) {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border: 2px solid #ccd0cf;
+  border-top-color: #11212d;
+  border-radius: 50%;
+  animation: incSpin .8s linear infinite;
+}
+
 .inc-block {
   animation: incFadeIn 0.15s ease-out;
+}
+
+@keyframes incSpin {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes incFadeIn {

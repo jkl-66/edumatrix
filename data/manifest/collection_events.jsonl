@@ -1,0 +1,18 @@
+{"timestamp": "2026-06-16T13:05:34+00:00", "event": "cloned_repo", "source": "machine-learning-refined", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\machine-learning-refined"}
+{"timestamp": "2026-06-16T13:05:41+00:00", "event": "cloned_repo", "source": "compsci-589", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\compsci-589"}
+{"timestamp": "2026-06-16T13:05:50+00:00", "event": "cloned_repo", "source": "mlcourse-ai", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\mlcourse-ai"}
+{"timestamp": "2026-06-16T13:05:54+00:00", "event": "skip_existing_repo", "source": "machine-learning-refined", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\machine-learning-refined"}
+{"timestamp": "2026-06-16T13:05:54+00:00", "event": "skip_existing_repo", "source": "compsci-589", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\compsci-589"}
+{"timestamp": "2026-06-16T13:05:54+00:00", "event": "skip_existing_repo", "source": "mlcourse-ai", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\mlcourse-ai"}
+{"timestamp": "2026-06-16T13:05:56+00:00", "event": "cloned_repo", "source": "mlbook-dafriedman", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\mlbook-dafriedman"}
+{"timestamp": "2026-06-16T13:05:57+00:00", "event": "cloned_repo", "source": "data-science-from-scratch", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\data-science-from-scratch"}
+{"timestamp": "2026-06-16T13:06:03+00:00", "event": "cloned_repo", "source": "nyandwi-machine-learning-complete", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\nyandwi-machine-learning-complete"}
+{"timestamp": "2026-06-16T13:06:05+00:00", "event": "cloned_repo", "source": "pumpkin-book", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\pumpkin-book"}
+{"timestamp": "2026-06-16T13:06:07+00:00", "event": "cloned_repo", "source": "vay-keen-watermelon-notes", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\vay-keen-watermelon-notes"}
+{"timestamp": "2026-06-16T13:06:09+00:00", "event": "cloned_repo", "source": "watermelonbook-training", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\watermelonbook-training"}
+{"timestamp": "2026-06-16T13:06:21+00:00", "event": "cloned_repo", "source": "dtreeviz", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\dtreeviz"}
+{"timestamp": "2026-06-16T13:06:46+00:00", "event": "cloned_repo", "source": "edge-impulse-courseware", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\edge-impulse-courseware"}
+{"timestamp": "2026-06-16T13:07:00+00:00", "event": "cloned_repo", "source": "rasbt-ml-book-code", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\rasbt-ml-book-code"}
+{"timestamp": "2026-06-16T13:07:01+00:00", "event": "cloned_repo", "source": "ruban-iris-classification", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\github_repos\\ruban-iris-classification"}
+{"timestamp": "2026-06-16T13:07:02+00:00", "event": "downloaded_direct_asset", "source": "uci-iris", "path": "D:\\project-edumatrix\\edumatrix-main\\data\\raw\\direct_assets\\uci-iris.zip"}
+{"timestamp": "2026-06-16T13:07:03+00:00", "event": "download_error", "source": "sklearn-iris-decision-surface", "error": "HTTP Error 404: Not Found"}

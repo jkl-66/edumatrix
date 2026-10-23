@@ -1,0 +1,6 @@
+{
+  "chapters": [
+    {"id": "robot-safety", "title": "机器人工作站安全", "skills": ["风险识别", "停机检查"]},
+    {"id": "robot-calibration", "title": "末端执行器标定", "skills": ["坐标系", "重复定位"]}
+  ]
+}

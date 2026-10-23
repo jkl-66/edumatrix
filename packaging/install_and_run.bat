@@ -4,8 +4,11 @@ title EduMatrix One-Click Evaluator Launcher
 
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
-set "VENV=%ROOT%.venv"
+if not defined EDUMATRIX_VENV_PATH set "EDUMATRIX_VENV_PATH=%LOCALAPPDATA%\EduMatrix\00015352\.venv"
+set "VENV=%EDUMATRIX_VENV_PATH%"
 set "PYTHON=%VENV%\Scripts\python.exe"
+set "REQUIREMENTS=%ROOT%requirements-lock.txt"
+if not exist "%REQUIREMENTS%" set "REQUIREMENTS=%ROOT%requirements.txt"
 
 echo ============================================================
 echo EduMatrix evaluator launcher
@@ -36,7 +39,8 @@ if not exist "%PYTHON%" (
         pause
         exit /b 1
     )
-    echo [1/5] Creating local virtual environment...
+    echo [1/5] Creating short-path virtual environment at %VENV%...
+    if not exist "%VENV%" mkdir "%VENV%" >nul 2>&1
     %BOOTSTRAP_PY% -m venv "%VENV%"
     if errorlevel 1 (
         echo [ERROR] Failed to create the virtual environment.
@@ -47,25 +51,42 @@ if not exist "%PYTHON%" (
 
 if not exist "%ROOT%.env" copy /y "%ROOT%.env.runtime.template" "%ROOT%.env" >nul
 
-echo [2/5] Checking Python dependencies...
-"%PYTHON%" -c "import fastapi,uvicorn,sqlalchemy,torch,numpy,pandas,sklearn" >nul 2>&1
-if errorlevel 1 (
+echo [2/5] Checking Python dependencies and package consistency...
+"%PYTHON%" "%ROOT%scripts\runtime_preflight.py" >nul 2>&1
+if errorlevel 1 goto install_dependencies
+"%PYTHON%" -m pip check >nul 2>&1
+if errorlevel 1 goto install_dependencies
+goto dependencies_ready
+
+:install_dependencies
     echo [3/5] Installing dependencies. This may take several minutes...
     "%PYTHON%" -m pip install --upgrade pip
-    "%PYTHON%" -m pip install -r "%ROOT%requirements.txt"
+    "%PYTHON%" -m pip install -r "%REQUIREMENTS%"
     if errorlevel 1 (
         echo [ERROR] Dependency installation failed. Check network access and retry.
         pause
         exit /b 1
     )
-) else (
-    echo [3/5] Dependencies already installed.
+    "%PYTHON%" -m pip check
+    if errorlevel 1 (
+        echo [ERROR] Installed dependencies are inconsistent.
+        pause
+        exit /b 1
+    )
+
+:dependencies_ready
+echo [3/5] Dependencies are ready from %REQUIREMENTS%.
+"%PYTHON%" "%ROOT%scripts\runtime_preflight.py"
+if errorlevel 1 (
+    echo [ERROR] Runtime preflight failed after dependency installation.
+    pause
+    exit /b 1
 )
 
 echo [4/5] Starting backend and built frontend...
 set "EDUMATRIX_ENV=development"
 set "EDUMATRIX_RELOAD=0"
-set "EDUMATRIX_SANDBOX_MODE=disabled"
+set "EDUMATRIX_SANDBOX_MODE=trusted_local"
 start "EduMatrix Backend" "%ComSpec%" /k ""%PYTHON%" "%ROOT%run.py""
 
 echo [5/5] Waiting for http://127.0.0.1:8000 ...

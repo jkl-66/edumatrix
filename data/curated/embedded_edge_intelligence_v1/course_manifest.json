@@ -1,0 +1,426 @@
+{
+  "schema_version": "edumatrix.course-version-manifest.v1",
+  "manifest_version": "course-embedded-edge-intelligence-1.0.0",
+  "generated_at": "2026-08-04T00:00:00+08:00",
+  "course_id": "course-embedded-edge-intelligence-v1",
+  "title": "嵌入式边缘智能技能实践",
+  "subject": "电子信息 / 嵌入式人工智能",
+  "description": "基于合法公开材料的 8 章嵌入式边缘智能技能领域泛化演示。",
+  "domain_pack": "domain-embedded-edge-intelligence-v1",
+  "knowledge_point_version": "edge-kp-1.0.0",
+  "language": "en",
+  "tags": [
+    "嵌入式系统",
+    "边缘智能",
+    "TinyML"
+  ],
+  "content_origin": "固定 Git commit 的公开课程 README 精选；无领域专家复核，不宣称行业认证。",
+  "license": "CC BY-NC-SA 4.0; Edge Impulse and Harvard TinyML attribution retained. See LICENSE-AND-ATTRIBUTION.upstream.md.",
+  "visibility": "public",
+  "status": "published",
+  "claim_boundary": "基于公开材料的第二领域泛化演示；不是独立专家验证或行业认证。",
+  "external_material_policy": "Only README excerpts enumerated by this manifest are imported; linked and binary materials are excluded.",
+  "source_repository": {
+    "key": "edge-impulse-courseware",
+    "url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+    "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+    "source_path": "README.md",
+    "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7"
+  },
+  "processing": {
+    "parser_version": "edumatrix-edge-course-readme-v1",
+    "deterministic": true,
+    "network_required": false,
+    "external_model_used": false,
+    "selected_material": "module descriptions, learning objectives, section titles",
+    "excluded_material": "linked videos, external blogs, PPTX, DOCX, notebooks and other binary assets"
+  },
+  "knowledge_points": [
+    {
+      "code": "EDGE-KP-01",
+      "title": "边缘机器学习导论",
+      "level": "foundation",
+      "prerequisites": []
+    },
+    {
+      "code": "EDGE-KP-02",
+      "title": "深度学习与嵌入式约束",
+      "level": "foundation",
+      "prerequisites": [
+        "EDGE-KP-01"
+      ]
+    },
+    {
+      "code": "EDGE-KP-03",
+      "title": "边缘机器学习工作流",
+      "level": "core",
+      "prerequisites": [
+        "EDGE-KP-01",
+        "EDGE-KP-02"
+      ]
+    },
+    {
+      "code": "EDGE-KP-04",
+      "title": "模型量化与部署",
+      "level": "core",
+      "prerequisites": [
+        "EDGE-KP-03"
+      ]
+    },
+    {
+      "code": "EDGE-KP-05",
+      "title": "边缘异常检测",
+      "level": "advanced",
+      "prerequisites": [
+        "EDGE-KP-03"
+      ]
+    },
+    {
+      "code": "EDGE-KP-06",
+      "title": "嵌入式图像分类",
+      "level": "advanced",
+      "prerequisites": [
+        "EDGE-KP-02",
+        "EDGE-KP-03"
+      ]
+    },
+    {
+      "code": "EDGE-KP-07",
+      "title": "目标检测与负责任 AI",
+      "level": "advanced",
+      "prerequisites": [
+        "EDGE-KP-06"
+      ]
+    },
+    {
+      "code": "EDGE-KP-08",
+      "title": "关键词唤醒系统",
+      "level": "advanced",
+      "prerequisites": [
+        "EDGE-KP-03"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "chapter_order": 0,
+      "title": "边缘机器学习导论",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "source_selector": "Module 1",
+      "path": "chapters/00_边缘机器学习导论.md",
+      "bytes": 1783,
+      "sha256": "cb38a4f88939c78dfd7259b47ca140260dbaef8454b4090abf0920a376229d4a",
+      "parser_version": "edumatrix-edge-course-readme-v1",
+      "conversion": {
+        "strategy": "readme_module_description_objectives_and_section_titles",
+        "external_links_imported": 0,
+        "binary_assets_imported": 0,
+        "learning_objective_count": 6,
+        "section_count": 3
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "c95497dd13d573881be2b0e7b30894ed0e101e5c8432a60f0f70a3867090f176",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi"
+      ],
+      "knowledge_point_codes": [
+        "EDGE-KP-01"
+      ],
+      "selection_reason": "公开 README 中具有明确 CC BY-NC-SA 4.0 许可和署名链的模块学习材料。"
+    },
+    {
+      "chapter_order": 1,
+      "title": "深度学习与嵌入式约束",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "source_selector": "Module 2",
+      "path": "chapters/01_深度学习与嵌入式约束.md",
+      "bytes": 1986,
+      "sha256": "98d8a9c40c6a9a050fbc1b050f6ce3c300ec22af8c0a31586fa629113cb377bf",
+      "parser_version": "edumatrix-edge-course-readme-v1",
+      "conversion": {
+        "strategy": "readme_module_description_objectives_and_section_titles",
+        "external_links_imported": 0,
+        "binary_assets_imported": 0,
+        "learning_objective_count": 8,
+        "section_count": 3
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "c95497dd13d573881be2b0e7b30894ed0e101e5c8432a60f0f70a3867090f176",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi"
+      ],
+      "knowledge_point_codes": [
+        "EDGE-KP-02"
+      ],
+      "selection_reason": "公开 README 中具有明确 CC BY-NC-SA 4.0 许可和署名链的模块学习材料。"
+    },
+    {
+      "chapter_order": 2,
+      "title": "边缘机器学习工作流",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "source_selector": "Module 3",
+      "path": "chapters/02_边缘机器学习工作流.md",
+      "bytes": 1900,
+      "sha256": "76c09b120c0dd39d87f598250fc0316a43529b7bcfdc6c836972d253be074846",
+      "parser_version": "edumatrix-edge-course-readme-v1",
+      "conversion": {
+        "strategy": "readme_module_description_objectives_and_section_titles",
+        "external_links_imported": 0,
+        "binary_assets_imported": 0,
+        "learning_objective_count": 9,
+        "section_count": 3
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "c95497dd13d573881be2b0e7b30894ed0e101e5c8432a60f0f70a3867090f176",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi"
+      ],
+      "knowledge_point_codes": [
+        "EDGE-KP-03"
+      ],
+      "selection_reason": "公开 README 中具有明确 CC BY-NC-SA 4.0 许可和署名链的模块学习材料。"
+    },
+    {
+      "chapter_order": 3,
+      "title": "模型量化与部署",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "source_selector": "Module 4",
+      "path": "chapters/03_模型量化与部署.md",
+      "bytes": 1561,
+      "sha256": "bde1c5b550472b400fa44164c166ebaa4758a4b5e8eb89d2bed451f6d7edcf16",
+      "parser_version": "edumatrix-edge-course-readme-v1",
+      "conversion": {
+        "strategy": "readme_module_description_objectives_and_section_titles",
+        "external_links_imported": 0,
+        "binary_assets_imported": 0,
+        "learning_objective_count": 5,
+        "section_count": 3
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "c95497dd13d573881be2b0e7b30894ed0e101e5c8432a60f0f70a3867090f176",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi"
+      ],
+      "knowledge_point_codes": [
+        "EDGE-KP-04"
+      ],
+      "selection_reason": "公开 README 中具有明确 CC BY-NC-SA 4.0 许可和署名链的模块学习材料。"
+    },
+    {
+      "chapter_order": 4,
+      "title": "边缘异常检测",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "source_selector": "Module 5",
+      "path": "chapters/04_边缘异常检测.md",
+      "bytes": 1399,
+      "sha256": "9ef8b4613a703e68c7d52a3cf571e695ff64a6c62c6b40f076919817a777794f",
+      "parser_version": "edumatrix-edge-course-readme-v1",
+      "conversion": {
+        "strategy": "readme_module_description_objectives_and_section_titles",
+        "external_links_imported": 0,
+        "binary_assets_imported": 0,
+        "learning_objective_count": 6,
+        "section_count": 3
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "c95497dd13d573881be2b0e7b30894ed0e101e5c8432a60f0f70a3867090f176",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi"
+      ],
+      "knowledge_point_codes": [
+        "EDGE-KP-05"
+      ],
+      "selection_reason": "公开 README 中具有明确 CC BY-NC-SA 4.0 许可和署名链的模块学习材料。"
+    },
+    {
+      "chapter_order": 5,
+      "title": "嵌入式图像分类",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "source_selector": "Module 6",
+      "path": "chapters/05_嵌入式图像分类.md",
+      "bytes": 1720,
+      "sha256": "fa40a9747427fab8747758543a5ba4a17e7b9e652207575abf73a981cc40defa",
+      "parser_version": "edumatrix-edge-course-readme-v1",
+      "conversion": {
+        "strategy": "readme_module_description_objectives_and_section_titles",
+        "external_links_imported": 0,
+        "binary_assets_imported": 0,
+        "learning_objective_count": 4,
+        "section_count": 3
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "c95497dd13d573881be2b0e7b30894ed0e101e5c8432a60f0f70a3867090f176",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi"
+      ],
+      "knowledge_point_codes": [
+        "EDGE-KP-06"
+      ],
+      "selection_reason": "公开 README 中具有明确 CC BY-NC-SA 4.0 许可和署名链的模块学习材料。"
+    },
+    {
+      "chapter_order": 6,
+      "title": "目标检测与负责任 AI",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "source_selector": "Module 7",
+      "path": "chapters/06_目标检测与负责任 AI.md",
+      "bytes": 1731,
+      "sha256": "46bcd897c04f41922488c0bd3ca15474bf4c8c657b6af020b7fd0c8dffc20f72",
+      "parser_version": "edumatrix-edge-course-readme-v1",
+      "conversion": {
+        "strategy": "readme_module_description_objectives_and_section_titles",
+        "external_links_imported": 0,
+        "binary_assets_imported": 0,
+        "learning_objective_count": 8,
+        "section_count": 3
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "c95497dd13d573881be2b0e7b30894ed0e101e5c8432a60f0f70a3867090f176",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi"
+      ],
+      "knowledge_point_codes": [
+        "EDGE-KP-07"
+      ],
+      "selection_reason": "公开 README 中具有明确 CC BY-NC-SA 4.0 许可和署名链的模块学习材料。"
+    },
+    {
+      "chapter_order": 7,
+      "title": "关键词唤醒系统",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "source_selector": "Module 8",
+      "path": "chapters/07_关键词唤醒系统.md",
+      "bytes": 1225,
+      "sha256": "84d6ad93d0973c1e20b18dd5b3ca0587669601c63b44c52bcf9ae350e54f56e9",
+      "parser_version": "edumatrix-edge-course-readme-v1",
+      "conversion": {
+        "strategy": "readme_module_description_objectives_and_section_titles",
+        "external_links_imported": 0,
+        "binary_assets_imported": 0,
+        "learning_objective_count": 4,
+        "section_count": 3
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.upstream.md",
+      "license_sha256": "c95497dd13d573881be2b0e7b30894ed0e101e5c8432a60f0f70a3867090f176",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi"
+      ],
+      "knowledge_point_codes": [
+        "EDGE-KP-08"
+      ],
+      "selection_reason": "公开 README 中具有明确 CC BY-NC-SA 4.0 许可和署名链的模块学习材料。"
+    }
+  ]
+}

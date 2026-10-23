@@ -8,7 +8,7 @@ from fastapi.security import OAuth2PasswordBearer
 
 from config import CONFIG
 from app.database import DBUser, run_db_op
-from app.identity import normalize_role
+from app.identity import VALID_ROLES, normalize_role
 
 # OAuth2 方案配置
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
@@ -81,12 +81,22 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> DBU
         raise credentials_exception
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
+    try:
+        if normalize_role(user.role) not in VALID_ROLES:
+            raise credentials_exception
+    except ValueError:
+        # Legacy assistant/visitor identities are never ordinary authenticated users.
+        raise credentials_exception
     
     return user
 
 async def get_current_teacher(user: DBUser = Depends(get_current_user)) -> DBUser:
-    """教师权限依赖：仅允许教师角色访问"""
-    if normalize_role(user.role) not in {"teacher", "admin", "assistant"}:
+    """Allow only the two formal roles that may enter teacher routes."""
+    try:
+        role = normalize_role(user.role)
+    except ValueError:
+        role = None
+    if role not in {"teacher", "admin"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="仅教师可访问此接口",
@@ -99,10 +109,18 @@ def enforce_student_access(requested_student_id: str | None, user: DBUser) -> st
     requested = str(requested_student_id or "").strip()
     if requested == "default":
         requested = ""
-    if user.role == "teacher":
+    try:
+        role = normalize_role(user.role)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="当前账号角色已失效")
+    if role not in VALID_ROLES:
+        raise HTTPException(status_code=403, detail="当前账号角色已失效")
+    if role in {"teacher", "admin"}:
         if not requested:
             raise HTTPException(status_code=400, detail="student_id 不能为空")
         return requested
+    if role != "student":
+        raise HTTPException(status_code=403, detail="当前账号没有学生数据权限")
     if requested and requested != user.username:
         raise HTTPException(status_code=403, detail="无权访问其他学生的数据")
     return user.username
@@ -117,8 +135,13 @@ async def enforce_request_student_scope(
     # a teacher before the handler has had a chance to read that target.
     if student_id is not None:
         enforce_student_access(student_id, user)
-    elif user.role != "teacher":
-        enforce_student_access(None, user)
+    else:
+        try:
+            role = normalize_role(user.role)
+        except ValueError:
+            role = None
+        if role not in {"teacher", "admin"}:
+            enforce_student_access(None, user)
     return user
 
 def authenticate_user(db, username: str, password: str) -> Optional[DBUser]:

@@ -2,6 +2,7 @@ import sys
 import os
 import uuid
 import time
+import asyncio
 import multiprocessing
 from datetime import timedelta
 from dataclasses import asdict
@@ -18,8 +19,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import CONFIG
 from concurrency import AsyncWorkerPool, TokenBucket
 from models import DIMENSION_LABELS, StudentProfile
-from app.database import init_db, DBStudentProfile, DBUser, run_db_op
-from app.identity import normalize_role
+from app.database import init_db, DBCourseMembership, DBNote, DBStudentProfile, DBUser, run_db_op
+from app.identity import VALID_ROLES, normalize_role
+from app.role_landing import resolve_login_landing
 from app.crud import (
     load_student_profile,
     save_student_profile,
@@ -52,8 +54,70 @@ from app.m2_api import router as m2_router
 from app.m3_api import router as m3_router
 from app.m4_api import router as m4_router
 from app.m5_api import router as m5_router, runtime_availability
+from app.m6_api import router as m6_router
+from app.m7_api import router as m7_router
 from app.m8_api import router as m8_router
+from app.next_core_api import router as next_core_router
+from app.speech_api import router as speech_router
+from app.media_context_api import router as media_context_router
+from app.interactive_lab_api import router as interactive_lab_router
+from app.code_sandbox_api import router as code_sandbox_router
+from app.feynman_api import router as feynman_router
+from app.course_governance_api import router as course_governance_router
+from app.teaching_analytics_api import router as teaching_analytics_router
+from app.teacher_api import router as teacher_router
+from app.content_review_api import router as content_review_router
+from app.model_operations_dashboard_api import router as model_operations_dashboard_router
+from app.admin_api import router as admin_router
+from app.certification_lifecycle_api import router as certification_lifecycle_router
+from app.multilevel_review_api import router as multilevel_review_router
+from app.job_standard_impact_api import router as job_standard_impact_router
+from app.enterprise_risk_api import router as enterprise_risk_router
+from app.course_sharing_api import router as course_sharing_router
+from app.marketplace_api import router as marketplace_router
+from app.organization_marketplace_api import router as organization_marketplace_router
+from app.spatial_workspace_api import router as spatial_workspace_router
+from app.plugin_registry_api import router as plugin_registry_router
+from app.video_rendering_api import router as video_rendering_router
+from app.video_catalog_api import router as video_catalog_router
+from app.video_imports_api import router as video_imports_router
+from app.wrong_question_videos_api import router as wrong_question_videos_router
+from app.chapter_videos_api import router as chapter_videos_router
+from app.video_practices_api import router as video_practices_router
+from app.teaching_animations_api import router as teaching_animations_router
+from app.web_decks_api import router as web_decks_router
+from app.local_adapters_api import router as local_adapters_router
+from app.resource_bundles_api import router as resource_bundles_router
+from app.review_schedule_api import router as review_schedule_router
+from app.local_sso_api import router as local_sso_router
+from app.local_hr_sync_api import router as local_hr_sync_router
+from app.local_lms_api import router as local_lms_router
+from app.local_webhook_api import router as local_webhook_router
+from app.integration_reconciliation_api import router as integration_reconciliation_router
+from app.integration_fault_drill_api import router as integration_fault_drill_router
+from app.competition_journey_api import router as competition_journey_router
+from app.competition_showcase_api import router as competition_showcase_router
+from app.competition_demo_api import router as competition_demo_router
+from app.profile_onboarding_api import router as profile_onboarding_router
+from app.diagnostic_api import router as diagnostic_router
+from app.document_selection import router as document_selection_router
+from app.chat_api import router as chat_router
 from app.legacy_repositories import LegacyReadRepository
+from app.legacy_migration_governance import (
+    IdentityProfileHistoryCanonicalReader,
+    observe_legacy_shadow_read,
+    project_model_row,
+)
+from app.spa_static import SPAStaticFiles
+from app.m5_gateway import StreamingModelCallLifecycle
+from app.m5_legacy_calls import audited_legacy_text_call
+from app.note_workspace import (
+    note_payload,
+    note_versions_payload,
+    prepare_source_metadata,
+    restore_note_version,
+    save_ai_suggestion,
+)
 from note_engine import LearningProgressAnalyzer, ReviewScheduler
 from export_pdf import generate_note_pdf
 from observability import TELEMETRY
@@ -121,22 +185,37 @@ async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequ
                 session.refresh(user)
             else:
                 return None
+
+        # Legacy assistant/visitor records are not formal accounts and cannot
+        # obtain a token through the normal login boundary.
+        try:
+            if normalize_role(user.role) not in VALID_ROLES:
+                return None
+        except ValueError:
+            return None
+
+        # Repair the built-in master-course context for legacy accounts that
+        # predate the course seed (idempotent and role-preserving).
+        from course_catalog import ensure_primary_course_membership
+        ensure_primary_course_membership(session, user)
+        session.commit()
         
         # 将在此设备上匿名生成的复习计划、笔记、历史记录合并迁移到登录账户中
         if anon_student_id:
             from app.crud import migrate_anonymous_data
             migrate_anonymous_data(session, anon_student_id, user.username)
         session.refresh(user)
-        return user
+        return user, resolve_login_landing(session, user)
 
-    user = await run_db_op(do_auth)
-    if not user:
+    auth_result = await run_db_op(do_auth)
+    if not auth_result:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    user, landing_path = auth_result
     access_token_expires = timedelta(minutes=CONFIG.auth_access_token_expire_minutes)
     access_token = create_access_token(
         data={"sub": user.public_id, "uid": user.public_id, "username": user.username, "role": normalize_role(user.role)}, expires_delta=access_token_expires
@@ -149,6 +228,7 @@ async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequ
         "role": user.role or "student",
         "student_id": user.username,
         "user_id": user.public_id,
+        "landing_path": landing_path,
     }
 
 @app.post("/api/auth/register")
@@ -159,10 +239,12 @@ async def register_user(request: Request):
     password = str(payload.get("password", "")).strip()
     display_name = str(payload.get("display_name", username)).strip()
     
-    # 接收冷启动背景问卷数据
-    major = str(payload.get("major", "计算机科学")).strip()
-    cognitive_style = str(payload.get("cognitive_style", "visual")).strip()
-    motivation_type = str(payload.get("motivation_type", "未诊断")).strip()
+    # Registration only accepts fields the learner actually supplied.  The
+    # onboarding conversation is the source of initial profile evidence; do
+    # not inject a subject, learning style, or peer-derived mastery values.
+    major = str(payload.get("major", "")).strip()
+    cognitive_style = str(payload.get("cognitive_style", "")).strip()
+    motivation_type = str(payload.get("motivation_type", "未诊断")).strip() or "未诊断"
     
     anon_student_id = request.headers.get("x-anon-student-id")
     
@@ -173,37 +255,35 @@ async def register_user(request: Request):
 
     def do_register(session):
         existing = LegacyReadRepository(session).user_by_username(username)
+        observe_legacy_shadow_read(
+            session, chain_id="identity-profile-history", legacy_result=existing,
+            canonical_loader=lambda: IdentityProfileHistoryCanonicalReader(session).user_by_username(username),
+            legacy_projector=project_model_row,
+        )
         if existing:
             raise HTTPException(status_code=409, detail="用户名已存在")
         hashed = get_password_hash(password)
         user = DBUser(username=username, hashed_password=hashed, role="student", display_name=display_name)
         session.add(user)
         
-        # 预先创建学生画像并注入问卷的冷启动初始参数，触发先验协同过滤
+        # Create an honest empty profile.  Real fields are added only after
+        # the learner answers onboarding questions or submits learning work.
         db_profile = DBStudentProfile(
             student_id=username,
+            target_course="",
+            knowledge_base="",
             major=major,
             cognitive_style=cognitive_style,
             motivation_type=motivation_type,
             concept_mastery={},
             bkt_states={}
         )
-        
-        from app.crud import calibrate_student_prior_collaborative
-        from models import StudentProfile
-        temp_prof = StudentProfile(student_id=username)
-        temp_prof.major = major
-        temp_prof.cognitive_style = cognitive_style
-        temp_prof.motivation_type = motivation_type
-        
-        try:
-            calibrate_student_prior_collaborative(session, temp_prof)
-            db_profile.concept_mastery = temp_prof.concept_mastery
-            db_profile.bkt_states = temp_prof.bkt_states
-        except Exception:
-            pass
-            
         session.add(db_profile)
+        # Every registered account starts with the built-in master course
+        # context; profile content remains empty until onboarding supplies it.
+        from course_catalog import ensure_primary_course_membership
+        session.flush()
+        ensure_primary_course_membership(session, user)
         session.commit()
         
         # 将在此设备上匿名生成的复习计划、笔记、历史记录合并迁移到新注册账户中
@@ -260,34 +340,74 @@ async def startup():
     _worker_pool = AsyncWorkerPool(max_workers=CONFIG.max_concurrent_llm)
     await _worker_pool.start()
     print(f"  [EduMatrix] AsyncWorkerPool started: {CONFIG.max_concurrent_llm} workers")
-    print(f"  [EduMatrix] LLM: {CONFIG.llm_provider} @ {CONFIG.llm_endpoint} model={CONFIG.llm_model}")
+    print(f"  [EduMatrix] LLM provider={CONFIG.llm_provider} model={CONFIG.llm_model} endpoint_configured={bool(CONFIG.llm_endpoint)}")
     print(f"  [EduMatrix] Rate limit: {CONFIG.llm_rate_limit_rpm} RPM / {CONFIG.llm_rate_limit_tpm} TPM")
     await SANDBOX_RUNNER.start()
-    # 自动预置教师账号
+    from app.speech_api import recover_interrupted_speech_sessions
+    recovered_speech = await run_db_op(recover_interrupted_speech_sessions)
+    if recovered_speech:
+        print(f"  [EduMatrix] Recovered {recovered_speech} interrupted speech session(s) to failed truth state")
+    # 仅在演示模式预置固定账号；幂等执行且不覆盖已有账号密码。
     def seed_teacher(session):
-        teacher = LegacyReadRepository(session).user_by_username("teacher")
-        if not teacher:
-            teacher = DBUser(username="teacher", hashed_password=get_password_hash("admin123"), role="teacher", display_name="教师")
-            session.add(teacher)
-            session.commit()
-            print("  [EduMatrix] Teacher account created: teacher / admin123")
-    await run_db_op(seed_teacher)
-    from course_catalog import seed_m0_course
-    course_seed = await run_db_op(seed_m0_course)
+        demo_accounts = (
+            ("teacher", "admin123", "teacher", "演示教师"),
+            ("demo-admin", "EduMatrix-Demo-2026", "admin", "演示管理员"),
+        )
+        created = []
+        for username, password, role, display_name in demo_accounts:
+            user = LegacyReadRepository(session).user_by_username(username)
+            observe_legacy_shadow_read(
+                session, chain_id="identity-profile-history", legacy_result=user,
+                canonical_loader=lambda username=username: IdentityProfileHistoryCanonicalReader(session).user_by_username(username),
+                legacy_projector=project_model_row,
+            )
+            if not user:
+                user = DBUser(
+                    username=username,
+                    hashed_password=get_password_hash(password),
+                    role=role,
+                    display_name=display_name,
+                )
+                session.add(user)
+                created.append(username)
+            elif username.startswith("demo-"):
+                # Keep credentials user-owned while repairing the demo account metadata.
+                user.role = role
+                user.display_name = display_name
+        session.commit()
+        if created:
+            print(f"  [EduMatrix] Demo accounts created: {', '.join(created)}")
+    if CONFIG.demo_mode:
+        await run_db_op(seed_teacher)
+    from course_catalog import seed_default_courses
+    course_seed = await run_db_op(seed_default_courses)
     print(
-        "  [EduMatrix] Baseline course ready: "
-        f"{course_seed['course_id']} / {course_seed['documents']} documents / "
+        "  [EduMatrix] Published courses ready: "
+        f"{course_seed['course_count']} courses / {course_seed['documents']} documents / "
         f"{course_seed['chunks']} chunks"
     )
+    pending_course_updates = [
+        item for item in course_seed["courses"] if item["status"] == "update_available"
+    ]
+    for item in pending_course_updates:
+        preflight = item["preflight"]
+        print(
+            "  [EduMatrix] Course update requires explicit approval: "
+            f"{item['course_id']} {preflight['current_version']} -> "
+            f"{preflight['incoming_version']} (database and RAG left unchanged)"
+        )
 
 
 @app.on_event("shutdown")
 async def shutdown():
     global _worker_pool
     from code_exec_api import SANDBOX_RUNNER
+    from app.code_sandbox import CODE_SANDBOX_RUN_COORDINATOR
     if _worker_pool is not None:
         await _worker_pool.stop()
         print("  [EduMatrix] AsyncWorkerPool stopped")
+    await CODE_SANDBOX_RUN_COORDINATOR.shutdown()
+    print("  [EduMatrix] Formal code-sandbox runner stopped")
     await SANDBOX_RUNNER.shutdown()
     print("  [EduMatrix] Sandbox runner stopped")
 
@@ -339,6 +459,13 @@ MACHINE_LEARNING_DATASETS = [
 
 def _seed_demo_class(db) -> None:
     """初始化数据库种子数据（演示专用学生）"""
+    competition_students = db.query(DBCourseMembership).filter_by(
+        course_id="demo-course-rag-trust-v1",
+        role="student",
+        status="active",
+    ).count()
+    if competition_students:
+        return
     samples = {
         "stu-ml-001": "我是计算机专业，期末要考机器学习。逻辑回归 and 混淆矩阵总混，accuracy 很高但 recall 低我不知道怎么判断，希望用图和例子一步步讲。",
         "stu-ml-002": "我线性回归能看懂公式，但一到项目就不会做数据预处理，只会照着答案改代码，想要代码实操 and 提示。",
@@ -346,6 +473,11 @@ def _seed_demo_class(db) -> None:
     }
     for student_id, message in samples.items():
         db_profile = LegacyReadRepository(db).student_profile(student_id)
+        observe_legacy_shadow_read(
+            db, chain_id="identity-profile-history", legacy_result=db_profile,
+            canonical_loader=lambda student_id=student_id: IdentityProfileHistoryCanonicalReader(db).student_profile(student_id),
+            legacy_projector=project_model_row,
+        )
         if not db_profile:
             profile = StudentProfile(student_id=student_id)
             profile.update_from_message(message)
@@ -420,6 +552,10 @@ async def get_teacher_dashboard(
     def fetch_dashboard_data(session):
         _seed_demo_class(session)
         student_ids = LegacyReadRepository(session).student_profile_ids()
+        observe_legacy_shadow_read(
+            session, chain_id="identity-profile-history", legacy_result=student_ids,
+            canonical_loader=lambda: IdentityProfileHistoryCanonicalReader(session).student_profile_ids(),
+        )
         return [load_student_profile(session, student_id) for student_id in student_ids]
 
     profiles = await run_db_op(fetch_dashboard_data)
@@ -586,6 +722,10 @@ async def get_teacher_reviews(
 
     def fetch(session):
         student_ids = LegacyReadRepository(session).student_profile_ids()
+        observe_legacy_shadow_read(
+            session, chain_id="identity-profile-history", legacy_result=student_ids,
+            canonical_loader=lambda: IdentityProfileHistoryCanonicalReader(session).student_profile_ids(),
+        )
         result = []
         for student_id in student_ids:
             plans = get_review_plan(session, student_id)
@@ -676,59 +816,67 @@ app.include_router(m2_router)
 app.include_router(m3_router)
 app.include_router(m4_router)
 app.include_router(m5_router)
+app.include_router(m6_router)
+app.include_router(m7_router)
+app.include_router(code_sandbox_router)
+app.include_router(feynman_router)
 app.include_router(m8_router)
+app.include_router(next_core_router)
+app.include_router(speech_router)
+app.include_router(media_context_router)
+app.include_router(interactive_lab_router)
+app.include_router(course_governance_router)
+app.include_router(teaching_analytics_router)
+app.include_router(teacher_router)
+app.include_router(content_review_router)
+app.include_router(model_operations_dashboard_router)
+app.include_router(admin_router)
+app.include_router(certification_lifecycle_router)
+app.include_router(multilevel_review_router)
+app.include_router(job_standard_impact_router)
+app.include_router(enterprise_risk_router)
+app.include_router(course_sharing_router)
+app.include_router(marketplace_router)
+app.include_router(organization_marketplace_router)
+app.include_router(spatial_workspace_router)
+app.include_router(plugin_registry_router)
+app.include_router(video_rendering_router)
+app.include_router(video_catalog_router)
+app.include_router(video_imports_router)
+app.include_router(wrong_question_videos_router)
+app.include_router(chapter_videos_router)
+app.include_router(video_practices_router)
+app.include_router(teaching_animations_router)
+app.include_router(web_decks_router)
+app.include_router(local_adapters_router)
+app.include_router(resource_bundles_router)
+app.include_router(review_schedule_router)
+app.include_router(local_sso_router)
+app.include_router(local_hr_sync_router)
+app.include_router(local_lms_router)
+app.include_router(local_webhook_router)
+app.include_router(integration_reconciliation_router)
+app.include_router(integration_fault_drill_router)
+app.include_router(competition_journey_router)
+app.include_router(competition_showcase_router)
+app.include_router(competition_demo_router)
+app.include_router(profile_onboarding_router)
+app.include_router(diagnostic_router)
+app.include_router(document_selection_router)
+app.include_router(chat_router)
 
 
-# === 任务 8.1: 行级/公式苏格拉底即时答疑 (直接挂载在app上，避免模块缓存问题) ===
+# Keep the historical direct route name while delegating to the single governed
+# implementation in stream_api. Some FastAPI versions retain the latest route
+# for duplicate path/method registrations.
 @app.post("/api/stream/explain", dependencies=[Depends(get_current_user)])
 async def socratic_explain_direct(
     request: Request,
     current_user: DBUser = Depends(get_current_user),
-) -> dict[str, Any]:
-    payload = await request.json()
-    target_text = str(payload.get("target_text", "")).strip()
-    context_before = str(payload.get("context_before", ""))
-    context_after = str(payload.get("context_after", ""))
-    student_id = enforce_student_access(payload.get("student_id"), current_user)
-    follow_up = str(payload.get("follow_up", "")).strip()
-    history = payload.get("history", "")
-    if not target_text and not follow_up:
-        raise HTTPException(status_code=400, detail="target_text 不能为空")
-    swarm = build_swarm_from_headers(request.headers)
-    profile = swarm.profile_store.get(student_id)
-    
-    import re
-    # 添加学生画像上下⽂
-    profile_context = ""
-    if profile:
-        weak = "、".join(profile.weak_points[:3]) if profile.weak_points else "暂无"
-        goals = "、".join(profile.learning_goals[:3]) if profile.learning_goals else "暂无"
-        major = profile.major or "未设置"
-        profile_context = f"学生专业={major}，学习目标={goals}，薄弱点={weak}"
-    
-    is_formula = bool(re.search(r'[\\∂∫∑πθ∏∐∆∇∞∧∨∩∪⊂⊃∈∉≤≥≠≈≡⇒⇔∀∃]', target_text))
-    is_code = bool(re.search(r'(def |import |class |\bfor\b|\bif\b|return |lambda |async |await )', target_text))
+) -> Any:
+    from stream_api import socratic_explain
 
-    if follow_up:
-        system = "你是一位温和的苏格拉底导师。根据先前的对话和学生追问进行详细引导，不要重复已讲内容。使用中文。"
-        if history:
-            user = f"【学生画像】{profile_context}\n【原始内容】{target_text}\n【历史对话】{history}\n【学生追问】{follow_up}"
-        else:
-            user = f"【学生画像】{profile_context}\n【原始内容】{target_text}\n【上文】{context_before}\n【下文】{context_after}\n【学生追问】{follow_up}"
-    elif is_formula:
-        system = f"你是一位温和的苏格拉底导师。{profile_context}。用户点击了一个数学公式，请用启发式分步推导解释。\n规则：1)拆解公式结构，用通俗比喻 2)给出具体数值例子 3)结合学生背景 4)最后问引导性问题 5)使用中文。"
-        user = f"公式: {target_text}\n上文: {context_before}\n下文: {context_after}"
-    elif is_code:
-        system = f"你是一位温和的苏格拉底导师。{profile_context}。用户点击了一行代码，请用启发式方式解释。\n规则：1)先问学生觉得代码在做什么 2)解释关键部分 3)结合学生专业 4)最后问引导性问题 5)使用中文。"
-        user = f"代码: {target_text}\n上文: {context_before}\n下文: {context_after}"
-    else:
-        system = f"你是一位温和的苏格拉底导师。{profile_context}。用户选取了一段文本，请用启发式方式解释。\n规则：1)概括核心内容 2)拆解关键概念 3)结合学生薄弱点 4)最后问引导性问题 5)使用中文。"
-        user = f"内容: {target_text}\n上文: {context_before}\n下文: {context_after}"
-    try:
-        content = await swarm.async_generator.llm.generate(system, user, role="苏格拉底辩手")
-        return {"status": "success", "content": content, "target_text": target_text}
-    except Exception as e:
-        return {"status": "fallback", "content": f"📖 选取内容: {target_text[:80]}\n💡 可在主对话继续追问", "target_text": target_text}
+    return await socratic_explain(request, current_user)
 
 
 @app.get("/api/health")
@@ -761,11 +909,11 @@ async def health_check(request: Request):
 
 
 @app.get("/api/llm/test")
-async def test_llm_connection(request: Request):
+async def test_llm_connection(
+    request: Request,
+    current_user: DBUser = Depends(get_current_user),
+):
     """测试 LLM 连通性：发送一条简短消息验证 API 是否可用"""
-    from llm_client import build_async_llm
-    from swarm_factory import build_swarm_from_headers
-
     swarm_obj = build_swarm_from_headers({})
     llm = swarm_obj.llm
 
@@ -779,10 +927,15 @@ async def test_llm_connection(request: Request):
         }
 
     try:
-        result = await llm.generate(
-            "你是一个教学助手，请用一句话简短回答。",
-            "请回复：API连接测试成功",
-            role="测试"
+        result = await audited_legacy_text_call(
+            llm,
+            system_prompt="你是一个教学助手，请用一句话简短回答。",
+            user_prompt="请回复：API连接测试成功",
+            role="测试",
+            operation="text_connection_test",
+            capability="answer",
+            owner_public_id=current_user.public_id,
+            input_summary={"operation_scope": "fixed_probe", "user_data_included": False},
         )
         return {
             "status": "ok",
@@ -801,14 +954,15 @@ async def test_llm_connection(request: Request):
 
 
 @app.get("/api/llm/test-vision")
-async def test_vision_connection(request: Request):
+async def test_vision_connection(
+    request: Request,
+    current_user: DBUser = Depends(get_current_user),
+):
     """Send a tiny image through the configured vision route.
 
     This endpoint verifies the evaluator's actual visual-model configuration,
     while returning only status and a short response preview.
     """
-    from swarm_factory import build_swarm_from_headers
-
     swarm_obj = build_swarm_from_headers(request.headers)
     llm = swarm_obj.llm
     llm_type = type(llm).__name__
@@ -825,27 +979,60 @@ async def test_vision_connection(request: Request):
         "data:image/png;base64,"
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     )
+    provider = CONFIG.multimodal_llm_provider or CONFIG.llm_provider or "unknown"
+    model = getattr(
+        vision_llm,
+        "model",
+        CONFIG.multimodal_llm_model or CONFIG.llm_model or "unknown",
+    )
+    system_prompt = "你是视觉模型连通性测试助手。"
+    user_prompt = "请确认你已收到一张图片，仅用一句话回复。"
+    lifecycle = StreamingModelCallLifecycle(
+        capability="vision",
+        prompt_key="legacy_vision_connection_test",
+        prompt_version="1.0",
+        provider=provider,
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        owner_public_id=current_user.public_id,
+        input_summary={
+            "operation": "vision_connection_test",
+            "image_count": 1,
+            "image_encoded_chars": len(test_image),
+            "image_payload_included": False,
+            "user_data_included": False,
+        },
+        database_runner=run_db_op,
+    )
+    await lifecycle.start()
+    chunks = []
     try:
-        chunks = []
         async for chunk in vision_llm.generate_stream(
-            "你是视觉模型连通性测试助手。",
-            "请确认你已收到一张图片，仅用一句话回复。",
+            system_prompt,
+            user_prompt,
             role="视觉连接测试",
             images=[test_image],
         ):
             chunks.append(chunk)
             if sum(len(item) for item in chunks) >= 500:
                 break
+        output = "".join(chunks)
+        await lifecycle.complete(output)
         return {
             "status": "ok",
             "message": "视觉模型请求已成功返回",
             "llm_type": llm_type,
-            "response": "".join(chunks)[:500],
+            "response": output[:500],
         }
-    except Exception as e:
+    except asyncio.CancelledError:
+        await asyncio.shield(lifecycle.fail("client_disconnected", "".join(chunks)))
+        raise
+    except Exception:
+        await lifecycle.fail("vision_connection_test_provider_failed", "".join(chunks))
         return {
             "status": "error",
-            "message": f"视觉模型调用失败: {str(e)}",
+            "message": "视觉模型调用失败",
             "llm_type": llm_type,
         }
 
@@ -910,7 +1097,10 @@ async def submit_feedback(request: Request):
 
 
 @app.post("/api/notes/ai-polish", dependencies=[Depends(get_current_user)])
-async def polish_note(request: Request):
+async def polish_note(
+    request: Request,
+    current_user: DBUser = Depends(get_current_user),
+):
     try:
         payload = await request.json()
         content = str(payload.get("content", "")).strip()
@@ -966,11 +1156,46 @@ async def polish_note(request: Request):
             "注意：Tags 和 Concepts 必须是提取出的精炼实体，Concepts 需尽量匹配机器学习核心概念。"
         )
         user_prompt = f"以下是学生的原始笔记内容：\n\n{placeholder_content}"
-        
+        provider = (
+            "deterministic"
+            if active_swarm.llm.__class__.__name__ == "AsyncDeterministicEducationLLM"
+            else CONFIG.llm_provider
+        )
+        model = getattr(
+            active_swarm.llm,
+            "model",
+            "deterministic" if provider == "deterministic" else CONFIG.llm_model,
+        )
+        lifecycle = StreamingModelCallLifecycle(
+            capability="answer",
+            prompt_key="legacy_note_polish",
+            prompt_version="1.0",
+            provider=provider or "unknown",
+            model=model or "unknown",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            owner_public_id=current_user.public_id,
+            input_summary={
+                "operation": "note_polish",
+                "source_chars": len(content),
+                "protected_code_block_count": len(code_blocks),
+                "contains_mermaid": "```mermaid" in content,
+            },
+            database_runner=run_db_op,
+        )
+        await lifecycle.start()
+        provider_failed = False
         try:
             polished = await active_swarm.llm.generate(system_prompt, user_prompt, role="笔记整理官")
-        except Exception as e:
-            polished = f"// AI 润色暂时不可用: {str(e)}\n\n{content}"
+        except asyncio.CancelledError:
+            await asyncio.shield(lifecycle.fail("client_disconnected"))
+            raise
+        except Exception:
+            await lifecycle.fail("note_polish_provider_failed")
+            provider_failed = True
+            polished = f"// AI 润色暂时不可用\n\n{content}"
+        else:
+            await lifecycle.complete(polished)
         
         # 2. 还原被保护的原始代码块
         restored_indices = set()
@@ -1014,10 +1239,40 @@ async def polish_note(request: Request):
         tags = [t for t in tags if t.lower() != 'none']
         concepts = [c for c in concepts if c.lower() != 'none']
         
+        saved_suggestion = None
+        note_id = str(payload.get("note_id") or "").strip()
+        if note_id and not provider_failed:
+            try:
+                expected_version = int(payload.get("expected_version"))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="expected_version is required for a saved AI suggestion")
+            idempotency_key = str(payload.get("idempotency_key") or "").strip()
+            if len(idempotency_key) < 8:
+                raise HTTPException(status_code=422, detail="idempotency_key is required for a saved AI suggestion")
+
+            def persist_suggestion(session):
+                note = save_ai_suggestion(
+                    session,
+                    note_id=note_id,
+                    actor=current_user,
+                    expected_version=expected_version,
+                    idempotency_key=idempotency_key,
+                    content=clean_content.strip(),
+                    tags=tags,
+                    concepts=concepts,
+                )
+                session.commit()
+                session.refresh(note)
+                return note_payload(session, actor=current_user, note=note)
+
+            saved_suggestion = await run_db_op(persist_suggestion)
+
         return {
             "polished_content": clean_content.strip(),
             "tags": tags,
-            "concepts": concepts
+            "concepts": concepts,
+            "suggestion_status": "unavailable" if provider_failed else "ready",
+            "note": saved_suggestion,
         }
     except Exception as outer_e:
         import traceback
@@ -1074,14 +1329,33 @@ async def update_existing_note(
     
     requested_student_id = payload.get("student_id")
     student_scope = enforce_student_access(requested_student_id, current_user)
-    note = await run_db_op(
-        update_note, note_id, content=content,
-        tags=payload.get("tags"), concepts=payload.get("concepts"),
-        student_id=None if current_user.role == "teacher" else student_scope,
-    )
-    if not note:
-        raise HTTPException(status_code=404, detail="note not found")
-    return {"id": note.id, "updated_at": note.updated_at.isoformat()}
+    expected_version = payload.get("expected_version")
+    if expected_version is not None:
+        try:
+            expected_version = int(expected_version)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="expected_version must be an integer")
+    idempotency_key = str(payload.get("idempotency_key") or "").strip() or None
+
+    def save(session):
+        note = update_note(
+            session,
+            note_id,
+            content=content,
+            tags=payload.get("tags"),
+            concepts=payload.get("concepts"),
+            student_id=None if current_user.role == "teacher" else student_scope,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            actor=current_user,
+            change_type=str(payload.get("change_type") or "saved"),
+            task_id=str(payload.get("task_id") or "") or None,
+        )
+        if note is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        return note_payload(session, actor=current_user, note=note)
+
+    return await run_db_op(save)
 
 
 @app.get("/api/notes/{student_id}", dependencies=[Depends(enforce_request_student_scope)])
@@ -1090,8 +1364,11 @@ async def list_notes(
     current_user: DBUser = Depends(get_current_user),
 ):
     student_id = enforce_student_access(student_id, current_user)
-    notes = await run_db_op(get_notes, student_id)
-    return {"student_id": student_id, "notes": [{"id": n.id, "source": n.source, "content": n.content, "tags": n.tags, "concepts": n.concepts, "created_at": n.created_at.isoformat()} for n in notes]}
+    def fetch(session):
+        notes = get_notes(session, student_id)
+        return [note_payload(session, actor=current_user, note=note) for note in notes]
+
+    return {"student_id": student_id, "notes": await run_db_op(fetch)}
 
 
 @app.post("/api/notes/{student_id}", dependencies=[Depends(enforce_request_student_scope)])
@@ -1106,11 +1383,82 @@ async def add_note(
     if not content:
         raise HTTPException(status_code=400, detail="content is required")
     
-    note = await run_db_op(
-        create_note, student_id, source=payload.get("source", "manual"),
-        content=content, tags=payload.get("tags"), concepts=payload.get("concepts")
-    )
-    return {"id": note.id, "created_at": note.created_at.isoformat()}
+    source_type = str(payload.get("source_type") or payload.get("source") or "manual").strip()
+    idempotency_key = str(payload.get("idempotency_key") or "").strip() or None
+
+    def create(session):
+        normalized_type, source_metadata = prepare_source_metadata(
+            session,
+            actor=current_user,
+            source_type=source_type,
+            metadata=payload.get("source_metadata"),
+        )
+        note = create_note(
+            session,
+            student_id,
+            source=normalized_type,
+            content=content,
+            tags=payload.get("tags"),
+            concepts=payload.get("concepts"),
+            source_metadata=source_metadata,
+            idempotency_key=idempotency_key,
+            actor=current_user,
+            task_id=str(payload.get("task_id") or "") or None,
+        )
+        return note_payload(session, actor=current_user, note=note)
+
+    return await run_db_op(create)
+
+
+@app.get("/api/notes/{note_id}/versions", dependencies=[Depends(get_current_user)])
+async def list_note_versions(
+    note_id: str,
+    current_user: DBUser = Depends(get_current_user),
+):
+    def fetch(session):
+        note = session.get(DBNote, note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        return {
+            "note_id": note.id,
+            "current_version": int(note.current_version_number or 1),
+            "lock_version": int(note.lock_version or 1),
+            "versions": note_versions_payload(session, actor=current_user, note=note),
+        }
+
+    return await run_db_op(fetch)
+
+
+@app.post("/api/notes/{note_id}/versions/{version_number}/restore", dependencies=[Depends(get_current_user)])
+async def restore_existing_note_version(
+    note_id: str,
+    version_number: int,
+    request: Request,
+    current_user: DBUser = Depends(get_current_user),
+):
+    payload = await request.json()
+    try:
+        expected_version = int(payload.get("expected_version"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="expected_version is required")
+    idempotency_key = str(payload.get("idempotency_key") or "").strip()
+    if len(idempotency_key) < 8:
+        raise HTTPException(status_code=422, detail="idempotency_key is required")
+
+    def restore(session):
+        note, _ = restore_note_version(
+            session,
+            note_id=note_id,
+            version_number=version_number,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            actor=current_user,
+        )
+        session.commit()
+        session.refresh(note)
+        return note_payload(session, actor=current_user, note=note)
+
+    return await run_db_op(restore)
 
 
 @app.delete("/api/notes/{note_id}", dependencies=[Depends(get_current_user)])
@@ -1292,7 +1640,7 @@ if os.path.isdir(PATCHES_DIR):
     app.mount("/data/patches", StaticFiles(directory=PATCHES_DIR), name="patches")
 
 if os.path.isdir(FRONTEND_DIST):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+    app.mount("/", SPAStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn

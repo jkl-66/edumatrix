@@ -54,6 +54,9 @@ class DomainPluginManifest(StrictModel):
     domain_key: str
     title: str = Field(min_length=1, max_length=128)
     license: str = Field(min_length=1, max_length=128)
+    attribution: str = Field(min_length=1, max_length=512)
+    source_url: str = Field(pattern=r"^https://[^\s]{3,500}$")
+    source_version: str = Field(min_length=1, max_length=128)
     assets: tuple[PluginAsset, ...]
     checkers: tuple[CheckerDeclaration, ...] = ()
     allowed_actions: tuple[Literal["validate_data", "register_domain", "register_checker"], ...] = ("validate_data",)
@@ -97,12 +100,17 @@ def validate_plugin_package(package_dir: str | Path) -> dict:
             except Exception as exc:
                 raise DomainPluginError("plugin_asset_invalid_json", f"invalid JSON asset: {asset.path}") from exc
         verified.append({"path": asset.path, "sha256": actual, "bytes": len(payload)})
+    seal_input = {"manifest": manifest.model_dump(mode="json"), "assets": verified}
+    package_hash = hashlib.sha256(json.dumps(seal_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {
         "schema_version": "edumatrix.domain-plugin-validation.v1",
         "plugin_id": manifest.plugin_id,
         "plugin_version": manifest.plugin_version,
         "domain_key": manifest.domain_key,
         "verified_assets": verified,
+        "package_hash": package_hash,
+        "license": manifest.license, "attribution": manifest.attribution,
+        "source_url": manifest.source_url, "source_version": manifest.source_version,
         "capability_boundary": {
             "network": False, "secrets": False, "executable_code": False,
             "allowed_actions": list(manifest.allowed_actions),

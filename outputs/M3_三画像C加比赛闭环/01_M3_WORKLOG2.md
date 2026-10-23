@@ -162,3 +162,56 @@
 - 模型配置审计：`/api/health` 报告 `llm_provider=deterministic`、`llm_model=deterministic`、endpoint 为空、API key 未配置；进程环境也没有 EduMatrix/OpenAI/Ollama 模型配置。真实 JSON 模型闭环需要外部端点、模型和凭据。
 - 退出结论：没有伪造 patch、视频、模型质量或 FAISS 证据；M3-012 保持 `PENDING`，不进入 M4。
 - 时间：2026-07-26（Asia/Shanghai）。
+
+## WL2-M3-20260801-014 - 真实 FAISS、结构化模型门禁与 E2E 诊断
+
+- 状态：`IN_PROGRESS`（M3-012 未关闭）。
+- 真实 FAISS：加载 `licensed_ml_course.faiss`，365 个向量、`IndexFlatIP`、512 维 BGE embedding；决策树查询 Top-3 均命中 MIT 来源，证据写入 `evidence/browser-e2e/report.json`。该索引是合法机器学习课程检索基础设施证据，当前不冒充 M3 RAG 任务的语义来源。
+- 真实模型：确认当前 `.env` 的 OpenAI-compatible structured provider 可连通；真实 E2E 使用隔离数据库、三注册用户和 Chromium，不记录端点或密钥。
+- 首轮真实失败：模型响应从 JSON 对象开始但追加非 JSON 解释；增加公共严格 JSON 解析器、原生 `response_format=json_object`，围栏外额外内容仍拒绝。
+- 第二轮真实失败：JSON 可解析但 `tiered_quiz.pass_rules` 未覆盖 foundation/application/advanced；增加一次 Schema 反馈重生成，不放宽 Pydantic 契约。
+- 第三轮真实失败：响应以尾逗号结束；将解析错误纳入一次反馈重生成，禁止自动修补不完整 JSON。
+- 工程修复：M2/M3/M5 结构化入口统一使用公共解析器；真实验收环境设置 `EDUMATRIX_DISABLE_LLM_FALLBACK=1`，防止确定性后备掩盖真实模型失败；E2E 请求超时提高到 180 秒，报告错误脱敏。
+- 聚焦验证：结构化 JSON、M2/M3/M5 回归 `26 passed, 5 warnings`；M3 资源重试专项 `15 passed`。
+- 当前缺口：真实三画像资源、三组辩论、刷新/重启、越权和交互工件尚未在同一次 E2E 中全部通过；外部审批服务本轮返回 502，未绕过重试。
+- 下一步：审批服务恢复后重新执行 `scripts/e2e_m3_competition_loop.py`；只有三画像资源差异、四角色辩论、交互隐藏验收和持久化恢复全部有报告证据，才将 M3-012 改为 PASS。
+- 时间：2026-08-01（Asia/Shanghai）。
+
+## WL2-M3-20260801-015 - 严格 JSON 重试后的真实模型复验
+
+- 状态：`BLOCKED`（M3-012 未关闭，不进入 M4）。
+- 客户端加固：结构化提示请求 OpenAI-compatible `response_format=json_object`；真实验收设置 `EDUMATRIX_DISABLE_LLM_FALLBACK=1`；空 content 进入已有退避重试；Schema/解析错误最多反馈重生成一次，拒绝自动补逗号、填缺失字段或截取正文。
+- 真实复验结果：模型仍先后出现缺少三层 `pass_rules`、空响应、截断到非 JSON 字符等情况；即使增加精确字段提示和重生成，三画像资源未完成一次稳定返回。
+- 本地验证：全量 `350 passed, 6 warnings`；M3 资源/解析专项 `15 passed`；前端 `vite build` 成功（3102 modules transformed）。
+- 结论：代码契约、失败可见性和退避已具备，但当前 `.env` 指向的外部模型/别名无法提供可复现的 M3 结构化产物。该阻塞不是本地代码测试失败，也不能用 deterministic fallback 代替真实证据。
+- 解除条件：将 `.env` 的模型换成稳定支持 JSON Object/结构化输出且有足够输出额度的模型，或提供同一端点下可用的正式模型名；随后从 `scripts/e2e_m3_competition_loop.py` 重新执行，不需要重做本地修复。
+- 时间：2026-08-01（Asia/Shanghai）。
+
+## WL2-M3-20260802-016 - 真实模型再测、拆分降级与空响应阻塞
+
+- 状态：`BLOCKED`（M3-012 未关闭，不进入 M4 正式发布）。
+- 今日复验：继续使用 `.env` 配置的 `deepseek-v4-flash`、隔离数据库、真实 365 向量 FAISS、本机 FastAPI/Vite 和无头 Chromium；未启用 deterministic fallback。
+- 第一轮结果：完整 Bundle 生成在浏览器 180 秒请求窗口内未返回。该表现不同于此前立即暴露的 JSON 截断，但仍无法形成第一个画像的正式资源产物。
+- 可靠性改进：完整 Bundle 最多尝试两次；若仍失败，按 `lesson`、`lab_guide`、`tiered_quiz` 三个较小严格 Schema 分别生成，再由服务端组合并执行原有画像一致性、来源范围、事实、安全和结构总校验。新增回归覆盖完整 Bundle 失败后的小对象降级，禁止自动补字段、修尾逗号或接受额外正文。
+- 第二轮优化：解析级截断不再重复请求同一个大 Bundle，而是立即进入小对象降级；可解析但 Schema 不合格时仍保留一次反馈修复。E2E 单请求窗口提高到 420 秒，只用于容纳串行小对象调用，不改变底层模型失败判定。
+- 第二轮真实结果：第一个画像的 `/generate` 在约 259 秒后返回 422；明确错误为 `structured model returned an empty content field`，底层退避重试 3 次仍失败。说明当前模型别名不仅对大对象有截断问题，对较小严格 JSON 也存在连续空响应，不能靠继续拆分稳定解决。
+- 新鲜验证：资源/结构化解析专项 `15 passed`；M2/M3/M5 聚焦回归在第一轮改动后为 `53 passed, 5 warnings`。真实 FAISS 查询继续通过，但三画像、辩论、交互、刷新/重启和越权未在同一次真实 E2E 中完成。
+- 历史核对：本日志早期已明确 API 和资源测试使用 `ProfileAwareFakeLLM` / deterministic reviewer，只证明契约、差异和持久化，不宣称真实模型质量；原浏览器记录也明确 deterministic provider 在生成端点失败。因此“原先测试正常”与本次真实模型失败不矛盾，M3-012 历史上从未由真实模型关闭。
+- 安全检查：E2E 报告中的 Authorization 已脱敏；失败请求使用隔离测试账户，未把 `.env` 密钥写入报告。控制台曾显示的临时 JWT 不作为证据保存。
+- 解除条件：将模型改为稳定支持 JSON Object、足够输出上限且能持续返回非空 content 的正式模型，再从 `scripts/e2e_m3_competition_loop.py` 重跑。当前模型停止继续试错，避免无效消耗。
+- 时间：2026-08-02（Asia/Shanghai）。
+
+## WL2-M3-20260802-017 - 思考模式根因闭环与真实 M3 E2E 通过
+
+- 状态：`PASS`（M3-012 关闭，允许进入 M4 实施与正式评测准备）。
+- 协议探针：同一端点、模型和 API Key 的普通输出及 JSON Output 均返回 200。响应包含 `reasoning_content`，证明模型默认启用思考；显式发送 `thinking={"type":"disabled"}` 后仍返回有效 JSON。
+- 根因 A/B：使用真实 `lesson` Schema 时，默认思考耗时 70.17 秒、completion 8105 tokens，其中 reasoning 6664 tokens，逼近项目原 `max_tokens=8192`；关闭思考后耗时 8.06 秒、completion 1014 tokens、JSON 有效。此前空 content 是思考耗尽共享输出预算，不是模型不支持 JSON。
+- 正式配置：新增兼容性变量 `EDUMATRIX_LLM_THINKING_MODE`，仅在值为 enabled/disabled 时发送 provider thinking 参数；当前 DeepSeek 配置为 disabled，`EDUMATRIX_LLM_MAX_TOKENS=16384`。其他 OpenAI-compatible provider 留空即可保持原协议。
+- 单画像冒烟：禁用 deterministic fallback，实际客户端断言为 `deepseek-v4-flash / 16384 / disabled`；24.19 秒生成 lesson、lab_guide、tiered_quiz，完整严格 Bundle Schema 通过。
+- 真实 E2E：隔离数据库、本机 FastAPI/Vite、无头 Chromium、真实模型和 365 向量 MIT FAISS 同时运行，145 秒完成。三画像的难度/脚手架/开放度及三类工件哈希均有差异，来源范围一致，三组生成和辩论全部完成。
+- 交互与安全：故障注入和恢复成功，隐藏验收 5/5、SE-4、mastery 不自动更新；浏览器刷新与后端重启后状态恢复；跨 owner 任务与 Bundle 均返回 403；桌面三画像、交互、重启和移动端共 6 张截图落盘。
+- 兼容修复：M3 测验学习者投影现在使用 M3 严格 Schema，保留标题、分层题目和可展示画像，同时删除 answer_key、explanation 与内部 rationale_refs；malformed 测验仍 fail-closed。
+- 审核加固：辩论 reviewer 接收完整 `DebateRoundOutput` JSON Schema；未知枚举或解析错误最多反馈重生成一次，连续非法则严格失败，不做静默映射。
+- 证据：`outputs/M3_三画像C加比赛闭环/evidence/browser-e2e/report.json` 为 `result=passed`，报告不含 Bearer、JWT 或 API Key 值。
+- 最终门禁：全量后端 `357 passed, 6 warnings in 75.68s`；前端生产构建通过，`3102 modules transformed`。警告为既有 FastAPI/Starlette 弃用提示、PyTorch tensor 转换提示和前端大 chunk 提示，不影响本次 M3 退出判定。
+- 时间：2026-08-02（Asia/Shanghai）。

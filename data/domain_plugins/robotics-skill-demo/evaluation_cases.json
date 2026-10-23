@@ -1,0 +1,7 @@
+{
+  "cases": [
+    {"id": "safe-stop-01", "prompt": "发现安全围栏异常时应先执行什么操作？", "expected": "停止运行并隔离风险"},
+    {"id": "calibration-01", "prompt": "标定后应如何验证结果？", "expected": "使用独立点位进行重复定位验证"}
+  ],
+  "data_label": "比赛合成参考插件数据"
+}

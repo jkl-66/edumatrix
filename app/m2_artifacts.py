@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.database import (
     DBArtifact,
     DBArtifactVersion,
@@ -27,7 +29,10 @@ from app.m2_contracts import (
     TieredQuizArtifact,
     validate_m2_artifact,
 )
+from app.m5_capabilities import Capability, M5CapabilityError, OutputConstraints
+from app.m5_gateway import execute_registered_structured_call
 from app.m2_tasks import M2_GOLDEN_CAPABILITY, complete_task_step
+from llm_client import parse_json_object
 
 
 CAPABILITY_SEQUENCE = {
@@ -148,14 +153,44 @@ class M2StructuredArtifactGenerator:
                 "sources": _source_material(session, verified),
             }
         )
-        raw = await self.llm.generate(
-            system_prompt,
-            user_prompt,
-            role=CAPABILITY_ROLE[capability_value],
-        )
+        gateway_capability = {
+            M2Capability.LESSON: Capability.LECTURE,
+            M2Capability.LAB_GUIDE: Capability.PRACTICAL_GUIDE,
+            M2Capability.TIERED_QUIZ: Capability.TIERED_QUIZ,
+        }[capability_value]
         try:
-            payload = json.loads(raw)
-        except (TypeError, json.JSONDecodeError) as exc:
+            result = await execute_registered_structured_call(
+                session,
+                backend=self.llm,
+                capability=gateway_capability,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                role=CAPABILITY_ROLE[capability_value],
+                operation=f"m2_{capability_value.value.split('.')[0]}_artifact",
+                response_model=model,
+                owner_public_id=context.owner_public_id,
+                course_id=context.course_id,
+                output_constraints=OutputConstraints(
+                    format="json",
+                    environment=("verified_course_context",) if capability_value == M2Capability.LAB_GUIDE else (),
+                    safety_boundary=(
+                        "Only the verified source and runtime boundary may be used."
+                        if capability_value == M2Capability.LAB_GUIDE else ""
+                    ),
+                ),
+            )
+            payload = result.structured_output or {}
+        except M5CapabilityError as exc:
+            code = (
+                "artifact_schema_invalid"
+                if exc.code == "structured_output_invalid" and isinstance(exc.__cause__, ValidationError)
+                else "invalid_generator_json"
+            )
+            raise M2ArtifactGenerationError(
+                code,
+                "generator output failed the M2 artifact contract" if code == "artifact_schema_invalid" else "generator did not return a raw JSON object",
+            ) from exc
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise M2ArtifactGenerationError(
                 "invalid_generator_json", "generator did not return a raw JSON object"
             ) from exc

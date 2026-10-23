@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic import ConfigDict
 
+from app.agent_audit import record_agent_audit, sanitize_public_value
 from app.database import DBAgentRun, DBGenerationTask, DBTaskStep
 from app.m1_repository import append_task_event, create_generation_task, create_task_step
 from app.m2_context import assemble_verified_context
@@ -120,6 +121,40 @@ def _steps(session: Any, task_id: str) -> dict[int, DBTaskStep]:
     }
 
 
+def _latest_run(session: Any, task_id: str, role: M3AgentRole) -> DBAgentRun | None:
+    return (
+        session.query(DBAgentRun)
+        .filter_by(task_id=task_id, role=role.value)
+        .order_by(DBAgentRun.created_at.desc(), DBAgentRun.id.desc())
+        .first()
+    )
+
+
+def _public_input_refs(input_summary: str) -> tuple[str, ...]:
+    summary = json.loads(input_summary or "{}")
+    values = [
+        summary.get("course_id"),
+        summary.get("domain_version_id"),
+        summary.get("profile_snapshot_id"),
+        *(summary.get("target_knowledge_point_ids") or []),
+        *(summary.get("source_ref_ids") or []),
+    ]
+    return tuple(dict.fromkeys(str(value) for value in values if value))
+
+
+def _run_public_input_refs(run: DBAgentRun, *, output_artifact_version_id: str | None = None) -> tuple[str, ...]:
+    """Bind a public stage summary to its real task/run/version facts."""
+    refs = [
+        f"task:{run.task_id}",
+        f"run:{run.id}",
+        f"trace:{run.trace_id}",
+        *_public_input_refs(run.input_summary),
+    ]
+    if output_artifact_version_id:
+        refs.append(f"version:{output_artifact_version_id}")
+    return tuple(dict.fromkeys(refs))
+
+
 def _context_summary(context: GenerationContext, role: M3AgentRole) -> str:
     contract = _CONTRACT_BY_ROLE[role]
     summary = {
@@ -226,15 +261,20 @@ def start_m3_agent_run(
     step = steps[sequence]
     if any(steps[index].status != "completed" for index in range(1, sequence)):
         _fail("role_dependency_incomplete", "all prior role runs must complete")
-    existing = session.query(DBAgentRun).filter_by(task_id=task.id, role=role.value).first()
-    if existing is not None:
+    existing = _latest_run(session, task.id, role)
+    if existing is not None and existing.status in {"running", "completed"}:
         return existing
-    if step.status != "pending":
+    retrying = existing is not None and existing.status == "failed" and step.status == "failed"
+    if step.status != "pending" and not retrying:
         _fail("role_not_startable", f"role step is {step.status}")
     step.status = "running"
+    step.error_code = ""
+    step.error_message = ""
     step.started_at = _now()
+    step.completed_at = None
     run = DBAgentRun(
         task_id=task.id,
+        parent_run_id=existing.id if retrying else None,
         trace_id=task.trace_id,
         role=role.value,
         agent_version=_CONTRACT_BY_ROLE[role].version,
@@ -245,6 +285,14 @@ def start_m3_agent_run(
     )
     session.add(run)
     session.flush()
+    record_agent_audit(
+        session,
+        run=run,
+        input_refs=_run_public_input_refs(run),
+        validation="Verified context assembled; private execution inputs are hidden.",
+        decision_summary="Stage is running.",
+        status="running",
+    )
     append_task_event(
         session,
         task_id=task.id,
@@ -263,11 +311,16 @@ def complete_m3_agent_run(
     owner_public_id: str,
     role: M3AgentRole,
     output_artifact_version_id: str | None = None,
+    candidate_summary: str = "",
+    disagreement: str = "",
+    validation: str = "",
+    revision: str = "",
+    decision_summary: str = "",
 ) -> DBAgentRun:
     task = _owned_task(session, task_id, owner_public_id)
     sequence = _ROLE_SEQUENCE.index(role) + 1
     step = _steps(session, task.id)[sequence]
-    run = session.query(DBAgentRun).filter_by(task_id=task.id, role=role.value).first()
+    run = _latest_run(session, task.id, role)
     if run is None or run.status != "running" or step.status != "running":
         _fail("role_not_running", "role run must be running before completion")
     run.status = "completed"
@@ -287,6 +340,60 @@ def complete_m3_agent_run(
             "agent_run_id": run.id,
             "output_artifact_version_id": output_artifact_version_id,
         },
+    )
+    record_agent_audit(
+        session,
+        run=run,
+        input_refs=_run_public_input_refs(run, output_artifact_version_id=output_artifact_version_id),
+        candidate_summary=candidate_summary,
+        disagreement=disagreement,
+        validation=validation,
+        revision=revision,
+        decision_summary=decision_summary,
+        status="completed",
+    )
+    session.flush()
+    return run
+
+
+def fail_m3_agent_run(
+    session: Any,
+    *,
+    task_id: str,
+    owner_public_id: str,
+    role: M3AgentRole,
+    error_code: str,
+    error_message: str,
+) -> DBAgentRun:
+    task = _owned_task(session, task_id, owner_public_id)
+    sequence = _ROLE_SEQUENCE.index(role) + 1
+    step = _steps(session, task.id)[sequence]
+    run = _latest_run(session, task.id, role)
+    if run is None or run.status != "running" or step.status != "running":
+        _fail("role_not_running", "role run must be running before failure is recorded")
+    run.status = "failed"
+    run.completed_at = _now()
+    step.status = "failed"
+    step.error_code = error_code
+    step.error_message = str(sanitize_public_value(error_message))[:1000]
+    step.completed_at = run.completed_at
+    append_task_event(
+        session,
+        task_id=task.id,
+        step_id=step.id,
+        event_type="m3.agent_run.failed",
+        payload={"role": role.value, "agent_run_id": run.id, "error_code": error_code},
+    )
+    record_agent_audit(
+        session,
+        run=run,
+        input_refs=_run_public_input_refs(run),
+        validation=f"Stage failed: {error_code}.",
+        revision="Retry this stage only; completed prior stages remain valid.",
+        decision_summary="Choose another configured model or retry later."
+        if error_code == "model_capacity"
+        else "Correct the failed stage and retry.",
+        status="failed",
     )
     session.flush()
     return run

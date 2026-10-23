@@ -35,6 +35,18 @@ def test_m5_routes_r0_without_model_and_requires_confirmation_for_delete():
     assert blocked.invokes_model is False
 
 
+def test_deterministic_demo_routes_without_claiming_an_external_text_model():
+    runtime = RuntimeAvailability(deterministic_text_model=True)
+    decision = route_capability(
+        RoutingRequest(contract=CapabilityContract(idempotency_key="m5-deterministic-demo")),
+        runtime,
+    )
+    assert runtime.text_model is False
+    assert runtime.text_generation_available is True
+    assert runtime.generation_mode == "deterministic_demo"
+    assert decision.route_level == "R2" and decision.status == "ready"
+
+
 def test_m5_locks_explicit_capability_and_preserves_plain_answer_default():
     default = route_capability(RoutingRequest(contract=_contract(), message="解释一下召回率"), READY)
     legacy = route_capability(RoutingRequest(contract=_contract(), message="/code 写一个例子"), READY)

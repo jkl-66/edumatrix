@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Mapping
+from typing import Literal, Mapping
 
 
 def _utc_now_iso() -> str:
@@ -36,6 +36,37 @@ class Triplet:
             confidence=max(0.0, min(1.0, float(self.confidence))),
             evidence=self.evidence.strip(),
         )
+
+
+GraphSourceKind = Literal[
+    "builtin_seed",
+    "canonical_course",
+    "rule_candidate",
+    "model_candidate",
+    "co_occurrence",
+    "legacy_manual",
+]
+GraphVerificationStatus = Literal["verified", "candidate", "rejected"]
+
+
+@dataclass(frozen=True)
+class GraphFactProvenance:
+    """Typed provenance that prevents candidates from masquerading as facts."""
+
+    source_kind: GraphSourceKind
+    verification_status: GraphVerificationStatus
+    course_id: str = ""
+    source_ref_id: str = ""
+    evidence_id: str = ""
+    content_hash: str = ""
+    manifest_hash: str = ""
+    extraction_method: str = ""
+
+
+@dataclass(frozen=True)
+class GraphFact:
+    triplet: Triplet
+    provenance: GraphFactProvenance
 
 
 @dataclass(frozen=True)
@@ -89,6 +120,8 @@ class GraphBuildReport:
     timestamp: str = field(default_factory=_utc_now_iso)
     triplets: tuple[Triplet, ...] = ()
     aligned: tuple[AlignedTriplet, ...] = ()
+    candidate_edges: int = 0
+    rejected_edges: int = 0
 
 
 @dataclass(frozen=True)
@@ -103,6 +136,10 @@ class GraphQueryResult:
 
 __all__ = (
     "Triplet",
+    "GraphFact",
+    "GraphFactProvenance",
+    "GraphSourceKind",
+    "GraphVerificationStatus",
     "EntityAlignment",
     "AlignedTriplet",
     "GraphBuildReport",

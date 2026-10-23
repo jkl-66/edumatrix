@@ -1,0 +1,103 @@
+{
+  "schema_version": "edumatrix.course-retrieval-evaluation.v1",
+  "dataset_version": "ml-foundations-retrieval-1.0.0",
+  "course_id": "course-machine-learning-foundations-v1",
+  "course_manifest_version": "course-ml-foundations-1.0.0",
+  "top_k": 8,
+  "answerable_cases": [
+    {
+      "id": "MLRET-001",
+      "query": "Python 字典如何用 key 访问 value，并新增一个键值对？",
+      "relevant_documents": ["00_Python机器学习编程基础.md"],
+      "allowed_answer_terms": ["dictionary", "key", "value"]
+    },
+    {
+      "id": "MLRET-002",
+      "query": "In NumPy, why can reshape change a (3,3) array into (1,9) but not (5,5)?",
+      "relevant_documents": ["01_NumPy数组与向量化计算.md"],
+      "allowed_answer_terms": ["reshape", "1,9", "5,5"]
+    },
+    {
+      "id": "MLRET-003",
+      "query": "Pandas 的 loc 和 iloc 在按标签与按整数位置选择数据时有什么区别？",
+      "relevant_documents": ["02_Pandas表格数据处理.md"],
+      "allowed_answer_terms": ["loc", "iloc", "index"]
+    },
+    {
+      "id": "MLRET-004",
+      "query": "Titanic 探索性数据分析中如何检查特征相关性并进行可视化？",
+      "relevant_documents": ["03_探索性数据分析.md"],
+      "allowed_answer_terms": ["correlation", "heatmap", "corr"]
+    },
+    {
+      "id": "MLRET-005",
+      "query": "模型训练前的数据准备为什么要处理缺失值、类别特征和缩放？",
+      "relevant_documents": ["04_数据准备概览.md"],
+      "allowed_answer_terms": ["missing", "categorical", "scaling"]
+    },
+    {
+      "id": "MLRET-006",
+      "query": "What is the difference between supervised learning and unsupervised learning, especially the use of labels?",
+      "relevant_documents": ["05_机器学习基本范式.md"],
+      "allowed_answer_terms": ["supervised", "unsupervised", "label"]
+    },
+    {
+      "id": "MLRET-007",
+      "query": "scikit-learn 的标准训练流程中 fit、predict 和 train_test_split 分别做什么？",
+      "relevant_documents": ["06_scikit-learn标准工作流.md"],
+      "allowed_answer_terms": ["fit", "predict", "train_test_split"]
+    },
+    {
+      "id": "MLRET-008",
+      "query": "线性分类实验如何使用 LogisticRegression 训练并评估手机价格类别？",
+      "relevant_documents": ["07_线性分类模型.md"],
+      "allowed_answer_terms": ["LogisticRegression", "accuracy", "classification"]
+    },
+    {
+      "id": "MLRET-009",
+      "query": "DecisionTreeClassifier 为什么不能直接处理 categorical features，应如何编码？",
+      "relevant_documents": ["08_决策树分类.md"],
+      "allowed_answer_terms": ["DecisionTreeClassifier", "categorical", "OrdinalEncoder"]
+    },
+    {
+      "id": "MLRET-010",
+      "query": "VotingClassifier 的 hard voting 与 soft voting 如何聚合多个分类器结果？",
+      "relevant_documents": ["09_集成学习.md"],
+      "allowed_answer_terms": ["VotingClassifier", "hard", "soft"]
+    },
+    {
+      "id": "MLRET-011",
+      "query": "K-Means 聚类如何通过 n_clusters 指定簇数并解释 cluster centers？",
+      "relevant_documents": ["10_K-Means聚类.md"],
+      "allowed_answer_terms": ["KMeans", "n_clusters", "cluster"]
+    },
+    {
+      "id": "MLRET-012",
+      "query": "PCA 中 explained_variance_ratio_ 表示什么，如何选择主成分数量？",
+      "relevant_documents": ["11_主成分分析.md"],
+      "allowed_answer_terms": ["explained_variance_ratio_", "variance", "components"]
+    }
+  ],
+  "no_evidence_cases": [
+    {
+      "id": "MLRET-NE-001",
+      "query": "量子退火设备拓扑和量子比特退相干时间是多少？",
+      "expected_reason": "material_not_covered"
+    },
+    {
+      "id": "MLRET-NE-002",
+      "query": "联邦学习安全聚合协议具体通信轮数是多少？",
+      "expected_reason": "material_not_covered"
+    },
+    {
+      "id": "MLRET-NE-003",
+      "query": "扩散模型使用的噪声调度器和采样步数是多少？",
+      "expected_reason": "material_not_covered"
+    },
+    {
+      "id": "MLRET-NE-004",
+      "query": "图神经网络消息传递层使用几阶邻居聚合？",
+      "expected_reason": "material_not_covered"
+    }
+  ]
+}

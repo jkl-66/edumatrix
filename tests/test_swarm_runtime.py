@@ -22,7 +22,7 @@ class OfflineRAG:
 class IntentStub(AsyncDeterministicEducationLLM):
     async def generate(self, system_prompt, user_prompt, *, role):
         if role == "意图分类":
-            return '{"is_academic": false, "reply": "## 智能答疑 / 系统说明\\n\\n请提出学习问题。"}'
+            return '{"is_academic": false, "reason": "非学术问候", "reply": "## 智能答疑 / 系统说明\\n\\n请提出学习问题。"}'
         return await super().generate(system_prompt, user_prompt, role=role)
 
 

@@ -8,6 +8,7 @@ surfaces. It intentionally does not call external LLM or web-search providers.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -17,8 +18,10 @@ import httpx
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE_URL = "http://127.0.0.1:8000"
-OUTPUT = ROOT / "outputs" / "runtime_security_matrix.json"
+BASE_URL = os.getenv("EDUMATRIX_SECURITY_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+OUTPUT = Path(os.getenv(
+    "EDUMATRIX_SECURITY_OUTPUT_PATH", str(ROOT / "outputs" / "runtime_security_matrix.json")
+)).resolve()
 
 
 def login(client: httpx.Client, username: str, password: str) -> tuple[str, dict[str, Any]]:
@@ -92,7 +95,10 @@ def main() -> int:
             report["checks"].append(item)
 
         # Baseline authentication and own-scope checks.
-        check("unauthenticated profile is rejected", "GET", f"/api/profile/{student_a}", {401})
+        # Normal mode returns 401. Explicit demo mode resolves an anonymous
+        # request to the restricted demo student, then rejects cross-owner
+        # access with 403. Both outcomes fail closed before profile data.
+        check("unauthenticated profile is rejected", "GET", f"/api/profile/{student_a}", {401, 403})
         check("student A can read own profile", "GET", f"/api/profile/{student_a}", {200}, headers=headers_a)
         check("student B can read own profile", "GET", f"/api/profile/{student_b}", {200}, headers=headers_b)
         check("student A can use default alias for own scope", "GET", "/api/profile/default", {200}, headers=headers_a)
@@ -171,6 +177,7 @@ def main() -> int:
     }
     report["result"] = "passed" if not failed else "failed"
     report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"result": report["result"], "summary": report["summary"]}, ensure_ascii=False, indent=2))
     return 0 if not failed else 1

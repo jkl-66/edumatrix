@@ -13,6 +13,7 @@ from app.m5_tasks import (
     fail_capability_step,
     resume_capability_task,
     retry_capability_step,
+    schedule_capability_rework,
     start_capability_step,
     start_capability_task,
 )
@@ -89,3 +90,32 @@ def test_m5_task_rejects_light_routes_and_requires_all_steps_before_completion()
     start_capability_task(session, task_id=task.id, owner_public_id="usr-m5-task")
     with pytest.raises(M5TaskError, match="all latest"):
         complete_capability_task(session, task_id=task.id, owner_public_id="usr-m5-task")
+
+
+def test_m5_task_reworks_only_one_completed_step_and_preserves_event_history():
+    session = _session()
+    task, _ = create_capability_task(
+        session, owner_public_id="usr-m5-task",
+        request=_request("m5-task-rework"), runtime=READY,
+    )
+    start_capability_task(session, task_id=task.id, owner_public_id="usr-m5-task")
+    start_capability_step(session, task_id=task.id, owner_public_id="usr-m5-task", sequence=1)
+    completed = complete_capability_step(
+        session, task_id=task.id, owner_public_id="usr-m5-task", sequence=1,
+    )
+
+    rework = schedule_capability_rework(
+        session, task_id=task.id, owner_public_id="usr-m5-task",
+        sequence=1, reason_code="review_requires_revision",
+    )
+    session.commit()
+    state = resume_capability_task(session, task_id=task.id, owner_public_id="usr-m5-task")
+
+    assert rework.attempt == 2 and rework.parent_step_id == completed.id
+    assert state["latest_steps"][0]["status"] == "pending"
+    assert state["latest_steps"][1]["status"] == "pending"
+    event = session.query(DBTaskEvent).filter_by(
+        task_id=task.id, event_type="task_step.rework_scheduled",
+    ).one()
+    assert event.payload["reason_code"] == "review_requires_revision"
+    assert event.payload["previous_step_id"] == completed.id

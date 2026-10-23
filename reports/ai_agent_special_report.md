@@ -175,7 +175,7 @@ if await request.is_disconnected():
 *   **基于 Q-learning 强化学习自适应资源推荐**：[app/utils/rl_planner.py](file:///d:/project-edumatrix/edumatrix-main/app/utils/rl_planner.py) 编写了基于强化学习的状态转移 Q 表迭代更新，但目前系统默认资源类型推送主要仍受 `SwarmMediationRouter` 的 FSM 规则控制。
 
 ### 3. 文档声称存在但物理代码无法证实的能力
-*   **基于异构图注意力神经网络 (GAT) 路径推荐**：文档或实施方案中提及团队深入比对了基于 GAT 的路径推荐，但代码库中实际使用的是基于一阶前置限制与拓扑寻路的图检索算法，**完全不存在 GAT/RGCN 的 PyTorch/TensorFlow 神经网络模型运行代码** [证据：[member3_implementation_plan.md](file:///d:/project-edumatrix/edumatrix-main/member3_implementation_plan.md#L246)]。
+*   **基于异构图注意力神经网络 (GAT) 路径推荐**：文档或实施方案中提及团队深入比对了基于 GAT 的路径推荐，但代码库中实际使用的是基于一阶前置限制与拓扑寻路的图检索算法，**完全不存在 GAT/RGCN 的 PyTorch/TensorFlow 神经网络模型运行代码** [证据：[member3_implementation_plan.md](../docs/history/member3_implementation_plan.md#L246)]。
 *   **Playwright 并发导出“多线程池保护”**：产品手册声称采用了“Playwright 高并发多线程隔离导出”，但物理代码 [report_api.py](file:///d:/project-edumatrix/edumatrix-main/report_api.py) 中实际采用的是 `asyncio.Semaphore(3)` 协程级通道限流排队，并未创建多线程。
 *   **高保真 3D 虚拟人数字人视频物理合成**：文档声称可以一键生成多模态教学视频，但代码中只有针对流式 TTS 生成口型缩放的模拟，完全不具备多模态视频（`.mp4`）流物理编码与视频渲染管线的支持。
 

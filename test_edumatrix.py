@@ -614,8 +614,23 @@ class EduMatrixPipelineTests(unittest.TestCase):
 
     def test_guided_decoding_self_healing(self):
         import asyncio
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
         from app.agents.coder import async_refine_code_agent, PyTorchPoolCodeSchema
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+        from app.database import Base, DBUser
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine)
+        owner_session = session_factory()
+        owner_session.add(DBUser(
+            public_id="test-owner", username="test-owner", hashed_password="test-only",
+            role="student", is_active=True,
+        ))
+        owner_session.commit()
+        owner_session.close()
 
         lecture = "我们要学习最大池化层，最大池化非常重要。"
         code = "import torch\nimport torch.nn as nn\nclass Model(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.pool = nn.AvgPool2d(kernel_size=2, stride=2)"
@@ -627,7 +642,11 @@ class EduMatrixPipelineTests(unittest.TestCase):
             asyncio.set_event_loop(loop)
             
         async def run_healing():
-            return await async_refine_code_agent(lecture, code, "平均池化不符合最大池化讲义")
+            return await async_refine_code_agent(
+                lecture, code, "平均池化不符合最大池化讲义",
+                llm=AsyncMock(side_effect=RuntimeError("offline")), owner_public_id="test-owner",
+                session_factory=session_factory,
+            )
             
         if loop.is_running():
             from concurrent.futures import ThreadPoolExecutor
@@ -647,14 +666,18 @@ class EduMatrixPipelineTests(unittest.TestCase):
             forward_and_print="print(pool(x))"
         )
         
+        class MockCodeLLM:
+            provider = "test"
+            model = "code-json"
+
+            async def generate(self, system_prompt, user_prompt, *, role):
+                return mock_schema.model_dump_json()
+
         async def run_success():
-            with patch("instructor.patch") as mock_patch:
-                mock_client = AsyncMock()
-                mock_create = AsyncMock(return_value=mock_schema)
-                mock_client.chat.completions.create = mock_create
-                mock_patch.return_value = mock_client
-                
-                return await async_refine_code_agent(lecture, code, "对齐纠偏")
+            return await async_refine_code_agent(
+                lecture, code, "对齐纠偏", llm=MockCodeLLM(), owner_public_id="test-owner",
+                session_factory=session_factory,
+            )
 
         if loop.is_running():
             from concurrent.futures import ThreadPoolExecutor

@@ -15,14 +15,39 @@ from app.database import (
     DBCertification, DBChapter, DBChapterKnowledgePoint, DBClaimCheck,
     DBCompetencyStandard, DBCourse, DBCourseMembership, DBDebateRound,
     DBDecisionRecord, DBDepartment, DBDomainPack, DBDomainVersion,
-    DBEvaluationCase, DBEvaluationResult, DBEvaluationRun, DBExemptionRequest,
+    DBAssessmentAbilityState, DBAssessmentAttempt, DBAssessmentGradingResult,
+    DBAssessmentExam, DBAssessmentExamItem, DBAssessmentExamReport,
+    DBAssessmentExamResponse, DBAssessmentExamSitting, DBAssessmentExamVersion,
+    DBAssessmentReviewCase,
+    DBAssessmentQuestion, DBAssessmentQuestionVersion, DBAssessmentSelectionTrace,
+    DBAssessmentRetestTask, DBEvaluationAnnotation, DBEvaluationCase,
+    DBEvaluationReport, DBEvaluationResult, DBEvaluationRun, DBExemptionRequest,
     DBExternalIdentityMapping, DBGenerationTask, DBJobFamily, DBJobLevel,
-    DBJobTask, DBKnowledgePoint, DBLearningEvent, DBLearningPath, DBMemoryItem,
+    DBIntegrationDelivery, DBJobTask, DBKnowledgePoint, DBLearningEvent,
+    DBLearningEventConsumption, DBLearningPath, DBMemoryItem, DBMisconceptionReview,
+    DBModelCall, DBModelPriceVersion, DBModelQuotaBucket, DBWorkerLease,
+    DBMemorySubscription,
     DBOrganization, DBOrganizationMembership, DBPathNode, DBPlanDraft,
+    DBSpatialWorkspace, DBSpatialLayoutVersion,
+    DBPluginRegistration, DBPluginLifecycleEvent,
+    DBVideoAsset, DBVideoAssetVersion, DBWrongQuestionVideoLink, DBChapterVideoLink,
+    DBVideoPracticeSet, DBVideoPracticeVersion, DBVideoWatchProgress, DBVideoPracticeAttemptLink,
+    DBVideoPracticeLabLink,
+    DBTeachingAnimation, DBTeachingAnimationVersion,
+    DBWebDeck, DBWebSlide, DBWebDeckVersion,
+    DBLocalAdapterSession, DBLocalAdapterEvent,
+    DBResourceBundle, DBResourceBundleVersion, DBResourceBundleItem,
+    DBFlashcard, DBFlashcardVersion,
+    DBMarketplaceComment, DBMarketplaceCommentEvent, DBMarketplaceCommentReport,
+    DBMarketplaceFavorite, DBMarketplaceReview, DBMarketplaceReviewEvent,
+    DBMarketplaceImpactEvent, DBMarketplaceImpactNotification,
+    DBMarketplaceFork, DBMarketplaceForkVersion, DBMarketplaceForkDecision,
+    DBMarketplaceRecommendationRun, DBMarketplaceRecommendationResult,
+    DBVideoProject, DBVideoScriptVersion, DBVideoRenderTask, DBVideoOutputVersion,
     DBPlanVersion, DBProfileEvidence, DBProfileSnapshot, DBPublication, DBQualityCheck,
     DBReviewDecision, DBSkillEvidence, DBSkillStandard, DBSourceDocument,
     DBSourceRef, DBTaskEvent, DBTaskStep, DBTrainingAssignment, DBTrainingCohort,
-    DBTrainingProgram, DBUser,
+    DBTrainingProgram, DBTutorContextSession, DBUser,
 )
 from app.identity import normalize_role
 from app.m1_enterprise import require_organization_access
@@ -46,7 +71,11 @@ OBJECT_SPECS: dict[str, ObjectSpec] = {
     "task_event": ObjectSpec(DBTaskEvent), "plan_draft": ObjectSpec(DBPlanDraft),
     "plan_version": ObjectSpec(DBPlanVersion), "learning_path": ObjectSpec(DBLearningPath),
     "path_node": ObjectSpec(DBPathNode), "learning_event": ObjectSpec(DBLearningEvent),
-    "memory_item": ObjectSpec(DBMemoryItem), "review_decision": ObjectSpec(DBReviewDecision),
+    "learning_event_consumption": ObjectSpec(DBLearningEventConsumption),
+    "tutor_context_session": ObjectSpec(DBTutorContextSession),
+    "memory_item": ObjectSpec(DBMemoryItem),
+    "memory_subscription": ObjectSpec(DBMemorySubscription),
+    "review_decision": ObjectSpec(DBReviewDecision),
     "publication": ObjectSpec(DBPublication), "audit_log": ObjectSpec(DBAuditLog),
     "domain_pack": ObjectSpec(DBDomainPack, public_reference=True),
     "domain_version": ObjectSpec(DBDomainVersion, public_reference=True),
@@ -54,13 +83,61 @@ OBJECT_SPECS: dict[str, ObjectSpec] = {
     "skill_standard": ObjectSpec(DBSkillStandard, public_reference=True),
     "profile_snapshot": ObjectSpec(DBProfileSnapshot),
     "profile_evidence": ObjectSpec(DBProfileEvidence), "agent_run": ObjectSpec(DBAgentRun),
+    "model_call": ObjectSpec(DBModelCall),
+    "model_quota_bucket": ObjectSpec(DBModelQuotaBucket, internal_only=True),
+    "model_price_version": ObjectSpec(DBModelPriceVersion, internal_only=True),
+    "worker_lease": ObjectSpec(DBWorkerLease, internal_only=True),
     "quality_check": ObjectSpec(DBQualityCheck), "claim_check": ObjectSpec(DBClaimCheck),
     "debate_round": ObjectSpec(DBDebateRound), "decision_record": ObjectSpec(DBDecisionRecord),
     "evaluation_case": ObjectSpec(DBEvaluationCase, public_reference=True),
     "evaluation_run": ObjectSpec(DBEvaluationRun, internal_only=True),
     "evaluation_result": ObjectSpec(DBEvaluationResult, internal_only=True),
+    "evaluation_annotation": ObjectSpec(DBEvaluationAnnotation, internal_only=True),
+    "evaluation_report": ObjectSpec(DBEvaluationReport, internal_only=True),
     "organization": ObjectSpec(DBOrganization),
     "organization_membership": ObjectSpec(DBOrganizationMembership),
+    "spatial_workspace": ObjectSpec(DBSpatialWorkspace),
+    "spatial_layout_version": ObjectSpec(DBSpatialLayoutVersion),
+    "plugin_registration": ObjectSpec(DBPluginRegistration, public_reference=True),
+    "plugin_lifecycle_event": ObjectSpec(DBPluginLifecycleEvent, internal_only=True),
+    "video_project": ObjectSpec(DBVideoProject),
+    "video_asset": ObjectSpec(DBVideoAsset),
+    "video_asset_version": ObjectSpec(DBVideoAssetVersion),
+    "wrong_question_video_link": ObjectSpec(DBWrongQuestionVideoLink),
+    "chapter_video_link": ObjectSpec(DBChapterVideoLink),
+    "video_practice_set": ObjectSpec(DBVideoPracticeSet),
+    "video_practice_version": ObjectSpec(DBVideoPracticeVersion),
+    "video_watch_progress": ObjectSpec(DBVideoWatchProgress),
+    "video_practice_attempt_link": ObjectSpec(DBVideoPracticeAttemptLink),
+    "video_practice_lab_link": ObjectSpec(DBVideoPracticeLabLink),
+    "teaching_animation": ObjectSpec(DBTeachingAnimation),
+    "teaching_animation_version": ObjectSpec(DBTeachingAnimationVersion),
+    "web_deck": ObjectSpec(DBWebDeck),
+    "web_slide": ObjectSpec(DBWebSlide),
+    "web_deck_version": ObjectSpec(DBWebDeckVersion),
+    "local_adapter_session": ObjectSpec(DBLocalAdapterSession),
+    "local_adapter_event": ObjectSpec(DBLocalAdapterEvent, internal_only=True),
+    "resource_bundle": ObjectSpec(DBResourceBundle),
+    "resource_bundle_version": ObjectSpec(DBResourceBundleVersion),
+    "resource_bundle_item": ObjectSpec(DBResourceBundleItem, internal_only=True),
+    "flashcard": ObjectSpec(DBFlashcard),
+    "flashcard_version": ObjectSpec(DBFlashcardVersion),
+    "marketplace_comment": ObjectSpec(DBMarketplaceComment),
+    "marketplace_comment_event": ObjectSpec(DBMarketplaceCommentEvent, internal_only=True),
+    "marketplace_comment_report": ObjectSpec(DBMarketplaceCommentReport),
+    "marketplace_favorite": ObjectSpec(DBMarketplaceFavorite),
+    "marketplace_review": ObjectSpec(DBMarketplaceReview),
+    "marketplace_review_event": ObjectSpec(DBMarketplaceReviewEvent, internal_only=True),
+    "marketplace_impact_event": ObjectSpec(DBMarketplaceImpactEvent, internal_only=True),
+    "marketplace_impact_notification": ObjectSpec(DBMarketplaceImpactNotification),
+    "marketplace_fork": ObjectSpec(DBMarketplaceFork),
+    "marketplace_fork_version": ObjectSpec(DBMarketplaceForkVersion),
+    "marketplace_fork_decision": ObjectSpec(DBMarketplaceForkDecision, internal_only=True),
+    "marketplace_recommendation_run": ObjectSpec(DBMarketplaceRecommendationRun),
+    "marketplace_recommendation_result": ObjectSpec(DBMarketplaceRecommendationResult, internal_only=True),
+    "video_script_version": ObjectSpec(DBVideoScriptVersion),
+    "video_render_task": ObjectSpec(DBVideoRenderTask),
+    "video_output_version": ObjectSpec(DBVideoOutputVersion),
     "department": ObjectSpec(DBDepartment), "job_family": ObjectSpec(DBJobFamily),
     "job_level": ObjectSpec(DBJobLevel), "competency_standard": ObjectSpec(DBCompetencyStandard),
     "training_program": ObjectSpec(DBTrainingProgram), "training_cohort": ObjectSpec(DBTrainingCohort),
@@ -68,6 +145,22 @@ OBJECT_SPECS: dict[str, ObjectSpec] = {
     "exemption_request": ObjectSpec(DBExemptionRequest), "skill_evidence": ObjectSpec(DBSkillEvidence),
     "certification": ObjectSpec(DBCertification),
     "external_identity_mapping": ObjectSpec(DBExternalIdentityMapping),
+    "integration_delivery": ObjectSpec(DBIntegrationDelivery),
+    "assessment_question": ObjectSpec(DBAssessmentQuestion),
+    "assessment_question_version": ObjectSpec(DBAssessmentQuestionVersion),
+    "assessment_attempt": ObjectSpec(DBAssessmentAttempt),
+    "assessment_grading_result": ObjectSpec(DBAssessmentGradingResult),
+    "assessment_ability_state": ObjectSpec(DBAssessmentAbilityState),
+    "assessment_selection_trace": ObjectSpec(DBAssessmentSelectionTrace),
+    "assessment_exam": ObjectSpec(DBAssessmentExam),
+    "assessment_exam_version": ObjectSpec(DBAssessmentExamVersion),
+    "assessment_exam_item": ObjectSpec(DBAssessmentExamItem),
+    "assessment_exam_sitting": ObjectSpec(DBAssessmentExamSitting),
+    "assessment_exam_response": ObjectSpec(DBAssessmentExamResponse),
+    "assessment_review_case": ObjectSpec(DBAssessmentReviewCase),
+    "assessment_exam_report": ObjectSpec(DBAssessmentExamReport),
+    "misconception_review": ObjectSpec(DBMisconceptionReview),
+    "assessment_retest_task": ObjectSpec(DBAssessmentRetestTask),
 }
 
 
@@ -110,6 +203,15 @@ def _resolve_scope(session: Any, object_type: str, row: Any) -> dict[str, Any]:
         artifact = session.query(DBArtifact).filter_by(id=row.artifact_id).first()
         if artifact:
             owner, course_id = artifact.owner_public_id, artifact.course_id
+    elif object_type == "flashcard_version":
+        card = session.query(DBFlashcard).filter_by(id=row.flashcard_id).first()
+        owner = card.owner_public_id if card else None
+    elif object_type == "spatial_layout_version":
+        workspace = session.query(DBSpatialWorkspace).filter_by(id=row.workspace_id).first()
+        owner = workspace.owner_public_id if workspace else None
+    elif object_type == "video_script_version":
+        project = session.query(DBVideoProject).filter_by(id=row.project_id).first()
+        owner, course_id = (project.owner_public_id, project.course_id) if project else (None, None)
     elif object_type == "artifact_relation":
         artifact = session.query(DBArtifact).filter_by(id=row.source_artifact_id).first()
         if artifact:
@@ -125,6 +227,10 @@ def _resolve_scope(session: Any, object_type: str, row: Any) -> dict[str, Any]:
         path = session.query(DBLearningPath).filter_by(id=row.learning_path_id).first()
         if path:
             owner, course_id = path.owner_public_id, path.course_id
+    elif object_type == "learning_event_consumption":
+        event = session.query(DBLearningEvent).filter_by(id=row.learning_event_id).first()
+        if event:
+            owner, course_id = event.owner_public_id, event.course_id
     elif object_type in {"review_decision", "publication"}:
         artifact = _artifact_from_version(session, row.artifact_version_id)
         if artifact:
@@ -143,6 +249,41 @@ def _resolve_scope(session: Any, object_type: str, row: Any) -> dict[str, Any]:
         owner = row.learner_public_id
     elif object_type == "external_identity_mapping":
         owner = row.user_public_id
+    elif object_type == "assessment_question_version":
+        question = session.query(DBAssessmentQuestion).filter_by(id=row.question_id).first()
+        if question:
+            owner, course_id = question.owner_public_id, question.course_id
+    elif object_type == "assessment_grading_result":
+        attempt = session.query(DBAssessmentAttempt).filter_by(id=row.attempt_id).first()
+        if attempt:
+            owner, course_id = attempt.owner_public_id, attempt.course_id
+    elif object_type == "assessment_exam_version":
+        exam = session.query(DBAssessmentExam).filter_by(id=row.exam_id).first()
+        if exam:
+            owner, course_id = exam.owner_public_id, exam.course_id
+    elif object_type == "assessment_exam_item":
+        version = session.query(DBAssessmentExamVersion).filter_by(id=row.exam_version_id).first()
+        exam = session.query(DBAssessmentExam).filter_by(id=version.exam_id).first() if version else None
+        if exam:
+            owner, course_id = exam.owner_public_id, exam.course_id
+    elif object_type in {"assessment_exam_response", "assessment_review_case", "assessment_exam_report"}:
+        sitting_id = row.sitting_id
+        sitting = session.query(DBAssessmentExamSitting).filter_by(id=sitting_id).first()
+        exam = session.query(DBAssessmentExam).filter_by(id=sitting.exam_id).first() if sitting else None
+        if sitting:
+            owner = sitting.owner_public_id
+        if exam:
+            course_id = exam.course_id
+    elif object_type in {"assessment_ability_state", "assessment_selection_trace"}:
+        owner = row.owner_public_id
+        course_id = None if row.course_scope == "__global__" else row.course_scope
+    elif object_type == "integration_delivery":
+        organization_id = row.organization_id
+    elif object_type == "evaluation_annotation":
+        result = session.query(DBEvaluationResult).filter_by(id=row.evaluation_result_id).first()
+        created_by = result.evaluation_run_id if result else None
+    elif object_type == "evaluation_report":
+        created_by = row.evaluation_run_id
     elif object_type == "job_level":
         family = session.query(DBJobFamily).filter_by(id=row.job_family_id).first()
         organization_id = family.organization_id if family else None

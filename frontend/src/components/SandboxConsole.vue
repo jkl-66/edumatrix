@@ -36,6 +36,18 @@ const sandboxLabel = computed(() => {
   return '未启用'
 })
 
+function readableRunError(error, fallback = '执行出错') {
+  const detail = error?.response?.data?.detail ?? error?.detail
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (detail && typeof detail === 'object') {
+    const message = detail.message || detail.error || detail.detail
+    if (typeof message === 'string' && message.trim()) return message
+  }
+  const responseError = error?.response?.data?.error
+  if (typeof responseError === 'string' && responseError.trim()) return responseError
+  return typeof error?.message === 'string' && error.message.trim() ? error.message : fallback
+}
+
 // 代码预设
 const presets = [
   { label: 'NumPy', code: 'import numpy as np\narr = np.array([[1,2],[3,4]])\nprint("Array:\\n", arr)\nprint("Mean:", np.mean(arr))' },
@@ -72,7 +84,7 @@ async function run() {
   try {
     const result = await runCode(code.value, 'python', props.studentId)
     output.value = result.output || ''
-    errorMsg.value = result.error || ''
+    errorMsg.value = result.error ? readableRunError({ detail: result.error }, '代码运行失败') : ''
     execTime.value = result.execution_time_ms || (Date.now() - start)
     if (result.exec_id) {
       history.value.unshift({
@@ -85,8 +97,8 @@ async function run() {
     }
     emit('output', { output: output.value, error: errorMsg.value, time: execTime.value })
   } catch (e) {
-    errorMsg.value = e.message || '执行出错'
-    emit('error', e.message)
+    errorMsg.value = readableRunError(e)
+    emit('error', errorMsg.value)
   } finally {
     running.value = false
   }

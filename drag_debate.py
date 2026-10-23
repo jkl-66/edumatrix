@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
 import json
 import re
 from typing import Any
 
+from pydantic import Field, TypeAdapter
+
+from app.database import run_db_op
+from app.m2_contracts import StrictModel
+from app.m5_gateway import StreamingModelCallLifecycle
+from app.m5_legacy_calls import model_identity
 from config import CONFIG
 from models import DebateVerdict, Evidence, RetrievalBundle
 
@@ -20,6 +27,34 @@ class DebateResult:
 
 # 任务 9.1: 证据最低质量阈值（低于此值直接拦截）
 EVIDENCE_MIN_THRESHOLD = 0.20
+
+
+class DebateJudgment(StrictModel):
+    evidence_id: str = Field(min_length=1, max_length=128)
+    pro_score: float = Field(ge=0.0, le=1.0)
+    con_score: float = Field(ge=0.0, le=1.0)
+    judge_score: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+_DEBATE_JUDGMENTS = TypeAdapter(list[DebateJudgment])
+
+
+def _parse_json_array(raw: str) -> list[Any]:
+    if not isinstance(raw, str):
+        raise TypeError("debate output must be text")
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) < 3 or lines[-1].strip() != "```":
+            raise ValueError("incomplete JSON fence")
+        if lines[0].strip().lower() not in {"```", "```json"}:
+            raise ValueError("unsupported JSON fence")
+        text = "\n".join(lines[1:-1]).strip()
+    value = json.loads(text)
+    if not isinstance(value, list):
+        raise ValueError("debate output must be a JSON array")
+    return value
 
 
 class DebateAugmentedRAG:
@@ -45,14 +80,28 @@ class DebateAugmentedRAG:
         # 否则使用确定性评分函数
         return self._deterministic_clean(bundle)
 
-    async def aclean(self, bundle: RetrievalBundle) -> DebateResult:
+    async def aclean(
+        self,
+        bundle: RetrievalBundle,
+        *,
+        owner_public_id: str | None = None,
+        course_id: str | None = None,
+        trace_id: str | None = None,
+        database_runner=run_db_op,
+    ) -> DebateResult:
         """Async entry point; never blocks an active event loop."""
         import asyncio
         import inspect
 
-        if self.llm is not None and 1 < len(bundle.evidence) <= 12:
+        if self.llm is not None and owner_public_id and 1 < len(bundle.evidence) <= 12:
             if inspect.iscoroutinefunction(getattr(self.llm, "generate", None)):
-                return await self._llm_debate_clean_async(bundle)
+                return await self._llm_debate_clean_async(
+                    bundle,
+                    owner_public_id=owner_public_id,
+                    course_id=course_id,
+                    trace_id=trace_id,
+                    database_runner=database_runner,
+                )
             return await asyncio.to_thread(self._llm_debate_clean, bundle)
         return self._deterministic_clean(bundle)
 
@@ -63,9 +112,9 @@ class DebateAugmentedRAG:
     def _llm_debate_clean(self, bundle: RetrievalBundle) -> DebateResult:
         return self._build_llm_debate_result(bundle, self._collective_batch_judge(bundle))
 
-    async def _llm_debate_clean_async(self, bundle: RetrievalBundle) -> DebateResult:
+    async def _llm_debate_clean_async(self, bundle: RetrievalBundle, **context: Any) -> DebateResult:
         return self._build_llm_debate_result(
-            bundle, await self._collective_batch_judge_async(bundle)
+            bundle, await self._collective_batch_judge_async(bundle, **context)
         )
 
     def _build_llm_debate_result(
@@ -75,9 +124,6 @@ class DebateAugmentedRAG:
         verdicts: list[DebateVerdict] = []
         clean: list[Evidence] = []
         kept_anchors: set[str] = set()
-
-        # 对整个证据集进行一次 LLM 集体评估
-        collective_verdict = self._collective_batch_judge(bundle)
 
         # 使用集体评估结果初始化每个证据的判决
         batch_judgments: dict[str, dict[str, Any]] = {}
@@ -216,7 +262,15 @@ class DebateAugmentedRAG:
             print(f"  [DragDebate] LLM 辩论失败，回退确定性评分: {exc}")
             return []
 
-    async def _collective_batch_judge_async(self, bundle: RetrievalBundle) -> list[dict[str, Any]]:
+    async def _collective_batch_judge_async(
+        self,
+        bundle: RetrievalBundle,
+        *,
+        owner_public_id: str,
+        course_id: str | None = None,
+        trace_id: str | None = None,
+        database_runner=run_db_op,
+    ) -> list[dict[str, Any]]:
         """Run the collective judge without nesting an event loop."""
         evidence_lines = [
             f"[{i}] ID={item.id} | 标题={item.title} | 来源={item.source} | "
@@ -234,16 +288,48 @@ class DebateAugmentedRAG:
             f"完整学习路径：{' -> '.join(bundle.graph_context.learning_path)}\n\n"
             f"待评估证据列表（共{len(bundle.evidence)}条）：\n" + "\n".join(evidence_lines)
         )
+        provider, model = model_identity(self.llm)
+        lifecycle = StreamingModelCallLifecycle(
+            capability="evaluate",
+            prompt_key="legacy_evidence_debate",
+            prompt_version="1.0",
+            provider=provider,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            owner_public_id=owner_public_id,
+            course_id=course_id,
+            trace_id=trace_id,
+            input_summary={
+                "operation": "evidence_debate",
+                "evidence_count": len(bundle.evidence),
+                "modalities": sorted({item.modality.value for item in bundle.evidence}),
+                "evidence_payload_included": False,
+            },
+            database_runner=database_runner,
+        )
+        await lifecycle.start()
         try:
             raw = await self.llm.generate(system_prompt, user_prompt, role="证据辩论裁判")
-            json_match = re.search(r"\[.*?\]", raw, re.DOTALL)
-            if not json_match:
-                return []
-            parsed = json.loads(json_match.group())
-            return parsed if isinstance(parsed, list) else []
-        except Exception as exc:
-            print(f"  [DragDebate] 异步 LLM 辩论失败，回退确定性评分: {exc}")
+        except asyncio.CancelledError:
+            await asyncio.shield(lifecycle.fail("client_disconnected"))
+            raise
+        except Exception:
+            await lifecycle.fail("evidence_debate_provider_failed")
             return []
+        try:
+            judgments = _DEBATE_JUDGMENTS.validate_python(_parse_json_array(raw))
+            known_ids = {item.id for item in bundle.evidence}
+            returned_ids = [item.evidence_id for item in judgments]
+            if len(returned_ids) != len(set(returned_ids)):
+                raise ValueError("duplicate evidence_id")
+            if not set(returned_ids).issubset(known_ids):
+                raise ValueError("unknown evidence_id")
+        except Exception:
+            await lifecycle.fail("evidence_debate_output_invalid", raw)
+            return []
+        await lifecycle.complete(raw)
+        return [item.model_dump(mode="json") for item in judgments]
 
     # ================================================================
     # 原始确定性评分函数（LLM 不可用时的回退路径）

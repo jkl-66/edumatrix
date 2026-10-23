@@ -96,7 +96,7 @@ def test_refresh_reconnect_restart_duplicate_submit_and_local_failure_recovery()
                     session, capability=M2Capability.LESSON, context=context
                 )
             )
-        assert raised.value.code == "invalid_generator_json"
+        assert raised.value.code == "artifact_schema_invalid"
         fail_task_step(
             session,
             task_id=task_id,

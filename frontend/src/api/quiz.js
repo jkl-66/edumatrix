@@ -53,6 +53,15 @@ export async function getWrongQuestions(studentId, concept = '') {
   return r.data
 }
 
+export async function prepareWrongQuestionRedo(wrongId, studentId) {
+  const r = await api.post(
+    `/quiz/wrong-questions/${wrongId}/prepare-redo`,
+    {},
+    { params: { student_id: studentId }, headers: buildHeaders() },
+  )
+  return r.data
+}
+
 export async function getWrongConcepts(studentId) {
   const r = await api.get(`/quiz/wrong-concepts/${studentId}`, { headers: buildHeaders() })
   return r.data

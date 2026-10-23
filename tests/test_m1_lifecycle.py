@@ -7,6 +7,7 @@ from app.auth import get_password_hash
 from app.database import (
     DBArtifact,
     DBAuditLog,
+    DBCourse,
     DBLearningEvent,
     DBMemoryItem,
     DBPlanDraft,
@@ -37,6 +38,13 @@ def _user(session):
 def test_plan_versions_paths_audit_and_optimistic_concurrency():
     with SessionLocal() as session:
         user = _user(session)
+        course = DBCourse(
+            id=new_public_id("m1-life-course"),
+            version="1",
+            title="M1 lifecycle course",
+            manifest_version="m1-lifecycle-v1",
+        )
+        session.add(course)
         plan = DBPlanDraft(owner_public_id=user.public_id, title="Initial path")
         session.add(plan)
         session.flush()
@@ -45,7 +53,7 @@ def test_plan_versions_paths_audit_and_optimistic_concurrency():
             created_by_public_id=user.public_id
         )
         path = publish_learning_path(
-            session, owner_public_id=user.public_id, course_id="course-rag-engineering-m0",
+            session, owner_public_id=user.public_id, course_id=course.id,
             plan_version=version, nodes=[{"node_type": "chapter", "title": "Retrieval"}]
         )
         record_audit(

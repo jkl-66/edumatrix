@@ -1,0 +1,572 @@
+{
+  "schema_version": "edumatrix.course-version-manifest.v1",
+  "manifest_version": "course-ml-foundations-1.0.0",
+  "generated_at": "2026-08-02T00:00:00+08:00",
+  "course_id": "course-machine-learning-foundations-v1",
+  "title": "机器学习基础与实践",
+  "subject": "人工智能 / 机器学习",
+  "description": "覆盖数据处理、监督与无监督学习的 12 章高校机器学习实践课程。",
+  "domain_pack": "domain-machine-learning-foundations-v1",
+  "knowledge_point_version": "ml-kp-1.0.0",
+  "language": "en",
+  "content_origin": "GitHub 许可审计后的精选课程；EduMatrix 仅添加来源说明与中文学习目标。",
+  "license": "MIT; Copyright (c) 2021 Jean de Dieu Nyandwi. See LICENSE.upstream.txt.",
+  "visibility": "public",
+  "status": "published",
+  "external_material_policy": "Only files enumerated by this manifest are importable.",
+  "source_audit": {
+    "schema_version": "edumatrix.course-source-audit.v1",
+    "source_manifest_sha256": "76fa0cb4337c0c74bbc37c293592a38d33fd845b518c6ade2e28645d868a3c2a",
+    "approved_repository_count": 7
+  },
+  "reviewed_candidates": [
+    {
+      "repository_key": "data-science-from-scratch",
+      "git_revision": "d5d0f117f41b3ccab3b07f1ee1fa21cfcf69afa1",
+      "license_spdx": "MIT",
+      "selected_file_count": 0,
+      "decision": "本版不选：以源代码为主，不适合作为零基础主教材。"
+    },
+    {
+      "repository_key": "dtreeviz",
+      "git_revision": "9680ac83b778124c9e21d018261144fbcdde5265",
+      "license_spdx": "MIT",
+      "selected_file_count": 0,
+      "decision": "本版不选：聚焦决策树可解释性，适合作为后续专题扩展。"
+    },
+    {
+      "repository_key": "edge-impulse-courseware",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "license_spdx": "Clear-BSD",
+      "selected_file_count": 0,
+      "decision": "本版不选：面向 TinyML，超出本课程的通用机器学习基础范围。"
+    },
+    {
+      "repository_key": "mlbook-dafriedman",
+      "git_revision": "35f1d80b8a180e12f66924fa9afa0b4866bf2868",
+      "license_spdx": "MIT",
+      "selected_file_count": 0,
+      "decision": "本版不选：统计推导较深入，适合作为进阶理论课程。"
+    },
+    {
+      "repository_key": "nyandwi-machine-learning-complete",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "license_spdx": "MIT",
+      "selected_file_count": 12,
+      "decision": "本版主教材：章节连续，兼顾概念、代码和可验证实验。"
+    },
+    {
+      "repository_key": "rasbt-ml-book-code",
+      "git_revision": "63bee951ca45420ac33ccf803ceb337afc3c0a91",
+      "license_spdx": "MIT",
+      "selected_file_count": 0,
+      "decision": "本版不选：与商业教材配套，代码质量高但上下文依赖较强。"
+    },
+    {
+      "repository_key": "ruban-iris-classification",
+      "git_revision": "c0df3e97bbc18b53e2c7a757716162f499768968",
+      "license_spdx": "MIT",
+      "selected_file_count": 0,
+      "decision": "本版不选：单项目体量较小，后续可作为课程结课案例。"
+    }
+  ],
+  "knowledge_points": [
+    {
+      "code": "ML-KP-01",
+      "title": "Python 机器学习编程基础",
+      "level": "foundation",
+      "prerequisites": []
+    },
+    {
+      "code": "ML-KP-02",
+      "title": "NumPy 数组与向量化计算",
+      "level": "foundation",
+      "prerequisites": [
+        "ML-KP-01"
+      ]
+    },
+    {
+      "code": "ML-KP-03",
+      "title": "Pandas 表格数据处理",
+      "level": "foundation",
+      "prerequisites": [
+        "ML-KP-01",
+        "ML-KP-02"
+      ]
+    },
+    {
+      "code": "ML-KP-04",
+      "title": "探索性数据分析",
+      "level": "core",
+      "prerequisites": [
+        "ML-KP-03"
+      ]
+    },
+    {
+      "code": "ML-KP-05",
+      "title": "数据清洗与特征准备",
+      "level": "core",
+      "prerequisites": [
+        "ML-KP-03"
+      ]
+    },
+    {
+      "code": "ML-KP-06",
+      "title": "监督学习与无监督学习基本范式",
+      "level": "core",
+      "prerequisites": [
+        "ML-KP-04"
+      ]
+    },
+    {
+      "code": "ML-KP-07",
+      "title": "scikit-learn 训练与推理接口",
+      "level": "core",
+      "prerequisites": [
+        "ML-KP-05",
+        "ML-KP-06"
+      ]
+    },
+    {
+      "code": "ML-KP-08",
+      "title": "线性分类模型",
+      "level": "core",
+      "prerequisites": [
+        "ML-KP-07"
+      ]
+    },
+    {
+      "code": "ML-KP-09",
+      "title": "分类任务评估与泛化",
+      "level": "core",
+      "prerequisites": [
+        "ML-KP-08"
+      ]
+    },
+    {
+      "code": "ML-KP-10",
+      "title": "决策树分类",
+      "level": "core",
+      "prerequisites": [
+        "ML-KP-07"
+      ]
+    },
+    {
+      "code": "ML-KP-11",
+      "title": "集成学习",
+      "level": "advanced",
+      "prerequisites": [
+        "ML-KP-10"
+      ]
+    },
+    {
+      "code": "ML-KP-12",
+      "title": "K-Means 聚类",
+      "level": "advanced",
+      "prerequisites": [
+        "ML-KP-06",
+        "ML-KP-07"
+      ]
+    },
+    {
+      "code": "ML-KP-13",
+      "title": "主成分分析",
+      "level": "advanced",
+      "prerequisites": [
+        "ML-KP-02",
+        "ML-KP-05"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "chapter_order": 0,
+      "title": "Python 机器学习编程基础",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/00_intro_to_python.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 108915,
+      "source_sha256": "b0259275ad44ae5077262aa35e89c4cf45d71cfd68a07cdeafef53bbd54c554b",
+      "path": "chapters/00_Python机器学习编程基础.md",
+      "bytes": 33771,
+      "sha256": "5dacfa340ee38f1a5ad4f58b180f8ec7a52ed3f5f0926046c502cd0e627e106b",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 95,
+        "code_cells": 151,
+        "stripped_output_count": 138
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-01"
+      ],
+      "selection_reason": "为没有完整 Python 基础的学习者提供可执行先修入口。"
+    },
+    {
+      "chapter_order": 1,
+      "title": "NumPy 数组与向量化计算",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/01_intro_to_Numpy_for_data_computation.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 70994,
+      "source_sha256": "d8c498a28a4f46c7672d36e7f50ef0ebd4f2efcbaca5ccb7d60a8db45a729309",
+      "path": "chapters/01_NumPy数组与向量化计算.md",
+      "bytes": 14154,
+      "sha256": "f35955d33168b78134649ae2a92c62d758537b47ea6470a99e7391de07ef4dd1",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 31,
+        "code_cells": 115,
+        "stripped_output_count": 105
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-02"
+      ],
+      "selection_reason": "机器学习数值计算的核心先修材料，概念与代码单元完整。"
+    },
+    {
+      "chapter_order": 2,
+      "title": "Pandas 表格数据处理",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/02_data_manipulation_with_pandas.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 213523,
+      "source_sha256": "a6c83c271a778878c9f7f04f65938bf85f88cca4325520a46acb90e42aa16f89",
+      "path": "chapters/02_Pandas表格数据处理.md",
+      "bytes": 19412,
+      "sha256": "744907dd7741d3e874f77f42fa33a68f487523ed4951dcdfa8a0f72f1bc60832",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 43,
+        "code_cells": 142,
+        "stripped_output_count": 119
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-03"
+      ],
+      "selection_reason": "覆盖真实机器学习项目前的数据处理主链。"
+    },
+    {
+      "chapter_order": 3,
+      "title": "探索性数据分析",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/06_exploratory_data_analysis.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 253180,
+      "source_sha256": "cd4b956433d1c421c9b5332b028f568fada29f1f6874013b1d189575f375e797",
+      "path": "chapters/03_探索性数据分析.md",
+      "bytes": 6759,
+      "sha256": "4861608349c6d6224d4864eb5fd628f9b23f4361bc32232e1f32cbf779e940fd",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 28,
+        "code_cells": 29,
+        "stripped_output_count": 38
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-04"
+      ],
+      "selection_reason": "将原始数据转化为可解释建模假设的关键实践章节。"
+    },
+    {
+      "chapter_order": 4,
+      "title": "数据准备概览",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/07_intro_to_data_preparation.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 4067,
+      "source_sha256": "8458f8a967ae122df3a5019db3f82bd8a31a6b012f0522241a49c900cfdfb76a",
+      "path": "chapters/04_数据准备概览.md",
+      "bytes": 3444,
+      "sha256": "d0ef846b052f6bfff69fcf5b2965c3ee208d7ac79b1ac30fbc1e53ab3ae61e37",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 4,
+        "code_cells": 0,
+        "stripped_output_count": 0
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-05"
+      ],
+      "selection_reason": "以短章节建立数据准备全局框架，承接后续模型实验。"
+    },
+    {
+      "chapter_order": 5,
+      "title": "机器学习基本范式",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/11_ml_fundamentals.md",
+      "source_type": "md",
+      "source_bytes": 47135,
+      "source_sha256": "7e743c4b8df0a7bfa5d4604f226afc4143c26a70f234cf726491932901ef8690",
+      "path": "chapters/05_机器学习基本范式.md",
+      "bytes": 47781,
+      "sha256": "ea9deb220b90f69b2a536a93cfde10fdaf921508285881f946d2716c35dfc01c",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 0,
+        "code_cells": 0,
+        "stripped_output_count": 0
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-06",
+        "ML-KP-09"
+      ],
+      "selection_reason": "原生 Markdown 理论材料完整，适合作为算法章节的概念总纲。"
+    },
+    {
+      "chapter_order": 6,
+      "title": "scikit-learn 标准工作流",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/12_intro_to_sklearn.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 20800,
+      "source_sha256": "37dea40649b9cd8a8d8622ebdeb7774fe4b6329caa70aad9c8e81cc049e9b6b7",
+      "path": "chapters/06_scikit-learn标准工作流.md",
+      "bytes": 4875,
+      "sha256": "4fd4eb6ff4328a6845ba114dd557c483cebfdf3a0b8f965b262b26ab956c9a56",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 11,
+        "code_cells": 8,
+        "stripped_output_count": 6
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-07",
+        "ML-KP-09"
+      ],
+      "selection_reason": "提供后续经典算法实验共同依赖的工程接口。"
+    },
+    {
+      "chapter_order": 7,
+      "title": "线性分类模型",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/14_linear_models_for_classification.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 801473,
+      "source_sha256": "df5813da908376cdd8b7257f2d0c03995c9ace616cca054c0a85c0a7c6e91425",
+      "path": "chapters/07_线性分类模型.md",
+      "bytes": 23951,
+      "sha256": "aa3c63f844da8ab4466fb32539f77582aa01dccfa690e3cb539ba2cda24071d4",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 43,
+        "code_cells": 57,
+        "stripped_output_count": 70
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-08",
+        "ML-KP-09"
+      ],
+      "selection_reason": "从基础模型建立监督分类与泛化评估闭环。"
+    },
+    {
+      "chapter_order": 8,
+      "title": "决策树分类",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/18_decision_trees_for_classification.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 328107,
+      "source_sha256": "73234f1c9c12e077b50964b0a35e1708776dfa672295ed6373d1c8442497d779",
+      "path": "chapters/08_决策树分类.md",
+      "bytes": 16878,
+      "sha256": "7bd51cb500d806b3fd1f8297c5cbd6ea400a0c4664145157639373cb8b28fffc",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 42,
+        "code_cells": 57,
+        "stripped_output_count": 54
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-09",
+        "ML-KP-10"
+      ],
+      "selection_reason": "提供非线性、可解释分类模型及完整实验。"
+    },
+    {
+      "chapter_order": 9,
+      "title": "集成学习",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/21_ensemble_models.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 1226442,
+      "source_sha256": "e7ed8f561d670e798dc9adb2ec3f4ec8cfb0c31f76411942bd56ff2598cd2500",
+      "path": "chapters/09_集成学习.md",
+      "bytes": 28691,
+      "sha256": "2d8071aa46209bc813e501c4de05559f2cf7ca410fbf0ce8ec7ba51a9b2f859c",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 62,
+        "code_cells": 49,
+        "stripped_output_count": 45
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-09",
+        "ML-KP-11"
+      ],
+      "selection_reason": "形成从单棵树到高性能组合模型的进阶路径。"
+    },
+    {
+      "chapter_order": 10,
+      "title": "K-Means 聚类",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/22_intro_to_unsupervised_learning_with_kmeans_clustering.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 123239,
+      "source_sha256": "171d8d52f542dcc3e64472a5f0c4305f28f85e5ffe4f8c07b8d7fb1ececefbbd",
+      "path": "chapters/10_K-Means聚类.md",
+      "bytes": 12290,
+      "sha256": "eac883dc2bd63758d1e34cd14a1b441096ff493489bfb28769f25de70d16d573",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 38,
+        "code_cells": 30,
+        "stripped_output_count": 28
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-12"
+      ],
+      "selection_reason": "补足监督学习之外的无监督学习完整实验。"
+    },
+    {
+      "chapter_order": 11,
+      "title": "主成分分析",
+      "repository_key": "nyandwi-machine-learning-complete",
+      "repository_url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "source_path": "docs/23_a_practical_intro_to_principal_components_analysis.ipynb",
+      "source_type": "ipynb",
+      "source_bytes": 296967,
+      "source_sha256": "5d89830fc0800e56c72394b56ae114c31abd2d112df125dc02b0fe1ba6b757a7",
+      "path": "chapters/11_主成分分析.md",
+      "bytes": 12785,
+      "sha256": "f2f48e20f753696889055a25c6b4de1d6d45528f95a49425d39607706ff943a4",
+      "parser_version": "edumatrix-notebook-to-markdown-v1",
+      "conversion": {
+        "markdown_cells": 41,
+        "code_cells": 29,
+        "stripped_output_count": 21
+      },
+      "license_spdx": "MIT",
+      "license_file": "LICENSE.upstream.txt",
+      "license_sha256": "5fd9dcb6cdf74e6e43be9b07b96024bb98e9c67c610923681e4bfa824316d789",
+      "source_audit_license_sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ],
+      "knowledge_point_codes": [
+        "ML-KP-13"
+      ],
+      "selection_reason": "以可验证实验连接数值计算、特征准备和无监督表示。"
+    }
+  ]
+}

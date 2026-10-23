@@ -1,0 +1,103 @@
+{
+  "schema_version": "edumatrix.course-retrieval-evaluation.v1",
+  "dataset_version": "course-rag-engineering-m0-retrieval-1.0.0",
+  "course_id": "course-rag-engineering-m0",
+  "course_manifest_version": "course-rag-engineering-m0-0.1.0",
+  "top_k": 8,
+  "answerable_cases": [
+    {
+      "id": "m0-course-scope",
+      "query": "这门 RAG 实训课的最小工程闭环包含哪些阶段，评测结果为什么必须绑定版本？",
+      "relevant_documents": ["00_课程说明.md"],
+      "allowed_answer_terms": ["来源登记", "结构化解析", "故障恢复", "课程版本"]
+    },
+    {
+      "id": "m0-license-admission",
+      "query": "许可证不明确的 GitHub 材料能否直接放入比赛作品包，准入检查需要记录什么？",
+      "relevant_documents": ["01_来源许可与课程边界.md"],
+      "allowed_answer_terms": ["REVIEW_REQUIRED", "来源 URL", "文件哈希", "不进入正式预置库"]
+    },
+    {
+      "id": "m0-parser-structure",
+      "query": "解析 PDF、PPTX、DOCX 和 Notebook 时怎样保留可回溯结构，解析失败应该如何呈现？",
+      "relevant_documents": ["02_文档解析与结构保留.md"],
+      "allowed_answer_terms": ["页码", "幻灯片", "单元格顺序", "需要人工确认"]
+    },
+    {
+      "id": "m0-chunk-isolation",
+      "query": "分块 metadata 为什么要包含 owner、课程和版本，怎样避免两个学生的同名文档串库？",
+      "relevant_documents": ["03_分块元数据与索引.md"],
+      "allowed_answer_terms": ["owner", "课程版本", "不串库", "权限"]
+    },
+    {
+      "id": "m0-hybrid-rerank",
+      "query": "关键词、向量和混合检索各自适合什么情况，调整 top-k 时要记录和比较哪些指标？",
+      "relevant_documents": ["04_混合检索与重排.md"],
+      "allowed_answer_terms": ["精确术语", "语义相近", "Recall@k", "平均耗时"]
+    },
+    {
+      "id": "m0-claim-citation",
+      "query": "回答中的原子事实如何绑定证据，来源冲突或资料不足时系统应该怎么做？",
+      "relevant_documents": ["05_引用约束生成与拒答.md"],
+      "allowed_answer_terms": ["supported", "contradicted", "unsupported", "拒答"]
+    },
+    {
+      "id": "m0-profile-resource",
+      "query": "同一混合检索知识点如何面向三类学习画像生成不同资源，哪些行为才是强学习证据？",
+      "relevant_documents": ["06_画像适配与资源契约.md"],
+      "allowed_answer_terms": ["定制化讲义", "实操指南", "分阶测试题", "延迟复测"]
+    },
+    {
+      "id": "m0-metrics-denominator",
+      "query": "幻觉率、画像资源适配准确率和核心知识点覆盖率的分子分母分别如何冻结，生成失败能否从分母删除？",
+      "relevant_documents": ["07_幻觉率与覆盖率评测.md"],
+      "allowed_answer_terms": ["原子事实数", "生成失败不能从分母删除", "核心知识点总数", "一致性"]
+    },
+    {
+      "id": "m0-failure-recovery",
+      "query": "怎样用 trace_id 串联 RAG 故障恢复，外部模型超时、低置信检索和断线时验收什么？",
+      "relevant_documents": ["08_故障恢复与技能验收.md"],
+      "allowed_answer_terms": ["trace_id", "可重试性", "不伪造成功", "不泄露数据"]
+    },
+    {
+      "id": "m0-cross-chapter-trust-loop",
+      "query": "从来源准入到引用拒答和故障恢复，怎样形成一条可审计的可信 RAG 闭环？",
+      "relevant_documents": ["01_来源许可与课程边界.md", "05_引用约束生成与拒答.md", "08_故障恢复与技能验收.md"],
+      "allowed_answer_terms": ["许可证", "来源块", "错误码", "trace_id"]
+    },
+    {
+      "id": "m0-cross-chapter-evaluation",
+      "query": "混合检索参数调优如何与引用质量、固定案例和三项评测指标关联，而不是只看一个成功回答？",
+      "relevant_documents": ["04_混合检索与重排.md", "05_引用约束生成与拒答.md", "07_幻觉率与覆盖率评测.md"],
+      "allowed_answer_terms": ["固定金标 query", "引用", "案例", "分母"]
+    },
+    {
+      "id": "m0-cross-chapter-personalized-skill",
+      "query": "针对不同学习画像训练混合检索调优技能时，资源差异、隐藏验收和延迟保持应怎样结合？",
+      "relevant_documents": ["06_画像适配与资源契约.md", "08_故障恢复与技能验收.md"],
+      "allowed_answer_terms": ["提示级别", "隐藏测试", "延迟复测", "通过条件"]
+    }
+  ],
+  "no_evidence_cases": [
+    {
+      "id": "m0-no-evidence-medical",
+      "query": "根据这门课程诊断患者胸痛的具体疾病并给出处方剂量",
+      "expected_reason": "material_not_covered"
+    },
+    {
+      "id": "m0-no-evidence-finance",
+      "query": "根据课程材料预测明天某只股票的收盘价和买卖点",
+      "expected_reason": "material_not_covered"
+    },
+    {
+      "id": "m0-no-evidence-foundation-training",
+      "query": "请给出从零训练万亿参数基础模型的完整 GPU 集群拓扑和超参数",
+      "expected_reason": "material_not_covered"
+    },
+    {
+      "id": "m0-no-evidence-kubernetes",
+      "query": "这套课程规定的 Kubernetes 生产集群节点数量和 Helm values 是什么",
+      "expected_reason": "material_not_covered"
+    }
+  ]
+}

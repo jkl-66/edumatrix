@@ -1,0 +1,820 @@
+{
+  "schema_version": "edumatrix.course-version-manifest.v1",
+  "manifest_version": "course-ai-deep-learning-agents-1.1.0",
+  "generated_at": "2026-08-31T00:00:00+08:00",
+  "course_id": "course-ai-deep-learning-agents-v1",
+  "title": "人工智能与深度学习：从机器学习基础到大模型智能体",
+  "subject": "人工智能 / 深度学习 / 大模型与智能体",
+  "description": "从机器学习数学与数据基础、神经网络和 Transformer，逐步进入大语言模型、RAG、Agent 与个性化学习智能体综合项目的中文主课程。",
+  "domain_pack": "domain-ai-deep-learning-agents-v1",
+  "knowledge_point_version": "ai-deep-learning-agents-kp-1.0.0",
+  "language": "zh-CN",
+  "content_origin": "D2L 中文第二版 PyTorch、NNDL 理论与通识版、NNDL 案例与实践、LLM-Beginner 的固定版本整合；每章保留来源角色和可追溯元数据。",
+  "license": "用户已取得课程资料使用许可；上游许可与署名见 LICENSES.md 及各文件 provenance 字段。",
+  "visibility": "public",
+  "status": "published",
+  "tags": [
+    "主课程",
+    "机器学习",
+    "深度学习",
+    "Transformer",
+    "大语言模型",
+    "RAG",
+    "Agent",
+    "中文教材"
+  ],
+  "source_roles": {
+    "primary": "D2L 中文第二版 PyTorch",
+    "theory": "NNDL 第二版",
+    "intuition": "NNDL 通识版",
+    "code": "NNDL 案例与实践",
+    "llm_agent": "LLM-Beginner"
+  },
+  "pathways": {
+    "main": [
+      "AI-KP-01",
+      "AI-KP-02",
+      "AI-KP-03",
+      "AI-KP-04",
+      "AI-KP-05",
+      "AI-KP-06",
+      "AI-KP-07",
+      "AI-KP-08",
+      "AI-KP-09",
+      "AI-KP-10",
+      "AI-KP-15",
+      "AI-KP-17",
+      "AI-KP-18",
+      "AI-KP-20"
+    ],
+    "theory": [
+      "AI-KP-02",
+      "AI-KP-04",
+      "AI-KP-06",
+      "AI-KP-07",
+      "AI-KP-10",
+      "AI-KP-11",
+      "AI-KP-12",
+      "AI-KP-15"
+    ],
+    "engineering": [
+      "AI-KP-03",
+      "AI-KP-04",
+      "AI-KP-06",
+      "AI-KP-08",
+      "AI-KP-10",
+      "AI-KP-15",
+      "AI-KP-17",
+      "AI-KP-18",
+      "AI-KP-19",
+      "AI-KP-20"
+    ]
+  },
+  "knowledge_points": [
+    {
+      "code": "AI-KP-01",
+      "title": "人工智能、机器学习与深度学习概览",
+      "level": "foundation",
+      "prerequisites": []
+    },
+    {
+      "code": "AI-KP-02",
+      "title": "向量、矩阵与概率基础",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-01"
+      ]
+    },
+    {
+      "code": "AI-KP-03",
+      "title": "数据集、特征工程与数据管道",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-02"
+      ]
+    },
+    {
+      "code": "AI-KP-04",
+      "title": "线性回归与线性分类",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-02",
+        "AI-KP-03"
+      ]
+    },
+    {
+      "code": "AI-KP-05",
+      "title": "模型评估、泛化与交叉验证",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-04"
+      ]
+    },
+    {
+      "code": "AI-KP-06",
+      "title": "多层感知机与反向传播",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-04"
+      ]
+    },
+    {
+      "code": "AI-KP-07",
+      "title": "优化算法、正则化与训练稳定性",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-05",
+        "AI-KP-06"
+      ]
+    },
+    {
+      "code": "AI-KP-08",
+      "title": "卷积神经网络与视觉表征",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-06"
+      ]
+    },
+    {
+      "code": "AI-KP-09",
+      "title": "循环神经网络与序列建模",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-06"
+      ]
+    },
+    {
+      "code": "AI-KP-10",
+      "title": "注意力机制与 Transformer",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-07",
+        "AI-KP-09"
+      ]
+    },
+    {
+      "code": "AI-KP-11",
+      "title": "图神经网络与知识图谱",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-10"
+      ]
+    },
+    {
+      "code": "AI-KP-12",
+      "title": "无监督学习、表示学习与降维",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-03",
+        "AI-KP-07"
+      ]
+    },
+    {
+      "code": "AI-KP-13",
+      "title": "计算机视觉应用",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-08"
+      ]
+    },
+    {
+      "code": "AI-KP-14",
+      "title": "自然语言处理与预训练",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-09",
+        "AI-KP-10"
+      ]
+    },
+    {
+      "code": "AI-KP-15",
+      "title": "大语言模型架构与生成",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-10",
+        "AI-KP-14"
+      ]
+    },
+    {
+      "code": "AI-KP-16",
+      "title": "指令微调与偏好对齐",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-15"
+      ]
+    },
+    {
+      "code": "AI-KP-17",
+      "title": "RAG 文档解析、切分与混合检索",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-10",
+        "AI-KP-15"
+      ]
+    },
+    {
+      "code": "AI-KP-18",
+      "title": "工具调用、ReAct 与 Agent",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-15",
+        "AI-KP-17"
+      ]
+    },
+    {
+      "code": "AI-KP-19",
+      "title": "Coding Agent、MCP 与 Skill",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-18"
+      ]
+    },
+    {
+      "code": "AI-KP-20",
+      "title": "个性化学习智能体综合项目",
+      "level": "capstone",
+      "prerequisites": [
+        "AI-KP-17",
+        "AI-KP-18",
+        "AI-KP-19"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "chapter_order": 0,
+      "title": "D2L 引言：人工智能与机器学习全景",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_introduction/index.md",
+      "source_type": "md",
+      "source_bytes": 67552,
+      "source_sha256": "db2d89bf7c2884e3102bd13b31bbb7a94b91159c27822b5c92f1158a7feb7b9a",
+      "path": "chapters/00_D2L引言_人工智能与机器学习全景.md",
+      "bytes": 68108,
+      "sha256": "9dfb2a959e7bc0ba57474cd799b2e0d9c7f245e05a9a580b3883538c96ef0a69",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-01"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 1,
+      "title": "D2L 预备知识：数学、数据与自动微分",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_preliminaries/autograd.md;chapter_preliminaries/calculus.md;chapter_preliminaries/index.md;chapter_preliminaries/linear-algebra.md;chapter_preliminaries/lookup-api.md;chapter_preliminaries/ndarray.md;chapter_preliminaries/pandas.md;chapter_preliminaries/probability.md",
+      "source_type": "md",
+      "source_bytes": 109631,
+      "source_sha256": "c9c48d71dd1b161eedf251aca065af4fe2025bda5931126386619c2cb29aa83b",
+      "path": "chapters/01_D2L预备知识_数学、数据与自动微分.md",
+      "bytes": 110447,
+      "sha256": "b4b2b55da32e695c4a54032641cd0b897088cf1fbcb6bccca8979e37d11f77a6",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-02",
+        "AI-KP-03"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 2,
+      "title": "D2L 线性神经网络",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_linear-networks/image-classification-dataset.md;chapter_linear-networks/index.md;chapter_linear-networks/linear-regression-concise.md;chapter_linear-networks/linear-regression-scratch.md;chapter_linear-networks/linear-regression.md;chapter_linear-networks/softmax-regression-concise.md;chapter_linear-networks/softmax-regression-scratch.md;chapter_linear-networks/softmax-regression.md",
+      "source_type": "md",
+      "source_bytes": 122609,
+      "source_sha256": "da811cf7e153b39cb928acafe3f9b69aa2cbd21994cf0657560b1f3fdd28dd51",
+      "path": "chapters/02_D2L线性神经网络.md",
+      "bytes": 123505,
+      "sha256": "0894b0f7b12d5fd366d0ffdab0fafa41b6e0cdf58c961207e9befc9ea5277a03",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-04"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 3,
+      "title": "D2L 多层感知机",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_multilayer-perceptrons/backprop.md;chapter_multilayer-perceptrons/dropout.md;chapter_multilayer-perceptrons/environment.md;chapter_multilayer-perceptrons/index.md;chapter_multilayer-perceptrons/kaggle-house-price.md;chapter_multilayer-perceptrons/mlp-concise.md;chapter_multilayer-perceptrons/mlp-scratch.md;chapter_multilayer-perceptrons/mlp.md;chapter_multilayer-perceptrons/numerical-stability-and-init.md;chapter_multilayer-perceptrons/underfit-overfit.md;chapter_multilayer-perceptrons/weight-decay.md",
+      "source_type": "md",
+      "source_bytes": 180565,
+      "source_sha256": "5eaec7ecfb2ced9e16b9bb5d123fa6db0ca6d45c866b0b8e5cdc23765a3d4dee",
+      "path": "chapters/03_D2L多层感知机.md",
+      "bytes": 181579,
+      "sha256": "7414475a6cb7e1f24b856434488f5448a6bc6d8e524646c9742d0c89bbe1c12b",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-06"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 4,
+      "title": "D2L 深度学习计算",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_deep-learning-computation/custom-layer.md;chapter_deep-learning-computation/deferred-init.md;chapter_deep-learning-computation/index.md;chapter_deep-learning-computation/model-construction.md;chapter_deep-learning-computation/parameters.md;chapter_deep-learning-computation/read-write.md;chapter_deep-learning-computation/use-gpu.md",
+      "source_type": "md",
+      "source_bytes": 86856,
+      "source_sha256": "e90ddda5fd2e50618ef1d17752415ceb3f92a8827c144de6b78b39f42cad1193",
+      "path": "chapters/04_D2L深度学习计算.md",
+      "bytes": 87709,
+      "sha256": "f2dd5b9b33e9f763797f85938c921caba2ef453c27fade721c8f382eed090676",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-06",
+        "AI-KP-07"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 5,
+      "title": "D2L 优化算法",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_optimization/adadelta.md;chapter_optimization/adagrad.md;chapter_optimization/adam.md;chapter_optimization/convexity.md;chapter_optimization/gd.md;chapter_optimization/index.md;chapter_optimization/lr-scheduler.md;chapter_optimization/minibatch-sgd.md;chapter_optimization/momentum.md;chapter_optimization/optimization-intro.md;chapter_optimization/rmsprop.md;chapter_optimization/sgd.md",
+      "source_type": "md",
+      "source_bytes": 185531,
+      "source_sha256": "1fb490ff783839f6bdf051fa483a47a7061e4246f2d40b89722a97a6fb8fa917",
+      "path": "chapters/05_D2L优化算法.md",
+      "bytes": 186433,
+      "sha256": "5983e3387bc43994f2d6aef3fc3733baf09c671b68a7dc87a707c599b52ebfec",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-05",
+        "AI-KP-07"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 6,
+      "title": "D2L 卷积神经网络",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_convolutional-neural-networks/channels.md;chapter_convolutional-neural-networks/conv-layer.md;chapter_convolutional-neural-networks/index.md;chapter_convolutional-neural-networks/lenet.md;chapter_convolutional-neural-networks/padding-and-strides.md;chapter_convolutional-neural-networks/pooling.md;chapter_convolutional-neural-networks/why-conv.md",
+      "source_type": "md",
+      "source_bytes": 83871,
+      "source_sha256": "69b651b3418256e7c0077e02e370c24d61ca6749882078b65ecdda28851f019c",
+      "path": "chapters/06_D2L卷积神经网络.md",
+      "bytes": 84729,
+      "sha256": "48516fa836eb235ea8ff83194979c99115739f44df346f00700a86b910bfb57c",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-08"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 7,
+      "title": "D2L 现代卷积网络",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_convolutional-modern/alexnet.md;chapter_convolutional-modern/batch-norm.md;chapter_convolutional-modern/densenet.md;chapter_convolutional-modern/googlenet.md;chapter_convolutional-modern/index.md;chapter_convolutional-modern/nin.md;chapter_convolutional-modern/resnet.md;chapter_convolutional-modern/vgg.md",
+      "source_type": "md",
+      "source_bytes": 129471,
+      "source_sha256": "6ef12cae4fb14176879456212f5c8e469321c9fd735108af26c8221cd688f725",
+      "path": "chapters/07_D2L现代卷积网络.md",
+      "bytes": 130288,
+      "sha256": "55016524122f427fb152a70e0d13c24bb83f79e2caa9b06c8886c9723c63e9fb",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-08"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 8,
+      "title": "D2L 循环神经网络",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_recurrent-neural-networks/bptt.md;chapter_recurrent-neural-networks/index.md;chapter_recurrent-neural-networks/language-models-and-dataset.md;chapter_recurrent-neural-networks/rnn-concise.md;chapter_recurrent-neural-networks/rnn-scratch.md;chapter_recurrent-neural-networks/rnn.md;chapter_recurrent-neural-networks/sequence.md;chapter_recurrent-neural-networks/text-preprocessing.md",
+      "source_type": "md",
+      "source_bytes": 136975,
+      "source_sha256": "59ffff740724f5c928dd490099a6f82e694a246b736933a479021ee7a6934506",
+      "path": "chapters/08_D2L循环神经网络.md",
+      "bytes": 137868,
+      "sha256": "bae99c85662b926ae14e39c3999232a446d1f19e6a4427e434077b096270161e",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-09"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 9,
+      "title": "D2L 现代循环网络与序列任务",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_recurrent-modern/beam-search.md;chapter_recurrent-modern/bi-rnn.md;chapter_recurrent-modern/deep-rnn.md;chapter_recurrent-modern/encoder-decoder.md;chapter_recurrent-modern/gru.md;chapter_recurrent-modern/index.md;chapter_recurrent-modern/lstm.md;chapter_recurrent-modern/machine-translation-and-dataset.md;chapter_recurrent-modern/seq2seq.md",
+      "source_type": "md",
+      "source_bytes": 136339,
+      "source_sha256": "930159b86ca38fe0a2578b559744593e002c48168a21f3475899eadbe7ad1231",
+      "path": "chapters/09_D2L现代循环网络与序列任务.md",
+      "bytes": 137207,
+      "sha256": "1900816783a81b421dbfb739db4da7000f1f21caab6accb455085a09ad0b6103",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-09"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 10,
+      "title": "D2L 注意力机制与 Transformer",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_attention-mechanisms/attention-cues.md;chapter_attention-mechanisms/attention-scoring-functions.md;chapter_attention-mechanisms/bahdanau-attention.md;chapter_attention-mechanisms/index.md;chapter_attention-mechanisms/multihead-attention.md;chapter_attention-mechanisms/nadaraya-waston.md;chapter_attention-mechanisms/self-attention-and-positional-encoding.md;chapter_attention-mechanisms/transformer.md",
+      "source_type": "md",
+      "source_bytes": 164642,
+      "source_sha256": "55b590fbda9e6f6bcb8294d5777651d29a2e503d6b65a3cd2e9dbad0b6206e3d",
+      "path": "chapters/10_D2L注意力机制与Transformer.md",
+      "bytes": 165567,
+      "sha256": "f3de4a33c05c039e59c276ff8d9ab22f04baf19938b5420918c41fb6bede70ae",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-10"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 11,
+      "title": "D2L 无监督学习与表示",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_computational-performance/async-computation.md;chapter_computational-performance/auto-parallelism.md;chapter_computational-performance/hardware.md;chapter_computational-performance/hybridize.md;chapter_computational-performance/index.md;chapter_computational-performance/multiple-gpus-concise.md;chapter_computational-performance/multiple-gpus.md;chapter_computational-performance/parameterserver.md",
+      "source_type": "md",
+      "source_bytes": 128953,
+      "source_sha256": "3aa62d4f07768c2fc8f4d73d02cf38504dd64f79dd00211019c137b1a1cf4d6f",
+      "path": "chapters/11_D2L无监督学习与表示.md",
+      "bytes": 129875,
+      "sha256": "0c63bb5f6403f107992620c206b9fb3089ec3842ff36ec656c20cc6beb6faefa",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-12"
+      ],
+      "source_role": "D2L 中文第二版主教材补充",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 12,
+      "title": "D2L 计算机视觉应用",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_computer-vision/anchor.md;chapter_computer-vision/bounding-box.md;chapter_computer-vision/fcn.md;chapter_computer-vision/fine-tuning.md;chapter_computer-vision/image-augmentation.md;chapter_computer-vision/index.md;chapter_computer-vision/kaggle-cifar10.md;chapter_computer-vision/kaggle-dog.md;chapter_computer-vision/multiscale-object-detection.md;chapter_computer-vision/neural-style.md;chapter_computer-vision/object-detection-dataset.md;chapter_computer-vision/rcnn.md;chapter_computer-vision/semantic-segmentation-and-dataset.md;chapter_computer-vision/ssd.md;chapter_computer-vision/transposed-conv.md",
+      "source_type": "md",
+      "source_bytes": 288105,
+      "source_sha256": "c77d27bddd9ea7304aaf61b4730966a85ff36a4cd2563116c3c18de8033de8ce",
+      "path": "chapters/12_D2L计算机视觉应用.md",
+      "bytes": 289227,
+      "sha256": "730ff00ae180ff0ebf0cb9eb0c768bd5288a8299470ab7bd9978b6c1fbbedb38",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-13"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 13,
+      "title": "D2L 自然语言处理预训练",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_natural-language-processing-pretraining/approx-training.md;chapter_natural-language-processing-pretraining/bert-dataset.md;chapter_natural-language-processing-pretraining/bert-pretraining.md;chapter_natural-language-processing-pretraining/bert.md;chapter_natural-language-processing-pretraining/glove.md;chapter_natural-language-processing-pretraining/index.md;chapter_natural-language-processing-pretraining/similarity-analogy.md;chapter_natural-language-processing-pretraining/subword-embedding.md;chapter_natural-language-processing-pretraining/word-embedding-dataset.md;chapter_natural-language-processing-pretraining/word2vec-pretraining.md;chapter_natural-language-processing-pretraining/word2vec.md",
+      "source_type": "md",
+      "source_bytes": 146802,
+      "source_sha256": "40030b93a7d95b2036c24ebc3df668bd92e9f1ae4df84cfc0c20fe333800c388",
+      "path": "chapters/13_D2L自然语言处理预训练.md",
+      "bytes": 148027,
+      "sha256": "402bd1603a840b34216ec2ed6dfdaa4cbe224fc5a501d3ada537a69c5b58dc00",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-14"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 14,
+      "title": "D2L 自然语言处理应用",
+      "repository_key": "d2l-zh",
+      "repository_url": "https://github.com/d2l-ai/d2l-zh",
+      "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
+      "source_path": "chapter_natural-language-processing-applications/finetuning-bert.md;chapter_natural-language-processing-applications/index.md;chapter_natural-language-processing-applications/natural-language-inference-and-dataset.md;chapter_natural-language-processing-applications/natural-language-inference-attention.md;chapter_natural-language-processing-applications/natural-language-inference-bert.md;chapter_natural-language-processing-applications/sentiment-analysis-and-dataset.md;chapter_natural-language-processing-applications/sentiment-analysis-cnn.md;chapter_natural-language-processing-applications/sentiment-analysis-rnn.md",
+      "source_type": "md",
+      "source_bytes": 108768,
+      "source_sha256": "74c23d4f7f13cd5a3d4c52adbb36148618b0539efa4e612db5d60a729b64122b",
+      "path": "chapters/14_D2L自然语言处理应用.md",
+      "bytes": 109899,
+      "sha256": "a13320480f332e71f6072a49de3884fe9c575f3fefc35fa0a1a82f0a34ab4319",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "Apache-2.0",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-14"
+      ],
+      "source_role": "D2L 中文第二版主教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 15,
+      "title": "NNDL 第二版：神经网络与深度学习理论地图",
+      "repository_key": "nndl",
+      "repository_url": "https://github.com/nndl/nndl",
+      "git_revision": "19b3bb01363b949bbfca5ae2279094db6cbf387d",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 8673,
+      "source_sha256": "1578d564d329d1e3c78d5bf13d0d3ec0d68a1ddd4aea6850a306bd2b6aee67c3",
+      "path": "chapters/15_NNDL第二版_神经网络与深度学习理论地图.md",
+      "bytes": 9254,
+      "sha256": "247955688da230e15f6e2a117c07dca4ebe093f84c8211e624547fac2e326396",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "OTHER",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-01",
+        "AI-KP-06",
+        "AI-KP-10",
+        "AI-KP-11",
+        "AI-KP-15"
+      ],
+      "source_role": "理论深化与通识版入口",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 16,
+      "title": "NNDL 第二版完整电子书",
+      "repository_key": "nndl",
+      "repository_url": "https://github.com/nndl/nndl",
+      "git_revision": "19b3bb01363b949bbfca5ae2279094db6cbf387d",
+      "source_path": "nndl-v2.pdf",
+      "source_type": "pdf",
+      "source_bytes": 7587144,
+      "source_sha256": "25ac42536ed343c99142bc2e7b1d5bca18bf0b8217d08cfe17aca6205e1af78c",
+      "path": "chapters/16_NNDL第二版完整电子书.md",
+      "bytes": 1347298,
+      "sha256": "b7ab950d8a3a4425b79fb0c71a2d505995059cd26091e933454acc13b85c76ae",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "OTHER",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-01",
+        "AI-KP-02",
+        "AI-KP-04",
+        "AI-KP-06",
+        "AI-KP-07",
+        "AI-KP-10",
+        "AI-KP-11",
+        "AI-KP-12",
+        "AI-KP-15"
+      ],
+      "source_role": "理论深化完整电子书",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 17,
+      "title": "NNDL 通识版完整电子书",
+      "repository_key": "nndl",
+      "repository_url": "https://github.com/nndl/nndl",
+      "git_revision": "19b3bb01363b949bbfca5ae2279094db6cbf387d",
+      "source_path": "nndl-ge.pdf",
+      "source_type": "pdf",
+      "source_bytes": 6193102,
+      "source_sha256": "5d051172707b476fc7bbc0d2155713a4607447b946eaf7bd6f1b3a3dc8a06bec",
+      "path": "chapters/17_NNDL通识版完整电子书.md",
+      "bytes": 1117724,
+      "sha256": "ed0bb57c12d065194217245226e131ba1aec801d694df42a61b3eb825d8e9b31",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "OTHER",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-01",
+        "AI-KP-06",
+        "AI-KP-10",
+        "AI-KP-15"
+      ],
+      "source_role": "零基础直觉完整电子书",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 18,
+      "title": "NNDL 案例与实践：PyTorch 工程实践",
+      "repository_key": "nndl-practice",
+      "repository_url": "https://github.com/nndl/nndl-practice",
+      "git_revision": "43f4e172b4b475eec06487fc7cbbcc3ea622f9e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 7545,
+      "source_sha256": "4ac35db88cd0b1bf115b3f167b2dc2f688d41c72d85ce7ec4f73384c1a5b9a6b",
+      "path": "chapters/18_NNDL案例与实践_PyTorch工程实践.md",
+      "bytes": 8110,
+      "sha256": "7364fea8c165954ad9d599e9aeffbfcaa5f5d54f42ecca60b5583922d6a0105d",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "OTHER",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-04",
+        "AI-KP-06",
+        "AI-KP-08",
+        "AI-KP-09",
+        "AI-KP-10"
+      ],
+      "source_role": "代码实践教材",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 19,
+      "title": "大模型基础：Transformer 到 Mini-GPT",
+      "repository_key": "llm-beginner",
+      "repository_url": "https://github.com/nndl/llm-beginner",
+      "git_revision": "446a1ce01a89b8eabaffcef83096f344b10c7a6b",
+      "source_path": "task-1-transformer/README.md;task-2-mini-gpt/README.md",
+      "source_type": "md",
+      "source_bytes": 15100,
+      "source_sha256": "99405679dcb3bc551c23663d03346d10f5b7e18719106938cc10d462340843e7",
+      "path": "chapters/19_大模型基础_Transformer到Mini-GPT.md",
+      "bytes": 15685,
+      "sha256": "fe990093e86f2c62dd3b1808963f515c0817bf7cea630d8a98a159090479143f",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "MIT",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-10",
+        "AI-KP-15"
+      ],
+      "source_role": "大模型与智能体专题",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 20,
+      "title": "指令微调与偏好对齐",
+      "repository_key": "llm-beginner",
+      "repository_url": "https://github.com/nndl/llm-beginner",
+      "git_revision": "446a1ce01a89b8eabaffcef83096f344b10c7a6b",
+      "source_path": "task-3-sft-dpo/README.md",
+      "source_type": "md",
+      "source_bytes": 9219,
+      "source_sha256": "92edf102a1894e40dc46226054ce159623aa7e0c36fd5ee79b27708368b96cae",
+      "path": "chapters/20_指令微调与偏好对齐.md",
+      "bytes": 9749,
+      "sha256": "018ee60c21b1208604638302735e5b1a9f91945cd457e5d4e6050710b6c55b06",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "MIT",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-16"
+      ],
+      "source_role": "大模型与智能体专题",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 21,
+      "title": "RAG 知识库问答工程",
+      "repository_key": "llm-beginner",
+      "repository_url": "https://github.com/nndl/llm-beginner",
+      "git_revision": "446a1ce01a89b8eabaffcef83096f344b10c7a6b",
+      "source_path": "task-4-rag/README.md",
+      "source_type": "md",
+      "source_bytes": 10088,
+      "source_sha256": "ad5002dae2350bc191bfa1acdcfc9c87d55dd7b7f881b31ad12ff2e691c23d9d",
+      "path": "chapters/21_RAG知识库问答工程.md",
+      "bytes": 10612,
+      "sha256": "ba2657fc2c90a544f1a4ef8de1959e545cec21279019fefa402ac1daa0aa3045",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "MIT",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-17"
+      ],
+      "source_role": "大模型与智能体专题",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 22,
+      "title": "工具调用与 ReAct Agent",
+      "repository_key": "llm-beginner",
+      "repository_url": "https://github.com/nndl/llm-beginner",
+      "git_revision": "446a1ce01a89b8eabaffcef83096f344b10c7a6b",
+      "source_path": "task-5-tool-agent/README.md",
+      "source_type": "md",
+      "source_bytes": 10244,
+      "source_sha256": "dcd4b8f9d5324c43d1a84f35cf522f05d63c4c4d90a2a7af8408c5665e6a0a3f",
+      "path": "chapters/22_工具调用与ReActAgent.md",
+      "bytes": 10777,
+      "sha256": "9d7ca02a3530c9ef1343e567e8970b40924d548dc66d98cafd7896e1a3366b3d",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "MIT",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-18"
+      ],
+      "source_role": "大模型与智能体专题",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 23,
+      "title": "Coding Agent、MCP 与 Skill",
+      "repository_key": "llm-beginner",
+      "repository_url": "https://github.com/nndl/llm-beginner",
+      "git_revision": "446a1ce01a89b8eabaffcef83096f344b10c7a6b",
+      "source_path": "task-6-coding-agent/README.md",
+      "source_type": "md",
+      "source_bytes": 10943,
+      "source_sha256": "68f60d29322f56244a3c83a0bf0df65237028d2fef92a32354f6dfa7ecb2e520",
+      "path": "chapters/23_CodingAgent、MCP与Skill.md",
+      "bytes": 11479,
+      "sha256": "e31f2536e6bb141ccec941d0884ec841bd74b0203b40974058b8cbc3a50d9311",
+      "parser_version": "edumatrix-course-source-v2",
+      "license_spdx": "MIT",
+      "license_file": "LICENSES.md",
+      "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
+      "knowledge_point_codes": [
+        "AI-KP-19"
+      ],
+      "source_role": "大模型与智能体专题",
+      "conversion": "markdown-concatenation-with-provenance-header"
+    }
+  ]
+}

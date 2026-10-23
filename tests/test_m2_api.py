@@ -208,7 +208,7 @@ def test_m2_api_retries_only_the_failed_step_with_owner_authorization(monkeypatc
             headers=owner_headers,
         )
         assert failed.status_code == 422
-        assert failed.json()["detail"]["code"] == "artifact_schema_invalid"
+        assert failed.json()["detail"]["code"] == "invalid_generator_json"
         state = client.get(
             f"/api/v1/m2/golden-tasks/{task_id}", headers=owner_headers
         ).json()

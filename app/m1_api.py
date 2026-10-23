@@ -17,8 +17,6 @@ from app.database import (
     DBArtifactVersion,
     DBGenerationTask,
     DBKnowledgePoint,
-    DBSourceDocument,
-    DBSourceRef,
     DBTaskEvent,
     DBTaskStep,
     DBUser,
@@ -38,6 +36,7 @@ from app.m1_object_service import (
     object_detail,
 )
 from app.m1_evidence import trace_bundle_summary
+from app.source_refs import require_source_ref_projection
 
 
 router = APIRouter(prefix="/api/v1", tags=["m1-foundation"])
@@ -75,17 +74,51 @@ class ChapterSummary(BaseModel):
 
 class SourceRefDetail(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    schema_version: str
+    kind: str
     id: str
     course_id: str
     source_document_id: str
+    document_version: str
     chapter_id: str | None
+    chapter_title: str
     parser_version: str
     page_number: int | None
     char_start: int | None
     char_end: int | None
     image_region: dict | None
+    location_kind: str
+    location_index: int | None
+    location_label: str
+    location_metadata: dict
     content_hash: str
+    title: str
+    filename: str
     quote: str
+    processing_status: str
+    available: bool
+    reason_code: str
+    reason: str
+    historical: bool
+    route: str
+
+
+class SourceEvidenceLocation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: str
+    evidence_id: str
+    source_ref_id: str
+    knowledge_document_id: str
+    course_id: str
+    source_document_id: str
+    chapter_id: str
+    chapter_title: str
+    parser_version: str
+    char_start: int
+    char_end: int
+    quote: str
+    content_hash: str
+    fragment_hash: str
 
 
 class TaskCreate(BaseModel):
@@ -164,6 +197,14 @@ async def get_canonical_course(
         course = repository.course(course_id)
         if course is None:
             raise HTTPException(status_code=404, detail="课程不存在")
+        from course_catalog import course_is_selectable
+        is_owned_empty_personal = (
+            course.owner_public_id == current_user.public_id
+            and isinstance(course.manifest_data, dict)
+            and course.manifest_data.get("kind") == "personal_course"
+        )
+        if not course_is_selectable(session, course) and not is_owned_empty_personal:
+            raise HTTPException(status_code=409, detail="课程已停止发布或没有可用学习资料")
         membership_role = require_course_access(
             session,
             current_user,
@@ -185,6 +226,14 @@ async def get_course_outline(
         course = repository.course(course_id)
         if course is None:
             raise HTTPException(status_code=404, detail="课程不存在")
+        from course_catalog import course_is_selectable
+        is_owned_empty_personal = (
+            course.owner_public_id == current_user.public_id
+            and isinstance(course.manifest_data, dict)
+            and course.manifest_data.get("kind") == "personal_course"
+        )
+        if not course_is_selectable(session, course) and not is_owned_empty_personal:
+            raise HTTPException(status_code=409, detail="课程已停止发布或没有可用学习资料")
         require_course_access(
             session,
             current_user,
@@ -202,6 +251,24 @@ async def get_source_ref(
     source_ref_id: str, current_user: DBUser = Depends(get_current_user)
 ):
     def fetch(session):
+        projection = require_source_ref_projection(session, current_user, source_ref_id)
+        return {"id": projection["source_ref_id"], **{
+            key: value for key, value in projection.items() if key != "source_ref_id"
+        }}
+
+    return await run_db_op(fetch)
+
+
+@router.get(
+    "/source-refs/{source_ref_id}/evidence/{evidence_id}",
+    response_model=SourceEvidenceLocation,
+)
+async def get_source_evidence_location(
+    source_ref_id: str,
+    evidence_id: str,
+    current_user: DBUser = Depends(get_current_user),
+):
+    def fetch(session):
         row = M1Repository(session).source_ref_context(source_ref_id)
         if row is None:
             raise HTTPException(status_code=404, detail="来源引用不存在")
@@ -213,18 +280,46 @@ async def get_source_ref(
             action="read",
             visibility=course.visibility,
         )
+
+        from app.m5_source_locator import (
+            SourceLocationError,
+            resolve_course_evidence_location,
+        )
+
+        try:
+            document, location = resolve_course_evidence_location(
+                session, source_ref=source_ref, evidence_id=evidence_id
+            )
+        except SourceLocationError as exc:
+            status_code = 404 if exc.code == "evidence_not_found" else 409
+            raise HTTPException(
+                status_code=status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        chapter = session.query(DBChapter).filter_by(id=source_ref.chapter_id).first()
+        if chapter is None or chapter.source_document_id != source.id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "source_chapter_drift",
+                    "message": "来源章节与 canonical 文档不一致",
+                },
+            )
         return {
-            "id": source_ref.id,
+            "schema_version": "m5.source-evidence-location.v1",
+            "evidence_id": evidence_id,
+            "source_ref_id": source_ref.id,
+            "knowledge_document_id": document.id,
             "course_id": course.id,
             "source_document_id": source.id,
-            "chapter_id": source_ref.chapter_id,
+            "chapter_id": chapter.id,
+            "chapter_title": chapter.title,
             "parser_version": source_ref.parser_version,
-            "page_number": source_ref.page_number,
-            "char_start": source_ref.char_start,
-            "char_end": source_ref.char_end,
-            "image_region": source_ref.image_region,
+            "char_start": location.char_start,
+            "char_end": location.char_end,
+            "quote": location.quote,
             "content_hash": source_ref.content_hash,
-            "quote": source_ref.quote or "",
+            "fragment_hash": location.fragment_hash,
         }
 
     return await run_db_op(fetch)

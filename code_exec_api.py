@@ -14,8 +14,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.database import DBCodeExecution, run_db_op
+from app.database import DBCodeExecution, DBStudentProfile, run_db_op
 from app.legacy_repositories import LegacyReadRepository
+from app.legacy_migration_governance import (
+    ActivityExecutionSearchCanonicalReader,
+    observe_legacy_shadow_read,
+    project_code_rows,
+)
 from app.auth import enforce_student_access, get_current_user
 from app.m5_assessment import AssessmentEvidenceInput, record_legacy_assessment_evidence
 from config import CONFIG
@@ -321,7 +326,10 @@ class SandboxProcessRunner:
         }
         env.pop("PYTHONPATH", None)
         env["PYTHONIOENCODING"] = "utf-8"
-        env["PYTHONNOUSERSITE"] = "1"
+        # The Windows distribution installs scientific packages in the user
+        # site. Keep that dependency location available while still removing
+        # the project PYTHONPATH and running from an isolated temporary cwd.
+        env.pop("PYTHONNOUSERSITE", None)
         env["EDUMATRIX_SANDBOX_MAX_OUTPUT_BYTES"] = str(CONFIG.sandbox_max_output_bytes)
         env["EDUMATRIX_SANDBOX_MAX_VISUAL_BYTES"] = str(CONFIG.sandbox_max_visual_bytes)
         workdir = tempfile.mkdtemp(prefix="edumatrix_trusted_local_")
@@ -697,6 +705,9 @@ async def run_code(
                 "error": f"语法错误: {e}",
                 "execution_time_ms": 0,
                 "language": language,
+                "canonical_evidence": None,
+                "history_saved": False,
+                "history_status": "not_saved_syntax_error",
             }
 
         output, error, exec_time = await _execute_python(code)
@@ -705,17 +716,25 @@ async def run_code(
         output, error, exec_time = await _execute_python(code)
 
     exec_id = _generate_id()
-    db_exec = DBCodeExecution(
-        id=exec_id,
-        student_id=student_id,
-        code=code[:5000],
-        language=language,
-        output=output[:10000],
-        error=error[:5000] if error else "",
-        execution_time_ms=int(exec_time * 1000),
-    )
-    
     def save_exec(session):
+        # Code execution is useful before onboarding creates a legacy profile.
+        # The profile is only needed for optional history/evidence persistence;
+        # it must not turn an already completed run into a 500 response.
+        if session.get(DBStudentProfile, student_id) is None:
+            return {
+                "history_saved": False,
+                "history_status": "student_profile_not_initialized",
+                "canonical_evidence": None,
+            }
+        db_exec = DBCodeExecution(
+            id=exec_id,
+            student_id=student_id,
+            code=code[:5000],
+            language=language,
+            output=output[:10000],
+            error=error[:5000] if error else "",
+            execution_time_ms=int(exec_time * 1000),
+        )
         session.add(db_exec)
         session.flush()
         evidence = AssessmentEvidenceInput(
@@ -728,9 +747,13 @@ async def run_code(
             session, student_id=student_id, evidence=evidence,
         )
         session.commit()
-        return evidence_result
+        return {
+            "history_saved": True,
+            "history_status": "saved",
+            "canonical_evidence": evidence_result,
+        }
         
-    canonical_evidence = await run_db_op(save_exec)
+    persistence = await run_db_op(save_exec)
 
     return {
         "exec_id": exec_id,
@@ -738,7 +761,9 @@ async def run_code(
         "error": error,
         "execution_time_ms": int(exec_time * 1000),
         "language": language,
-        "canonical_evidence": canonical_evidence,
+        "canonical_evidence": persistence.get("canonical_evidence"),
+        "history_saved": persistence.get("history_saved", False),
+        "history_status": persistence.get("history_status", "unknown"),
     }
 
 
@@ -754,7 +779,16 @@ async def get_code_history(
 ) -> list[dict[str, Any]]:
     student_id = enforce_student_access(student_id, current_user)
     def fetch_history(session):
-        return LegacyReadRepository(session).code_history(student_id, limit=limit)
+        records = LegacyReadRepository(session).code_history(student_id, limit=limit)
+        observe_legacy_shadow_read(
+            session,
+            chain_id="activity-execution-search",
+            legacy_result=records,
+            canonical_loader=lambda: ActivityExecutionSearchCanonicalReader(session).code_history(student_id, limit=limit),
+            legacy_projector=project_code_rows,
+            actor_public_id=current_user.public_id,
+        )
+        return records
         
     records = await run_db_op(fetch_history)
     return [

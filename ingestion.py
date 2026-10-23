@@ -10,6 +10,7 @@ import re
 from config import CONFIG
 from models import Evidence, EvidenceModality
 from vector_store import VectorIndex
+from document_parser import chunk_document, parse_document
 
 
 @dataclass(frozen=True)
@@ -33,9 +34,10 @@ class DocumentChunk:
     page: int | None = None
     tags: tuple[str, ...] = ()
     anchors: tuple[str, ...] = ()
+    metadata: dict[str, Any] | None = None
 
     def to_evidence(self) -> Evidence:
-        metadata = {}
+        metadata = dict(self.metadata or {})
         if self.page is not None:
             metadata["page"] = self.page
         return Evidence(
@@ -123,36 +125,30 @@ class DocumentIngestionPipeline:
 
     def ingest_file(self, path: str | Path) -> IngestionReport:
         file_path = Path(path)
-        text = file_path.read_text(encoding="utf-8")
-        return self.ingest_text(text, source=str(file_path), title=file_path.stem)
+        parsed = parse_document(file_path.read_bytes(), file_path.name)
+        return self.ingest_text(parsed.text, source=str(file_path), title=file_path.stem)
 
     def chunk_text(self, text: str, *, source: str, title: str) -> tuple[DocumentChunk, ...]:
-        normalized = re.sub(r"\s+", " ", text).strip()
-        if not normalized:
-            return ()
-        chunks: list[DocumentChunk] = []
-        start = 0
-        index = 1
-        while start < len(normalized):
-            end = min(len(normalized), start + self.chunk_size)
-            content = normalized[start:end].strip()
-            chunk_id = _stable_chunk_id(source, index, content)
-            chunks.append(
-                DocumentChunk(
-                    id=chunk_id,
-                    title=f"{title} chunk {index}",
-                    content=content,
-                    source=source,
-                    modality=EvidenceModality.TEXT,
-                    tags=_infer_tags(content),
-                    anchors=_infer_anchors(content),
-                )
+        evidence = chunk_document(
+            text,
+            source=source,
+            chunk_size=self.chunk_size,
+            overlap=self.overlap,
+        )
+        return tuple(
+            DocumentChunk(
+                id=item.id,
+                title=f"{title} / {item.title}",
+                content=item.content,
+                source=item.source,
+                modality=item.modality,
+                page=item.metadata.get("page_number") or item.metadata.get("page"),
+                tags=item.tags,
+                anchors=item.anchors,
+                metadata=dict(item.metadata or {}),
             )
-            if end == len(normalized):
-                break
-            start = max(end - self.overlap, start + 1)
-            index += 1
-        return tuple(chunks)
+            for item in evidence
+        )
 
     def _maybe_persist(self) -> tuple[bool, str]:
         """Persist the underlying index to disk if it is a FaissVectorIndex."""
@@ -228,10 +224,41 @@ def _sentence_diff(previous_text: str, new_text: str) -> list[str]:
 _graph_builder: Any = None
 
 
+def _canonical_course_seed_signature() -> tuple[tuple[str, str], ...]:
+    """Identify the published canonical course state without loading document bodies."""
+    import json
+
+    from app.database import DBCourse, SessionLocal
+
+    with SessionLocal() as session:
+        courses = session.query(DBCourse).filter_by(status="published").order_by(DBCourse.id).all()
+        return tuple(
+            (
+                course.id,
+                hashlib.sha256(
+                    json.dumps(
+                        course.manifest_data if isinstance(course.manifest_data, dict) else {},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+            )
+            for course in courses
+        )
+
+
 def _get_graph_builder():
     """\u5ef6\u8fdf\u521d\u59cb\u5316\u56fe\u8c31\u6784\u5efa\u5668\uff08InMemory \u540e\u7aef\uff0c\u79cd\u5b50\u6570\u636e\u9884\u586b\u5145\uff09\u3002"""
     global _graph_builder
     if _graph_builder is not None:
+        try:
+            signature = _canonical_course_seed_signature()
+            if signature != getattr(_graph_builder, "canonical_seed_signature", None):
+                _seed_canonical_course_facts(_graph_builder)
+                _graph_builder.canonical_seed_signature = signature
+        except Exception as e:
+            print(f"  [ingestion] canonical course graph refresh failed: {e}")
         return _graph_builder
     try:
         from app.utils.graph_builder import GraphBuilder, create_graph_repository, seed_default_graph
@@ -239,10 +266,120 @@ def _get_graph_builder():
         repo = create_graph_repository()
         _graph_builder = GraphBuilder(repository=repo, llm=DEFAULT_ASYNC_LLM)
         seed_default_graph(_graph_builder)
+        _seed_canonical_course_facts(_graph_builder)
+        _graph_builder.canonical_seed_signature = _canonical_course_seed_signature()
     except Exception as e:
         print(f"  [ingestion] \u56fe\u8c31\u6784\u5efa\u5668\u521d\u59cb\u5316\u5931\u8d25: {e}")
         _graph_builder = None
     return _graph_builder
+
+
+def _seed_canonical_course_facts(builder: Any) -> dict[str, int]:
+    """Load manifest-declared prerequisites with canonical course provenance."""
+    import json
+
+    from app.database import (
+        DBChapter,
+        DBChapterKnowledgePoint,
+        DBCourse,
+        DBCourseDocument,
+        DBKnowledgePoint,
+        DBSourceDocument,
+        DBSourceRef,
+        SessionLocal,
+    )
+    from app.m5_source_locator import resolve_course_evidence_location
+    from app.utils.graph_models import GraphFactProvenance, Triplet
+    from document_parser import chunk_document
+
+    written = skipped_external = rejected = 0
+    with SessionLocal() as session:
+        courses = session.query(DBCourse).filter_by(status="published").order_by(DBCourse.id).all()
+        for course in courses:
+            manifest = course.manifest_data if isinstance(course.manifest_data, dict) else {}
+            manifest_hash = hashlib.sha256(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            rows = (
+                session.query(DBKnowledgePoint, DBChapter)
+                .join(
+                    DBChapterKnowledgePoint,
+                    DBChapterKnowledgePoint.knowledge_point_id == DBKnowledgePoint.id,
+                )
+                .join(DBChapter, DBChapter.id == DBChapterKnowledgePoint.chapter_id)
+                .filter(DBChapter.course_id == course.id)
+                .order_by(DBChapter.position, DBKnowledgePoint.code)
+                .all()
+            )
+            point_by_code = {point.code: point for point, _chapter in rows}
+            chapter_by_code: dict[str, Any] = {}
+            for point, chapter in rows:
+                chapter_by_code.setdefault(point.code, chapter)
+            for target_code, target in sorted(point_by_code.items()):
+                chapter = chapter_by_code[target_code]
+                source_ref = (
+                    session.query(DBSourceRef)
+                    .filter_by(chapter_id=chapter.id)
+                    .order_by(DBSourceRef.created_at.desc())
+                    .first()
+                )
+                source = session.query(DBSourceDocument).filter_by(id=chapter.source_document_id).first()
+                document = (
+                    session.query(DBCourseDocument)
+                    .filter_by(id=source.legacy_document_id if source else "", course_id=course.id)
+                    .first()
+                )
+                if source_ref is None or source is None or document is None:
+                    rejected += len(target.prerequisites or [])
+                    continue
+                chunks = chunk_document(document.content or "", source=f"{course.id}/{document.filename}")
+                if not chunks:
+                    rejected += len(target.prerequisites or [])
+                    continue
+                evidence_id = chunks[0].id
+                try:
+                    resolve_course_evidence_location(
+                        session, source_ref=source_ref, evidence_id=evidence_id
+                    )
+                except Exception:
+                    rejected += len(target.prerequisites or [])
+                    continue
+                for prerequisite_code in target.prerequisites or []:
+                    prerequisite = point_by_code.get(prerequisite_code)
+                    if prerequisite is None:
+                        skipped_external += 1
+                        continue
+                    if builder._write_triplet(
+                        Triplet(
+                            source=prerequisite.title,
+                            target=target.title,
+                            relation="PREREQUISITE_OF",
+                            confidence=1.0,
+                            evidence=f"{source_ref.id}:{evidence_id}",
+                        ),
+                        GraphFactProvenance(
+                            source_kind="canonical_course",
+                            verification_status="verified",
+                            course_id=course.id,
+                            source_ref_id=source_ref.id,
+                            evidence_id=evidence_id,
+                            content_hash=source_ref.content_hash.lower(),
+                            manifest_hash=manifest_hash,
+                            extraction_method="canonical_course_prerequisite",
+                        ),
+                    ):
+                        written += 1
+    builder.canonical_seed_report = {
+        "written_facts": written,
+        "skipped_external_prerequisites": skipped_external,
+        "rejected_facts": rejected,
+    }
+    return builder.canonical_seed_report
 
 
 def build_graph_after_upload(
@@ -322,7 +459,23 @@ def _build_co_occur_edges(evidence_chunks: tuple, source: str, builder: Any) -> 
                 tgt_concept = getattr(item, "source", "")[:30] or f"chunk_{item.id[:8]}"
                 if hasattr(builder.repository, "merge_edge"):
                     try:
-                        builder.repository.merge_edge(src_concept, tgt_concept, "CO_OCCUR")
+                        from app.utils.graph_models import GraphFact, GraphFactProvenance, Triplet
+
+                        builder.repository.record_candidate(
+                            GraphFact(
+                                triplet=Triplet(
+                                    source=src_concept,
+                                    target=tgt_concept,
+                                    relation="CO_OCCUR",
+                                    confidence=float(item.score),
+                                ),
+                                provenance=GraphFactProvenance(
+                                    source_kind="co_occurrence",
+                                    verification_status="candidate",
+                                    extraction_method="embedding_similarity",
+                                ),
+                            )
+                        )
                         count += 1
                     except Exception:
                         pass

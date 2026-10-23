@@ -289,13 +289,13 @@ class LearningStrategyPlan:
 @dataclass
 class StudentProfile:
     student_id: str = "demo-student"
-    target_course: str = "机器学习导论"
-    knowledge_base: str = "初级"
-    cognitive_style: str = "视觉+代码导向"
+    target_course: str = ""
+    knowledge_base: str = ""
+    cognitive_style: str = ""
     weak_points: list[str] = field(default_factory=list)
-    focus_level: float = 0.72
-    major_preference: str = "人工智能实践"
-    cognitive_load: float = 0.45
+    focus_level: float = 0.0
+    major_preference: str = ""
+    cognitive_load: float = 0.0
     history: list[str] = field(default_factory=list)
     major: str = ""
     learning_goals: list[str] = field(default_factory=list)

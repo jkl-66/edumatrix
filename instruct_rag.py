@@ -1,10 +1,50 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
+import asyncio
 
 from llm_client import AsyncLLMBackend, DEFAULT_ASYNC_LLM, LLMBackend
 from models import AgentOutput, Evidence, GraphContext, StudentProfile
+from app.m5_gateway import StreamingModelCallLifecycle
+from config import CONFIG
+
+
+# 旧版资源工厂的角色提示词。它们是“教学职责”而不是另一条生成链；
+# 当前结构化资源入口会复用同一组要求，确保恢复旧版丰富度时仍只有一个模型边界。
+LEGACY_RESOURCE_PROMPTS: dict[str, str] = {
+    "理论教授": (
+        "负责把目标知识点讲成一份可学习、可复习、可迁移的专业讲义。按“学习目标→背景与术语→核心机制/推导→"
+        "带解释的例子→反例与边界→常见误区→代码或实验阅读→闭卷检索问题→下一步练习”组织。"
+        "每个结论先说明适用条件；课程证据不足时可以用通用基础知识补足教学链，但把它标为通用拓展，绝不伪造课程来源。"
+    ),
+    "逻辑画师": (
+        "负责把理论教授确认的概念、前置关系、机制、应用和误区组织成层级清晰的思维导图。"
+        "同义概念合并，保留主干与跨主题桥接；每个节点只放一个短概念，必要时附一句解释或例子，"
+        "同时提供可折叠的 Mermaid mindmap，禁止把长段落塞进节点。"
+    ),
+    "极客助教": (
+        "负责把概念落到可运行的 Python/NumPy/PyTorch/Scikit-Learn 实操。先给最小可运行示例，再逐步增加参数、"
+        "观察输出、解释错误和验证边界；代码必须含完整 import、输入数据、执行入口和可观察结果，不用省略号冒充代码。"
+    ),
+    "考官智能体": (
+        "负责生成从基础理解到综合迁移的分层题目。题干要对应目标知识点和岗位/课程情境，给出答案、解析、评分标准、"
+        "常见误区和三层提示阶梯；提示只能逐步减少困难，不能在第一层直接泄露答案。"
+    ),
+    "视频推荐官": (
+        "负责根据学习目标、掌握度和学习风格解释每个候选视频的观看价值、建议片段和观看后任务。"
+        "只使用系统提供的真实候选与 URL，不自行猜测链接；视频脚本或推荐说明要和讲义、导图、练习的术语保持一致。"
+    ),
+}
+
+LEGACY_LEARNING_STRATEGY_PROMPTS: dict[str, str] = {
+    "WORKED_EXAMPLE": "先给一个从输入到结果的完整 worked example，再让学习者修改一个参数并解释变化。",
+    "HINT_LADDER": "提供模糊线索→适用方法→局部步骤三级提示，任何一级都不直接泄露完整答案。",
+    "RETRIEVAL_PRACTICE": "学习后安排闭卷检索题，要求写出错因和下次识别线索，而不是只看答案。",
+    "MISCONCEPTION_CONTRAST": "把正例、反例和相似概念放在同一对照中，明确边界条件和高频混淆点。",
+    "METACOGNITIVE_CALIBRATION": "作答前记录自评掌握度，作答后比较自评与表现，促成校准。",
+    "SPACED_REVIEW": "生成三分钟内可完成的短复习题，并围绕间隔保持率安排复习。",
+}
 
 
 # === P2-3 共享构建计划函数（消除同步/异步代码重复） ===
@@ -146,6 +186,22 @@ def _build_instruction_plan(
     else:
         role_rules = f"围绕 {graph_context.target}，给出该角色视角下的核心教学输出。\n"
 
+    legacy_role_guidance = LEGACY_RESOURCE_PROMPTS.get(role)
+    if legacy_role_guidance:
+        role_rules = (
+            f"{role_rules}\n"
+            f"【旧版资源工厂职责恢复】{legacy_role_guidance}\n"
+        )
+
+    # 旧版强调内容完整度；资料较少时不能把讲义压缩成空洞摘要。
+    # 允许模型补足通用教学背景，但仍要求区分课程证据和通用拓展。
+    sparse_evidence_guidance = (
+        "【证据稀疏时的教学策略】当可用课程证据不足以覆盖完整教学链时，"
+        "使用你掌握的通用基础知识补齐定义、例子、反例和练习，使学习者仍能完成学习；"
+        "把无法由给定来源直接支持的内容标注为‘通用拓展’，不要伪造 source_ref 或课程原文。\n"
+    )
+    role_rules = f"{role_rules}{sparse_evidence_guidance}"
+
     forced_section = f"{forced_instruction}\n" if forced_instruction else ""
 
     if role == "视频推荐官":
@@ -189,7 +245,7 @@ def _build_instruction_plan(
         f"{graph_context.to_prompt()}\n"
         f"可用证据：\n{evidence_prompt}\n"
         f"额外纠偏要求：{correction or '无'}\n"
-        "输出要求：结构完整，只回答当前核心任务，不要啰嗦。"
+        "输出要求：结构完整、内容充分，只回答当前核心任务；优先给出可执行的学习步骤、例子和检查点。"
     )
 
     return InstructionPlan(
@@ -292,6 +348,7 @@ class AsyncInstructRAGGenerator:
         correction: str = "",
         conversation_memory: str = "",
         forced_instruction: str = "",
+        model_call_context: dict[str, Any] | None = None,
     ) -> AgentOutput:
         plan = self._build_plan(
             role=role,
@@ -304,7 +361,40 @@ class AsyncInstructRAGGenerator:
             conversation_memory=conversation_memory,
             forced_instruction=forced_instruction,
         )
-        content = await self.llm.generate(plan.system_prompt, plan.user_prompt, role=role)
+        context = model_call_context or {}
+        provider = "deterministic" if self.llm.__class__.__name__ == "AsyncDeterministicEducationLLM" else CONFIG.llm_provider
+        model = getattr(self.llm, "model", "deterministic" if provider == "deterministic" else CONFIG.llm_model)
+        lifecycle = StreamingModelCallLifecycle(
+            capability="answer",
+            prompt_key="matrix_resource_agent",
+            prompt_version="1.0",
+            provider=provider or "unknown",
+            model=model or "unknown",
+            system_prompt=plan.system_prompt,
+            user_prompt=plan.user_prompt,
+            owner_public_id=context.get("owner_public_id"),
+            course_id=context.get("course_id"),
+            trace_id=context.get("trace_id"),
+            input_summary={
+                "operation": "matrix_resource_agent",
+                "agent_role": role,
+                "resource_type": resource_type,
+                "evidence_count": len(evidence),
+            },
+            database_runner=context.get("database_runner"),
+        )
+        try:
+            await lifecycle.start()
+            content = await self.llm.generate(plan.system_prompt, plan.user_prompt, role=role)
+            await lifecycle.complete(content)
+        except asyncio.CancelledError:
+            if lifecycle.call_id is not None:
+                await asyncio.shield(lifecycle.fail("client_disconnected"))
+            raise
+        except Exception:
+            if lifecycle.call_id is not None:
+                await lifecycle.fail("agent_provider_failed")
+            raise
         return AgentOutput(
             agent=role,
             resource_type=resource_type,

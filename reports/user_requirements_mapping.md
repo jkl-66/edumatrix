@@ -88,7 +88,7 @@ graph TD
 *   **多模态视频脚本转化为真实 MP4 视频**：系统目前可以生成详尽的“多模态教学视频/动画脚本（Director）” [证据：[agent_swarm.py](file:///d:/project-edumatrix/edumatrix-main/agent_swarm.py#L71)]，但前端页面实际渲染的是讯飞流式 TTS 伴随虚拟人嘴形一阶低通平滑缩放的声画模拟联动 [证据：[frontend/src/components/AvatarSpeech.ts](file:///d:/project-edumatrix/edumatrix-main/frontend/src/components/AvatarSpeech.ts#L302)]，并未在后端真正合成出 MP4 物理视频文件供学生下载。
 
 ### 3. 未实现或计划在未来迭代的功能
-*   **异构知识图谱图神经网络（GNN）预测**：初赛实施方案提到由于数据集限制，GNN/GAT 算法作为答辩的“未来技术展望/学术包装”保留，代码中并未真实编写图卷积运算模块 [证据：[member3_implementation_plan.md](file:///d:/project-edumatrix/edumatrix-main/member3_implementation_plan.md#L237)]。
+*   **异构知识图谱图神经网络（GNN）预测**：初赛实施方案提到由于数据集限制，GNN/GAT 算法作为答辩的“未来技术展望/学术包装”保留，代码中并未真实编写图卷积运算模块 [证据：[member3_implementation_plan.md](../docs/history/member3_implementation_plan.md#L237)]。
 *   **分布式事务级多数据库 Schema 自动伸缩**：目前多租户隔离是在 SQLite 的 `search_path` 上做拦截防护 [证据：[app/database.py](file:///d:/project-edumatrix/edumatrix-main/app/database.py#L49)]，在物理多服务器集群上的分布式自动部署与 Schema 伸缩尚未在代码中构建。
 
 ---

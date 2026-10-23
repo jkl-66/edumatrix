@@ -58,6 +58,42 @@ class TestFAISSPersistence(unittest.TestCase):
         self.assertTrue(hits)
         hit_ids = {h.id for h in hits}
         self.assertTrue(hit_ids.issubset({f"test-ev-{i}" for i in range(5)}))
+        with open(save_path + ".json", encoding="utf-8") as handle:
+            metadata = __import__("json").load(handle)
+        self.assertIn("embedding", metadata)
+        self.assertEqual(metadata["embedding"]["name"], "hash-embedding")
+
+    def test_faiss_save_load_round_trip_in_unicode_directory(self):
+        unicode_dir = os.path.join(self.tmpdir, "中文证据")
+        save_path = os.path.join(unicode_dir, "课程索引")
+        original = FaissVectorIndex(name="unicode-round-trip")
+        original.upsert(self._make_evidence(3))
+
+        original.save(save_path)
+        loaded = FaissVectorIndex.load(save_path)
+
+        self.assertEqual(loaded.count(), 3)
+        self.assertTrue(loaded.search("pooling", top_k=1))
+
+    def test_medium_course_corpus_keeps_exact_flat_index(self):
+        index = FaissVectorIndex(name="medium-course")
+        index.upsert(self._make_evidence(365))
+
+        self.assertEqual(type(index._index).__name__, "IndexFlatIP")
+        self.assertFalse(index._use_ivf)
+
+    def test_faiss_index_set_discovers_manifest_named_index(self):
+        from rag_engine import FAISSIndexSet
+
+        index = FaissVectorIndex(name="licensed-course")
+        index.upsert(self._make_evidence(4))
+        index.save(os.path.join(self.tmpdir, "licensed_ml_course"))
+
+        loaded = FAISSIndexSet(self.tmpdir)
+
+        self.assertIn("licensed_ml_course", loaded.indexes)
+        self.assertEqual(loaded.indexes["licensed_ml_course"].count(), 4)
+        self.assertTrue(loaded.search("pooling", top_k=2))
 
     def test_faiss_incremental_upsert_and_save(self):
         """Additional upserts merge correctly before and after save/load."""

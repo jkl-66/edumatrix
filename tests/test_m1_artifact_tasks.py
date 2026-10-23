@@ -7,6 +7,7 @@ from app.database import (
     DBArtifact,
     DBArtifactRelation,
     DBArtifactVersion,
+    DBCourse,
     DBTaskEvent,
     DBUser,
     SessionLocal,
@@ -37,14 +38,20 @@ def _user(session):
 def test_generation_task_idempotency_and_replayable_timeline():
     with SessionLocal() as session:
         user = _user(session)
+        course_id = new_public_id("m1-task-course")
+        session.add(DBCourse(
+            id=course_id, version="m1-test", title="M1 Task Fixture",
+            visibility="private", manifest_version="m1-test",
+        ))
+        session.flush()
         key = new_public_id("idem")
         task, created = create_generation_task(
             session, owner_public_id=user.public_id, capability="resource.generate",
-            idempotency_key=key, course_id="course-rag-engineering-m0"
+            idempotency_key=key, course_id=course_id
         )
         duplicate, duplicate_created = create_generation_task(
             session, owner_public_id=user.public_id, capability="resource.generate",
-            idempotency_key=key, course_id="course-rag-engineering-m0"
+            idempotency_key=key, course_id=course_id
         )
         assert created is True
         assert duplicate_created is False

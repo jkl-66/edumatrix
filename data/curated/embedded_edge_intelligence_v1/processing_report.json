@@ -1,0 +1,13 @@
+{
+  "schema_version": "edumatrix.course-processing-report.v1",
+  "course_id": "course-embedded-edge-intelligence-v1",
+  "source_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+  "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+  "parser_version": "edumatrix-edge-course-readme-v1",
+  "output_manifest_sha256": "b0d1e00d5e476170786416a3ad9474eafe18349da86cf249211fe9f1b97a6d84",
+  "chapter_count": 8,
+  "license_sha256": "c95497dd13d573881be2b0e7b30894ed0e101e5c8432a60f0f70a3867090f176",
+  "network_calls": 0,
+  "external_model_calls": 0,
+  "excluded_binary_assets": true
+}

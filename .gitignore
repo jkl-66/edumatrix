@@ -1,11 +1,11 @@
 # Python
 .reasonix/
 *.db
-!edumatrix.db
-!edumatrix_safe_backup.db
-!data/backups/edumatrix_safe_backup.db
 *.db-shm
 *.db-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 !scripts/data/quiz_bank/
 __pycache__/
 *.py[cod]
@@ -17,13 +17,48 @@ venv/
 
 # Environment & Secrets
 .env
+.env.*
+!.env.example
+!packaging/.env.runtime.template
 *.local
 
 # SQLite Database (local data, not to be committed)
 *.sqlite
 /data/
-!/data/backups/
-!/data/backups/*
+!/data/
+/data/*
+!/data/raw/
+/data/raw/*
+!/data/raw/videos_metadata/
+/data/raw/videos_metadata/*
+!/data/raw/videos_metadata/legal_video_catalog.json
+!/data/raw/videos_metadata/video_node_alignment.jsonl
+!/data/README.md
+!/data/curated/
+!/data/curated/**
+!/data/domain_plugins/
+!/data/domain_plugins/**
+!/data/manifest/
+!/data/manifest/**
+!/data/datasets/
+/data/datasets/*
+!/data/datasets/adult/
+!/data/datasets/auto_mpg/
+!/data/datasets/breast_cancer_wisconsin/
+!/data/datasets/california_housing/
+!/data/datasets/diabetes/
+!/data/datasets/iris/
+!/data/datasets/wine/
+!/data/evidences.json
+!/data/patches/
+/data/patches/*
+!/data/patches/pooling_2x2.png
+!/data/patches/avg_pooling.png
+!/data/patches/conv_stride.png
+!/data/patches/backprop_math.png
+!/data/patches/ml_pipeline.png
+!/data/patches/overfit_curve.png
+!/data/patches/confusion_matrix.png
 
 # Frontend
 node_modules/
@@ -109,7 +144,6 @@ README00.md
 现在假设你是这个榜题的总评委，有一份满足了以上要求的作品交到你手上，但是有太多的人借助ai做出了这....md
 
 # Personal Developer Guides & Logs (keep local only)
-AGENTS.md
 GUIDE.md
 DEVELOPMENT_TRACE.md
 WORKLOG.md
@@ -123,3 +157,30 @@ docs/edumatrix_test_manual.md
 docs/edumatrix_e2e_test_flow.md
 
 data.zip
+
+# Local media, generated runs and historical submission packages
+/111.mp4
+/runtime/
+/.tmp_video_frames/
+/.impeccable/
+/skills-lock.json
+/软件著作权申请资料/
+/outputs/*
+!/outputs/README.md
+!/outputs/M0_阶段0基线与架构契约/
+/outputs/M0_阶段0基线与架构契约/*
+!/outputs/M0_阶段0基线与架构契约/baseline_course/
+!/outputs/M0_阶段0基线与架构契约/datasets/
+!/outputs/figures/
+
+# Optional downloaded speech runtime; provenance remains versioned
+/vendor/whisper.cpp/bin/
+/vendor/whisper.cpp/models/
+
+# Public baseline: local-only textbook copies without confirmed redistribution terms
+/data/curated/ai_deep_learning_agents_v1/chapters/*NNDL*
+
+# Transient test runs and archived local notes
+/tests/m8_runtime_fixture/
+!/docs/history/WORKLOG.md
+!/docs/history/DEVELOPMENT_TRACE.md

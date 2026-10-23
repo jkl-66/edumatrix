@@ -14,9 +14,30 @@ export function buildHeaders() {
 
 export const api = axios.create({ baseURL: '/api' })
 
+export function errorMessageText(value, fallback = '') {
+  const seen = new Set()
+  const visit = (candidate, depth = 0) => {
+    if (candidate === null || candidate === undefined || depth > 4) return ''
+    if (typeof candidate === 'string') return candidate.trim()
+    if (typeof candidate === 'number' || typeof candidate === 'boolean') return String(candidate)
+    if (seen.has(candidate)) return ''
+    if (typeof candidate !== 'object') return ''
+    seen.add(candidate)
+    if (Array.isArray(candidate)) {
+      return candidate.map((item) => visit(item, depth + 1)).filter(Boolean).join('；')
+    }
+    for (const key of ['message', 'detail', 'error', 'reason', 'title', 'msg']) {
+      const result = visit(candidate[key], depth + 1)
+      if (result) return result
+    }
+    return ''
+  }
+  return visit(value) || fallback
+}
+
 export class EduMatrixApiError extends Error {
   constructor(status, detail, response = null) {
-    super(detail || `请求失败 (${status || 'network'})`)
+    super(errorMessageText(detail, `请求失败 (${status || 'network'})`))
     this.name = 'EduMatrixApiError'
     this.status = status || 0
     this.detail = detail || ''
@@ -35,6 +56,18 @@ export function normalizeApiError(error) {
   return new EduMatrixApiError(status, detail, error?.response || null)
 }
 
+export function authConfig(params) {
+  return { params, headers: buildHeaders() }
+}
+
+export async function request(promise) {
+  try {
+    return (await promise).data
+  } catch (error) {
+    throw normalizeApiError(error)
+  }
+}
+
 const AUTH_STORAGE_KEYS = [
   'edumatrix_token',
   'edumatrix_role',
@@ -43,11 +76,19 @@ const AUTH_STORAGE_KEYS = [
   'edumatrix_student_id',
   'edumatrix_viewing_student',
   'edumatrix_onboarded',
+  'edumatrix_context_ref',
+  'edumatrix_course_id',
+  'edumatrix_course_title',
+  'edumatrix_chat_messages',
 ]
 let authRedirecting = false
 
-function clearExpiredAuth() {
+export function clearAuthSession() {
   AUTH_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key))
+}
+
+function clearExpiredAuth() {
+  clearAuthSession()
   if (!authRedirecting && window.location.pathname !== '/login') {
     authRedirecting = true
     window.location.assign('/login?reason=session-expired')

@@ -22,6 +22,8 @@ def _package():
         "schema_version": "edumatrix.domain-plugin.v1",
         "plugin_id": "robotics-basics", "plugin_version": "1.0.0",
         "domain_key": "robotics", "title": "Robotics", "license": "CC-BY-4.0",
+        "attribution": "Synthetic robotics fixture", "source_url": "https://example.invalid/robotics",
+        "source_version": "fixture-1",
         "assets": [{
             "path": "chapters.json", "sha256": hashlib.sha256(payload).hexdigest(),
             "media_type": "application/json", "purpose": "chapters",

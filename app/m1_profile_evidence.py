@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from app.database import DBProfileEvidence, DBStudentProfile, DBUser
+from app.database import DBLearningEvent, DBProfileEvidence, DBStudentProfile, DBUser
 
 
 def _bounded_score(value: Any) -> float:
@@ -104,3 +104,41 @@ def profile_evidence_compat_view(session: Any, student_id: str) -> list[dict[str
         } for row in rows]
     profile = session.query(DBStudentProfile).filter_by(student_id=student_id).first()
     return list(profile.profile_evidence or []) if profile else []
+
+
+def project_learning_event_evidence(
+    session: Any, event: DBLearningEvent,
+) -> DBProfileEvidence | None:
+    """Project accepted event evidence without changing any mastery aggregate."""
+    if event.evidence_status != "accepted" or not event.mastery_eligible:
+        return None
+    user = session.query(DBUser).filter_by(public_id=event.owner_public_id).first()
+    student_id = user.username if user else str(event.owner_public_id or "")
+    if not student_id:
+        return None
+    legacy_key = hashlib.sha256(f"learning-event:{event.id}".encode("utf-8")).hexdigest()
+    row = session.query(DBProfileEvidence).filter_by(
+        legacy_student_id=student_id,
+        legacy_key=legacy_key,
+    ).first()
+    if row is None:
+        row = DBProfileEvidence(
+            legacy_student_id=student_id,
+            legacy_key=legacy_key,
+        )
+        session.add(row)
+    row.owner_public_id = event.owner_public_id
+    row.source_type = f"learning_event:{event.action}"[:64]
+    row.source_object_id = event.id
+    row.features = [event.action, event.object_type, event.object_id]
+    row.weight = _bounded_score(event.evidence_strength)
+    row.confidence = _bounded_score((event.payload or {}).get("confidence", 1.0))
+    row.evidence_summary = (
+        f"{event.action} · {event.object_type}:{event.object_id}"
+    )[:2048]
+    row.observed_at = event.occurred_at
+    row.status = "active"
+    row.evidence_version = event.payload_version
+    row.trace_id = event.trace_id
+    session.flush()
+    return row

@@ -64,7 +64,7 @@ def test_request_cannot_escalate_registration_role_or_choose_authority_id():
 
 
 def test_role_vocabulary_covers_m0_roles():
-    assert {"admin", "teacher", "assistant", "student", "visitor"} <= VALID_ROLES
+    assert VALID_ROLES == {"admin", "teacher", "student"}
 
 
 def test_object_policy_denies_unrelated_private_owner():
@@ -104,4 +104,3 @@ def test_course_membership_is_persisted_and_not_caller_supplied():
                 session, other, course_id=membership.course_id, action="read"
             )
         assert raised.value.status_code == 403
-

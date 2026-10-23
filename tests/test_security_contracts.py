@@ -119,6 +119,16 @@ class TestSecurityContracts(unittest.TestCase):
             self.assertNotIn(forbidden, combined)
         self.assertIn("localStorage.removeItem('edumatrix_llm_config')", settings)
 
+    def test_default_teacher_is_only_seeded_in_explicit_demo_mode(self):
+        main = self.read("app/main.py")
+        seed_call = main.index("await run_db_op(seed_teacher)")
+        guard = main.rfind("if CONFIG.demo_mode:", 0, seed_call)
+        self.assertGreater(guard, main.index("async def startup"))
+        env_example = self.read(".env.example")
+        self.assertIn("EDUMATRIX_LLM_PROVIDER=deterministic", env_example)
+        self.assertNotIn("windhub.cc", env_example)
+        self.assertNotIn("open.bigmodel.cn", env_example)
+
     def test_swarm_factory_ignores_external_model_configuration_headers(self):
         source = self.read("swarm_factory.py")
         for forbidden in ("x-edumatrix-api-key", "x-edumatrix-endpoint", "x-edumatrix-model", "x-edumatrix-multimodal-api-key"):

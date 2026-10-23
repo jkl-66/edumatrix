@@ -34,7 +34,7 @@ async function submitQuality(quality) {
   submitting.value = true
   reviewMessage.value = ''
   try {
-    const res = await reviewFlashcard(props.studentId, props.card.concept, quality)
+    const res = await reviewFlashcard(props.studentId, props.card.concept, quality, props.card.id || '')
     nextReviewInterval.value = res.interval_new
     reviewMessage.value = res.message || `复习成功！下次复习间隔 ${res.interval_new} 天`
     emit('reviewed', res)

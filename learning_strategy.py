@@ -1015,6 +1015,7 @@ def build_adaptive_astar_route(
     max_steps: int = 8,
     resource_index: dict[str, dict[str, Any]] | None = None,
     graph_metadata: dict[str, Any] | None = None,
+    owner_public_id: str | None = None,
 ) -> dict[str, Any]:
     """Plan a deterministic multi-constraint A* route over prerequisite edges."""
     mastery = mastery or {}
@@ -1308,6 +1309,7 @@ def build_adaptive_astar_route(
         frustration=affect,
         audit=audit,
         session_plan=session_plan,
+        owner_public_id=owner_public_id,
     )
     
     # 运行 A* 寻路寻找已掌握起点到本阶段目标的辅助最优路径，用于 Swarm Terminal 日志的可观测性呈现
@@ -1423,6 +1425,7 @@ def _review_candidate_route_with_planner(
     frustration: float,
     audit: dict[str, Any],
     session_plan: dict[str, Any],
+    owner_public_id: str | None = None,
 ) -> dict[str, Any]:
     action_dispatch = [
         {
@@ -1442,6 +1445,7 @@ def _review_candidate_route_with_planner(
     guidance = fallback_guidance
     try:
         from llm_client import DEFAULT_LLM
+        from app.m5_legacy_calls import audited_legacy_sync_text_call
 
         llm_backend = getattr(DEFAULT_LLM, "__class__", type(DEFAULT_LLM)).__name__
         prompt = (
@@ -1451,11 +1455,23 @@ def _review_candidate_route_with_planner(
             f"今日切片: {session_plan.get('today_concepts', [])}\n"
             "请用一句话审核路线，并说明今天的执行建议。"
         )
-        guidance = DEFAULT_LLM.generate(
-            "你是 EduMatrix 的路径规划师，负责审核候选路线，不改变拓扑顺序。",
-            prompt,
-            role="路径规划师",
-        )
+        if owner_public_id:
+            guidance = audited_legacy_sync_text_call(
+                DEFAULT_LLM,
+                system_prompt="你是 EduMatrix 的路径规划师，负责审核候选路线，不改变拓扑顺序。",
+                user_prompt=prompt,
+                role="路径规划师",
+                operation="learning_path_review",
+                capability="plan",
+                owner_public_id=owner_public_id,
+                input_summary={
+                    "route_node_count": len(route_nodes),
+                    "candidate_path_count": len(candidate_path),
+                    "profile_payload_included": False,
+                },
+            )
+        else:
+            llm_backend = "deterministic-fallback-unowned"
     except Exception:
         guidance = fallback_guidance
 
@@ -1594,6 +1610,7 @@ class PathPlanner:
         frustration: float = 0.0,
         mastery_threshold: float = 0.7,
         max_steps: int = 8,
+        owner_public_id: str | None = None,
     ) -> dict[str, Any]:
         active_dag, resource_index, graph_metadata, active_tiers = self._active_inputs()
         return build_adaptive_astar_route(
@@ -1608,6 +1625,7 @@ class PathPlanner:
             max_steps=max_steps,
             resource_index=resource_index,
             graph_metadata=graph_metadata,
+            owner_public_id=owner_public_id,
         )
 
 

@@ -6,7 +6,8 @@ import secrets
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+    if os.getenv("PYTHON_DOTENV_DISABLED", "").strip().lower() not in {"1", "true", "yes"}:
+        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 except ImportError:
     pass
 
@@ -44,6 +45,8 @@ class EduMatrixConfig:
     llm_temperature: float = float(os.getenv("EDUMATRIX_LLM_TEMPERATURE", "0.3"))
     llm_max_tokens: int = int(os.getenv("EDUMATRIX_LLM_MAX_TOKENS", "8192"))
     llm_timeout: int = int(os.getenv("EDUMATRIX_LLM_TIMEOUT", "120"))
+    llm_thinking_mode: str = os.getenv("EDUMATRIX_LLM_THINKING_MODE", "").strip().lower()
+    llm_reasoning_effort: str = os.getenv("EDUMATRIX_LLM_REASONING_EFFORT", "").strip().lower()
 
     # Configs for fallback multimodal LLM
     multimodal_llm_provider: str = os.getenv("EDUMATRIX_MULTIMODAL_LLM_PROVIDER", "")
@@ -103,6 +106,8 @@ class EduMatrixConfig:
     auth_algorithm: str = os.getenv("EDUMATRIX_AUTH_ALGORITHM", "HS256")
     auth_access_token_expire_minutes: int = int(os.getenv("EDUMATRIX_AUTH_TOKEN_EXPIRE_MINS", "1440")) # Default 24 hours
     demo_mode: bool = os.getenv("EDUMATRIX_DEMO_MODE", "0") == "1"
+    chat_resource_demo_execution: bool = os.getenv("EDUMATRIX_CHAT_RESOURCE_DEMO_EXECUTION", "0") == "1"
+    onboarding_v2: bool = os.getenv("EDUMATRIX_ONBOARDING_V2", "1") == "1"
 
     # Sandbox Settings. trusted_local is a research/demo mode: it uses a
     # restricted child process but does not provide container isolation.

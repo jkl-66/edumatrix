@@ -1,0 +1,69 @@
+{
+  "schema_version": "edumatrix.course-retrieval-evaluation.v1",
+  "dataset_version": "embedded-edge-intelligence-retrieval-1.0.0",
+  "course_id": "course-embedded-edge-intelligence-v1",
+  "course_manifest_version": "course-embedded-edge-intelligence-1.0.0",
+  "top_k": 5,
+  "answerable_cases": [
+    {
+      "id": "EDGERET-001",
+      "query": "边缘机器学习相较云端机器学习适合解决哪些资源受限设备问题？",
+      "relevant_documents": ["00_边缘机器学习导论.md"],
+      "allowed_answer_terms": ["embedded", "resource-constrained", "limitations"]
+    },
+    {
+      "id": "EDGERET-002",
+      "query": "Why should training, validation and test datasets be separated, and how can overfitting be identified?",
+      "relevant_documents": ["01_深度学习与嵌入式约束.md"],
+      "allowed_answer_terms": ["training", "validation", "test", "overfitting"]
+    },
+    {
+      "id": "EDGERET-003",
+      "query": "边缘模型工作流如何计算 accuracy、precision、recall 和 F1？",
+      "relevant_documents": ["02_边缘机器学习工作流.md"],
+      "allowed_answer_terms": ["accuracy", "precision", "recall", "F1"]
+    },
+    {
+      "id": "EDGERET-004",
+      "query": "量化为什么对嵌入式模型部署重要，部署后如何执行 inference？",
+      "relevant_documents": ["03_模型量化与部署.md"],
+      "allowed_answer_terms": ["quantization", "inference", "embedded"]
+    },
+    {
+      "id": "EDGERET-005",
+      "query": "异常检测如何用于边缘设备的问题识别？",
+      "relevant_documents": ["04_边缘异常检测.md"],
+      "allowed_answer_terms": ["anomaly detection", "embedded"]
+    },
+    {
+      "id": "EDGERET-006",
+      "query": "卷积和池化在嵌入式图像分类的 CNN 中分别有什么作用？",
+      "relevant_documents": ["05_嵌入式图像分类.md"],
+      "allowed_answer_terms": ["convolution", "pooling", "convolutional neural networks"]
+    },
+    {
+      "id": "EDGERET-007",
+      "query": "目标检测、图像分类和图像分割有什么区别，为什么要考虑负责任 AI？",
+      "relevant_documents": ["06_目标检测与负责任 AI.md"],
+      "allowed_answer_terms": ["object detection", "image classification", "image segmentation", "ethical"]
+    },
+    {
+      "id": "EDGERET-008",
+      "query": "关键词唤醒系统包含哪些主要组件，如何训练声音分类系统？",
+      "relevant_documents": ["07_关键词唤醒系统.md"],
+      "allowed_answer_terms": ["keyword spotting", "sound classification", "train and deploy"]
+    }
+  ],
+  "no_evidence_cases": [
+    {
+      "id": "EDGERET-NE-001",
+      "query": "工业 PLC 的 IEC 61131-3 梯形图指令集有哪些？",
+      "expected_reason": "material_not_covered"
+    },
+    {
+      "id": "EDGERET-NE-002",
+      "query": "毫米波雷达 FMCW 距离 FFT 的具体窗函数参数是什么？",
+      "expected_reason": "material_not_covered"
+    }
+  ]
+}

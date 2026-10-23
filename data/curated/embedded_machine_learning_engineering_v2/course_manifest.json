@@ -1,0 +1,2524 @@
+{
+  "schema_version": "edumatrix.course-version-manifest.v1",
+  "manifest_version": "course-embedded-machine-learning-engineering-2.0.0",
+  "generated_at": "2026-08-21T00:00:00+08:00",
+  "course_id": "course-embedded-machine-learning-engineering-v2",
+  "title": "嵌入式机器学习与边缘智能工程实践",
+  "subject": "电子信息 / 人工智能 / TinyML",
+  "description": "一门从问题定义、模型训练、评估、量化部署到现场监控的完整垂直课程，含 8 个模块、PDF 工程手册、真实 DOCX/PPTX 课件和本地课程导览视频。",
+  "domain_pack": "domain-embedded-machine-learning-engineering-v2",
+  "knowledge_point_version": "eml-kp-2.0.0",
+  "language": "zh-CN / en",
+  "tags": [
+    "嵌入式机器学习",
+    "边缘智能",
+    "TinyML",
+    "工程实践"
+  ],
+  "content_origin": "Edge Impulse 开放课程固定版本 a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6 与 EduMatrix 团队改编材料。",
+  "license": "CC BY-NC-SA 4.0; attribution and change notice retained in LICENSE-AND-ATTRIBUTION.md.",
+  "visibility": "public",
+  "status": "published",
+  "claim_boundary": "非商业比赛与教学演示课程；不宣称行业认证或独立专家背书。",
+  "external_material_policy": "No standard-license YouTube video is downloaded or redistributed.",
+  "source_repository": {
+    "key": "edge-impulse-courseware",
+    "url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+    "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+    "source_path": "README.md",
+    "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7"
+  },
+  "processing": {
+    "deterministic": true,
+    "network_required": false,
+    "external_model_used": false,
+    "video_transcription_at_startup": false
+  },
+  "knowledge_points": [
+    {
+      "code": "EML-KP-01",
+      "title": "边缘机器学习导论与责任边界",
+      "level": "foundation",
+      "prerequisites": []
+    },
+    {
+      "code": "EML-KP-02",
+      "title": "神经网络训练与嵌入式约束",
+      "level": "foundation",
+      "prerequisites": [
+        "EML-KP-01"
+      ]
+    },
+    {
+      "code": "EML-KP-03",
+      "title": "端到端机器学习工程工作流",
+      "level": "core",
+      "prerequisites": [
+        "EML-KP-01",
+        "EML-KP-02"
+      ]
+    },
+    {
+      "code": "EML-KP-04",
+      "title": "量化、编译与设备部署",
+      "level": "core",
+      "prerequisites": [
+        "EML-KP-03"
+      ]
+    },
+    {
+      "code": "EML-KP-05",
+      "title": "边缘异常检测与阈值治理",
+      "level": "advanced",
+      "prerequisites": [
+        "EML-KP-03"
+      ]
+    },
+    {
+      "code": "EML-KP-06",
+      "title": "嵌入式图像分类与迁移学习",
+      "level": "advanced",
+      "prerequisites": [
+        "EML-KP-02",
+        "EML-KP-03"
+      ]
+    },
+    {
+      "code": "EML-KP-07",
+      "title": "目标检测、定位误差与负责任 AI",
+      "level": "advanced",
+      "prerequisites": [
+        "EML-KP-06"
+      ]
+    },
+    {
+      "code": "EML-KP-08",
+      "title": "关键词唤醒系统与持续监控",
+      "level": "advanced",
+      "prerequisites": [
+        "EML-KP-03"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "chapter_order": 0,
+      "chapter_key": "course-overview",
+      "chapter_position": 0,
+      "parent_chapter_key": "",
+      "title": "课程导论：嵌入式机器学习与边缘智能工程手册",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "materials/嵌入式机器学习与边缘智能工程手册.pdf",
+      "bytes": 43390,
+      "sha256": "22da12c2373b20b53a212e8778122d278d29711dd741fb3e38fe1796852724e2",
+      "parser_version": "edumatrix-pdf-text-v2",
+      "conversion": {
+        "strategy": "team_authored_pdf_handbook_from_frozen_course_outline",
+        "page_count": 28
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-01",
+        "EML-KP-02",
+        "EML-KP-03",
+        "EML-KP-04",
+        "EML-KP-05",
+        "EML-KP-06",
+        "EML-KP-07",
+        "EML-KP-08"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。",
+      "reader_pages": [
+        {
+          "page_number": 1,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "1d31907069fc9cfdf02ca742ba9d7a1d589b4472b56784fcdc7f814d807a48d1",
+          "redacted_image_sha256": "1d31907069fc9cfdf02ca742ba9d7a1d589b4472b56784fcdc7f814d807a48d1",
+          "asset_name": "page-0001.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0001.png",
+          "asset_bytes": 99868,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p1-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.346838757949869,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "课程目标\n建立从问题定义、数据采集、模型训练、评估、量化部署到现场监控的完整方法。\n能够在设备资源、实时性、隐私和可靠性约束下解释技术取舍。\n通过图像、异常检测、目标检测和关键词唤醒案例完成跨模态实践。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 2,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "c33fd970aaa727cdea7b67edb79d87a67f99ce9546318d4e3b2e0769498cc380",
+          "redacted_image_sha256": "c33fd970aaa727cdea7b67edb79d87a67f99ce9546318d4e3b2e0769498cc380",
+          "asset_name": "page-0002.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0002.png",
+          "asset_bytes": 89689,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p2-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "建议顺序\n模块 1-3 建立问题定义、神经网络与端到端工作流基础。\n模块 4-5 进入量化部署、异常检测和阈值治理。\n模块 6-8 完成图像分类、目标检测和关键词唤醒三个综合场景。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p2-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.41810699588477357,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "每个模块的完成证据\n阅读模块摘要与上游课件，完成关键概念测验。\n根据实训任务书运行代码或分析设备约束，保存输出与解释。\n使用检查点复盘错误，形成可追溯的学习记录和下一步计划。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 3,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "ff7ab598b1d31589d7674d3f50bbf9a79ffcb7ef97ddb7e4b45aa54a0824cf1f",
+          "redacted_image_sha256": "ff7ab598b1d31589d7674d3f50bbf9a79ffcb7ef97ddb7e4b45aa54a0824cf1f",
+          "asset_name": "page-0003.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0003.png",
+          "asset_bytes": 130133,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p3-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.34327534605312376
+              },
+              "region_type": "text",
+              "content": {
+                "text": "模块说明\nThis module provides an overview of machine learning and how it can be used to solve problems. It also introduces the idea of running machine learning algorithms on resource-constrained devices, such as microcontrollers. It covers some of the limitations and ethical concerns of machine learning. Finally, it demonstrates a few examples of Python in Google Colab, which will be used in early modules to showcase how programming is often performed for machine learning with TensorFlow and Keras.",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p3-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.49175084175084166,
+                "width": 0.84,
+                "height": 0.4240460157126823
+              },
+              "region_type": "text",
+              "content": {
+                "text": "学习目标\nDescribe the differences between artificial intelligence, machine learning, and deep learning\nProvide examples of how machine learning can be used to solve problems (that traditional deterministic programming cannot)\nProvide examples of how embedded machine learning can be used to solve problems (where other forms of machine learning would be limited or inappropriate)\nDescribe the limitations of machine learning\nDescribe the ethical concerns of machine learning\nDescribe the differences between supervised and unsupervised machine learning",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 4,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "660fa77af850db8c4322dd3d1ad7e556a7c3e4b20f0486fb947ecdac0dcbe4fb",
+          "redacted_image_sha256": "660fa77af850db8c4322dd3d1ad7e556a7c3e4b20f0486fb947ecdac0dcbe4fb",
+          "asset_name": "page-0004.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0004.png",
+          "asset_bytes": 79579,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p4-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "实施步骤\n把业务目标改写为可观测的传感器输入、模型输出和设备动作。\n区分训练环境、边缘设备和真实现场的数据分布差异。\n在立项阶段记录隐私、公平性、误报成本和人工接管条件。\n用最小可运行样例验证数据读取、推理接口和输出解释。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p4-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "原始课程单元\nMachine Learning on the Edge\nLimitations and Ethics\nGetting Started with Colab",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 5,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "a851224b1216653c36f314a84c6c812290f7a91c8464c6560f35694da5e474b6",
+          "redacted_image_sha256": "a851224b1216653c36f314a84c6c812290f7a91c8464c6560f35694da5e474b6",
+          "asset_name": "page-0005.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0005.png",
+          "asset_bytes": 93141,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p5-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "完成检查\n能够解释为什么低延迟、隐私和断网可用性会推动边缘推理。\n能够列出模型失败对用户、设备和业务流程造成的后果。\n能够为一个应用写出输入、输出、指标、约束和停止条件。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p5-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.24943883277216605,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "证据要求\n记录输入数据、版本、关键参数、输出指标和失败样本。\n说明结果是否满足设备与场景约束，不能只给出成功截图。\n保留来源页码或章节，保证结论能够回到课程资料复核。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 6,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "d669fee65e03c2450377e52f4663f75ffb9f465dac3213cef9615e42ee2e49bd",
+          "redacted_image_sha256": "d669fee65e03c2450377e52f4663f75ffb9f465dac3213cef9615e42ee2e49bd",
+          "asset_name": "page-0006.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0006.png",
+          "asset_bytes": 149306,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p6-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.32308267863823414
+              },
+              "region_type": "text",
+              "content": {
+                "text": "模块说明\nThis module provides an overview of neural networks and how they can be used to make predictions. Simple examples are given in Python (Google Colab) for students to play with and learn from. If you do not wish to explore basic machine learning with Keras in Google Colab, you may skip this module to move on to using the Edge Impulse graphical environment. Note that some later exercises rely on Google Colab for curating data, visualizing neural networks, etc.",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p6-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.47155817433595204,
+                "width": 0.84,
+                "height": 0.5653946876169097
+              },
+              "region_type": "text",
+              "content": {
+                "text": "学习目标\nProvide examples of how machine learning can be used to solve problems (that traditional deterministic programming cannot)\nProvide examples of how embedded machine learning can be used to solve problems (where other forms of machine learning would be limited or inappropriate)\nDescribe challenges associated with running machine learning algorithms on embedded systems\nDescribe broadly how a mathematical model can be used to generalize trends in data\nExplain how the training process results from minimizing a loss function\nDescribe why datasets should be broken up into training, validation, and test sets\nExplain how overfitting occurs and how to identify it\nDemonstrate the ability to train a dense neural network using Keras and TensorFlow",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 7,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "a4bdaa281cb4cbfc199292b011f6b467def3fdafab6ec959fe49ed9e61e4c4a0",
+          "redacted_image_sha256": "a4bdaa281cb4cbfc199292b011f6b467def3fdafab6ec959fe49ed9e61e4c4a0",
+          "asset_name": "page-0007.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0007.png",
+          "asset_bytes": 84536,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p7-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "实施步骤\n从张量形状、参数量和激活内存三个维度估算模型成本。\n通过训练集、验证集和测试集分离避免把调参结果当成泛化能力。\n观察学习率、损失曲线和过拟合信号，而不是只看最终准确率。\n在模型结构确定前先明确设备 RAM、Flash、时延和功耗预算。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p7-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "原始课程单元\nMachine Learning Paradigm\nBuilding Blocks of Deep Learning\nEmbedded Machine Learning Challenges",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 8,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "2f166e654a9909ddde4cd33856479aba695960b76428e4ef68c436bfabd916a4",
+          "redacted_image_sha256": "2f166e654a9909ddde4cd33856479aba695960b76428e4ef68c436bfabd916a4",
+          "asset_name": "page-0008.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0008.png",
+          "asset_bytes": 94155,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p8-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "完成检查\n能够手工说明前向传播、损失计算、反向传播和参数更新的关系。\n能够判断训练不收敛、欠拟合和过拟合对应的不同处理方式。\n能够比较更深网络与更小网络在精度和部署成本上的取舍。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p8-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.24943883277216605,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "证据要求\n记录输入数据、版本、关键参数、输出指标和失败样本。\n说明结果是否满足设备与场景约束，不能只给出成功截图。\n保留来源页码或章节，保证结论能够回到课程资料复核。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 9,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "31f0842504f1ada0e81ce870046769bb3f6660f5f4025f8cf848c193c18fd760",
+          "redacted_image_sha256": "31f0842504f1ada0e81ce870046769bb3f6660f5f4025f8cf848c193c18fd760",
+          "asset_name": "page-0009.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0009.png",
+          "asset_bytes": 139915,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p9-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.28269734380845485
+              },
+              "region_type": "text",
+              "content": {
+                "text": "模块说明\nIn this module, students will get an understanding of how data is collected and used to train a machine learning model. They will have the opportunity to collect their own dataset, upload it to Edge Impulse, and train a model using the graphical interface. From there, they will learn how to evaluate a model using a confusion matrix to calculate precision, recall, accuracy, and F1 scores.",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p9-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.43117283950617274,
+                "width": 0.84,
+                "height": 0.5653946876169097
+              },
+              "region_type": "text",
+              "content": {
+                "text": "学习目标\nProvide examples of how embedded machine learning can be used to solve problems (where other forms of machine learning would be limited or inappropriate)\nDescribe challenges associated with running machine learning algorithms on embedded systems\nDescribe why datasets should be broken up into training, validation, and test sets\nExplain how overfitting occurs and how to identify it\nDescribe broadly what happens during machine learning model training\nDescribe the difference between model training and inference\nDescribe why test and validation datasets are needed\nEvaluate a model's performance by calculating accuracy, precision, recall, and F1 scores\nDemonstrate the ability to train a machine learning model with a given dataset and evaluate its performance",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 10,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "9868858b2e707f9b72216789f5ec2c95263e38cf3b08f392fece13bb2a8ac692",
+          "redacted_image_sha256": "9868858b2e707f9b72216789f5ec2c95263e38cf3b08f392fece13bb2a8ac692",
+          "asset_name": "page-0010.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0010.png",
+          "asset_bytes": 83103,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p10-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "实施步骤\n建立采集、标注、切分、特征、训练、评估、部署和监控的可复现链路。\n把数据版本、模型版本、阈值和评测报告绑定到同一次实验。\n按真实部署环境设计交叉验证与盲测，避免随机切分造成数据泄漏。\n将错误案例按场景、类别和原因归档，形成下一轮采集计划。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p10-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "原始课程单元\nMachine Learning Workflow\nData Collection\nModel Training and Evaluation",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 11,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "6e5cda8708f8b8057b86221e822f14f4c27244a4bbeb677f21112be5048f39a0",
+          "redacted_image_sha256": "6e5cda8708f8b8057b86221e822f14f4c27244a4bbeb677f21112be5048f39a0",
+          "asset_name": "page-0011.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0011.png",
+          "asset_bytes": 95334,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p11-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "完成检查\n能够为数据泄漏、类别不平衡和概念漂移设计检查项。\n能够解释准确率、精确率、召回率和混淆矩阵何时更重要。\n能够从失败样本反推数据、模型、阈值或业务规则的修订动作。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p11-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.24943883277216605,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "证据要求\n记录输入数据、版本、关键参数、输出指标和失败样本。\n说明结果是否满足设备与场景约束，不能只给出成功截图。\n保留来源页码或章节，保证结论能够回到课程资料复核。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 12,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "a2a7765bbff951eb3a0f3b94decaea696f3f2f354f94b128cfa17b484a826b09",
+          "redacted_image_sha256": "a2a7765bbff951eb3a0f3b94decaea696f3f2f354f94b128cfa17b484a826b09",
+          "asset_name": "page-0012.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0012.png",
+          "asset_bytes": 107667,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p12-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.26250467639356523
+              },
+              "region_type": "text",
+              "content": {
+                "text": "模块说明\nThis module covers why quantization is important for models running on embedded systems and some of the limitations. It also shows how to use a model for inference and set an appropriate threshold to minimize false positives or false negatives, depending on the system requirements. Finally, it covers the steps to deploy a model trained on Edge Impulse to an Arduino board.",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p12-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.4109801720912831,
+                "width": 0.84,
+                "height": 0.34327534605312376
+              },
+              "region_type": "text",
+              "content": {
+                "text": "学习目标\nProvide examples of how embedded machine learning can be used to solve problems (where other forms of machine learning would be limited or inappropriate)\nDescribe challenges associated with running machine learning algorithms on embedded systems\nDescribe broadly what happens during machine learning model training\nDescribe the difference between model training and inference\nDemonstrate the ability to perform inference on an embedded system to solve a problem",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 13,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "b1993c245146f3663e4dc2803e20b209e5ef62d1203af0f5a8f1c610c5ae4df8",
+          "redacted_image_sha256": "b1993c245146f3663e4dc2803e20b209e5ef62d1203af0f5a8f1c610c5ae4df8",
+          "asset_name": "page-0013.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0013.png",
+          "asset_bytes": 82598,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p13-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "实施步骤\n比较浮点、动态范围量化和整数量化对体积、速度与误差的影响。\n使用代表性数据集校准量化范围，避免只在训练样本上校准。\n测量端到端时延、峰值内存和持续功耗，而不是只看模型文件大小。\n保留桌面基准与设备基准，定位预处理、推理和后处理的性能瓶颈。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p13-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "原始课程单元\nQuantization\nEmbedded Microcontrollers\nDeploying a Model to an Arduino Board",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 14,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "ad74e1db32050c352d196da350275dd0dd1837fc1f9cddf3bc4167bdcf935d82",
+          "redacted_image_sha256": "ad74e1db32050c352d196da350275dd0dd1837fc1f9cddf3bc4167bdcf935d82",
+          "asset_name": "page-0014.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0014.png",
+          "asset_bytes": 91894,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p14-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "完成检查\n能够说明量化误差产生的位置以及校准数据为什么重要。\n能够设计设备部署前后的精度一致性检查。\n能够给出模型无法满足预算时的结构、算子和输入尺寸调整顺序。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p14-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.24943883277216605,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "证据要求\n记录输入数据、版本、关键参数、输出指标和失败样本。\n说明结果是否满足设备与场景约束，不能只给出成功截图。\n保留来源页码或章节，保证结论能够回到课程资料复核。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 15,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "325a2266bff8b6880dea2bed294f75e9d4b6f80d8979c5671b9190c84391f27f",
+          "redacted_image_sha256": "325a2266bff8b6880dea2bed294f75e9d4b6f80d8979c5671b9190c84391f27f",
+          "asset_name": "page-0015.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0015.png",
+          "asset_bytes": 93286,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p15-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "模块说明\nThis module describes several approaches to anomaly detection and why we might want to use it in embedded machine learning.",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p15-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.38366068088290306
+              },
+              "region_type": "text",
+              "content": {
+                "text": "学习目标\nProvide examples of how embedded machine learning can be used to solve problems (where other forms of machine learning would be limited or inappropriate)\nDescribe challenges associated with running machine learning algorithms on embedded systems\nDescribe broadly what happens during machine learning model training\nDescribe the difference between model training and inference\nDemonstrate the ability to perform inference on an embedded system to solve a problem\nDescribe how anomaly detection can be used to solve problems",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 16,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "5d7763ed7c1ead738632d7ed9428caa2f7e078eb61e7a2424e9039c9f59f8e82",
+          "redacted_image_sha256": "5d7763ed7c1ead738632d7ed9428caa2f7e078eb61e7a2424e9039c9f59f8e82",
+          "asset_name": "page-0016.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0016.png",
+          "asset_bytes": 80607,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p16-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "实施步骤\n明确正常样本覆盖范围，避免把未知正常工况误判为异常。\n将异常分数、业务阈值和告警等级分离，支持不同现场策略。\n使用时间窗口、滞回和连续命中规则抑制瞬时噪声告警。\n把误报和漏报样本回流到数据集并记录阈值变更原因。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p16-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "原始课程单元\nIntroduction to Anomaly Detection\nK-means Clustering and Autoencoders\nAnomaly Detection in Edge Impulse",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 17,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "0e0966c8a7d1b1a733917d75550e7465b5bc1ec5e83641d618c4be1b5372bcbc",
+          "redacted_image_sha256": "0e0966c8a7d1b1a733917d75550e7465b5bc1ec5e83641d618c4be1b5372bcbc",
+          "asset_name": "page-0017.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0017.png",
+          "asset_bytes": 91815,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p17-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "完成检查\n能够解释无监督异常检测与监督分类的适用条件。\n能够通过分数分布选择初始阈值并设计人工复核区间。\n能够描述阈值变化如何影响误报、漏报和现场负担。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p17-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.24943883277216605,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "证据要求\n记录输入数据、版本、关键参数、输出指标和失败样本。\n说明结果是否满足设备与场景约束，不能只给出成功截图。\n保留来源页码或章节，保证结论能够回到课程资料复核。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 18,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "28f3f366d53d0362f52111269b9e54520a4f35d3a3f421558759588200235bfd",
+          "redacted_image_sha256": "28f3f366d53d0362f52111269b9e54520a4f35d3a3f421558759588200235bfd",
+          "asset_name": "page-0018.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0018.png",
+          "asset_bytes": 124072,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p18-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.38366068088290306
+              },
+              "region_type": "text",
+              "content": {
+                "text": "模块说明\nThis module introduces the concept of image classification, why it is important in machine learning, and how it can be used to solve problems. Convolution and pooling operations are covered, which form the building blocks for convolutional neural networks (CNNs). Saliency maps and Grad-CAM are offered as two techniques for visualizing the inner gs of CNNs. Data augmentation is introduced as a method for generating new data from existing data to train a more robust model. Finally, transfer learning is shown as a way of reusing pretrained models.",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p18-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.532136176580621,
+                "width": 0.84,
+                "height": 0.28269734380845485
+              },
+              "region_type": "text",
+              "content": {
+                "text": "学习目标\nDescribe the differences between image classification, object detection, and image segmentation\nDescribe how embedded computer vision can be used to solve problems\nDescribe how convolution and pooling operations are used to filter and downsample images\nDescribe how convolutional neural networks differ from dense neural networks and how they can be used to solve computer vision problems",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 19,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "04181618696ebf91a7e1df3f7ad76a09b84f5d1bc78400f4a8685757801560c1",
+          "redacted_image_sha256": "04181618696ebf91a7e1df3f7ad76a09b84f5d1bc78400f4a8685757801560c1",
+          "asset_name": "page-0019.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0019.png",
+          "asset_bytes": 89567,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p19-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "实施步骤\n按相机位置、照明、背景和目标姿态设计覆盖真实变化的数据采集。\n先训练轻量分类基线，再决定是否需要更大骨干网络或数据增强。\n检查输入缩放、颜色通道和归一化在训练端与设备端是否一致。\n使用迁移学习缩短训练时间，同时验证预训练特征是否适合目标场景。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p19-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "原始课程单元\nImage Classification\nConvolutional Neural Network (CNN)\nAnalyzing CNNs, Data Augmentation, and Transfer Learning",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 20,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "3523a4d0216e5827647e2a95849c1d89012a7354eccf77c17bb8f5158552159c",
+          "redacted_image_sha256": "3523a4d0216e5827647e2a95849c1d89012a7354eccf77c17bb8f5158552159c",
+          "asset_name": "page-0020.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0020.png",
+          "asset_bytes": 93260,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p20-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "完成检查\n能够从混淆矩阵识别容易混淆的类别和缺失数据场景。\n能够解释数据增强何时提升泛化、何时会破坏标签语义。\n能够为相机变化和光照漂移设计回归样本集。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p20-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.24943883277216605,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "证据要求\n记录输入数据、版本、关键参数、输出指标和失败样本。\n说明结果是否满足设备与场景约束，不能只给出成功截图。\n保留来源页码或章节，保证结论能够回到课程资料复核。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 21,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "422841d8a061aa2b37da3fb181ed6ad1adf5b05eea751a500e8f5e2a936bb404",
+          "redacted_image_sha256": "422841d8a061aa2b37da3fb181ed6ad1adf5b05eea751a500e8f5e2a936bb404",
+          "asset_name": "page-0021.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0021.png",
+          "asset_bytes": 123007,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p21-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.22211934156378596
+              },
+              "region_type": "text",
+              "content": {
+                "text": "模块说明\nIn this module, we look at object detection, how it differs from image classification, and the unique set of problems it solves. We also briefly examine image segmentation and discuss constrained object detection. Finally, we look at responsible AI as it relates to computer vision and AI at large.",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p21-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.3705948372615039,
+                "width": 0.84,
+                "height": 0.4644313505424616
+              },
+              "region_type": "text",
+              "content": {
+                "text": "学习目标\nDescribe the differences between image classification, object detection, and image segmentation\nDescribe how embedded computer vision can be used to solve problems\nDescribe how image segmentation can be used to solve problems\nDescribe how convolution and pooling operations are used to filter and downsample images\nDescribe how convolutional neural networks differ from dense neural networks and how they can be used to solve computer vision problems\nDescribe the limitations of machine learning\nDescribe the ethical concerns of machine learning\nDescribe the requirements for collecting a good dataset and what factors can create a biased dataset",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 22,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "7b67671f522cc7567125752c0daad4018b8035775a417318f8ac0d8203573d03",
+          "redacted_image_sha256": "7b67671f522cc7567125752c0daad4018b8035775a417318f8ac0d8203573d03",
+          "asset_name": "page-0022.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0022.png",
+          "asset_bytes": 80827,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p22-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "实施步骤\n统一边界框标注规则，处理遮挡、截断、小目标和重叠目标。\n同时评估分类置信度、定位质量、漏检率和每帧推理时间。\n按距离、尺寸、光照和人群属性切片评估，暴露总体指标掩盖的问题。\n为低置信度和高风险场景设计拒答、告警或人工确认。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p22-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "原始课程单元\nIntroduction to Object Detection\nImage Segmentation and Constrained Object Detection\nResponsible AI",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 23,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "0b632d8aad7294c73edb35c32080f0fd8dee0df10957959f73f49beccfc11d93",
+          "redacted_image_sha256": "0b632d8aad7294c73edb35c32080f0fd8dee0df10957959f73f49beccfc11d93",
+          "asset_name": "page-0023.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0023.png",
+          "asset_bytes": 88133,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p23-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "完成检查\n能够解释 IoU、非极大值抑制和置信度阈值之间的关系。\n能够区分分类错误、定位错误和后处理错误。\n能够为高风险检测任务写出可审计的人工接管规则。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p23-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.24943883277216605,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "证据要求\n记录输入数据、版本、关键参数、输出指标和失败样本。\n说明结果是否满足设备与场景约束，不能只给出成功截图。\n保留来源页码或章节，保证结论能够回到课程资料复核。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 24,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "815b213de0efe1fed7a607c8238f5a781356fd7e313e348842881e1d7e1d428a",
+          "redacted_image_sha256": "815b213de0efe1fed7a607c8238f5a781356fd7e313e348842881e1d7e1d428a",
+          "asset_name": "page-0024.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0024.png",
+          "asset_bytes": 82487,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p24-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.20192667414889634
+              },
+              "region_type": "text",
+              "content": {
+                "text": "模块说明\nIn this module, we create a functioning keyword spotting (also known as \"wake word detection\") system. To do so, we must introduce several concepts unique to audio digital signal processing and combine it with image classification techniques.",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p24-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.3504021698466142,
+                "width": 0.84,
+                "height": 0.22211934156378596
+              },
+              "region_type": "text",
+              "content": {
+                "text": "学习目标\nDescribe how machine learning can be used to classify sounds\nDescribe how sound classification can be used to solve problems\nDescribe the major components in a keyword spotting system\nDemonstrate the ability to train and deploy a sound classification system",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 25,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "bea61dc3f42d2accae78297fa19d8ca688bdcea3e31a9a9ee03d5fde68f40d34",
+          "redacted_image_sha256": "bea61dc3f42d2accae78297fa19d8ca688bdcea3e31a9a9ee03d5fde68f40d34",
+          "asset_name": "page-0025.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0025.png",
+          "asset_bytes": 85277,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p25-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "实施步骤\n定义唤醒词、未知词和背景噪声三类数据，并覆盖不同说话人与设备。\n统一采样率、窗口、步长和频谱特征，保证训练与流式推理一致。\n使用滑动窗口、平滑和抑制时间降低重复触发与偶发误触发。\n持续记录设备环境中的误触发和漏触发，形成增量评测集。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p25-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "原始课程单元\nAudio Classification\nSpectrograms and MFCCs\nDeploying a Keyword Spotting System",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 26,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "17b4aa914db64766f58e55933f6197b773b829728685c5bd5b63428f777ee8e4",
+          "redacted_image_sha256": "17b4aa914db64766f58e55933f6197b773b829728685c5bd5b63428f777ee8e4",
+          "asset_name": "page-0026.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0026.png",
+          "asset_bytes": 93799,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p26-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "完成检查\n能够解释离线片段准确率为何不能代表持续监听体验。\n能够设计每小时误触发次数和真实唤醒召回率的测试。\n能够说明噪声、口音、麦克风和距离变化的验证方法。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p26-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.24943883277216605,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "证据要求\n记录输入数据、版本、关键参数、输出指标和失败样本。\n说明结果是否满足设备与场景约束，不能只给出成功截图。\n保留来源页码或章节，保证结论能够回到课程资料复核。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 27,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "ff589bab64e2c21688c75a92f4785074794f996ae53c1b7c961e5655ef2c2b7e",
+          "redacted_image_sha256": "ff589bab64e2c21688c75a92f4785074794f996ae53c1b7c961e5655ef2c2b7e",
+          "asset_name": "page-0027.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0027.png",
+          "asset_bytes": 93193,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p27-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.1211560044893378
+              },
+              "region_type": "text",
+              "content": {
+                "text": "任务\n选择图像、声音或传感器异常中的一个场景，定义输入、输出、指标和设备预算。\n建立可复现的数据切分与训练基线，完成错误分析和一次有依据的改进。\n执行量化或轻量化，比较桌面与设备侧的精度、时延、内存和模型体积。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p27-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.2696315001870557,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "提交物\n数据与许可说明、实验配置、模型评测报告、设备部署记录、失败样本与复盘。\n一段能够解释系统边界、风险和人工接管条件的技术说明。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        },
+        {
+          "page_number": 28,
+          "width_px": 953,
+          "height_px": 1348,
+          "image_sha256": "f1824f62b33f81ca3d3108eadff743a24d81758502b487f13534ade91f28722f",
+          "redacted_image_sha256": "f1824f62b33f81ca3d3108eadff743a24d81758502b487f13534ade91f28722f",
+          "asset_name": "page-0028.png",
+          "asset_path": "data/curated/embedded_machine_learning_engineering_v2/reader_pages/page-0028.png",
+          "asset_bytes": 91316,
+          "regions": [
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p28-r1",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.13897306397306394,
+                "width": 0.84,
+                "height": 0.16154133931911707
+              },
+              "region_type": "text",
+              "content": {
+                "text": "来源\nEdge Impulse courseware，冻结版本 a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6。\n上游幻灯片、示例问题和项目任务采用 CC BY-NC-SA 4.0。\n本手册是 EduMatrix 团队为比赛演示制作的中文改编材料，采用相同许可证。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            },
+            {
+              "schema_version": "edumatrix.ocr-region.v1",
+              "region_id": "handbook-p28-r2",
+              "bbox": {
+                "x": 0.07727513227513227,
+                "y": 0.41810699588477357,
+                "width": 0.84,
+                "height": 0.10096333707444817
+              },
+              "region_type": "text",
+              "content": {
+                "text": "边界\n未下载或重新分发仓库中以标准 YouTube 许可证提供的视频。\n课程用于非商业教育与比赛展示，不宣称经过独立行业专家认证。\n工程指标为教学检查项，实际产品部署仍需按设备和现场重新验证。",
+                "recognition_status": "layout_verified"
+              },
+              "privacy": {
+                "sensitive": false,
+                "categories": []
+              }
+            }
+          ]
+        }
+      ],
+      "reader_page_engine": "team_authored_layout_map_v1"
+    },
+    {
+      "chapter_order": 1,
+      "chapter_key": "course-overview-video",
+      "chapter_position": 1,
+      "parent_chapter_key": "course-overview",
+      "title": "课程导览视频：从数据到设备",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "media/课程导览_嵌入式机器学习工程实践.mp4",
+      "bytes": 113028,
+      "sha256": "53b511102834809c2e685ce4d68d646c367f8ff6fab69a9eb7f191b79c4fe0e5",
+      "parser_version": "edumatrix-curated-video-transcript-v1",
+      "conversion": {
+        "strategy": "team_authored_local_video",
+        "external_video_downloaded": false
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-01",
+        "EML-KP-03",
+        "EML-KP-04"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。",
+      "index_text_path": "media/课程导览_转写与画面说明.md",
+      "index_text_bytes": 847,
+      "index_text_sha256": "bfbfc2b1524f1b7d581ba983ac7dd6b6b94e66c296ca475b6fb1e4101941df46",
+      "media": {
+        "kind": "video",
+        "mime_type": "video/mp4",
+        "duration_seconds": 25,
+        "audio": "silent_track",
+        "transcript_status": "team_authored_visual_description"
+      }
+    },
+    {
+      "chapter_order": 2,
+      "chapter_key": "module-1",
+      "chapter_position": 10,
+      "parent_chapter_key": "",
+      "title": "模块 1：边缘机器学习导论与责任边界",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "chapters/01_边缘机器学习导论与责任边界.md",
+      "bytes": 1978,
+      "sha256": "0514ed7aebe7d1fdb081ae7619250db22bfa3042a8891e7d794e519cd162b2bb",
+      "parser_version": "edumatrix-markdown-v1",
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-01"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 3,
+      "chapter_key": "module-1-实验文档",
+      "chapter_position": 11,
+      "parent_chapter_key": "module-1",
+      "title": "实验文档：1.3.6.sample-tensorflow-code.3",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 1 - Introduction to Machine Learning/1.3.6.sample-tensorflow-code.3.docx",
+      "source_type": "docx",
+      "source_bytes": 217410,
+      "source_sha256": "0114346b253b4ff974ec08597408eaa34daec82dbe8b4c4b2139c0011eaf2cc9",
+      "path": "materials/module-01/1.3.6.sample-tensorflow-code.3.docx",
+      "bytes": 217410,
+      "sha256": "0114346b253b4ff974ec08597408eaa34daec82dbe8b4c4b2139c0011eaf2cc9",
+      "parser_version": "edumatrix-docx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-01"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 4,
+      "chapter_key": "module-1-课程课件",
+      "chapter_position": 12,
+      "parent_chapter_key": "module-1",
+      "title": "课程课件：1.2.1.limitations-and-ethics.1",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 1 - Introduction to Machine Learning/1.2.1.limitations-and-ethics.1.pptx",
+      "source_type": "pptx",
+      "source_bytes": 275207,
+      "source_sha256": "c36d419344b2669135b8215efd5a66e09f20a6a84437bb34b7dee208b70c5461",
+      "path": "materials/module-01/1.2.1.limitations-and-ethics.1.pptx",
+      "bytes": 275207,
+      "sha256": "c36d419344b2669135b8215efd5a66e09f20a6a84437bb34b7dee208b70c5461",
+      "parser_version": "edumatrix-pptx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-01"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 5,
+      "chapter_key": "module-2",
+      "chapter_position": 20,
+      "parent_chapter_key": "",
+      "title": "模块 2：神经网络训练与嵌入式约束",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "chapters/02_神经网络训练与嵌入式约束.md",
+      "bytes": 2182,
+      "sha256": "7c1c15be1deb25d8f4e78cf271a02e504e0584112bb00bd429ad07488c7c53e8",
+      "parser_version": "edumatrix-markdown-v1",
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-02"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 6,
+      "chapter_key": "module-2-实验文档",
+      "chapter_position": 21,
+      "parent_chapter_key": "module-2",
+      "title": "实验文档：2.2.2.initialization-and-learning.3",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 2 - Getting Started with Deep Learning/2.2.2.initialization-and-learning.3.docx",
+      "source_type": "docx",
+      "source_bytes": 109650,
+      "source_sha256": "dca86199708080845f9a7703821905772b1e43a89a6c1b294bc509c5997105b1",
+      "path": "materials/module-02/2.2.2.initialization-and-learning.3.docx",
+      "bytes": 109650,
+      "sha256": "dca86199708080845f9a7703821905772b1e43a89a6c1b294bc509c5997105b1",
+      "parser_version": "edumatrix-docx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-02"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 7,
+      "chapter_key": "module-2-课程课件",
+      "chapter_position": 22,
+      "parent_chapter_key": "module-2",
+      "title": "课程课件：2.2.1.introduction-to-neural-networks.1",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 2 - Getting Started with Deep Learning/2.2.1.introduction-to-neural-networks.1.pptx",
+      "source_type": "pptx",
+      "source_bytes": 31820,
+      "source_sha256": "e4acd84d1c2f88b1f2d6e04a489ab31e29c03584f508f8278a57ff2c93fb3217",
+      "path": "materials/module-02/2.2.1.introduction-to-neural-networks.1.pptx",
+      "bytes": 31820,
+      "sha256": "e4acd84d1c2f88b1f2d6e04a489ab31e29c03584f508f8278a57ff2c93fb3217",
+      "parser_version": "edumatrix-pptx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-02"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 8,
+      "chapter_key": "module-3",
+      "chapter_position": 30,
+      "parent_chapter_key": "",
+      "title": "模块 3：端到端机器学习工程工作流",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "chapters/03_端到端机器学习工程工作流.md",
+      "bytes": 2135,
+      "sha256": "623e505416b65fab255457817391f133ad747ad6721d31f3ee6dd7c3f434c16b",
+      "parser_version": "edumatrix-markdown-v1",
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-03"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 9,
+      "chapter_key": "module-3-实验文档",
+      "chapter_position": 31,
+      "parent_chapter_key": "module-3",
+      "title": "实验文档：3.1.4.machine-learning-lifecycle.3",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 3 - Machine Learning Workflow/3.1.4.machine-learning-lifecycle.3.docx",
+      "source_type": "docx",
+      "source_bytes": 188560,
+      "source_sha256": "5df978cb5423aaef11500ecbb2a21b404de8423444360f250041f4f04a5ef033",
+      "path": "materials/module-03/3.1.4.machine-learning-lifecycle.3.docx",
+      "bytes": 188560,
+      "sha256": "5df978cb5423aaef11500ecbb2a21b404de8423444360f250041f4f04a5ef033",
+      "parser_version": "edumatrix-docx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-03"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 10,
+      "chapter_key": "module-3-课程课件",
+      "chapter_position": 32,
+      "parent_chapter_key": "module-3",
+      "title": "课程课件：3.3.5.how-to-evaluate-a-model.1",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 3 - Machine Learning Workflow/3.3.5.how-to-evaluate-a-model.1.pptx",
+      "source_type": "pptx",
+      "source_bytes": 255296,
+      "source_sha256": "4c4988fab71e38423892db1ae7c14f235505c892b7520ef46e0eb990a717aed2",
+      "path": "materials/module-03/3.3.5.how-to-evaluate-a-model.1.pptx",
+      "bytes": 255296,
+      "sha256": "4c4988fab71e38423892db1ae7c14f235505c892b7520ef46e0eb990a717aed2",
+      "parser_version": "edumatrix-pptx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-03"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 11,
+      "chapter_key": "module-4",
+      "chapter_position": 40,
+      "parent_chapter_key": "",
+      "title": "模块 4：量化、编译与设备部署",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "chapters/04_量化、编译与设备部署.md",
+      "bytes": 1776,
+      "sha256": "ca76635d46e52c856958023f7adf405b3641eb2a9768d7a4ade3a3b64bfad95d",
+      "parser_version": "edumatrix-markdown-v1",
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-04"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 12,
+      "chapter_key": "module-4-实验文档",
+      "chapter_position": 41,
+      "parent_chapter_key": "module-4",
+      "title": "实验文档：4.1.1.why-quantization.3",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 4 - Model Deployment/4.1.1.why-quantization.3.docx",
+      "source_type": "docx",
+      "source_bytes": 142919,
+      "source_sha256": "e751d9f6bdc2fd1a83d4bd9a584f87f434638e6aaf4d882d7ca4f9be82099843",
+      "path": "materials/module-04/4.1.1.why-quantization.3.docx",
+      "bytes": 142919,
+      "sha256": "e751d9f6bdc2fd1a83d4bd9a584f87f434638e6aaf4d882d7ca4f9be82099843",
+      "parser_version": "edumatrix-docx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-04"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 13,
+      "chapter_key": "module-4-课程课件",
+      "chapter_position": 42,
+      "parent_chapter_key": "module-4",
+      "title": "课程课件：4.3.1.using-a-model-for-inference.1",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 4 - Model Deployment/4.3.1.using-a-model-for-inference.1.pptx",
+      "source_type": "pptx",
+      "source_bytes": 542083,
+      "source_sha256": "bf9de675d1faa47e8bfb79652d7708b47e8580d9d46005ed6b1f7dff1ab17df6",
+      "path": "materials/module-04/4.3.1.using-a-model-for-inference.1.pptx",
+      "bytes": 542083,
+      "sha256": "bf9de675d1faa47e8bfb79652d7708b47e8580d9d46005ed6b1f7dff1ab17df6",
+      "parser_version": "edumatrix-pptx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-04"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 14,
+      "chapter_key": "module-5",
+      "chapter_position": 50,
+      "parent_chapter_key": "",
+      "title": "模块 5：边缘异常检测与阈值治理",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "chapters/05_边缘异常检测与阈值治理.md",
+      "bytes": 1539,
+      "sha256": "0c0e9c38c961407226964c162c07505473a3c50bc5d27ccd2ce7df2b548e7c68",
+      "parser_version": "edumatrix-markdown-v1",
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-05"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 15,
+      "chapter_key": "module-5-实验文档",
+      "chapter_position": 51,
+      "parent_chapter_key": "module-5",
+      "title": "实验文档：5.1.1.introduction-to-anomaly-detection.3",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 5 - Anomaly Detection/5.1.1.introduction-to-anomaly-detection.3.docx",
+      "source_type": "docx",
+      "source_bytes": 40369,
+      "source_sha256": "056c0f46d770c7af33afe574fece606c542f59fec5241eded42ee52d7f96b1fb",
+      "path": "materials/module-05/5.1.1.introduction-to-anomaly-detection.3.docx",
+      "bytes": 40369,
+      "sha256": "056c0f46d770c7af33afe574fece606c542f59fec5241eded42ee52d7f96b1fb",
+      "parser_version": "edumatrix-docx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-05"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 16,
+      "chapter_key": "module-5-课程课件",
+      "chapter_position": 52,
+      "parent_chapter_key": "module-5",
+      "title": "课程课件：5.3.1.anomaly-detection-in-edge-impulse.1",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 5 - Anomaly Detection/5.3.1.anomaly-detection-in-edge-impulse.1.pptx",
+      "source_type": "pptx",
+      "source_bytes": 36194,
+      "source_sha256": "6042a0341d98f6b8cf267f680da81c14fa75db5b1bd671f822c57a0854b16cc9",
+      "path": "materials/module-05/5.3.1.anomaly-detection-in-edge-impulse.1.pptx",
+      "bytes": 36194,
+      "sha256": "6042a0341d98f6b8cf267f680da81c14fa75db5b1bd671f822c57a0854b16cc9",
+      "parser_version": "edumatrix-pptx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-05"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 17,
+      "chapter_key": "module-6",
+      "chapter_position": 60,
+      "parent_chapter_key": "",
+      "title": "模块 6：嵌入式图像分类与迁移学习",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "chapters/06_嵌入式图像分类与迁移学习.md",
+      "bytes": 1899,
+      "sha256": "5f666e8a257780efdf83182e98b8ad5212c5c3f3c86f3fb67314f18c986bcba6",
+      "parser_version": "edumatrix-markdown-v1",
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-06"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 18,
+      "chapter_key": "module-6-实验文档",
+      "chapter_position": 61,
+      "parent_chapter_key": "module-6",
+      "title": "实验文档：6.2.10.solution-cnn.3",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 6 - Image Classification with Deep Learning/6.2.10.solution-cnn.3.docx",
+      "source_type": "docx",
+      "source_bytes": 216652,
+      "source_sha256": "13850f6f4064487ebb1bed0cecef2278d9ebeb2829c534285d328d82ba0391e2",
+      "path": "materials/module-06/6.2.10.solution-cnn.3.docx",
+      "bytes": 216652,
+      "sha256": "13850f6f4064487ebb1bed0cecef2278d9ebeb2829c534285d328d82ba0391e2",
+      "parser_version": "edumatrix-docx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-06"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 19,
+      "chapter_key": "module-6-课程课件",
+      "chapter_position": 62,
+      "parent_chapter_key": "module-6",
+      "title": "课程课件：6.3.7.transfer-learning-and-mobilenet.2",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 6 - Image Classification with Deep Learning/6.3.7.transfer-learning-and-mobilenet.2.pptx",
+      "source_type": "pptx",
+      "source_bytes": 128543,
+      "source_sha256": "db39caf98c8be37959220b1008d955e172246b981dcaf9aaa715671d3488cf4d",
+      "path": "materials/module-06/6.3.7.transfer-learning-and-mobilenet.2.pptx",
+      "bytes": 128543,
+      "sha256": "db39caf98c8be37959220b1008d955e172246b981dcaf9aaa715671d3488cf4d",
+      "parser_version": "edumatrix-pptx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-06"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 20,
+      "chapter_key": "module-7",
+      "chapter_position": 70,
+      "parent_chapter_key": "",
+      "title": "模块 7：目标检测、定位误差与负责任 AI",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "chapters/07_目标检测、定位误差与负责任 AI.md",
+      "bytes": 1888,
+      "sha256": "aaaf8acf48d72359aa3ef7c7304be43572707141c7a0a63462f8dbcc73ef1e53",
+      "parser_version": "edumatrix-markdown-v1",
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-07"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 21,
+      "chapter_key": "module-7-实验文档",
+      "chapter_position": 71,
+      "parent_chapter_key": "module-7",
+      "title": "实验文档：7.1.5.digging-deeper-into-object-detection.2",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 7 - Object Detection/7.1.5.digging-deeper-into-object-detection.2.docx",
+      "source_type": "docx",
+      "source_bytes": 15738,
+      "source_sha256": "240f3909a429784f9980071c82c2660d23f57df239f5f3784c9238d22b2bd5f0",
+      "path": "materials/module-07/7.1.5.digging-deeper-into-object-detection.2.docx",
+      "bytes": 15738,
+      "sha256": "240f3909a429784f9980071c82c2660d23f57df239f5f3784c9238d22b2bd5f0",
+      "parser_version": "edumatrix-docx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-07"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 22,
+      "chapter_key": "module-7-课程课件",
+      "chapter_position": 72,
+      "parent_chapter_key": "module-7",
+      "title": "课程课件：7.1.1.introduction-to-object-detection.2",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 7 - Object Detection/7.1.1.introduction-to-object-detection.2.pptx",
+      "source_type": "pptx",
+      "source_bytes": 1312043,
+      "source_sha256": "69211ececb0aee4692abef8624476e164120ffefb757a0232f9a237f58665dc7",
+      "path": "materials/module-07/7.1.1.introduction-to-object-detection.2.pptx",
+      "bytes": 1312043,
+      "sha256": "69211ececb0aee4692abef8624476e164120ffefb757a0232f9a237f58665dc7",
+      "parser_version": "edumatrix-pptx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-07"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 23,
+      "chapter_key": "module-8",
+      "chapter_position": 80,
+      "parent_chapter_key": "",
+      "title": "模块 8：关键词唤醒系统与持续监控",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "README.md",
+      "source_type": "md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "path": "chapters/08_关键词唤醒系统与持续监控.md",
+      "bytes": 1431,
+      "sha256": "3ddb9cec6b22400b8229f25c4407e3429daa2c508883c144dafaf0f95c627140",
+      "parser_version": "edumatrix-markdown-v1",
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-08"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 24,
+      "chapter_key": "module-8-实验文档",
+      "chapter_position": 81,
+      "parent_chapter_key": "module-8",
+      "title": "实验文档：8.1.5.keyword-spotting-application-architecture.3",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 8 - Keyword Spotting/8.1.5.keyword-spotting-application-architecture.3.docx",
+      "source_type": "docx",
+      "source_bytes": 40995,
+      "source_sha256": "51b5a90d98abbd4a2eb5b48b4dfb31db58d20071b8f5b2b606090590016a2be6",
+      "path": "materials/module-08/8.1.5.keyword-spotting-application-architecture.3.docx",
+      "bytes": 40995,
+      "sha256": "51b5a90d98abbd4a2eb5b48b4dfb31db58d20071b8f5b2b606090590016a2be6",
+      "parser_version": "edumatrix-docx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-08"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    },
+    {
+      "chapter_order": 25,
+      "chapter_key": "module-8-课程课件",
+      "chapter_position": 82,
+      "parent_chapter_key": "module-8",
+      "title": "课程课件：8.3.1.deploy-audio-classifier.1",
+      "repository_key": "edge-impulse-courseware",
+      "repository_url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "source_path": "Module 8 - Keyword Spotting/8.3.1.deploy-audio-classifier.1.pptx",
+      "source_type": "pptx",
+      "source_bytes": 227806,
+      "source_sha256": "69a0a78c8936be8a463b23696a7bf73e0a1ae60c8a390495ee4fe151b8565494",
+      "path": "materials/module-08/8.3.1.deploy-audio-classifier.1.pptx",
+      "bytes": 227806,
+      "sha256": "69a0a78c8936be8a463b23696a7bf73e0a1ae60c8a390495ee4fe151b8565494",
+      "parser_version": "edumatrix-pptx-v2",
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      },
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "license_file": "LICENSE-AND-ATTRIBUTION.md",
+      "license_sha256": "7723585865338f58c9c3fbf0fafeb199c609dd511857b9d5c00100716cc3e325",
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "knowledge_point_codes": [
+        "EML-KP-08"
+      ],
+      "selection_reason": "课程主线中的真实学习资料，具有冻结来源、明确许可和可复现解析结果。"
+    }
+  ]
+}

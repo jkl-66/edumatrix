@@ -1,0 +1,192 @@
+{
+  "schema_version": "edumatrix.course-processing-report.v2",
+  "course_id": "course-embedded-machine-learning-engineering-v2",
+  "source_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+  "file_count": 26,
+  "format_counts": {
+    ".md": 8,
+    ".pdf": 1,
+    ".docx": 8,
+    ".pptx": 8,
+    ".mp4": 1
+  },
+  "network_calls": 0,
+  "external_model_calls": 0,
+  "startup_video_transcription": false,
+  "files": [
+    {
+      "path": "materials/嵌入式机器学习与边缘智能工程手册.pdf",
+      "format": "pdf",
+      "text_chars": 13156,
+      "warnings": []
+    },
+    {
+      "path": "media/课程导览_嵌入式机器学习工程实践.mp4",
+      "format": "mp4",
+      "text_chars": 350,
+      "warnings": [],
+      "transcript_source": "team_authored"
+    },
+    {
+      "path": "chapters/01_边缘机器学习导论与责任边界.md",
+      "format": "md",
+      "text_chars": 1523,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-01/1.3.6.sample-tensorflow-code.3.docx",
+      "format": "docx",
+      "text_chars": 1788,
+      "location_count": 29,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-01/1.2.1.limitations-and-ethics.1.pptx",
+      "format": "pptx",
+      "text_chars": 971,
+      "location_count": 5,
+      "warnings": []
+    },
+    {
+      "path": "chapters/02_神经网络训练与嵌入式约束.md",
+      "format": "md",
+      "text_chars": 1717,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-02/2.2.2.initialization-and-learning.3.docx",
+      "format": "docx",
+      "text_chars": 4436,
+      "location_count": 28,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-02/2.2.1.introduction-to-neural-networks.1.pptx",
+      "format": "pptx",
+      "text_chars": 13,
+      "location_count": 1,
+      "warnings": []
+    },
+    {
+      "path": "chapters/03_端到端机器学习工程工作流.md",
+      "format": "md",
+      "text_chars": 1656,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-03/3.1.4.machine-learning-lifecycle.3.docx",
+      "format": "docx",
+      "text_chars": 6554,
+      "location_count": 10,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-03/3.3.5.how-to-evaluate-a-model.1.pptx",
+      "format": "pptx",
+      "text_chars": 7117,
+      "location_count": 18,
+      "warnings": []
+    },
+    {
+      "path": "chapters/04_量化、编译与设备部署.md",
+      "format": "md",
+      "text_chars": 1311,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-04/4.1.1.why-quantization.3.docx",
+      "format": "docx",
+      "text_chars": 5296,
+      "location_count": 14,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-04/4.3.1.using-a-model-for-inference.1.pptx",
+      "format": "pptx",
+      "text_chars": 1805,
+      "location_count": 4,
+      "warnings": []
+    },
+    {
+      "path": "chapters/05_边缘异常检测与阈值治理.md",
+      "format": "md",
+      "text_chars": 1108,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-05/5.1.1.introduction-to-anomaly-detection.3.docx",
+      "format": "docx",
+      "text_chars": 1395,
+      "location_count": 5,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-05/5.3.1.anomaly-detection-in-edge-impulse.1.pptx",
+      "format": "pptx",
+      "text_chars": 38,
+      "location_count": 1,
+      "warnings": []
+    },
+    {
+      "path": "chapters/06_嵌入式图像分类与迁移学习.md",
+      "format": "md",
+      "text_chars": 1434,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-06/6.2.10.solution-cnn.3.docx",
+      "format": "docx",
+      "text_chars": 1355,
+      "location_count": 14,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-06/6.3.7.transfer-learning-and-mobilenet.2.pptx",
+      "format": "pptx",
+      "text_chars": 1380,
+      "location_count": 7,
+      "warnings": []
+    },
+    {
+      "path": "chapters/07_目标检测、定位误差与负责任 AI.md",
+      "format": "md",
+      "text_chars": 1447,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-07/7.1.5.digging-deeper-into-object-detection.2.docx",
+      "format": "docx",
+      "text_chars": 1370,
+      "location_count": 20,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-07/7.1.1.introduction-to-object-detection.2.pptx",
+      "format": "pptx",
+      "text_chars": 3370,
+      "location_count": 23,
+      "warnings": []
+    },
+    {
+      "path": "chapters/08_关键词唤醒系统与持续监控.md",
+      "format": "md",
+      "text_chars": 970,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-08/8.1.5.keyword-spotting-application-architecture.3.docx",
+      "format": "docx",
+      "text_chars": 2017,
+      "location_count": 16,
+      "warnings": []
+    },
+    {
+      "path": "materials/module-08/8.3.1.deploy-audio-classifier.1.pptx",
+      "format": "pptx",
+      "text_chars": 3387,
+      "location_count": 5,
+      "warnings": []
+    }
+  ],
+  "manifest_sha256": "25430f57437cc99a4272a1922fab876b29228b791f063c73141112f6177bf162"
+}

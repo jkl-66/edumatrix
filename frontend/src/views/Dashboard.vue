@@ -1,22 +1,21 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, nextTick, watch, createApp } from 'vue'
-import { useRouter } from 'vue-router'
-import { getStudentProfile, getLearningPath, getReviewPlans, getRecommendations, getNotes, regenerateComponent, getProfileAnalysis, updateStudentProfile, getGoalRecommendations } from '../api'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch, createApp, defineAsyncComponent } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useCourseContextStore } from '../stores/courseContext'
+import { getStudentProfile, getLearningPath, getReviewPlans, getRecommendations, getNotes, regenerateComponent, getProfileAnalysis, getM5DashboardSummary, getM5WorkspaceOverview } from '../api'
 import {
-  Activity, Brain, ArrowRight, Sparkles, BookOpen, Target, TrendingUp,
-  CheckCircle2, Clock, Calendar, GraduationCap, UserCheck, Play, Edit3
+  Activity, Brain, ArrowRight, BookOpen, Target,
+  CheckCircle2, Clock, GraduationCap, Play, CalendarDays,
+  ChevronDown, X
 } from '@lucide/vue'
-import MasteryRadar from '../components/MasteryRadar.vue'
-import LearningTrendChart from '../components/LearningTrendChart.vue'
-import VideoRenderPanel from '../components/VideoRenderPanel.vue'
-import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
-import VideoPlayerCard from '../components/VideoPlayerCard.vue'
-import UiCard from '../components/ui/UiCard.vue'
-import UiButton from '../components/ui/UiButton.vue'
-import DashboardWidget from '../components/ui/DashboardWidget.vue'
-import ChartContainer from '../components/ui/ChartContainer.vue'
+import AggregationStatus from '../components/AggregationStatus.vue'
+const LearningTrendChart = defineAsyncComponent(() => import('../components/LearningTrendChart.vue'))
+const VideoRenderPanel = defineAsyncComponent(() => import('../components/VideoRenderPanel.vue'))
+const VideoPlayerCard = defineAsyncComponent(() => import('../components/VideoPlayerCard.vue'))
 
 const router = useRouter()
+const route = useRoute()
+const courseContext = useCourseContextStore()
 const props = defineProps({ studentId: String })
 
 const profile = ref(null)
@@ -24,6 +23,10 @@ const learningPath = ref(null)
 const reviews = ref([])
 const recommendations = ref([])
 const profileAnalysis = ref(null)
+const workspaceOverview = ref(null)
+const dashboardSummary = ref(null)
+const dashboardSummaryError = ref('')
+const todayTasks = computed(() => workspaceOverview.value?.today_tasks || [])
 const loading = ref(true)
 
 const showVideoPanel = ref(false)
@@ -34,20 +37,13 @@ const activeResource = ref(null)
 const activeResourceContent = ref('')
 const isGenerating = ref(false)
 const currentStudentId = ref(props.studentId || localStorage.getItem('edumatrix_student_id') || 'demo-student')
+const currentCourseId = computed(() => (
+  courseContext.course?.id
+  || courseContext.contextRef?.courseId
+  || String(route.query.course_id || '')
+))
 
-const pathwayLoading = ref({})
-
-const activeLearningTarget = computed(() => learningPath.value?.active_learning_target || '')
-const goalOrigin = computed(() => learningPath.value?.goal_origin || 'course_default')
-const adaptiveRoute = computed(() => learningPath.value?.adaptive_route || null)
-const availableConcepts = computed(() => {
-  return learningPath.value?.learning_chain?.map(n => n.concept) || []
-})
-
-const goalRecommendations = ref([])
-const showGoalModal = ref(false)
-const newGoalInput = ref('')
-const updatingGoal = ref(false)
+const activeLearningTarget = computed(() => dashboardSummary.value?.focus?.title || todayTasks.value[0]?.title || learningPath.value?.active_learning_target || '')
 let resourceScrollLock = null
 
 function setResourceScrollLock(locked) {
@@ -69,58 +65,6 @@ function setResourceScrollLock(locked) {
   }
 }
 
-async function handleGoalUpdate(newGoal) {
-  if (!newGoal) return
-  updatingGoal.value = true
-  try {
-    await updateStudentProfile(currentStudentId.value, {
-      learning_goals: [newGoal]
-    })
-    // Reload path, recommendations and goal recommendations after update
-    const [lp, recs, p, gr] = await Promise.all([
-      getLearningPath(currentStudentId.value).catch(() => null),
-      getRecommendations(currentStudentId.value).catch(() => []),
-      getStudentProfile(currentStudentId.value).catch(() => null),
-      getGoalRecommendations(currentStudentId.value).catch(() => [])
-    ])
-    learningPath.value = lp
-    recommendations.value = recs || []
-    if (p) profile.value = p
-    goalRecommendations.value = gr || []
-    newGoalInput.value = ''
-    showGoalModal.value = false
-  } catch (err) {
-    console.error('Failed to update learning goal:', err)
-  } finally {
-    updatingGoal.value = false
-  }
-}
-
-async function switchPathway(concept, pathwayCode) {
-  pathwayLoading.value[concept] = true
-  try {
-    const data = await getRecommendations(currentStudentId.value, concept, pathwayCode)
-    if (data && data.length) {
-      const updatedRec = data[0]
-      const idx = recommendations.value.findIndex(r => r.concept === concept)
-      if (idx !== -1) {
-        recommendations.value[idx] = updatedRec
-      }
-    }
-  } catch (err) {
-    console.error('Failed to switch pathway:', err)
-  } finally {
-    pathwayLoading.value[concept] = false
-  }
-}
-
-const avgMastery = computed(() => {
-  const m = profile.value?.concept_mastery
-  if (!m || !Object.keys(m).length) return 0
-  const v = Object.values(m)
-  return Math.round(v.reduce((a, b) => a + b, 0) / v.length * 100)
-})
-
 const weakConcepts = computed(() => {
   const m = profile.value?.concept_mastery
   if (!m) return []
@@ -132,32 +76,170 @@ const conceptMastery = computed(() => {
   return Object.entries(raw).map(([name, score]) => ({ name, mastery: score }))
 })
 
-const inProgress = computed(() => learningPath.value?.progress_summary?.in_progress || 0)
-const mastered = computed(() => learningPath.value?.progress_summary?.mastered || 0)
-const locked = computed(() => learningPath.value?.progress_summary?.locked || 0)
-const nextUp = computed(() => (learningPath.value?.next_steps || []).slice(0, 3))
-
-const totalConcepts = computed(() => learningPath.value?.progress_summary?.total_concepts || 0)
-const trendValues = computed(() => {
-  const scores = Object.values(profile.value?.concept_mastery || {}).map(score => Math.round(score * 100))
-  if (!scores.length) return []
-  const average = Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
-  return [average - 18, average - 14, average - 11, average - 7, average - 5, average - 2, average]
-    .map(score => Math.max(4, Math.min(100, score)))
+const focus = computed(() => dashboardSummary.value?.focus || {
+  title: activeLearningTarget.value || '继续当前学习安排',
+  strategy: '按已确认路径完成当前任务，达到完成标准后再进入下一知识点。',
+  reason: '来自当前学习路径。',
+  completion_criteria: '完成当前任务并保存有效学习证据。',
+  estimated_minutes: todayTasks.value[0]?.estimate_minutes || [],
+  source_refs: [],
 })
+const primaryAction = computed(() => dashboardSummary.value?.primary_action || workspaceOverview.value?.next_action || {
+  label: '查看学习路径',
+  route: '/workspace/path',
+})
+const summaryMetrics = computed(() => dashboardSummary.value?.metrics || [])
+const summaryStrategies = computed(() => dashboardSummary.value?.knowledge_strategies || [])
+const reviewSummary = computed(() => dashboardSummary.value?.review_summary || {
+  due_count: reviews.value.length,
+  items: reviews.value.slice(0, 3),
+})
+const weakSummary = computed(() => dashboardSummary.value?.weak_summary || weakConcepts.value.map(([id, mastery]) => ({
+  id,
+  knowledge_point_id: id,
+  title: id,
+  mastery,
+  mastery_status: 'supported',
+  mastery_label: '有掌握证据',
+  weak_reason: '来自已有掌握度记录；详细原因待确认。',
+  weak_reason_status: 'unknown',
+  profile_dimensions: [{ key: 'unknown', label: '关联画像维度', status: '待确认' }],
+  course_snapshot: {},
+  source_refs: [],
+  event_refs: [],
+  next_action: { label: '路径待确认', route: null, available: false },
+})).slice(0, 3))
+const hasProfileSnapshot = computed(() => Boolean(
+  dashboardSummary.value?.traceability?.profile_snapshot_id
+  || dashboardSummary.value?.profile_alignment?.profile_snapshot?.id
+  || workspaceOverview.value?.profile?.snapshot_id
+))
+const weakSummaryEmptyCopy = computed(() => hasProfileSnapshot.value
+  ? '当前画像快照没有确认的薄弱点；继续学习后，系统会用新的证据更新。'
+  : '当前没有可用的画像快照，完成诊断或确认画像后才会显示薄弱点。')
+const trendPoints = computed(() => dashboardSummary.value?.trend || [])
+const activitySummary = computed(() => dashboardSummary.value?.activity_summary || { event_count: 0, active_days: 0 })
+const aggregationNotice = computed(() => dashboardSummary.value?.aggregation?.message || dashboardSummaryError.value)
+
+function estimateLabel(range) {
+  const values = Array.isArray(range) ? range.filter(value => Number.isFinite(Number(value))) : []
+  if (!values.length) return '按当前步骤完成'
+  if (values.length === 1 || values[0] === values[1]) return `约 ${values[0]} 分钟`
+  return `约 ${values[0]}-${values[1]} 分钟`
+}
+
+function sourceLabel(ref) {
+  return ref?.label || '当前学习记录'
+}
+
+function profileInsight(field) {
+  const value = profile.value?.[field]
+  if (typeof value === 'string' && value.trim() && value.trim().toLowerCase() !== 'imported') return value.trim()
+  return '待生成'
+}
+
+function openPrimaryAction() {
+  if (primaryAction.value?.route) router.push(primaryAction.value.route)
+}
+
+function weakMasteryLabel(item) {
+  if (item?.mastery !== null && item?.mastery !== undefined && Number.isFinite(Number(item.mastery))) {
+    return `${Math.round(Number(item.mastery) * 100)}% · ${item.mastery_label || '有掌握证据'}`
+  }
+  return '未知 / 待确认 · 暂无掌握证据'
+}
+
+function weakSnapshotLabel(item) {
+  const snapshot = item?.course_snapshot || {}
+  const course = snapshot.course_title || '当前课程未知'
+  const version = snapshot.course_version ? ` v${snapshot.course_version}` : ''
+  const profileVersion = snapshot.snapshot_version ? ` · 画像 ${snapshot.snapshot_version}` : ''
+  return `${course}${version}${profileVersion}`
+}
+
+function openWeakPoint(item) {
+  if (item?.next_action?.route) router.push(item.next_action.route)
+}
+
+function buildDashboardFallback(overview) {
+  const tasks = overview?.today_tasks || []
+  const first = tasks[0]
+  const nodes = overview?.current_path?.nodes || []
+  const completed = nodes.filter(item => item.status === 'completed').length
+  return {
+    schema_version: 'f4.dashboard-summary.fallback.v1',
+    state: first ? 'ready' : overview?.state || 'path_required',
+    course: overview?.course || null,
+    focus: {
+      title: first?.title || (overview?.state === 'course_required' ? '先选择一门预置课程' : '查看下一步学习安排'),
+      strategy: first?.recommendation_reason || '已有首页摘要暂时不可用，请从当前路径继续。',
+      reason: first ? '来自当前已确认学习路径。' : '来自当前课程状态。',
+      completion_criteria: first?.completion_criteria || '完成当前主动作后返回首页查看最新状态。',
+      estimated_minutes: first?.estimate_minutes || [],
+      source_refs: first?.path_id ? [{ type: 'learning_path', id: first.path_id, label: '当前已确认学习路径' }] : [],
+    },
+    primary_action: overview?.next_action || { label: '查看学习路径', route: '/workspace/path' },
+    knowledge_strategies: tasks.map((item, index) => ({
+      id: item.node_id,
+      title: item.title,
+      is_current: index === 0,
+      strategy: item.recommendation_reason,
+      recommended_resource: item.task_kind === 'review' ? '复习中心' : '学习空间',
+      estimate_minutes: item.estimate_minutes,
+      completion_criteria: item.completion_criteria,
+      continue_route: item.continue_route,
+      source_refs: item.path_id ? [{ type: 'learning_path', id: item.path_id, label: '当前已确认学习路径' }] : [],
+    })),
+    metrics: [
+      { label: '路径进度', value: nodes.length ? `${completed}/${nodes.length}` : '暂无', detail: '已完成任务 / 路径任务', source_refs: [] },
+      { label: '到期复习', value: String(overview?.review?.due_count || 0), detail: '来自当前课程复习队列', source_refs: [] },
+      { label: '需强化', value: String(overview?.profile?.weak_knowledge_points?.length || 0), detail: '来自最近画像快照', source_refs: [] },
+      { label: '最近更新', value: '待同步', detail: '保留当前路径继续学习', source_refs: [] },
+    ],
+    review_summary: overview?.review || { due_count: 0, items: [] },
+    weak_summary: (overview?.profile?.weak_knowledge_points || []).slice(0, 3).map((item) => ({
+      id: item?.id || null,
+      knowledge_point_id: item?.id || null,
+      title: item?.title || item?.id || '未命名知识点',
+      mastery: null,
+      mastery_status: 'unknown',
+      mastery_label: '未知（暂无掌握证据）',
+      weak_reason: '当前画像快照记录该知识点需要优先强化；具体原因待确认。',
+      weak_reason_status: 'unknown',
+      profile_dimensions: [{ key: 'unknown', label: '关联画像维度', status: '待确认' }],
+      course_snapshot: {
+        course_id: overview?.course?.id || null,
+        course_title: overview?.course?.title || null,
+        course_version: overview?.course?.version || null,
+        snapshot_id: overview?.profile?.snapshot_id || null,
+        snapshot_version: overview?.profile?.profile_version || null,
+      },
+      source_refs: overview?.profile?.snapshot_id ? [{ type: 'profile_snapshot', id: overview.profile.snapshot_id, label: '当前画像快照' }] : [],
+      event_refs: [],
+      next_action: {
+        label: item?.id ? '开始强化' : '路径待确认',
+        route: item?.id ? `/workspace/path?course_id=${encodeURIComponent(overview?.course?.id || '')}&knowledge_point_id=${encodeURIComponent(item.id)}` : null,
+        available: Boolean(item?.id),
+      },
+    })),
+    aggregation: { status: 'unavailable', message: '首页摘要暂时未同步，当前路径与已有资源仍可继续使用。' },
+    trend: [],
+    sourceEventIds: [],
+  }
+}
 
 function goLearn(concept) {
   router.push({ path: '/learn', query: { q: concept } })
 }
 
+function continueTodayTask(item = todayTasks.value[0]) {
+  if (item?.continue_route) router.push(item.continue_route)
+  else goLearn(activeLearningTarget.value)
+}
+
 function goPath() { router.push('/learning-path') }
 // Go analysis properly navigates
-function goAnalysis() { router.push('/student-analysis') }
 function goReview() { router.push('/review') }
-
-function goNotes(concept) {
-  router.push({ path: '/notes', query: { search: concept } })
-}
 
 function playVideo(url) {
   videoPanelUrl.value = url
@@ -174,12 +256,9 @@ function getDimensionIcon(key) {
 }
 
 function getDimensionColorClass(key) {
-  if (key === 'lecture') return 'text-blue-500'
-  if (key === 'mindmap') return 'text-purple-500'
-  if (key === 'code') return 'text-emerald-500'
-  if (key === 'quiz') return 'text-amber-500'
-  if (key === 'video') return 'text-rose-500'
-  return 'text-indigo-500'
+  if (key === 'quiz') return 'text-amber-700'
+  if (key === 'video') return 'text-rose-700'
+  return 'text-edu-600'
 }
 
 function getSortedResources(resourcesObj) {
@@ -272,7 +351,35 @@ function openInWorkspace() {
   }
 }
 
+let dashboardRefreshing = false
+let lastDashboardRefreshAt = 0
+async function refreshDashboardSummary() {
+  if (dashboardRefreshing || loading.value) return
+  if (Date.now() - lastDashboardRefreshAt < 15000) return
+  lastDashboardRefreshAt = Date.now()
+  dashboardRefreshing = true
+  try {
+    const courseId = currentCourseId.value
+    const [overview, summary] = await Promise.all([
+      getM5WorkspaceOverview(courseId).catch(() => null),
+      getM5DashboardSummary(courseId),
+    ])
+    workspaceOverview.value = overview
+    dashboardSummary.value = summary
+    dashboardSummaryError.value = ''
+  } catch (requestError) {
+    dashboardSummaryError.value = requestError?.message || '首页摘要暂时未同步，当前路径与已有资源仍可继续使用。'
+  } finally {
+    dashboardRefreshing = false
+  }
+}
+
+function refreshDashboardOnVisibility() {
+  if (!document.hidden) void refreshDashboardSummary()
+}
+
 onMounted(async () => {
+  await courseContext.restoreFromRoute(route).catch(() => null)
   window.startInteractiveQuiz = (conceptName) => {
     router.push({ path: '/learn', query: { quiz: conceptName } })
   }
@@ -290,32 +397,45 @@ onMounted(async () => {
     }
   }
 
+  const sid = currentStudentId.value
+  const courseId = currentCourseId.value
+
   try {
-    const sid = currentStudentId.value
-    const [p, lp, rv, recs, notesData, analysisData, gr] = await Promise.all([
+    workspaceOverview.value = await getM5WorkspaceOverview(courseId).catch(() => null)
+    dashboardSummary.value = await getM5DashboardSummary(courseId)
+  } catch (e) {
+    console.warn('Dashboard summary unavailable:', e)
+    dashboardSummaryError.value = '首页摘要暂时未同步，当前路径与已有资源仍可继续使用。'
+    dashboardSummary.value = buildDashboardFallback(workspaceOverview.value)
+  }
+
+  try {
+    const [p, lp, rv, recs, notesData, analysisData] = await Promise.all([
       getStudentProfile(sid),
       getLearningPath(sid).catch(() => null),
       getReviewPlans(sid).catch(() => []),
       getRecommendations(sid).catch(() => []),
       getNotes(sid).catch(() => ({ notes: [] })),
-      getProfileAnalysis(sid).catch(() => null),
-      getGoalRecommendations(sid).catch(() => [])
+      getProfileAnalysis(sid, courseId).catch(() => null)
     ])
-    profile.value = p
+    profile.value = { ...(profile.value || {}), ...(p || {}) }
     learningPath.value = lp
     reviews.value = Array.isArray(rv) ? rv : (rv?.plans || rv?.due_reviews || [])
     recommendations.value = recs || []
     studentNotes.value = notesData?.notes || []
     profileAnalysis.value = analysisData
-    goalRecommendations.value = gr || []
   } catch (e) {
     console.error('Dashboard load error:', e)
   } finally {
     loading.value = false
   }
+  window.addEventListener('focus', refreshDashboardSummary)
+  document.addEventListener('visibilitychange', refreshDashboardOnVisibility)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('focus', refreshDashboardSummary)
+  document.removeEventListener('visibilitychange', refreshDashboardOnVisibility)
   setResourceScrollLock(false)
   window.startInteractiveQuiz = null
   window.startInteractiveVideo = null
@@ -529,31 +649,30 @@ function renderMarkdown(text, type = '', conceptName = '') {
     if (layer3Match) layers.push({ num: 3, name: layer3Match[1].trim(), content: layer3Match[2].trim() })
 
     if (layers.length === 0) {
-      const cardStart = protectLayout(`<div class="edumatrix-accordion-card border border-slate-200/80 dark:border-slate-800/80 rounded-xl my-3 overflow-hidden shadow-sm bg-slate-50/40 dark:bg-slate-900/40 transition-all duration-300">
-  <div onclick="const body=this.nextElementSibling; const icon=this.querySelector('.accordion-icon'); if(body.style.display==='none'||!body.style.display){ body.style.display='block'; if(icon) icon.textContent='▼'; }else{ body.style.display='none'; if(icon) icon.textContent='▶'; }" class="px-4 py-3 font-semibold text-slate-800 dark:text-slate-200 cursor-pointer bg-slate-100/60 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between select-none text-xs">
-    <span class="flex items-center gap-1.5">💡 提示阶梯（点击展开）</span>
-    <span class="accordion-icon text-[10px] text-slate-400 font-mono">▶</span>
-  </div>
-  <div class="accordion-body px-5 py-4 border-t border-slate-100 dark:border-slate-800/60 text-slate-700 dark:text-slate-300 leading-relaxed text-xs" style="display: none;">`)
+      const cardStart = protectLayout(`<div class="resource-accordion">
+  <button type="button" onclick="const body=this.nextElementSibling; const icon=this.querySelector('.accordion-icon'); if(body.style.display==='none'||!body.style.display){ body.style.display='block'; if(icon) icon.textContent='收起'; }else{ body.style.display='none'; if(icon) icon.textContent='展开'; }" class="resource-accordion__trigger">
+    <span>提示阶梯</span>
+    <span class="accordion-icon">展开</span>
+  </button>
+  <div class="accordion-body resource-accordion__body" style="display: none;">`)
       const cardEnd = protectLayout(`</div></div>`)
       return `\n\n${cardStart}\n\n${text}\n\n${cardEnd}\n\n`
     }
 
     const itemsHtml = layers.map(l => {
-      const cardStart = protectLayout(`<div class="edumatrix-accordion-card border border-sky-200/80 dark:border-sky-900/50 rounded-xl my-2 overflow-hidden shadow-sm bg-sky-50/20 dark:bg-slate-900/40 transition-all duration-300">
-  <div onclick="const body=this.nextElementSibling; const icon=this.querySelector('.accordion-icon'); if(body.style.display==='none'||!body.style.display){ body.style.display='block'; if(icon) icon.textContent='▼'; }else{ body.style.display='none'; if(icon) icon.textContent='▶'; }" class="px-4 py-2.5 font-semibold text-sky-900 dark:text-sky-200 cursor-pointer bg-sky-50/80 dark:bg-sky-950/40 hover:bg-sky-100/80 dark:hover:bg-sky-900/60 transition-colors flex items-center justify-between select-none text-xs">
-    <span class="flex items-center gap-1.5">💡 <strong class="text-sky-800 dark:text-sky-300">第 ${l.num} 层提示</strong> · ${l.name}（点击展开）</span>
-    <span class="accordion-icon text-[10px] text-sky-600 dark:text-sky-400 font-mono">▶</span>
-  </div>
-  <div class="accordion-body px-5 py-3.5 border-t border-sky-100 dark:border-sky-900/50 text-slate-700 dark:text-slate-300 leading-relaxed text-xs bg-white/40 dark:bg-slate-900/20" style="display: none;">`)
+      const cardStart = protectLayout(`<div class="resource-accordion resource-accordion--nested">
+  <button type="button" onclick="const body=this.nextElementSibling; const icon=this.querySelector('.accordion-icon'); if(body.style.display==='none'||!body.style.display){ body.style.display='block'; if(icon) icon.textContent='收起'; }else{ body.style.display='none'; if(icon) icon.textContent='展开'; }" class="resource-accordion__trigger">
+    <span><strong>第 ${l.num} 层提示</strong> · ${l.name}</span>
+    <span class="accordion-icon">展开</span>
+  </button>
+  <div class="accordion-body resource-accordion__body" style="display: none;">`)
       const cardEnd = protectLayout(`</div></div>`)
       return `\n\n${cardStart}\n\n${l.content}\n\n${cardEnd}\n\n`
     }).join('\n')
 
-    const wrapperStart = protectLayout(`<div class="edumatrix-hint-ladder-wrapper my-3.5 p-3.5 bg-gradient-to-br from-sky-50/70 via-blue-50/40 to-slate-50/60 dark:from-slate-900/80 dark:via-sky-950/30 dark:to-slate-900/90 rounded-2xl border border-sky-200/80 dark:border-sky-900/50 shadow-sm">
-  <div class="text-xs font-bold text-sky-900 dark:text-sky-300 mb-2 flex items-center gap-1.5 px-1">
-    <span>🪜</span>
-    <span>三层递进提示阶梯（点击各层按需展开查看）：</span>
+    const wrapperStart = protectLayout(`<div class="resource-hint-ladder">
+  <div class="resource-hint-ladder__title">
+    <span>三层递进提示阶梯</span>
   </div>`)
     const wrapperEnd = protectLayout(`</div>`)
 
@@ -656,27 +775,22 @@ function renderMarkdown(text, type = '', conceptName = '') {
       if (cleanCode.includes('mindmap')) {
         blockHtml = `<div class="custom-mindmap-placeholder" data-code="${escapedCode}"></div>`
       } else {
-        blockHtml = `<div class="my-3 p-4 bg-white border border-gray-200 rounded-xl text-xs flex flex-col items-center shadow-sm max-w-full">
-          <div class="w-full flex items-center justify-between mb-3 pb-2 border-b border-gray-100">
-            <div class="flex items-center gap-1.5">
-              <span class="text-base">📊</span>
-              <span class="font-bold text-gray-800 text-xs">概念思维导图</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-[9px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-mono font-medium">Mermaid</span>
-            </div>
+        blockHtml = `<div class="resource-diagram">
+          <div class="resource-diagram__header">
+            <span>概念思维导图</span>
+            <span class="resource-diagram__format">Mermaid</span>
           </div>
-          <div class="mermaid-container w-full overflow-auto flex justify-center py-2 bg-white max-h-[300px]">
-            <div class="mermaid w-full flex justify-center" data-code="${escapedCode}"><div class="mermaid-loading flex flex-col items-center justify-center gap-1.5 py-6 text-gray-400 select-none"><div class="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div><span class="text-[10px] text-indigo-500 font-semibold animate-pulse">正在绘制思维导图...</span></div></div>
+          <div class="mermaid-container resource-diagram__canvas">
+            <div class="mermaid" data-code="${escapedCode}"><div class="mermaid-loading resource-rendering"><span class="resource-spinner"></span><span>正在绘制思维导图...</span></div></div>
           </div>
         </div>`
       }
     } else {
       const cleanLang = (lang || 'python').trim().toLowerCase()
-      blockHtml = `<div class="relative group my-3">
-        <pre class="p-3 bg-gray-900 rounded-lg overflow-x-auto text-xs leading-relaxed language-${cleanLang}"><code class="language-${cleanLang}">${code.trim()}</code></pre>
-        <button onclick="window.mountCodeToSandbox && window.mountCodeToSandbox(this)" class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity px-2.5 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-[10px] flex items-center gap-1 shadow-sm font-semibold transition-all">
-          💻 挂载至沙箱
+      blockHtml = `<div class="resource-code-block">
+        <pre class="language-${cleanLang}"><code class="language-${cleanLang}">${code.trim()}</code></pre>
+        <button onclick="window.mountCodeToSandbox && window.mountCodeToSandbox(this)" class="resource-code-block__action">
+          挂载至沙箱
         </button>
       </div>`
     }
@@ -686,7 +800,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
   })
 
   html = html.replace(/`([^`\n]+)`/g, (_, code) => {
-    const blockHtml = `<code class="px-1.5 py-0.5 bg-gray-100 text-red-600 rounded font-mono text-xs font-medium">${code}</code>`
+    const blockHtml = `<code class="resource-inline-code">${code}</code>`
     const idx = codeBlocks.length
     codeBlocks.push(blockHtml)
     return `@@CODEBLOCKTOKEN${idx}@@`
@@ -736,7 +850,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
         processedLines.push('<ul class="my-2 space-y-1 list-disc list-inside">')
         inList = true
       }
-      processedLines.push(`<li class="ml-4 text-xs text-gray-600 my-1 leading-relaxed">${content}</li>`)
+        processedLines.push(`<li class="resource-list-item">${content}</li>`)
     } else {
       if (inList) {
         processedLines.push('</ul>')
@@ -756,11 +870,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
   html = processedLines.join('\n')
 
   function generateTableHtml(header, rows) {
-    let tableHtml = '<div class="overflow-x-auto my-4 border border-gray-200/80 rounded-xl shadow-sm bg-white"><table class="min-w-full divide-y divide-gray-200">'
+    let tableHtml = '<div class="resource-table-wrap"><table class="resource-table">'
     if (header && header.length > 0) {
       tableHtml += '<thead class="bg-gray-50/75"><tr>'
       header.forEach(h => {
-        tableHtml += `<th class="px-4 py-2.5 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">${h}</th>`
+      tableHtml += `<th>${h}</th>`
       })
       tableHtml += '</tr></thead>'
     }
@@ -768,7 +882,7 @@ function renderMarkdown(text, type = '', conceptName = '') {
     rows.forEach(row => {
       tableHtml += '<tr class="hover:bg-gray-50/50 transition-colors">'
       row.forEach(cell => {
-        tableHtml += `<td class="px-4 py-2 text-xs text-gray-600">${cell}</td>`
+        tableHtml += `<td>${cell}</td>`
       })
       tableHtml += '</tr>'
     })
@@ -778,11 +892,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
 
   html = html.replace(/!\[([^\]]*)\]\s*\(([^)]+)\)/g, (match, alt, url) => {
     const cleanUrl = url.replace(/\s+/g, '')
-    return `<img src="${cleanUrl}" alt="${alt}" class="max-w-full max-h-[300px] object-contain rounded-xl my-3 shadow-sm border border-gray-100 bg-white p-1" />`
+    return `<img src="${cleanUrl}" alt="${alt}" class="resource-image" />`
   })
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-gray-900">$1</strong>')
   html = html.replace(/\*([^*]+)\*/g, '<em class="italic text-gray-800">$1</em>')
-  html = html.replace(/^### (.*$)/gim, '<h4 class="text-xs font-bold text-gray-800 mt-4 mb-1.5 flex items-center gap-1">$1</h4>')
+  html = html.replace(/^### (.*$)/gim, '<h4 class="resource-heading-4">$1</h4>')
   html = html.replace(/^## (.*$)/gim, '<h3 class="text-sm font-semibold text-gray-900 mt-5 mb-2 border-b border-gray-100 pb-1 flex items-center gap-1.5">$1</h3>')
   html = html.replace(/^# (.*$)/gim, '<h2 class="text-base font-bold text-gray-900 mt-6 mb-3 flex items-center gap-2">$1</h2>')
 
@@ -828,9 +942,9 @@ function renderMarkdown(text, type = '', conceptName = '') {
       .replace(/\\quad/g, '&nbsp;&nbsp;')
 
     if (display) {
-      return `<div class="my-3.5 p-4 bg-gray-50/75 border border-gray-100 rounded-xl text-center font-serif text-sm overflow-x-auto select-all shadow-inner text-gray-800">${cleanMath}</div>`
+      return `<div class="resource-math resource-math--block">${cleanMath}</div>`
     } else {
-      return `<span class="font-serif italic bg-gray-50/75 px-1.5 py-0.5 rounded text-xs select-all text-gray-800 border border-gray-100/50">${cleanMath}</span>`
+      return `<span class="resource-math resource-math--inline">${cleanMath}</span>`
     }
   }
 
@@ -870,21 +984,21 @@ function renderMarkdown(text, type = '', conceptName = '') {
   const normalizedType = type.toLowerCase()
   if (normalizedType.includes('assess') || normalizedType.includes('quiz') || normalizedType.includes('考官') || normalizedType.includes('评测')) {
     const escapedConcept = (conceptName || '机器学习').replace(/'/g, "\\'")
-    html += `<div class="mt-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 flex items-center justify-between">
-      <div class="text-xs text-blue-800">
-        <strong>📝 评测联动已就绪：</strong>已为您准备了针对此概念的自适应多步评测。
+    html += `<div class="resource-callout">
+      <div>
+        <strong>评测联动已就绪：</strong>已为您准备了针对此概念的自适应多步评测。
       </div>
-      <button onclick="window.startInteractiveQuiz && window.startInteractiveQuiz('${escapedConcept}')" class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all whitespace-nowrap">
-        去测验板作答 (CAT) →
+      <button onclick="window.startInteractiveQuiz && window.startInteractiveQuiz('${escapedConcept}')" class="resource-callout__action">
+        去测验板作答
       </button>
     </div>`
   } else if (normalizedType.includes('director') || normalizedType.includes('video') || normalizedType.includes('导演') || normalizedType.includes('视频')) {
-    html += `<div class="mt-4 p-3 bg-indigo-50/50 rounded-xl border border-indigo-100 flex items-center justify-between">
-      <div class="text-xs text-indigo-800">
-        <strong>🎬 视频演示已就绪：</strong>已为您量身定制并合成了该知识点的教学短视频。
+    html += `<div class="resource-callout">
+      <div>
+        <strong>视频演示已就绪：</strong>已为您量身定制并合成了该知识点的教学短视频。
       </div>
-      <button onclick="window.startInteractiveVideo && window.startInteractiveVideo()" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all whitespace-nowrap">
-        播放讲解视频 →
+      <button onclick="window.startInteractiveVideo && window.startInteractiveVideo()" class="resource-callout__action">
+        播放讲解视频
       </button>
     </div>`
   }
@@ -893,9 +1007,11 @@ function renderMarkdown(text, type = '', conceptName = '') {
 }
 
 function mountCustomMindmaps() {
-  nextTick(() => {
+  nextTick(async () => {
     try {
       const placeholders = document.querySelectorAll('.custom-mindmap-placeholder:not([data-mounted="true"])')
+      if (!placeholders.length) return
+      const { default: CollapsibleMindmap } = await import('../components/CollapsibleMindmap.vue')
       placeholders.forEach((el) => {
         const rawCode = decodeURIComponent(el.getAttribute('data-code') || '')
         const app = createApp(CollapsibleMindmap, { code: rawCode })
@@ -931,9 +1047,9 @@ function initMermaid() {
           securityLevel: 'loose',
           themeVariables: {
             background: '#ffffff',
-            primaryColor: '#ff79c6',
-            primaryTextColor: '#111827',
-            lineColor: '#6366f1',
+            primaryColor: '#4a5c6a',
+            primaryTextColor: '#06141b',
+            lineColor: '#253745',
             fontSize: '12px'
           }
         })
@@ -974,561 +1090,206 @@ function renderAllDiagrams() {
   </div>
   <div v-else class="dashboard-page space-y-7 max-w-[1380px] mx-auto soft-reveal">
 
-    <section class="dashboard-overview">
-      <UiCard class="dashboard-hero" tone="dark">
-        <div class="dashboard-hero__content">
-          <div>
-            <span class="dashboard-hero__eyebrow"><Sparkles :size="13" /> 今日学习焦点</span>
-            <h1>{{ activeLearningTarget || '继续构建你的知识网络' }}</h1>
-            <p>AI 已结合掌握度、认知负荷和复习节奏，为你生成当前最值得投入的学习任务。</p>
-          </div>
-          <div class="dashboard-hero__actions">
-            <UiButton variant="secondary" @click="goLearn(activeLearningTarget)"><template #icon><Play :size="15" /></template>继续学习</UiButton>
-            <UiButton variant="ghost" @click="goPath">查看学习路径 <ArrowRight :size="14" /></UiButton>
-          </div>
-        </div>
-        <div class="dashboard-hero__meta">
-          <div><span>目标课程</span><strong>{{ profile?.target_course || '机器学习导论' }}</strong></div>
-          <div><span>今日建议</span><strong>{{ Math.max(1, nextUp.length) }} 项任务</strong></div>
-          <div><span>学习状态</span><strong>{{ profile?.cognitive_load > 0.6 ? '建议轻量推进' : '适合深度学习' }}</strong></div>
-        </div>
-      </UiCard>
+    <header class="dashboard-heading">
+      <div>
+        <h1>今日学习</h1>
+        <p>{{ dashboardSummary?.profile_alignment?.course?.title || dashboardSummary?.course?.title || '选择课程后开始个性化学习' }}</p>
+      </div>
+      <span v-if="dashboardSummary?.aggregation?.updated_at" class="dashboard-updated-at">
+        更新于 {{ new Date(dashboardSummary.aggregation.updated_at).toLocaleString() }}
+      </span>
+    </header>
 
-      <ChartContainer title="学习趋势" subtitle="最近 7 天知识掌握度变化" eyebrow="Learning momentum">
-        <template #action><span class="dashboard-trend-status"><span />较上周稳步提升</span></template>
-        <LearningTrendChart :values="trendValues" />
-      </ChartContainer>
+    <AggregationStatus
+      :course-id="dashboardSummary?.course?.id || workspaceOverview?.course?.id || currentCourseId"
+      class="dashboard-feedback"
+    />
+
+    <section class="dashboard-metrics" aria-label="学习摘要">
+      <details v-for="item in summaryMetrics" :key="item.label" class="dashboard-metric">
+        <summary>
+          <span>{{ item.label }}</span>
+          <strong>{{ item.value }}</strong>
+          <small>{{ item.detail }}</small>
+        </summary>
+        <div class="dashboard-metric__sources">
+          <template v-if="item.source_refs?.length">
+            <span v-for="source in item.source_refs" :key="`${source.type}-${source.id}`">{{ sourceLabel(source) }}</span>
+          </template>
+          <span v-else>暂无可追溯学习记录</span>
+        </div>
+      </details>
     </section>
 
-    <section class="dashboard-metrics">
-      <DashboardWidget label="平均掌握度" :value="`${avgMastery}%`" detail="综合全部知识点计算" tone="sage">
-        <template #icon><TrendingUp :size="16" /></template><template #signal>核心指标</template>
-      </DashboardWidget>
-      <DashboardWidget label="课程完成" :value="`${mastered}/${totalConcepts}`" detail="已达到稳定掌握标准" tone="violet">
-        <template #icon><CheckCircle2 :size="16" /></template><template #signal>课程进度</template>
-      </DashboardWidget>
-      <DashboardWidget label="正在学习" :value="inProgress" detail="当前路径中的活跃知识点" tone="sand">
-        <template #icon><Activity :size="16" /></template><template #signal>进行中</template>
-      </DashboardWidget>
-      <DashboardWidget label="风险知识点" :value="weakConcepts.length" detail="建议在本周优先强化" tone="rose">
-        <template #icon><Target :size="16" /></template><template #signal>AI 预测</template>
-      </DashboardWidget>
-    </section>
+    <p v-if="aggregationNotice" class="dashboard-sync-notice" role="status">
+      <Clock :size="16" />{{ aggregationNotice }}
+    </p>
 
-    <!-- 🎓 课程全局学情诊断与自适应评价 -->
-    <div v-if="profileAnalysis && profile" class="dashboard-insight bg-gradient-to-br from-indigo-50/80 via-white/90 to-blue-50/70 rounded-3xl border border-indigo-100/70 p-6 shadow-sm space-y-5 relative overflow-hidden">
-      <div class="absolute -right-16 -top-20 w-56 h-56 rounded-full bg-indigo-300/15 blur-3xl pointer-events-none" />
-      <div class="flex items-center justify-between border-b border-indigo-100/60 pb-3 flex-wrap gap-2">
-        <div class="flex items-center gap-2">
-          <GraduationCap :size="18" class="text-indigo-600 animate-pulse" />
-          <h2 class="text-base font-bold tracking-tight text-slate-800">课程全局学情诊断与自适应评价</h2>
+    <section data-testid="dashboard-today-tasks" class="dashboard-decision-grid">
+      <article class="dashboard-focus" data-testid="dashboard-primary-task">
+        <div class="dashboard-focus__meta">
+          <span>{{ dashboardSummary?.primary_task?.task_kind === 'review' ? '今日复习' : '今日主任务' }}</span>
+          <span>{{ estimateLabel(focus.estimated_minutes) }}</span>
         </div>
-        <div class="flex items-center gap-2 text-[10px] text-slate-500 font-medium">
-          <span>📚 目标课程: <strong class="text-indigo-700 font-semibold">{{ profile?.target_course || '机器学习导论' }}</strong></span>
-          <span>🎓 专业方向: <strong class="text-indigo-700 font-semibold">{{ profile?.major || '自适应' }}</strong></span>
+        <div class="dashboard-focus__copy">
+          <h2>{{ focus.title }}</h2>
+          <p class="dashboard-focus__strategy">{{ focus.strategy }}</p>
         </div>
-      </div>
-
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
-        <!-- 左侧及中间：全局学情诊断报告 (Dashboard Analysis) -->
-        <div class="md:col-span-2 bg-slate-50/60 border border-slate-100 rounded-xl p-4 relative overflow-hidden flex flex-col justify-between">
-          <Sparkles class="absolute right-3 top-3 text-slate-200/40 w-12 h-12 pointer-events-none" />
-          <div class="space-y-2">
-            <h3 class="text-xs font-bold text-slate-800 flex items-center gap-1">
-              📊 全局学情诊断报告
-            </h3>
-            <div class="text-[11px] text-slate-700 leading-relaxed whitespace-pre-wrap font-medium">
-              {{ profileAnalysis.dashboard_report || '正在加载中...' }}
-            </div>
-          </div>
-        </div>
-
-        <!-- 右侧：全局心智负荷与偏好评价 -->
-        <div class="bg-white/90 border border-slate-100 rounded-xl p-4 flex flex-col justify-between space-y-3">
-          <div class="space-y-3">
-            <h3 class="text-xs font-bold text-slate-800 flex items-center gap-1">
-              🧠 脑力心智负荷与风格评价
-            </h3>
-            
-            <div class="space-y-2.5 text-[10px] text-slate-600">
-              <div class="flex items-center justify-between">
-                <span class="font-medium">认知负荷:</span>
-                <span class="font-bold" :class="profile.cognitive_load > 0.6 ? 'text-amber-600' : 'text-emerald-600'">
-                  {{ Math.round(profile.cognitive_load * 100) }}%
-                </span>
-              </div>
-              <div class="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                <div class="h-full rounded-full" 
-                  :class="profile.cognitive_load > 0.6 ? 'bg-amber-500' : 'bg-emerald-500'"
-                  :style="{ width: (profile.cognitive_load * 100) + '%' }" />
-              </div>
-
-              <div class="flex items-center justify-between">
-                <span class="font-medium">情绪避障/挫败感:</span>
-                <span class="font-bold" :class="profile.frustration_index > 0.4 ? 'text-rose-600' : 'text-emerald-600'">
-                  {{ Math.round(profile.frustration_index * 100) }}%
-                </span>
-              </div>
-              <div class="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                <div class="h-full rounded-full" 
-                  :class="profile.frustration_index > 0.4 ? 'bg-rose-500' : 'bg-emerald-500'"
-                  :style="{ width: (profile.frustration_index * 100) + '%' }" />
-              </div>
-              
-              <div class="pt-2 border-t border-slate-100 space-y-1">
-                <div class="flex justify-between">
-                  <span class="text-slate-500">学习风格:</span>
-                  <span class="font-bold text-indigo-600">{{ profile.cognitive_style || '自适应' }}</span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="text-slate-500">学习动机:</span>
-                  <span class="font-bold text-indigo-600">{{ profile.motivation_type || '未诊断' }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <button class="w-full py-2 text-center text-xs font-bold text-indigo-600 bg-indigo-50/50 hover:bg-indigo-50 border border-indigo-100/50 rounded-lg transition-all"
-            @click="router.push({ path: '/profile', query: { student_id: currentStudentId } })">
-            查看数字孪生详细分析 →
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 🎯 唯一主攻锚点与最终目标微调中心 -->
-    <div v-if="activeLearningTarget" class="bg-gradient-to-r from-amber-500/10 via-amber-600/5 to-amber-700/0 border border-amber-500/30 rounded-2xl p-5 shadow-sm space-y-3 relative overflow-hidden">
-      <!-- Background micro-glow decoration -->
-      <div class="absolute -right-8 -top-8 w-24 h-24 rounded-full bg-amber-400/20 blur-xl pointer-events-none" />
-
-      <!-- Card Header / Goal Resolver UI -->
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-500/20 pb-3">
-        <div class="flex items-center gap-2">
-          <span class="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center text-xs font-bold shadow-md shadow-amber-500/20">🎯</span>
-          <div>
-            <h3 class="text-xs font-bold text-slate-800 leading-none">自适应学习主攻卡</h3>
-            <span class="text-[9px] text-slate-400 mt-1 block">A* 算法全局拓扑寻优路线</span>
-          </div>
-        </div>
-
-        <!-- 最终目标微调中心 -->
-        <div class="flex items-center gap-1.5 bg-white/60 border border-slate-200/80 px-2.5 py-1 rounded-xl text-[10px] font-semibold text-slate-600 shadow-inner">
-          <span>最终通关目标:</span>
-          <strong class="text-indigo-600 font-bold">{{ adaptiveRoute?.target_concept || '未指定' }}</strong>
-          <span class="px-1.5 py-0.5 text-[8px] rounded-md scale-95 font-bold"
-            :class="{
-              'bg-blue-50 text-blue-700': goalOrigin === 'user',
-              'bg-emerald-50 text-emerald-700': goalOrigin === 'document',
-              'bg-amber-50 text-amber-700': goalOrigin === 'course_default',
-            }">
-            {{ goalOrigin === 'user' ? '✨ 手设' : goalOrigin === 'document' ? '📂 文档' : '📚 大纲' }}
-          </span>
-          <button @click="showGoalModal = true" class="ml-1 p-0.5 hover:bg-slate-200 rounded transition-colors text-slate-400 hover:text-indigo-600" title="微调目标">
-            <Edit3 :size="10" />
-          </button>
-        </div>
-      </div>
-
-      <!-- Core Guidance Statement -->
-      <div class="space-y-1 pb-1">
-        <h4 class="text-xs font-bold text-slate-850 flex items-center gap-1">
-          🎯 当前主攻概念：{{ activeLearningTarget }}（掌握度: {{ Math.round((profile?.concept_mastery?.[activeLearningTarget] || 0.0) * 100) }}%）
-        </h4>
-        <p class="text-[11px] text-slate-600 leading-relaxed font-medium mt-1.5">
-          💡 智能指引：这是根据您的备考目标规划出的 A* 核心路线第一步。系统已在下方为您准备了该概念的 5 维专属自适应学习资源，请优先攻克。
-        </p>
-      </div>
-
-      <!-- Horizontal Step Pipeline -->
-      <div v-if="adaptiveRoute?.nodes?.length" class="pt-2">
-        <div class="text-[9px] text-slate-400 font-bold mb-1.5 flex items-center gap-1">
-          <span>🛤️ A* 通关推进链条:</span>
-          <span class="text-slate-300">(共 {{ adaptiveRoute.nodes.length }} 步)</span>
-        </div>
-        <div class="flex flex-wrap items-center gap-y-2 gap-x-1.5 py-1.5 max-w-full">
-          <div v-for="(node, index) in adaptiveRoute.nodes" :key="node.concept" class="flex items-center shrink-0">
-            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[10px] font-bold select-none transition-all cursor-pointer hover:scale-[1.01]"
-              @click="goLearn(node.concept)"
-              :class="node.concept === activeLearningTarget 
-                ? 'bg-amber-500 text-white border-amber-500 shadow-md ring-2 ring-amber-400/40 ring-offset-2 scale-[1.03] animate-pulse'
-                : (profile?.concept_mastery?.[node.concept] || 0.0) >= 0.7 
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
-                  : 'bg-white text-slate-500 border-slate-100 hover:border-slate-200'">
-              <span>{{ index + 1 }}. {{ node.concept }}</span>
-              <span v-if="(profile?.concept_mastery?.[node.concept] || 0.0) >= 0.7" class="text-[8px]">✅</span>
-            </div>
-            <span v-if="index < adaptiveRoute.nodes.length - 1" class="text-slate-300 mx-1 font-bold text-xs">→</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Goal Resolver Select Modal -->
-    <Teleport to="body">
-    <div v-if="showGoalModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 backdrop-blur-sm transition-all" @click="showGoalModal = false">
-      <div class="w-full max-w-2xl bg-white rounded-2xl shadow-2xl p-5 space-y-4 border border-slate-100 animate-scale-up mx-4 max-h-[90vh] overflow-y-auto" @click.stop>
-        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-          <h3 class="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-            🎯 A* 最终学习目标与智能路径规划中心
-          </h3>
-          <button @click="showGoalModal = false" class="text-slate-400 hover:text-slate-600 text-sm">✕</button>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <!-- Left side: Manual selection -->
-          <div class="md:col-span-1 space-y-3.5">
+        <dl class="dashboard-focus__facts">
+          <div><dt>为什么现在做</dt><dd>{{ focus.reason }}</dd></div>
+          <div><dt>完成条件</dt><dd>{{ focus.completion_criteria }}</dd></div>
+          <div><dt>建议资源</dt><dd>{{ dashboardSummary?.primary_task?.recommended_resource || '当前学习空间' }}</dd></div>
+        </dl>
+        <div class="dashboard-focus__footer">
+          <details class="dashboard-source-disclosure">
+            <summary>查看决策依据</summary>
             <div>
-              <label class="text-[10px] text-slate-400 font-bold block mb-1">手动微调最终通关目标</label>
-              <select v-model="newGoalInput" class="w-full p-2.5 bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all">
-                <option value="" disabled>-- 请选择目标概念 --</option>
-                <option v-for="conceptName in availableConcepts" :key="conceptName" :value="conceptName">
-                  {{ conceptName }}
-                </option>
-              </select>
+              <span v-for="source in focus.source_refs" :key="`${source.type}-${source.id}`">{{ sourceLabel(source) }}</span>
+              <span v-if="!focus.source_refs?.length">依据将在完成画像或路径后显示。</span>
             </div>
+          </details>
+          <button type="button" class="dashboard-primary-action" data-testid="dashboard-primary-action" @click="openPrimaryAction">
+            <Play :size="17" />{{ primaryAction.label }}<ArrowRight :size="17" />
+          </button>
+        </div>
+      </article>
 
-            <p class="text-[10px] text-slate-400 leading-relaxed">
-              ✏️ 说明：选择目标概念后，A* 寻路算法及推送卡片会自动更新以其为终点。如果包含未掌握的前置依赖，系统将引导您优先攻克首个薄弱概念。
+      <aside class="dashboard-side-summary" aria-label="复习与薄弱点摘要">
+        <section>
+          <header><div><CalendarDays :size="17" /><h2>到期复习</h2></div><span>{{ reviewSummary.due_count }} 项</span></header>
+          <ol v-if="reviewSummary.items?.length">
+            <li v-for="item in reviewSummary.items.slice(0, 3)" :key="item.id || item.knowledge_point_id">
+              <strong>{{ item.title || item.concept || '未命名知识点' }}</strong>
+              <span>{{ item.next_review_at ? new Date(item.next_review_at).toLocaleDateString() : '今天' }}</span>
+            </li>
+          </ol>
+          <p v-else>今天没有到期复习。</p>
+        </section>
+        <section>
+          <header><div><Target :size="17" /><h2>优先强化</h2></div><button type="button" @click="router.push('/profile/learning')">查看画像</button></header>
+          <ol v-if="weakSummary.length">
+            <li v-for="item in weakSummary.slice(0, 3)" :key="item.id || item.title" class="dashboard-weak-item" data-testid="dashboard-weak-item">
+              <div class="dashboard-weak-item__heading">
+                <strong>{{ item.title || item.id || '未命名知识点' }}</strong>
+                <span>{{ weakMasteryLabel(item) }}</span>
+              </div>
+              <p class="dashboard-weak-item__reason">{{ item.weak_reason || '薄弱原因待确认。' }}</p>
+              <div class="dashboard-weak-item__dimensions">
+                <span v-for="dimension in (item.profile_dimensions || [])" :key="`${item.id || item.title}-${dimension.key}`">
+                  {{ dimension.label || '关联画像维度' }}：{{ dimension.status || '待确认' }}
+                </span>
+              </div>
+              <p class="dashboard-weak-item__snapshot">{{ weakSnapshotLabel(item) }}</p>
+              <details class="dashboard-weak-item__evidence">
+                <summary>查看来源与学习事件</summary>
+                <ul>
+                  <li v-for="source in (item.source_refs || [])" :key="`${source.type}-${source.id}-${source.label}`">来源：{{ sourceLabel(source) }}</li>
+                  <li v-for="event in (item.event_refs || [])" :key="`event-${event.id}`">学习事件：{{ event.label || '支持该知识点的学习事件' }}</li>
+                  <li v-if="!(item.source_refs || []).length && !(item.event_refs || []).length">来源与学习事件：待确认</li>
+                </ul>
+              </details>
+              <button
+                v-if="item.next_action?.route"
+                type="button"
+                class="dashboard-weak-item__action"
+                :aria-label="`${item.next_action.label || '开始强化'}：${item.title || item.id}`"
+                @click="openWeakPoint(item)"
+              >
+                {{ item.next_action.label || '开始强化' }} <ArrowRight :size="14" />
+              </button>
+              <span v-else class="dashboard-weak-item__pending">路径待确认</span>
+            </li>
+          </ol>
+          <div v-else class="dashboard-weak-empty">
+            <p>{{ weakSummaryEmptyCopy }}</p>
+            <button type="button" @click="router.push(hasProfileSnapshot ? '/profile/learning' : '/onboarding')">
+              {{ hasProfileSnapshot ? '查看画像证据' : '完成画像/诊断' }} <ArrowRight :size="14" />
+            </button>
+          </div>
+        </section>
+      </aside>
+    </section>
+
+    <details v-if="summaryStrategies.length > 1" class="dashboard-next-tasks" data-testid="dashboard-next-tasks">
+      <summary>
+        <span><strong>接下来还有 {{ summaryStrategies.length - 1 }} 项安排</strong><small>当前任务完成后再进入，不与主动作竞争。</small></span>
+        <ChevronDown :size="18" />
+      </summary>
+      <ol>
+        <li v-for="item in summaryStrategies.slice(1)" :key="item.id">
+          <div><strong>{{ item.title }}</strong><p>{{ item.strategy }}</p></div>
+          <span>{{ item.recommended_resource }} · {{ estimateLabel(item.estimate_minutes) }}</span>
+        </li>
+      </ol>
+    </details>
+
+    <section class="dashboard-trend-summary">
+      <header>
+        <div><h2>最近学习变化</h2><p>只显示有效学习事件形成的掌握变化。</p></div>
+        <button type="button" @click="router.push('/profile')">前往个人中心 <ArrowRight :size="14" /></button>
+      </header>
+      <LearningTrendChart :points="trendPoints" />
+      <p class="dashboard-trend-activity">近 30 天记录 {{ activitySummary.event_count }} 条有效学习活动，分布在 {{ activitySummary.active_days }} 天。掌握度曲线只显示已处理的有效证据。</p>
+    </section>
+
+    <details class="dashboard-detail" data-testid="dashboard-detail">
+      <summary class="dashboard-detail__summary">
+        <span class="dashboard-detail__summary-icon"><GraduationCap :size="19" /></span>
+        <span class="dashboard-detail__summary-copy">
+          <strong>详细学习分析</strong>
+          <span>查看课程学情诊断</span>
+        </span>
+        <ChevronDown :size="18" class="dashboard-detail__chevron" />
+      </summary>
+      <div class="dashboard-detail__body">
+
+    <section v-if="profileAnalysis && profile" class="dashboard-detail-section dashboard-analysis-section">
+      <header class="dashboard-section-heading">
+        <div class="dashboard-section-heading__title">
+          <span class="dashboard-section-heading__icon"><GraduationCap :size="18" /></span>
+          <div>
+            <h2>课程学情诊断</h2>
+            <p>基于当前课程和学习状态生成</p>
+          </div>
+        </div>
+        <div class="dashboard-section-heading__meta">
+            <span>{{ dashboardSummary?.profile_alignment?.course?.title || dashboardSummary?.course?.title || '当前课程未知' }}</span>
+            <span>v{{ dashboardSummary?.profile_alignment?.course?.version || '未知' }}</span>
+        </div>
+      </header>
+
+      <div class="dashboard-analysis-grid">
+        <article class="dashboard-analysis-report">
+          <h3>诊断摘要</h3>
+            <p>{{ profileAnalysis.dashboard_report || '诊断结果正在生成，完成后会保留在学习画像中。' }}</p>
+            <p class="dashboard-analysis-source">
+              画像快照：{{ dashboardSummary?.profile_alignment?.profile_snapshot?.version || '未知' }}
             </p>
+        </article>
 
-            <div class="flex items-center gap-2 pt-2">
-              <button @click="showGoalModal = false" class="flex-1 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-bold rounded-xl transition-all">
-                取消
-              </button>
-              <button @click="handleGoalUpdate(newGoalInput)" :disabled="!newGoalInput || updatingGoal"
-                class="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center gap-1">
-                <span v-if="updatingGoal" class="animate-spin w-3 h-3 border-2 border-white border-t-transparent rounded-full" />
-                确认设定
-              </button>
-            </div>
+        <aside class="dashboard-analysis-signals" aria-label="当前学习状态">
+          <h3>学习状态</h3>
+          <div class="dashboard-signal">
+            <div><span>认知负荷</span><strong>{{ Math.round(profile.cognitive_load * 100) }}%</strong></div>
+            <div class="dashboard-meter"><span :class="{ 'dashboard-meter__fill--warning': profile.cognitive_load > 0.6 }" :style="{ width: (profile.cognitive_load * 100) + '%' }" /></div>
           </div>
-
-          <!-- Right side: AI smart pathway recommendations -->
-          <div class="md:col-span-2 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-4">
-            <h4 class="text-[11px] font-bold text-slate-800 flex items-center gap-1.5 mb-2.5">
-              <Sparkles :size="12" class="text-amber-500 animate-pulse" />
-              AI 自适应学习路径推荐 (多路线通关)
-            </h4>
-            <div v-if="goalRecommendations.length" class="space-y-3 max-h-[320px] overflow-y-auto pr-1">
-              <div v-for="pw in goalRecommendations" :key="pw.target_concept"
-                class="bg-slate-50 hover:bg-slate-100/70 border border-slate-150 rounded-xl p-3 space-y-2 transition-all">
-                
-                <div class="flex items-center justify-between gap-3 flex-wrap">
-                  <div>
-                    <h5 class="text-[11px] font-extrabold text-slate-800">{{ pw.pathway_name }}</h5>
-                    <p class="text-[9px] text-slate-400 font-medium mt-0.5">{{ pw.description }}</p>
-                  </div>
-                  <button @click="handleGoalUpdate(pw.target_concept)" :disabled="updatingGoal"
-                    class="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white text-[10px] font-extrabold rounded-lg shadow-sm transition-all shrink-0">
-                    选择该目标
-                  </button>
-                </div>
-
-                <!-- Progress bar and Metrics -->
-                <div class="flex items-center justify-between gap-3 text-[9px] font-mono text-slate-500 flex-wrap">
-                  <div class="flex items-center gap-1.5 flex-1 min-w-[120px]">
-                    <span class="font-bold shrink-0">通关进度:</span>
-                    <div class="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                      <div class="h-full bg-emerald-500 rounded-full transition-all" :style="{ width: pw.completion_rate + '%' }" />
-                    </div>
-                    <span class="font-bold text-emerald-600 shrink-0">{{ pw.completion_rate }}%</span>
-                  </div>
-                  
-                  <div class="flex items-center gap-1.5">
-                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
-                      ⏱️ 预估通关: {{ pw.expected_minutes }} 分钟
-                    </span>
-                    <span class="px-2 py-0.5 rounded font-extrabold border"
-                      :class="{
-                        'bg-emerald-50 text-emerald-700 border-emerald-100': pw.cognitive_load_index === '轻度学习',
-                        'bg-amber-50 text-amber-700 border-amber-100': pw.cognitive_load_index === '中度攻坚',
-                        'bg-rose-50 text-rose-700 border-rose-100': pw.cognitive_load_index === '深度挑战'
-                      }">
-                      🧠 {{ pw.cognitive_load_index }}
-                    </span>
-                  </div>
-                </div>
-
-                <!-- Horizontal workflow crumbs node chain (wrapped to avoid truncation) -->
-                <div class="flex flex-wrap items-center gap-y-2 gap-x-1.5 py-1.5 max-w-full">
-                  <div v-for="(node, index) in pw.nodes" :key="node.concept + '_' + index" class="flex items-center shrink-0">
-                    <span v-if="node.is_ellipsis" class="text-slate-400 font-bold px-1 select-none">...</span>
-                    <span v-else class="px-2 py-0.5 rounded text-[9px] font-bold border select-none transition-all"
-                      :class="node.concept === activeLearningTarget
-                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm animate-pulse'
-                        : node.is_target
-                          ? 'bg-indigo-50 text-indigo-700 border-indigo-200 font-extrabold ring-1 ring-indigo-100/50'
-                          : node.mastered 
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
-                            : 'bg-white text-slate-400 border-slate-100'">
-                      {{ node.concept }}
-                      <span v-if="node.mastered" class="text-[8px] ml-0.5">✓</span>
-                    </span>
-                    <span v-if="index < pw.nodes.length - 1" class="text-slate-300 mx-0.5 text-[9px] font-bold">→</span>
-                  </div>
-                </div>
-
-              </div>
-            </div>
-            <div v-else class="flex flex-col items-center justify-center h-40 text-xs text-gray-400 gap-1.5">
-              <span class="animate-spin w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
-              <p>AI 正在分析核心路径推荐...</p>
-            </div>
+          <div class="dashboard-signal">
+            <div><span>挫败风险</span><strong>{{ Math.round(profile.frustration_index * 100) }}%</strong></div>
+            <div class="dashboard-meter"><span :class="{ 'dashboard-meter__fill--danger': profile.frustration_index > 0.4 }" :style="{ width: (profile.frustration_index * 100) + '%' }" /></div>
           </div>
-        </div>
+          <dl class="dashboard-analysis-facts">
+            <div><dt>学习风格</dt><dd>{{ profileInsight('cognitive_style') }}</dd></div>
+            <div><dt>学习动机</dt><dd>{{ profileInsight('motivation_type') }}</dd></div>
+          </dl>
+          <button type="button" class="dashboard-secondary-action" @click="router.push({ path: '/profile', query: { student_id: currentStudentId } })">
+            查看完整学习画像 <ArrowRight :size="14" />
+          </button>
+        </aside>
       </div>
-    </div>
-    </Teleport>
+    </section>
 
-    <!-- 备选解锁方向 -->
-    <div v-if="nextUp.length" class="bg-blue-50/75 rounded-2xl border border-blue-100 p-4">
-      <h2 class="text-sm font-bold text-blue-800 mb-1 flex items-center gap-2">
-        <Sparkles :size="15" class="text-blue-600 animate-pulse" />
-        <span>备选解锁方向 (Alternative Directions)</span>
-      </h2>
-      <p class="text-[10px] text-blue-600 font-medium mb-3">
-        以下知识点您的前置依赖已满足，可以随时作为备选方向切换学习。
-      </p>
-      <div class="flex flex-wrap gap-2">
-        <button v-for="n in nextUp" :key="n.concept"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-blue-700 border border-blue-200 hover:bg-blue-100 transition-all"
-          @click="goLearn(n.concept)">
-          {{ n.concept }} <ArrowRight :size="11" />
-        </button>
       </div>
-    </div>
-
-    <!-- 智能自适应资源推送 (5维矩阵) -->
-    <div v-if="recommendations.length" class="space-y-5">
-      <h2 class="text-sm font-bold text-gray-800 flex items-center gap-2">
-        <Sparkles :size="15" class="text-indigo-500" />
-        <span>智教自适应资源推送 (5维矩阵)</span>
-        <span class="px-2 py-0.5 text-[9px] font-semibold bg-indigo-50 text-indigo-600 rounded-full border border-indigo-100 animate-pulse">AI Agent 智能体推荐底座</span>
-      </h2>
-
-      <div class="space-y-5">
-        <!-- Iterate over recommended concepts -->
-        <div v-for="conceptRec in recommendations" :key="conceptRec.concept"
-          class="bg-white rounded-2xl border p-5 space-y-4 relative overflow-hidden transition-all duration-300"
-          :class="conceptRec.concept === activeLearningTarget 
-            ? 'border-amber-400/80 shadow-[0_0_15px_rgba(245,158,11,0.12)] ring-2 ring-amber-400/30 ring-offset-2' 
-            : 'border-slate-100 shadow-sm'">
-          
-          <!-- Concept Header -->
-          <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-            <div class="flex items-center gap-2 flex-wrap">
-              <span class="px-2.5 py-0.5 text-xs font-bold rounded-lg border"
-                :class="{
-                  'bg-rose-50 text-rose-600 border-rose-100': conceptRec.badge === '🔥 薄弱强化',
-                  'bg-purple-50 text-purple-600 border-purple-100': conceptRec.badge === '💡 探索进阶'
-                }">
-                {{ conceptRec.badge }}
-              </span>
-              <h3 class="text-sm font-bold text-gray-800">
-                知识强化目标: <span class="text-indigo-600 text-sm font-extrabold ml-1">{{ conceptRec.concept }}</span>
-              </h3>
-              <span class="text-[10px] font-semibold px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full">
-                当前掌握度: {{ Math.round(conceptRec.mastery * 100) }}%
-              </span>
-            </div>
-            <p class="text-[10px] text-slate-400 font-medium leading-relaxed max-w-md">
-              {{ conceptRec.reason }}
-            </p>
-          </div>
-
-          <!-- Tactical Pathway Switcher -->
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50/60 rounded-xl border border-slate-100/80">
-            <div class="flex items-center gap-2">
-              <span class="text-xs font-bold text-slate-700">战术编译路线:</span>
-              <span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-md border"
-                :class="{
-                  'bg-blue-50 text-blue-700 border-blue-100': conceptRec.pathway_meta.code === 'ICE_BREAKER',
-                  'bg-emerald-50 text-emerald-700 border-emerald-100': conceptRec.pathway_meta.code === 'PRACTITIONER',
-                  'bg-purple-50 text-purple-700 border-purple-100': conceptRec.pathway_meta.code === 'EXPLORER',
-                  'bg-rose-50 text-rose-700 border-rose-100': conceptRec.pathway_meta.code === 'RESCUE',
-                  'bg-amber-50 text-amber-700 border-amber-100': conceptRec.pathway_meta.code === 'FUSION',
-                }">
-                <span>{{ conceptRec.pathway_meta.name }}</span>
-              </span>
-            </div>
-            
-            <div class="flex flex-wrap gap-1.5">
-              <button v-for="pw in [
-                { code: 'ICE_BREAKER', name: '破冰', icon: '🚀' },
-                { code: 'PRACTITIONER', name: '实操', icon: '🛠️' },
-                { code: 'EXPLORER', name: '探究', icon: '🔬' },
-                { code: 'RESCUE', name: '防忘', icon: '🚨' },
-                { code: 'FUSION', name: '跨界', icon: '📈' }
-              ]" :key="pw.code"
-                @click="switchPathway(conceptRec.concept, pw.code)"
-                :disabled="pathwayLoading[conceptRec.concept]"
-                class="px-2.5 py-1 text-[10px] font-bold rounded-lg border transition-all flex items-center gap-1 shadow-sm"
-                :class="conceptRec.pathway_meta.code === pw.code
-                  ? 'bg-indigo-600 border-indigo-600 text-white font-extrabold shadow-md scale-[1.03]'
-                  : 'bg-white border-slate-200 text-slate-600 hover:scale-[1.01] hover:bg-slate-50'">
-                <span>{{ pw.icon }}</span>
-                <span>{{ pw.name }}</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- 学情诊断与改进意见 (细节分析、原因、意见) -->
-          <div v-if="conceptRec.learning_state_overview" class="p-3.5 bg-slate-50 border border-slate-100 rounded-xl space-y-2">
-            <h4 class="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-              📊 专属学情诊断与改进建议
-            </h4>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-[11px] text-slate-600 leading-relaxed">
-              <div class="space-y-0.5">
-                <span class="font-bold text-slate-800">🔍 细节分析：</span>
-                <p>{{ conceptRec.learning_state_overview.detail_analysis }}</p>
-              </div>
-              <div class="space-y-0.5">
-                <span class="font-bold text-slate-800">🧩 障碍原因：</span>
-                <p>{{ conceptRec.learning_state_overview.reason }}</p>
-              </div>
-              <div class="space-y-0.5">
-                <span class="font-bold text-slate-800">💡 教学意见：</span>
-                <p>{{ conceptRec.learning_state_overview.advice }}</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- 5-Dimensional Resource Matrix Grid Wrapper -->
-          <div class="relative min-h-[160px]">
-            <!-- Loading Indicator for compilation -->
-            <div v-if="pathwayLoading[conceptRec.concept]" class="absolute inset-0 bg-white/70 backdrop-blur-[1px] z-10 flex flex-col items-center justify-center rounded-xl space-y-2">
-              <div class="animate-spin w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full" />
-              <span class="text-xs font-bold text-indigo-700">战术路线重新编译中...</span>
-            </div>
-
-            <!-- Grid -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
-              <div v-for="res in getSortedResources(conceptRec.resources)" :key="res.key"
-                @click="openResourceViewer(conceptRec.concept, res.key, res)"
-                class="relative group overflow-hidden cursor-pointer rounded-2xl p-4 flex flex-col justify-between transition-all duration-300 border border-slate-100 hover:border-indigo-200 shadow-sm hover:shadow-md bg-white hover:bg-slate-50/20">
-                
-                <div class="space-y-3">
-                  <!-- Icon & Title -->
-                  <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-1.5">
-                      <div class="w-6 h-6 rounded-lg flex items-center justify-center transition-transform group-hover:scale-110"
-                        :class="{
-                          'bg-blue-50 text-blue-600': res.key === 'lecture',
-                          'bg-purple-50 text-purple-600': res.key === 'mindmap',
-                          'bg-emerald-50 text-emerald-600': res.key === 'code',
-                          'bg-amber-50 text-amber-600': res.key === 'quiz',
-                          'bg-rose-50 text-rose-600': res.key === 'video'
-                        }">
-                        <component :is="getDimensionIcon(res.key)" :size="13" />
-                      </div>
-                      <div class="flex flex-col">
-                        <span class="text-xs font-bold text-slate-800 leading-none flex items-center gap-1">
-                          {{ res.resource_type }}
-                        </span>
-                        <span class="text-[9px] text-slate-400 mt-0.5">{{ res.role }}</span>
-                      </div>
-                    </div>
-                    
-                    <span class="px-1.5 py-0.5 text-[9px] font-bold rounded-md"
-                      :class="res.status === 'generated' 
-                        ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
-                        : 'bg-slate-50 text-slate-400 border border-slate-100'">
-                      {{ res.status === 'generated' ? '已就绪' : '待生成' }}
-                    </span>
-                  </div>
-
-                  <!-- Card Overview Description -->
-                  <p class="text-[10px] text-slate-500 line-clamp-4 leading-relaxed min-h-[64px]">{{ res.overview }}</p>
-                </div>
-
-                <!-- Action Indicator -->
-                <div class="mt-3.5 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold">
-                  <span class="transition-colors" :class="res.status === 'generated' ? 'text-indigo-600 group-hover:text-indigo-700' : 'text-slate-500 group-hover:text-slate-700'">
-                    {{ res.status === 'generated' ? '立即学习' : '一键生成' }}
-                  </span>
-                  <span class="text-xs transition-transform group-hover:translate-x-0.5">→</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 主内容：雷达图 + 薄弱点 -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <!-- 雷达图 -->
-      <div class="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 overflow-hidden">
-        <h2 class="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
-          <Brain :size="15" class="text-purple-500" /> 知识掌握度
-        </h2>
-        <div class="h-56">
-          <MasteryRadar v-if="conceptMastery.length" :concepts="conceptMastery" :student-id="props.studentId" />
-          <div v-else class="flex items-center justify-center h-full text-xs text-gray-400">暂无数据，开始学习后自动生成</div>
-        </div>
-      </div>
-
-      <!-- 薄弱点列表 -->
-      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-        <h2 class="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
-          <Target :size="15" class="text-rose-500" /> 需要加强
-        </h2>
-        <div v-if="weakConcepts.length" class="space-y-2">
-          <div v-for="([concept, score], i) in weakConcepts" :key="concept"
-            class="flex items-center gap-2 p-2 rounded-lg hover:bg-rose-50 transition-all cursor-pointer group"
-            @click="goLearn(concept)">
-            <span class="w-5 h-5 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center text-[9px] font-bold shrink-0">{{ i + 1 }}</span>
-            <span class="text-xs text-gray-700 flex-1">{{ concept }}</span>
-            <span class="text-[10px] font-mono text-rose-600">{{ Math.round(score * 100) }}%</span>
-            <ArrowRight :size="11" class="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity" />
-          </div>
-        </div>
-        <div v-else class="flex flex-col items-center justify-center h-40 text-xs text-gray-400 gap-2">
-          <CheckCircle2 :size="24" class="text-emerald-300" />
-          <p>暂无薄弱点，继续保持！</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- 快捷入口 -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <button class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 hover:border-purple-200 transition-all text-left flex items-center gap-3"
-        @click="goLearn(nextUp[0]?.concept)">
-        <div class="w-9 h-9 rounded-xl bg-purple-50 flex items-center justify-center"><BookOpen :size="16" class="text-purple-600" /></div>
-        <div><p class="text-xs font-semibold text-gray-800">开始学习</p><p class="text-[9px] text-gray-400">进入对话</p></div>
-      </button>
-      <button class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 hover:border-emerald-200 transition-all text-left flex items-center gap-3"
-        @click="goAnalysis">
-        <div class="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center"><UserCheck :size="16" class="text-emerald-600" /></div>
-        <div><p class="text-xs font-semibold text-gray-800">学习画像</p><p class="text-[9px] text-gray-400">10维分析</p></div>
-      </button>
-      <button class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 hover:border-indigo-200 transition-all text-left flex items-center gap-3"
-        @click="goPath">
-        <div class="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center"><TrendingUp :size="16" class="text-indigo-600" /></div>
-        <div><p class="text-xs font-semibold text-gray-800">学习路径</p><p class="text-[9px] text-gray-400">链条推进</p></div>
-      </button>
-      <button class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 hover:border-amber-200 transition-all text-left flex items-center gap-3"
-        @click="goReview">
-        <div class="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center"><Calendar :size="16" class="text-amber-600" /></div>
-        <div><p class="text-xs font-semibold text-gray-800">复习计划</p><p class="text-[9px] text-gray-400">遗忘曲线</p></div>
-      </button>
-    </div>
-
-    <!-- 待复习概念 -->
-    <div v-if="reviews.length" class="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-      <h2 class="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
-        <Clock :size="15" class="text-amber-500" /> 待复习
-      </h2>
-      <div class="space-y-1">
-        <div v-for="r in reviews.slice(0, 5)" :key="r.concept || r.id"
-          class="flex items-center gap-2 text-xs py-1.5">
-          <div class="w-1.5 h-1.5 rounded-full bg-amber-400" />
-          <span class="text-gray-700 flex-1">{{ r.concept || '未命名概念' }}</span>
-          <span class="text-gray-400 text-[10px]">{{ r.next_review_at ? new Date(r.next_review_at).toLocaleDateString() : '' }}</span>
-          <button class="text-[10px] text-amber-600 hover:text-amber-800 font-medium" @click="goLearn(r.concept)">去复习</button>
-        </div>
-      </div>
-    </div>
+    </details>
 
     <!-- 视频微课播放模态窗 -->
     <VideoRenderPanel
@@ -1538,213 +1299,370 @@ function renderAllDiagrams() {
       @close="showVideoPanel = false"
     />
 
-    <!-- Drawer/Viewer for Resource Matrix -->
     <Teleport to="body">
-    <div v-if="activeResource" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm transition-opacity p-4 sm:p-6" @click="closeResourceViewer">
-      <div class="w-full max-w-2xl max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-slide-in" @click.stop>
-        
-        <!-- Drawer Header -->
-        <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-          <div>
-            <div class="flex items-center gap-2">
-              <span class="px-2 py-0.5 text-[10px] font-bold bg-indigo-50 text-indigo-700 rounded-lg">
-                {{ activeResource.res.resource_type }}
-              </span>
-              <span class="text-xs text-slate-400">智能体：{{ activeResource.res.role }}</span>
-            </div>
-            <h3 class="text-base font-bold text-gray-800 mt-1">
-              概念强化：<span class="text-indigo-600">{{ activeResource.concept }}</span>
-            </h3>
-          </div>
-          <button @click="closeResourceViewer" class="p-1 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition-colors">
-            <span class="text-xl">✕</span>
-          </button>
-        </div>
-
-        <!-- Drawer Content -->
-        <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain p-6 space-y-4">
-          
-          <!-- Case 1: NOT GENERATED -->
-          <div v-if="activeResource.res.status === 'not_generated' && !isGenerating" class="flex flex-col items-center justify-center py-12 text-center space-y-4">
-            <div class="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-2xl">
-              💡
-            </div>
-            <div class="max-w-md">
-              <h4 class="text-sm font-bold text-gray-800">该资源尚未生成</h4>
-              <p class="text-xs text-slate-500 mt-1">您可以点击下方按钮，系统将调用专属于该维度的 AI 智能体实时根据您的学情为您量身生成定制内容。</p>
-            </div>
-            <div class="bg-slate-50 border border-slate-100 rounded-xl p-4 w-full text-left">
-              <p class="text-[11px] font-bold text-slate-600 mb-1">🔍 生成预览大纲：</p>
-              <p class="text-xs text-slate-500 leading-relaxed">{{ activeResource.res.overview }}</p>
-            </div>
-            <button @click="generateResource" 
-              class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center gap-1.5">
-              🚀 开始一键生成
-            </button>
-          </div>
-
-          <!-- Case 2: GENERATING -->
-          <div v-else-if="isGenerating" class="flex flex-col items-center justify-center py-16 text-center space-y-4">
-            <div class="animate-spin w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full" />
+      <div v-if="activeResource" class="dashboard-modal-backdrop" @click="closeResourceViewer">
+        <section class="dashboard-modal dashboard-resource-modal" role="dialog" aria-modal="true" aria-labelledby="resource-modal-title" @click.stop>
+          <header class="dashboard-modal__header">
             <div>
-              <h4 class="text-sm font-bold text-gray-800">智能体正在深度生成中...</h4>
-              <p class="text-xs text-slate-400 mt-1">正在调用【{{ activeResource.res.role }}】智能体进行推理与编写，请稍候 (5~15秒)...</p>
+              <span class="dashboard-status-label">{{ activeResource.res.resource_type }}</span>
+              <h3 id="resource-modal-title">{{ activeResource.concept }}</h3>
+              <p>生成智能体：{{ activeResource.res.role }}</p>
             </div>
-          </div>
+            <button type="button" class="dashboard-icon-action" aria-label="关闭资源预览" title="关闭" @click="closeResourceViewer"><X :size="18" /></button>
+          </header>
 
-          <!-- Case 3: GENERATED / VIEWING -->
-          <div v-else-if="activeResource.res.status === 'generated'" class="space-y-4">
-            
-            <!-- Dynamic Actions depending on type -->
-            <div class="bg-indigo-50/50 border border-indigo-100/50 rounded-xl p-4 flex items-center justify-between">
-              <div class="space-y-0.5">
-                <p class="text-xs font-bold text-indigo-900">✨ 资源已就绪并同步存入您的学习笔记本</p>
-                <p class="text-[10px] text-indigo-700">您可以直接在此阅读，也可以点击右侧进入独立的工作空间学习。</p>
+          <div class="dashboard-resource-modal__body">
+            <div v-if="activeResource.res.status === 'not_generated' && !isGenerating" class="dashboard-resource-state">
+              <span class="dashboard-resource-state__icon"><BookOpen :size="25" /></span>
+              <div><h4>该资源尚未生成</h4><p>系统会依据当前知识点与学习画像生成资源，并保存到对应学习空间。</p></div>
+              <div class="dashboard-resource-preview"><strong>内容预览</strong><p>{{ activeResource.res.overview }}</p></div>
+              <button type="button" class="dashboard-button dashboard-button--primary" @click="generateResource">开始生成</button>
+            </div>
+
+            <div v-else-if="isGenerating" class="dashboard-resource-state">
+              <span class="dashboard-spinner dashboard-spinner--large" />
+              <div><h4>资源正在生成</h4><p>{{ activeResource.res.role }}正在整理内容，完成后会自动归档。</p></div>
+            </div>
+
+            <div v-else-if="activeResource.res.status === 'generated'" class="dashboard-resource-content">
+              <div class="dashboard-resource-content__toolbar">
+                <div><strong>资源已就绪</strong><p>可在此预览，也可以进入对应学习空间继续。</p></div>
+                <button type="button" class="dashboard-button dashboard-button--primary dashboard-button--compact" @click="openInWorkspace">进入学习空间 <ArrowRight :size="14" /></button>
               </div>
-              
-              <!-- Redirection shortcut -->
-              <button @click="openInWorkspace" 
-                class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 shrink-0 shadow-sm transition-all">
-                进入工作空间 →
-              </button>
-            </div>
 
-            <!-- Video Player Block (if video resource) -->
-            <div v-if="activeResource.res.role === '视频推荐官' || activeResource.res.role === '虚拟导演' || activeResource.res.resource_type === '自适应推荐视频' || activeResource.res.resource_type === '虚拟人视频脚本'" class="space-y-3">
-              <template v-if="safeParseJson(activeResourceContent).length > 0">
-                <VideoPlayerCard 
-                  :videos="safeParseJson(activeResourceContent)" 
-                  :concept="activeResource.concept" 
-                />
-              </template>
-              <template v-else>
-                <div class="markdown-body bg-slate-50/50 border border-slate-100 rounded-xl p-5 overflow-x-auto text-xs leading-relaxed max-w-full text-slate-700">
-                  <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(activeResourceContent || '内容加载中...', activeResource?.res?.resource_type || '', activeResource?.concept || '')"></div>
-                </div>
-              </template>
+              <div v-if="activeResource.res.role === '视频推荐官' || activeResource.res.role === '虚拟导演' || activeResource.res.resource_type === '自适应推荐视频' || activeResource.res.resource_type === '虚拟人视频脚本'" class="dashboard-resource-content__viewer">
+                <VideoPlayerCard v-if="safeParseJson(activeResourceContent).length > 0" :videos="safeParseJson(activeResourceContent)" :concept="activeResource.concept" />
+                <div v-else class="markdown-body dashboard-markdown" v-html="renderMarkdown(activeResourceContent || '内容加载中...', activeResource?.res?.resource_type || '', activeResource?.concept || '')" />
+              </div>
+              <div v-else class="markdown-body dashboard-markdown" v-html="renderMarkdown(activeResourceContent || '内容加载中...', activeResource?.res?.resource_type || '', activeResource?.concept || '')" />
             </div>
-
-            <!-- Content Area (Markdown render, for regular resources) -->
-            <div v-else class="markdown-body bg-slate-50/50 border border-slate-100 rounded-xl p-5 overflow-x-auto text-xs leading-relaxed max-w-full text-slate-700">
-              <div class="prose prose-sm max-w-none text-xs text-gray-700 leading-relaxed" v-html="renderMarkdown(activeResourceContent || '内容加载中...', activeResource?.res?.resource_type || '', activeResource?.concept || '')"></div>
-            </div>
-
           </div>
 
-        </div>
-
-        <!-- Drawer Footer -->
-        <div class="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end">
-          <button @click="closeResourceViewer" class="px-4 py-2 border border-slate-200 text-slate-600 hover:bg-slate-100 text-xs font-bold rounded-xl transition-all">
-            关闭窗口
-          </button>
-        </div>
-
+          <footer class="dashboard-modal__footer"><button type="button" class="dashboard-button dashboard-button--secondary" @click="closeResourceViewer">关闭窗口</button></footer>
+        </section>
       </div>
-    </div>
     </Teleport>
 
   </div>
 </template>
 
 <style scoped>
-@keyframes slide-in {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
-  }
-}
-
-.animate-slide-in {
-  animation: slide-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
 .dashboard-page {
+  padding-top: var(--space-6);
   padding-bottom: 2rem;
 }
 
-.dashboard-overview {
+.dashboard-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
+.dashboard-heading h1 { margin: 0; color: var(--color-text); font-family: var(--font-heading); font-size: 30px; font-weight: 620; line-height: 1.2; }
+.dashboard-heading p { margin: 6px 0 0; color: var(--color-text-secondary); font-size: 15px; }
+.dashboard-course-alignment { display: block; margin-top: 4px; color: var(--color-text-muted); font-size: 14px; line-height: 1.45; }
+.dashboard-analysis-source { margin-top: 8px; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
+.dashboard-updated-at { flex: 0 0 auto; color: var(--color-text-muted); font-size: 14px; }
+
+.dashboard-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 1px solid var(--color-border); }
+.dashboard-metric { min-width: 0; border-left: 1px solid var(--color-border); }
+.dashboard-metric:first-child { border-left: 0; }
+.dashboard-metric summary { display: grid; min-height: 96px; align-content: center; gap: 3px; padding: 14px 18px; cursor: pointer; list-style: none; }
+.dashboard-metric summary::-webkit-details-marker { display: none; }
+.dashboard-metric summary:hover { background: var(--color-surface-subtle); }
+.dashboard-metric summary span, .dashboard-metric summary small { color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-metric summary strong { color: var(--color-text); font-size: 23px; font-weight: 680; font-variant-numeric: tabular-nums; }
+.dashboard-metric__sources { display: grid; gap: 5px; padding: 12px 18px 16px; color: var(--color-text-secondary); border-top: 1px solid var(--color-border); font-size: 14px; line-height: 1.45; }
+
+.dashboard-sync-notice { display: flex; min-height: 42px; align-items: center; gap: 9px; margin: 0; padding: 10px 14px; color: #344957; border: 1px solid #ccd0cf; background: #f1f4f4; font-size: 14px; line-height: 1.5; }
+
+.dashboard-decision-grid { display: grid; grid-template-columns: minmax(0, 2.55fr) minmax(280px, 1fr); gap: 28px; }
+.dashboard-focus { display: flex; min-width: 0; min-height: 400px; flex-direction: column; padding: 34px; color: #f3f6f6; border-radius: var(--radius-panel); background: #11212d; }
+.dashboard-focus__meta { display: flex; align-items: center; justify-content: space-between; gap: 20px; color: #ccd0cf; font-size: 14px; }
+.dashboard-focus__meta span:first-child { color: #ffffff; font-weight: 700; }
+.dashboard-focus__copy { margin-top: 42px; }
+.dashboard-focus__copy h2 { max-width: 22ch; margin: 0; overflow-wrap: anywhere; color: #ffffff; font-family: var(--font-display); font-size: 34px; font-weight: 620; line-height: 1.23; }
+.dashboard-focus__strategy { max-width: 67ch; margin: 16px 0 0; color: #dce2e3; font-size: 16px; line-height: 1.7; }
+.dashboard-focus__facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin: 34px 0 0; padding: 22px 0; border-block: 1px solid #4a5c6a; }
+.dashboard-focus__facts div { min-width: 0; }
+.dashboard-focus__facts dt { color: #9ba8ab; font-size: 14px; }
+.dashboard-focus__facts dd { margin: 7px 0 0; color: #edf1f2; font-size: 14px; line-height: 1.55; }
+.dashboard-focus__footer { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-top: auto; padding-top: 24px; }
+.dashboard-source-disclosure { min-width: 0; color: #ccd0cf; font-size: 14px; }
+.dashboard-source-disclosure summary { width: fit-content; cursor: pointer; }
+.dashboard-source-disclosure div { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 9px; }
+.dashboard-primary-action { display: inline-flex; min-height: 46px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 9px; padding: 0 18px; color: #11212d; border: 1px solid #ffffff; border-radius: var(--radius-control); background: #ffffff; font-size: 15px; font-weight: 700; cursor: pointer; }
+.dashboard-primary-action:hover { color: #000000; background: #edf1f2; }
+
+.dashboard-side-summary { display: grid; min-width: 0; align-content: start; gap: 0; border-block: 1px solid var(--color-border); }
+.dashboard-side-summary > section { padding: 24px 18px; border-bottom: 1px solid var(--color-border); }
+.dashboard-side-summary > section:last-child { border-bottom: 0; }
+.dashboard-side-summary header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.dashboard-side-summary header > div { display: flex; align-items: center; gap: 8px; }
+.dashboard-side-summary h2 { margin: 0; color: var(--color-text); font-size: 17px; font-weight: 680; }
+.dashboard-side-summary header span, .dashboard-side-summary header button { color: var(--color-accent); font-size: 14px; font-weight: 680; }
+.dashboard-side-summary header button { border: 0; background: transparent; cursor: pointer; }
+.dashboard-side-summary ol { margin: 14px 0 0; padding: 0; list-style: none; }
+.dashboard-side-summary li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 11px 0; border-top: 1px solid var(--color-border); }
+.dashboard-side-summary li:first-child { border-top: 0; }
+.dashboard-side-summary li strong { overflow: hidden; color: var(--color-text); font-size: 14px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-side-summary li span, .dashboard-side-summary p { color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-side-summary p { margin: 15px 0 0; line-height: 1.55; }
+.dashboard-weak-item { display: block !important; padding: 16px 0 !important; }
+.dashboard-weak-item__heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.dashboard-weak-item__heading strong { min-width: 0; overflow-wrap: anywhere; color: var(--color-text); font-size: 15px; font-weight: 680; line-height: 1.45; white-space: normal; }
+.dashboard-weak-item__heading span { flex: 0 0 auto; color: var(--color-text-secondary); font-size: 14px; line-height: 1.45; text-align: right; }
+.dashboard-weak-item__reason { margin: 8px 0 0 !important; color: var(--color-text-secondary); line-height: 1.55; }
+.dashboard-weak-item__dimensions { display: grid; gap: 5px; margin-top: 10px; color: var(--color-text-secondary); font-size: 14px; line-height: 1.45; }
+.dashboard-weak-item__snapshot { margin: 9px 0 0 !important; color: var(--color-text-muted) !important; overflow-wrap: anywhere; font-size: 14px !important; }
+.dashboard-weak-item__evidence { margin-top: 10px; color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-weak-item__evidence summary { width: fit-content; color: var(--color-accent); cursor: pointer; }
+.dashboard-weak-item__evidence ul { display: grid; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; line-height: 1.45; }
+.dashboard-weak-item__evidence li { display: block; padding: 0; border: 0; overflow-wrap: anywhere; }
+.dashboard-weak-item__action { display: inline-flex; min-height: 36px; align-items: center; gap: 5px; margin-top: 12px; padding: 0 11px; color: #ffffff; border: 1px solid #11212d; border-radius: var(--radius-control); background: #11212d; font-size: 14px; font-weight: 650; cursor: pointer; }
+.dashboard-weak-item__action:hover { background: #253745; }
+.dashboard-weak-item__pending { display: inline-block; margin-top: 12px; color: var(--color-text-muted); font-size: 14px; }
+.dashboard-weak-empty { display: grid; gap: 12px; }
+.dashboard-weak-empty p { margin: 15px 0 0; }
+.dashboard-weak-empty button { display: inline-flex; width: fit-content; min-height: 36px; align-items: center; gap: 5px; padding: 0 10px; color: var(--color-accent); border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); font-size: 14px; font-weight: 650; cursor: pointer; }
+
+.dashboard-next-tasks { border-block: 1px solid var(--color-border); }
+.dashboard-next-tasks > summary { display: flex; min-height: 68px; align-items: center; justify-content: space-between; gap: 20px; cursor: pointer; list-style: none; }
+.dashboard-next-tasks > summary::-webkit-details-marker { display: none; }
+.dashboard-next-tasks > summary span { display: grid; gap: 3px; }
+.dashboard-next-tasks > summary strong { color: var(--color-text); font-size: 15px; }
+.dashboard-next-tasks > summary small { color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-next-tasks > summary svg { color: var(--color-text-muted); transition: transform 160ms ease; }
+.dashboard-next-tasks[open] > summary svg { transform: rotate(180deg); }
+.dashboard-next-tasks ol { margin: 0; padding: 0 0 14px; list-style: none; }
+.dashboard-next-tasks li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; padding: 14px 0; border-top: 1px solid var(--color-border); }
+.dashboard-next-tasks li strong { color: var(--color-text); font-size: 15px; }
+.dashboard-next-tasks li p { margin: 4px 0 0; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
+.dashboard-next-tasks li > span { color: var(--color-text-secondary); font-size: 14px; white-space: nowrap; }
+
+.dashboard-trend-summary { padding-block: 4px; }
+.dashboard-trend-summary header { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 12px; }
+.dashboard-trend-summary h2 { margin: 0; color: var(--color-text); font-size: 17px; font-weight: 680; }
+.dashboard-trend-summary p { margin: 4px 0 0; color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-trend-activity { margin: 10px 0 0; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
+.dashboard-trend-summary button { display: inline-flex; align-items: center; gap: 6px; color: var(--color-accent); border: 0; background: transparent; font-size: 14px; font-weight: 680; cursor: pointer; }
+
+.dashboard-detail {
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.dashboard-detail__summary {
   display: grid;
-  grid-template-columns: minmax(0, 1.18fr) minmax(360px, .82fr);
-  gap: 18px;
+  min-height: 76px;
+  grid-template-columns: 38px minmax(0, 1fr) auto 20px;
+  align-items: center;
+  gap: 14px;
+  padding: 0 18px;
+  color: var(--color-text);
+  cursor: pointer;
+  list-style: none;
 }
 
-.dashboard-hero {
-  position: relative;
+.dashboard-detail__summary::-webkit-details-marker { display: none; }
+.dashboard-detail__summary:hover { background: var(--color-surface-subtle); }
+.dashboard-detail__summary-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--color-accent);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-accent-soft);
+}
+.dashboard-detail__summary-copy { display: grid; min-width: 0; gap: 2px; }
+.dashboard-detail__summary-copy strong { font-size: 16px; font-weight: 680; }
+.dashboard-detail__summary-copy span,
+.dashboard-detail__summary-meta { color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-detail__summary-meta { white-space: nowrap; }
+.dashboard-detail__chevron { color: var(--color-text-muted); transition: transform 160ms ease; }
+.dashboard-detail[open] .dashboard-detail__chevron { transform: rotate(180deg); }
+.dashboard-detail__body {
+  padding: 0 22px 24px;
+  border-top: 1px solid var(--color-border);
+  background: #ffffff;
+}
+
+.dashboard-detail-section {
+  padding: 28px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dashboard-detail-section:last-child { border-bottom: 0; }
+
+.dashboard-section-heading {
   display: flex;
-  min-height: 318px;
-  flex-direction: column;
+  align-items: flex-start;
   justify-content: space-between;
-  overflow: hidden;
-  padding: clamp(24px, 3vw, 38px);
-  background:
-    radial-gradient(circle at 85% 18%, rgba(191, 205, 194, .18), transparent 34%),
-    #27312b;
+  gap: 24px;
+  margin-bottom: 20px;
 }
 
-.dashboard-hero::after {
-  content: '';
-  position: absolute;
-  right: -80px;
-  bottom: -145px;
-  width: 360px;
-  height: 360px;
-  border: 1px solid rgba(255,255,255,.09);
-  border-radius: 50%;
-  box-shadow: 0 0 0 46px rgba(255,255,255,.025), 0 0 0 92px rgba(255,255,255,.018);
+.dashboard-section-heading--compact { align-items: center; }
+.dashboard-section-heading__title { display: flex; min-width: 0; align-items: flex-start; gap: 11px; }
+.dashboard-section-heading__icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  color: var(--color-accent);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-accent-soft);
+}
+.dashboard-section-heading h2,
+.dashboard-section-heading h3,
+.dashboard-section-heading p { margin: 0; }
+.dashboard-section-heading h2 { color: var(--color-text); font-size: 18px; font-weight: 680; line-height: 1.35; }
+.dashboard-section-heading p { margin-top: 4px; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
+.dashboard-section-heading__meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.dashboard-section-heading__meta span,
+.dashboard-status-label {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 4px 9px;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-subtle);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
 }
 
-.dashboard-hero__content, .dashboard-hero__meta { position: relative; z-index: 1; }
-.dashboard-hero__eyebrow { display: inline-flex; align-items: center; gap: 6px; color: #c7d4ca; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.dashboard-hero h1 { max-width: 650px; margin: 15px 0 10px; color: #fbfcfa; font-size: clamp(27px, 3.2vw, 43px); font-weight: 620; letter-spacing: -.055em; line-height: 1.08; }
-.dashboard-hero p { max-width: 610px; margin: 0; color: rgba(237,243,238,.62); font-size: 12px; line-height: 1.75; }
-.dashboard-hero__actions { display: flex; align-items: center; gap: 8px; margin-top: 24px; }
-.dashboard-hero__actions :deep(.ui-button--secondary) { color: #2e3931; background: #eff3ee; }
-.dashboard-hero__actions :deep(.ui-button--ghost) { color: #d4ddd6; }
-.dashboard-hero__meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 30px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.09); }
-.dashboard-hero__meta span, .dashboard-hero__meta strong { display: block; }
-.dashboard-hero__meta span { margin-bottom: 4px; color: rgba(233,240,235,.38); font-size: 9px; }
-.dashboard-hero__meta strong { overflow: hidden; color: rgba(250,252,250,.88); font-size: 11px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-analysis-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, .7fr); gap: 28px; }
+.dashboard-analysis-report { padding-right: 28px; border-right: 1px solid var(--color-border); }
+.dashboard-analysis-report h3,
+.dashboard-analysis-signals h3 { margin: 0 0 12px; color: var(--color-text); font-size: 15px; font-weight: 680; }
+.dashboard-analysis-report p { max-width: 72ch; margin: 0; color: var(--color-text-secondary); font-size: 15px; line-height: 1.75; white-space: pre-wrap; }
+.dashboard-analysis-signals { display: grid; align-content: start; gap: 16px; }
+.dashboard-signal { display: grid; gap: 7px; }
+.dashboard-signal > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-signal strong { color: var(--color-text); font-variant-numeric: tabular-nums; }
+.dashboard-meter { height: 7px; overflow: hidden; border-radius: 999px; background: var(--color-surface-muted); }
+.dashboard-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); }
+.dashboard-meter > .dashboard-meter__fill--warning { background: var(--color-warning); }
+.dashboard-meter > .dashboard-meter__fill--danger { background: var(--color-danger); }
+.dashboard-analysis-facts { display: grid; gap: 8px; margin: 0; padding-top: 14px; border-top: 1px solid var(--color-border); }
+.dashboard-analysis-facts div { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dashboard-analysis-facts dt { color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-analysis-facts dd { margin: 0; color: var(--color-text); font-size: 14px; font-weight: 650; }
 
-.dashboard-trend-status { display: inline-flex; align-items: center; gap: 6px; color: #778179; font-size: 9px; }
-.dashboard-trend-status span { width: 6px; height: 6px; border-radius: 50%; background: #829187; box-shadow: 0 0 0 4px rgba(130,145,135,.12); }
-.dashboard-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-
-.dashboard-insight {
-  border-color: rgba(106, 116, 108, .1) !important;
-  background: rgba(250, 251, 248, .84) !important;
-  box-shadow: 0 16px 42px rgba(45, 56, 49, .06);
+.dashboard-secondary-action {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
 }
+.dashboard-secondary-action:hover { color: var(--color-text); background: var(--color-surface-subtle); }
 
-.dashboard-page :deep(.bg-white.rounded-2xl),
-.dashboard-page :deep(.bg-white.rounded-xl) {
-  border-color: rgba(42,54,46,.075);
-  background-color: rgba(253,254,251,.86);
-  box-shadow: 0 12px 32px rgba(45,56,49,.05);
+.dashboard-icon-action {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  cursor: pointer;
 }
+.dashboard-icon-action:hover { color: var(--color-text); background: var(--color-surface-subtle); }
+.dashboard-modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: rgb(33 28 24 / 46%); }
+.dashboard-modal { display: grid; width: min(940px, calc(100vw - 48px)); max-height: calc(100vh - 48px); grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-surface); box-shadow: var(--shadow-popover); font-family: var(--font-sans); animation: dashboard-modal-in 160ms cubic-bezier(.2,.8,.2,1); }
+@keyframes dashboard-modal-in { from { transform: translateY(8px); opacity: .86; } to { transform: translateY(0); opacity: 1; } }
+.dashboard-modal__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px 22px; border-bottom: 1px solid var(--color-border); }
+.dashboard-modal__header h3 { margin: 0; color: var(--color-text); font-size: 18px; font-weight: 680; }
+.dashboard-modal__header p { margin: 5px 0 0; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
+.dashboard-modal__footer { display: flex; justify-content: flex-end; padding: 14px 22px; border-top: 1px solid var(--color-border); background: var(--color-surface-subtle); }
+.dashboard-button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 0 15px; border: 1px solid transparent; border-radius: var(--radius-control); font-size: 14px; font-weight: 680; cursor: pointer; }
+.dashboard-button--compact { min-height: 36px; padding-inline: 12px; }
+.dashboard-button--primary { color: #ffffff; border-color: #11212d; background: #11212d; }
+.dashboard-button--primary:hover { background: #000000; }
+.dashboard-button--secondary { color: var(--color-text-secondary); border-color: var(--color-border-strong); background: var(--color-surface); }
+.dashboard-button--secondary:hover { color: var(--color-text); background: var(--color-surface-subtle); }
+.dashboard-button:disabled { opacity: .46; cursor: not-allowed; }
+.dashboard-spinner,
+.resource-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--color-border-strong); border-top-color: var(--color-accent); border-radius: 50%; animation: dashboard-spin .8s linear infinite; }
+.dashboard-spinner--large { width: 30px; height: 30px; border-width: 3px; }
+@keyframes dashboard-spin { to { transform: rotate(360deg); } }
+.dashboard-inline-state { display: flex; min-height: 96px; align-items: center; justify-content: center; gap: 10px; color: var(--color-text-secondary); font-size: 14px; text-align: center; }
+.dashboard-inline-state p { margin: 0; }
+
+.dashboard-resource-modal { width: min(920px, calc(100vw - 48px)); }
+.dashboard-resource-modal__body { min-height: 0; padding: 24px; overflow: auto; }
+.dashboard-resource-state { display: grid; min-height: 360px; align-content: center; justify-items: center; gap: 16px; text-align: center; }
+.dashboard-resource-state__icon { display: grid; width: 54px; height: 54px; place-items: center; color: var(--color-accent); border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-accent-soft); }
+.dashboard-resource-state h4 { margin: 0; color: var(--color-text); font-size: 18px; font-weight: 680; }
+.dashboard-resource-state p { max-width: 58ch; margin: 5px 0 0; color: var(--color-text-secondary); font-size: 14px; line-height: 1.6; }
+.dashboard-resource-preview { width: min(620px, 100%); padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-surface-subtle); text-align: left; }
+.dashboard-resource-preview strong { color: var(--color-text); font-size: 14px; }
+.dashboard-resource-preview p { margin: 5px 0 0; }
+.dashboard-resource-content { display: grid; gap: 18px; }
+.dashboard-resource-content__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 16px; border: 1px solid var(--color-border); background: var(--color-surface-subtle); }
+.dashboard-resource-content__toolbar strong { color: var(--color-text); font-size: 14px; }
+.dashboard-resource-content__toolbar p { margin: 3px 0 0; color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-markdown { max-width: 100%; padding: 20px; overflow-x: auto; color: var(--color-text-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-surface); font-size: 15px; line-height: 1.75; }
+
+.dashboard-markdown :deep(.resource-accordion),
+.dashboard-markdown :deep(.resource-hint-ladder),
+.dashboard-markdown :deep(.resource-diagram),
+.dashboard-markdown :deep(.resource-callout) { margin: 16px 0; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-surface); }
+.dashboard-markdown :deep(.resource-accordion--nested) { margin: 8px 0; }
+.dashboard-markdown :deep(.resource-accordion__trigger) { display: flex; width: 100%; min-height: 42px; align-items: center; justify-content: space-between; gap: 16px; padding: 0 14px; color: var(--color-text); border: 0; background: var(--color-surface-subtle); font-size: 14px; font-weight: 650; cursor: pointer; }
+.dashboard-markdown :deep(.resource-accordion__body) { padding: 14px 16px; border-top: 1px solid var(--color-border); }
+.dashboard-markdown :deep(.resource-hint-ladder) { padding: 14px; background: var(--color-surface-subtle); }
+.dashboard-markdown :deep(.resource-hint-ladder__title) { margin-bottom: 8px; color: var(--color-text); font-size: 14px; font-weight: 680; }
+.dashboard-markdown :deep(.resource-diagram__header) { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 16px; padding: 0 14px; border-bottom: 1px solid var(--color-border); color: var(--color-text); font-size: 14px; font-weight: 680; }
+.dashboard-markdown :deep(.resource-diagram__format) { color: var(--color-text-muted); font-family: var(--font-mono); font-size: 14px; font-weight: 500; }
+.dashboard-markdown :deep(.resource-diagram__canvas) { max-height: 360px; padding: 16px; overflow: auto; }
+.dashboard-markdown :deep(.mermaid) { display: flex; width: 100%; justify-content: center; }
+.dashboard-markdown :deep(.resource-rendering) { display: flex; min-height: 120px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-markdown :deep(.resource-code-block) { position: relative; margin: 16px 0; }
+.dashboard-markdown :deep(.resource-code-block pre) { margin: 0; padding: 18px; overflow-x: auto; color: #f1f4f4; border-radius: var(--radius-panel); background: #11212d; font-family: var(--font-mono); font-size: 14px; line-height: 1.65; }
+.dashboard-markdown :deep(.resource-code-block__action) { position: absolute; top: 10px; right: 10px; min-height: 34px; padding: 0 10px; color: #ffffff; border: 1px solid #4a5c6a; border-radius: var(--radius-control); background: #253745; font-size: 14px; font-weight: 650; cursor: pointer; }
+.dashboard-markdown :deep(.resource-inline-code) { padding: 2px 5px; color: var(--color-danger); border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface-subtle); font-family: var(--font-mono); font-size: 14px; }
+.dashboard-markdown :deep(.resource-math) { color: var(--color-text); font-family: var(--font-display); }
+.dashboard-markdown :deep(.resource-math--block) { margin: 16px 0; padding: 16px; overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-surface-subtle); text-align: center; }
+.dashboard-markdown :deep(.resource-math--inline) { padding: 1px 4px; border-bottom: 1px solid var(--color-border-strong); }
+.dashboard-markdown :deep(.resource-callout) { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 16px; color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-markdown :deep(.resource-callout strong) { color: var(--color-text); }
+.dashboard-markdown :deep(.resource-callout__action) { min-height: 36px; flex: 0 0 auto; padding: 0 12px; color: #ffffff; border: 1px solid #11212d; border-radius: var(--radius-control); background: #11212d; font-size: 14px; font-weight: 650; cursor: pointer; }
+.dashboard-markdown :deep(.resource-list-item) { margin: 6px 0 6px 20px; color: var(--color-text-secondary); font-size: 15px; line-height: 1.65; }
+.dashboard-markdown :deep(.resource-table-wrap) { margin: 16px 0; overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-panel); }
+.dashboard-markdown :deep(.resource-table) { width: 100%; border-collapse: collapse; font-size: 14px; }
+.dashboard-markdown :deep(.resource-table th),
+.dashboard-markdown :deep(.resource-table td) { padding: 10px 12px; border-bottom: 1px solid var(--color-border); text-align: left; }
+.dashboard-markdown :deep(.resource-table th) { color: var(--color-text); background: var(--color-surface-subtle); font-weight: 680; }
+.dashboard-markdown :deep(.resource-table td) { color: var(--color-text-secondary); }
+.dashboard-markdown :deep(.resource-image) { display: block; max-width: 100%; max-height: 360px; margin: 16px auto; object-fit: contain; border: 1px solid var(--color-border); border-radius: var(--radius-panel); }
+.dashboard-markdown :deep(.resource-heading-4) { margin: 22px 0 7px; color: var(--color-text); font-size: 16px; font-weight: 680; line-height: 1.4; }
 
 .dashboard-skeleton { max-width: 1380px; margin: 0 auto; }
-.dashboard-skeleton__hero, .dashboard-skeleton__grid span { position: relative; overflow: hidden; border-radius: 22px; background: #e4e7e2; }
+.dashboard-skeleton__hero, .dashboard-skeleton__grid span { position: relative; overflow: hidden; border-radius: 8px; background: #dce2e3; }
 .dashboard-skeleton__hero { height: 318px; }
 .dashboard-skeleton__grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 18px; }
 .dashboard-skeleton__grid span { height: 150px; }
-.dashboard-skeleton__hero::after, .dashboard-skeleton__grid span::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); animation: skeleton-shimmer 1.6s infinite; }
-@keyframes skeleton-shimmer { to { transform: translateX(100%); } }
+.dashboard-skeleton__hero::after, .dashboard-skeleton__grid span::after { position: absolute; inset: 0; background: rgba(255,255,255,.42); content: ''; animation: skeleton-pulse 1.4s ease-in-out infinite; }
+@keyframes skeleton-pulse { 50% { opacity: .35; } }
 
 @media (max-width: 1100px) {
   .dashboard-overview { grid-template-columns: 1fr; }
   .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-@media (max-width: 640px) {
-  .dashboard-page {
-    padding-bottom: 1rem;
-  }
-  .dashboard-hero { min-height: 360px; }
-  .dashboard-hero__meta { grid-template-columns: 1fr; }
-  .dashboard-metrics, .dashboard-skeleton__grid { grid-template-columns: 1fr 1fr; }
-  .dashboard-trend-status { display: none; }
-}
 </style>

@@ -1,7 +1,8 @@
 @echo off
 setlocal
 set "ROOT=%~dp0"
-set "PYTHON=%ROOT%.venv\Scripts\python.exe"
+if not defined EDUMATRIX_VENV_PATH set "EDUMATRIX_VENV_PATH=%LOCALAPPDATA%\EduMatrix\00015352\.venv"
+set "PYTHON=%EDUMATRIX_VENV_PATH%\Scripts\python.exe"
 if not exist "%PYTHON%" (
     echo FAIL: .venv is missing. Run install_and_run.bat first.
     exit /b 1

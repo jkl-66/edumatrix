@@ -3,7 +3,10 @@ from __future__ import annotations
 import math
 from typing import Any
 import numpy as np
+from pydantic import Field
 
+from app.m2_contracts import StrictModel
+from app.m5_legacy_calls import audited_legacy_sync_text_call
 from embedding_models import EMBEDDINGS
 from embedding_models import cosine_similarity
 from models import AlignmentReport
@@ -15,6 +18,25 @@ _EMBED_CACHE: TTLBoundedCache[str, tuple[float, ...]] = TTLBoundedCache(
     maxsize=CONFIG.cache_max_entries,
     ttl_seconds=CONFIG.cache_ttl_seconds,
 )
+
+
+class CouncilConflict(StrictModel):
+    type: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=2000)
+    agents_involved: list[str] = Field(default_factory=list, max_length=20)
+
+
+class CouncilVerdict(StrictModel):
+    agent: str = Field(min_length=1, max_length=128)
+    passed: bool
+    score: float = Field(ge=0.0, le=1.0)
+    suggestion: str = Field(min_length=1, max_length=2000)
+
+
+class CouncilDecision(StrictModel):
+    overall_passed: bool
+    conflicts: list[CouncilConflict] = Field(default_factory=list, max_length=50)
+    verdicts: list[CouncilVerdict] = Field(min_length=1, max_length=50)
 
 # 确定性流形投影变换矩阵 W (384x384)，若存在离线训练的对齐矩阵则加载，否则使用确定性兜底矩阵
 import os
@@ -294,7 +316,42 @@ class CouncilDecisionEngine:
         self.fact_threshold = fact_threshold
         self.rel_threshold = rel_threshold
 
-    def synthesize(self, resources: list[Any], target_concept: str) -> dict[str, Any]:
+    def _deterministic_synthesis(self, resources: list[Any]) -> dict[str, Any]:
+        verdicts = []
+        for resource in resources:
+            content = getattr(resource, "content", "") or ""
+            fact_score = 1.0
+            if ("maxpool" in content.lower() or "最大池化" in content) and (
+                "avgpool" in content.lower() or "平均池化" in content
+            ):
+                fact_score = 0.65
+            verdicts.append({
+                "resource_type": getattr(resource, "agent", ""),
+                "factuality_score": fact_score,
+                "relevance_score": 0.80,
+                "passed": fact_score >= 0.70,
+                "suggestion": "自动兜底通过",
+            })
+        count = len(resources)
+        mean_fact = sum(item["factuality_score"] for item in verdicts) / max(count, 1)
+        passed_count = sum(1 for item in verdicts if item["passed"])
+        return {
+            "overall_passed": (mean_fact >= 0.65) and (passed_count >= count * 0.5),
+            "mean_factuality_score": round(mean_fact, 3),
+            "mean_relevance_score": 0.8,
+            "verdicts": verdicts,
+            "advice": "Agentic校验不可用，采用确定性事实检查。",
+        }
+
+    def synthesize(
+        self,
+        resources: list[Any],
+        target_concept: str,
+        *,
+        owner_public_id: str | None = None,
+        course_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> dict[str, Any]:
         """对平行专家生成的定制资源进行事实性与相关性定量共识核查。"""
         if not resources:
             return {
@@ -305,7 +362,10 @@ class CouncilDecisionEngine:
                 "advice": "无资源输入，默认合成通过。"
             }
             
-        from llm_client import build_llm
+        if not owner_public_id:
+            return self._deterministic_synthesis(resources)
+
+        from llm_client import build_llm, parse_json_object
         llm = build_llm()
         
         # 1. 构造委员会审查上下文
@@ -337,11 +397,43 @@ class CouncilDecisionEngine:
         )
         
         try:
-            raw_response = llm.generate(system_instruction, user_prompt, role="事实共识审查")
-            # 清洗包裹符号
-            cleaned = raw_response.strip("`").replace("json\n", "").strip()
-            import json
-            decision = json.loads(cleaned)
+            agents = [getattr(resource, "agent", "") for resource in resources]
+
+            def validate_council_output(raw: str) -> CouncilDecision:
+                parsed = CouncilDecision.model_validate(parse_json_object(raw))
+                verdict_agents = [item.agent for item in parsed.verdicts]
+                if len(verdict_agents) != len(set(verdict_agents)):
+                    raise ValueError("duplicate council agent")
+                expected_agents = set(agents)
+                if set(verdict_agents) != expected_agents:
+                    raise ValueError("council verdict agents do not match resources")
+                conflict_agents = {
+                    agent
+                    for conflict in parsed.conflicts
+                    for agent in conflict.agents_involved
+                }
+                if not conflict_agents.issubset(expected_agents):
+                    raise ValueError("unknown council conflict agent")
+                return parsed
+
+            raw_response = audited_legacy_sync_text_call(
+                llm,
+                system_prompt=system_instruction,
+                user_prompt=user_prompt,
+                role="事实共识审查",
+                operation="council_fact_review",
+                capability="evaluate",
+                owner_public_id=owner_public_id,
+                course_id=course_id,
+                trace_id=trace_id,
+                input_summary={
+                    "resource_count": len(resources),
+                    "resource_types": sorted({getattr(r, "resource_type", "") for r in resources}),
+                    "resource_payload_included": False,
+                },
+                response_validator=validate_council_output,
+            )
+            decision = validate_council_output(raw_response)
             
             # 格式转换，以保证与原接口返回值完全一致
             verdicts = []
@@ -351,12 +443,10 @@ class CouncilDecisionEngine:
             # 计算相关度（继续使用余弦相似度）
             target_vec = _embed_cached(target_concept) if target_concept else ()
             
-            for item in decision.get("verdicts", []):
-                agent_name = item.get("agent", "")
-                is_passed = item.get("passed", True)
-                fact_score = item.get("score")
-                if fact_score is None:
-                    fact_score = 0.8
+            for item in decision.verdicts:
+                agent_name = item.agent
+                is_passed = item.passed
+                fact_score = item.score
                 
                 # 寻找匹配的 resource
                 matched_r = next((r for r in resources if getattr(r, "agent", "") == agent_name), None)
@@ -373,14 +463,14 @@ class CouncilDecisionEngine:
                     "factuality_score": round(fact_score, 3),
                     "relevance_score": round(rel_score, 3),
                     "passed": is_passed,
-                    "suggestion": item.get("suggestion", "通过共识合成")
+                    "suggestion": item.suggestion,
                 })
                 
             n = len(resources)
             mean_fact = total_fact / n
             
             # 重新计算整体是否通过
-            overall_passed = decision.get("overall_passed", True) and (passed_count >= n * 0.5)
+            overall_passed = decision.overall_passed and (passed_count >= n * 0.5)
             
             return {
                 "overall_passed": overall_passed,
@@ -389,36 +479,8 @@ class CouncilDecisionEngine:
                 "verdicts": verdicts,
                 "advice": "委员会共识合成通过，事实谬误控制在安全阈值内。" if overall_passed else "委员会未能达成共识，建议携带反思日志触发重试。"
             }
-        except Exception as e:
-            # 大模型校验异常或离线退化时的安全降级容错
-            print(f"[Council Agentic Verifier Error] {e}. Safe bypass.")
-            
-            # 保留原有的基于正则的简化兜底校验，保证测试完全通过
-            verdicts = []
-            for r in resources:
-                content = getattr(r, "content", "") or ""
-                fact_score = 1.0
-                if ("maxpool" in content.lower() or "最大池化" in content) and ("avgpool" in content.lower() or "平均池化" in content):
-                    fact_score = 0.65
-                verdicts.append({
-                    "resource_type": getattr(r, "agent", ""),
-                    "factuality_score": fact_score,
-                    "relevance_score": 0.80,
-                    "passed": fact_score >= 0.70,
-                    "suggestion": "自动兜底通过"
-                })
-            n = len(resources)
-            mean_fact = sum(v["factuality_score"] for v in verdicts) / max(n, 1)
-            passed_count = sum(1 for v in verdicts if v["passed"])
-            overall_passed = (mean_fact >= 0.65) and (passed_count >= n * 0.5)
-            
-            return {
-                "overall_passed": overall_passed,
-                "mean_factuality_score": round(mean_fact, 3),
-                "mean_relevance_score": 0.8,
-                "verdicts": verdicts,
-                "advice": "Agentic校验抛出异常，进入兜底直通防线。"
-            }
+        except Exception:
+            return self._deterministic_synthesis(resources)
 
 
 class ManifoldAlignmentVerifier:
@@ -435,7 +497,13 @@ class ManifoldAlignmentVerifier:
         )
         
         # 2. 运行委员会共识合成分析
-        synthesis = self.council.synthesize(resources, target)
+        synthesis = self.council.synthesize(
+            resources,
+            target,
+            owner_public_id=kwargs.get("owner_public_id"),
+            course_id=kwargs.get("course_id"),
+            trace_id=kwargs.get("trace_id"),
+        )
         
         # 3. 融合判定
         new_passed = report.passed and synthesis["overall_passed"]

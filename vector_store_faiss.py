@@ -4,6 +4,8 @@ import asyncio
 import json
 import math
 import pickle
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -39,9 +41,12 @@ class FaissVectorIndex:
     def _ensure_index(self, n: int):
         if self._use_ivf:
             return
-        if n >= 256:
+        nlist = max(1, int(math.sqrt(n)))
+        # FAISS recommends at least 39 training vectors per centroid. For
+        # small course corpora exact IndexFlatIP is both faster to build and
+        # avoids quality loss from an under-trained IVF quantizer.
+        if n >= 1024 and n >= 39 * nlist:
             self._use_ivf = True
-            nlist = max(1, int(math.sqrt(n)))
             quantizer = faiss.IndexFlatIP(self.dim)
             ivf = faiss.IndexIVFFlat(quantizer, self.dim, nlist, faiss.METRIC_INNER_PRODUCT)
             ivf.train(self._get_all_vectors())
@@ -127,11 +132,29 @@ class FaissVectorIndex:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        faiss.write_index(self._index, str(path.with_suffix(".faiss")))
+        faiss_path = path.with_suffix(".faiss")
+        try:
+            faiss.write_index(self._index, str(faiss_path))
+        except RuntimeError:
+            # FAISS on Windows cannot reliably open paths containing Unicode.
+            # Let Python move the serialized bytes across that boundary.
+            with tempfile.TemporaryDirectory(prefix="edumatrix_faiss_") as temp_dir:
+                temporary = Path(temp_dir) / "index.faiss"
+                faiss.write_index(self._index, str(temporary))
+                shutil.copyfile(temporary, faiss_path)
 
         meta = {
             "name": self.name,
             "dim": self.dim,
+            "embedding": (
+                self.embedding_backend.identity()
+                if hasattr(self.embedding_backend, "identity")
+                else {
+                    "name": str(getattr(self.embedding_backend, "name", type(self.embedding_backend).__name__)),
+                    "model": str(getattr(self.embedding_backend, "model_name", getattr(self.embedding_backend, "model", ""))),
+                    "dim": int(getattr(self.embedding_backend, "dim", self.dim) or self.dim),
+                }
+            ),
             "next_idx": self._next_idx,
             "id_to_idx": self._id_to_idx,
             "idx_to_id": {str(k): v for k, v in self._idx_to_id.items()},
@@ -157,10 +180,37 @@ class FaissVectorIndex:
     def load(cls, path: str | Path) -> FaissVectorIndex:
         path = Path(path)
 
-        index = faiss.read_index(str(path.with_suffix(".faiss")))
+        faiss_path = path.with_suffix(".faiss")
+        try:
+            index = faiss.read_index(str(faiss_path))
+        except RuntimeError:
+            with tempfile.TemporaryDirectory(prefix="edumatrix_faiss_") as temp_dir:
+                temporary = Path(temp_dir) / "index.faiss"
+                shutil.copyfile(faiss_path, temporary)
+                index = faiss.read_index(str(temporary))
 
         with open(path.with_suffix(".json"), "r", encoding="utf-8") as f:
             meta = json.load(f)
+
+        current_identity = (
+            EMBEDDINGS.identity()
+            if hasattr(EMBEDDINGS, "identity")
+            else {"name": str(getattr(EMBEDDINGS, "name", type(EMBEDDINGS).__name__)), "model": "", "dim": 0}
+        )
+        current_dim = len(EMBEDDINGS.embed("faiss-load-dimension-check"))
+        if current_dim != int(meta["dim"]):
+            raise ValueError(
+                f"FAISS embedding dimension mismatch: index={meta['dim']} runtime={current_dim}"
+            )
+        stored_identity = meta.get("embedding")
+        if stored_identity:
+            for field in ("name", "model"):
+                expected = str(stored_identity.get(field, ""))
+                actual = str(current_identity.get(field, ""))
+                if expected and actual and expected != actual:
+                    raise ValueError(
+                        f"FAISS embedding {field} mismatch: index={expected} runtime={actual}"
+                    )
 
         items = {}
         for eid, edata in meta["items"].items():
@@ -188,7 +238,7 @@ class FaissVectorIndex:
             _index=index,
         )
 
-        if instance._next_idx >= 256 and not instance._use_ivf:
+        if instance._next_idx >= 1024 and not instance._use_ivf:
             instance._ensure_index(instance._next_idx)
 
         return instance

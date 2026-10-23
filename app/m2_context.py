@@ -69,6 +69,9 @@ def assemble_verified_context(
     course = session.query(DBCourse).filter_by(id=requested.course_id).first()
     if course is None or course.status != "published":
         _fail("course_not_available", "published course does not exist")
+    from course_catalog import course_is_selectable
+    if not course_is_selectable(session, course):
+        _fail("course_not_available", "course has no usable learning material")
     try:
         require_course_access(
             session,

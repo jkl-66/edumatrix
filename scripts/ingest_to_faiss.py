@@ -13,10 +13,9 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import nbformat
-
 from models import Evidence, EvidenceModality
 from vector_store_faiss import FaissVectorIndex
+from document_parser import chunk_document, parse_document
 
 BASE = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE / "data"
@@ -40,57 +39,33 @@ TOTAL_STATS = defaultdict(lambda: {"files": 0, "chunks": 0})
 # ============================================================
 
 def extract_ipynb(path: Path) -> list[dict]:
-    """Extract markdown and code cells from Jupyter notebook."""
+    """Extract a notebook through the canonical parser and splitter."""
     chunks = []
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            nb = nbformat.read(f, as_version=4)
+        text = parse_document(path.read_bytes(), path.name).text
     except Exception:
         return chunks
-
-    md_cells = []
-    code_cells = []
-    for cell in nb.cells:
-        source = cell.source.strip()
-        if not source:
-            continue
-        if cell.cell_type == "markdown":
-            md_cells.append(source)
-        elif cell.cell_type == "code":
-            code_cells.append(source)
-
-    if md_cells:
-        combined = "\n".join(md_cells)
-        for i, chunk in enumerate(chunk_text(combined, 800, 100)):
-            chunks.append({
-                "title": f"{path.stem} 课件-{i + 1}",
-                "content": chunk,
-                "modality": EvidenceModality.TEXT,
-                "tags": infer_tags(chunk) + ("notebook", "markdown"),
-                "anchors": infer_anchors(chunk),
-            })
-    if code_cells:
-        combined = "\n".join(code_cells)
-        for i, chunk in enumerate(chunk_text(combined, 600, 50)):
-            chunks.append({
-                "title": f"{path.stem} 代码-{i + 1}",
-                "content": chunk,
-                "modality": EvidenceModality.CODE,
-                "tags": infer_tags(chunk) + ("notebook", "code"),
-                "anchors": infer_anchors(chunk),
-            })
+    for i, chunk in enumerate(chunk_text(text, source=str(path))):
+        is_code = "```python" in chunk
+        chunks.append({
+            "title": f"{path.stem} {'代码' if is_code else '课件'}-{i + 1}",
+            "content": chunk,
+            "modality": EvidenceModality.CODE if is_code else EvidenceModality.TEXT,
+            "tags": infer_tags(chunk) + ("notebook", "code" if is_code else "markdown"),
+            "anchors": infer_anchors(chunk),
+        })
     return chunks
 
 
 def extract_python(path: Path) -> list[dict]:
     chunks = []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = parse_document(path.read_bytes(), path.name).text
     except Exception:
         return chunks
     if not text.strip():
         return chunks
-    for i, chunk in enumerate(chunk_text(text, 600, 50)):
+    for i, chunk in enumerate(chunk_text(text, source=str(path))):
         chunks.append({
             "title": f"{path.stem} code-{i + 1}",
             "content": chunk,
@@ -104,12 +79,12 @@ def extract_python(path: Path) -> list[dict]:
 def extract_markdown(path: Path) -> list[dict]:
     chunks = []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = parse_document(path.read_bytes(), path.name).text
     except Exception:
         return chunks
     if not text.strip():
         return chunks
-    for i, chunk in enumerate(chunk_text(text, 800, 100)):
+    for i, chunk in enumerate(chunk_text(text, source=str(path))):
         chunks.append({
             "title": f"{path.stem} md-{i + 1}",
             "content": chunk,
@@ -123,14 +98,13 @@ def extract_markdown(path: Path) -> list[dict]:
 def extract_html(path: Path) -> list[dict]:
     chunks = []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = parse_document(path.read_bytes(), path.name).text
     except Exception:
         return chunks
-    text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) < 50:
         return chunks
-    for i, chunk in enumerate(chunk_text(text, 800, 100)):
+    for i, chunk in enumerate(chunk_text(text, source=str(path))):
         chunks.append({
             "title": f"{path.stem} html-{i + 1}",
             "content": chunk,
@@ -144,19 +118,12 @@ def extract_html(path: Path) -> list[dict]:
 def extract_pdf(path: Path) -> list[dict]:
     chunks = []
     try:
-        from pypdf import PdfReader
-        reader = PdfReader(path)
-        text_pages = []
-        for page in reader.pages:
-            t = page.extract_text()
-            if t:
-                text_pages.append(t)
-        text = "\n".join(text_pages)
+        text = parse_document(path.read_bytes(), path.name).text
     except Exception:
         return chunks
     if not text.strip() or len(text.strip()) < 50:
         return chunks
-    for i, chunk in enumerate(chunk_text(text, 800, 100)):
+    for i, chunk in enumerate(chunk_text(text, source=str(path))):
         chunks.append({
             "title": f"{path.stem} pdf-{i + 1}",
             "content": chunk,
@@ -170,24 +137,12 @@ def extract_pdf(path: Path) -> list[dict]:
 def extract_pptx(path: Path) -> list[dict]:
     chunks = []
     try:
-        from pptx import Presentation
-        prs = Presentation(path)
-        slides_text = []
-        for slide in prs.slides:
-            slide_content = []
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for para in shape.text_frame.paragraphs:
-                        if para.text.strip():
-                            slide_content.append(para.text.strip())
-            if slide_content:
-                slides_text.append("\n".join(slide_content))
-        text = "\n\n".join(slides_text)
+        text = parse_document(path.read_bytes(), path.name).text
     except Exception:
         return chunks
     if not text.strip():
         return chunks
-    for i, chunk in enumerate(chunk_text(text, 800, 100)):
+    for i, chunk in enumerate(chunk_text(text, source=str(path))):
         chunks.append({
             "title": f"{path.stem} slide-{i + 1}",
             "content": chunk,
@@ -201,42 +156,27 @@ def extract_pptx(path: Path) -> list[dict]:
 def extract_csv(path: Path) -> list[dict]:
     chunks = []
     try:
-        import pandas as pd
-        df = pd.read_csv(path, nrows=100)
-        info = [
-            f"Dataset: {path.stem}",
-            f"Shape: {df.shape[0]} rows x {df.shape[1]} columns",
-            f"Columns: {', '.join(df.columns.tolist())}",
-            f"Sample rows:",
-        ]
-        for _, row in df.head(5).iterrows():
-            info.append(" | ".join(f"{col}={val}" for col, val in row.items()))
-        text = "\n".join(info)
+        text = parse_document(path.read_bytes(), path.name).text
     except Exception:
         return chunks
-    chunks.append({
-        "title": f"{path.stem} dataset",
-        "content": text,
-        "modality": EvidenceModality.TEXT,
-        "tags": ("dataset", "csv", path.stem) + infer_tags(text),
-        "anchors": infer_anchors(text),
-    })
+    for i, chunk in enumerate(chunk_text(text, source=str(path))):
+        chunks.append({
+            "title": f"{path.stem} dataset-{i + 1}",
+            "content": chunk,
+            "modality": EvidenceModality.TEXT,
+            "tags": ("dataset", "csv", path.stem) + infer_tags(chunk),
+            "anchors": infer_anchors(chunk),
+        })
     return chunks
 
 
 def extract_tex(path: Path) -> list[dict]:
     chunks = []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = parse_document(path.read_bytes(), path.name).text
     except Exception:
         return chunks
-    text = re.sub(r"\\(?:label|ref|cite)\{[^}]*\}", "", text)
-    text = re.sub(r"\\[a-zA-Z]+", " ", text)
-    text = re.sub(r"\{|\}|\\", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    if len(text) < 50:
-        return chunks
-    for i, chunk in enumerate(chunk_text(text, 800, 100)):
+    for i, chunk in enumerate(chunk_text(text, source=str(path))):
         chunks.append({
             "title": f"{path.stem} tex-{i + 1}",
             "content": chunk,
@@ -250,21 +190,10 @@ def extract_tex(path: Path) -> list[dict]:
 def extract_epub(path: Path) -> list[dict]:
     chunks = []
     try:
-        import zipfile
-        import xml.etree.ElementTree as ET
-        with zipfile.ZipFile(path) as z:
-            html_files = [n for n in z.namelist() if n.endswith((".xhtml", ".html", ".htm"))]
-            text_parts = []
-            for hf in html_files[:20]:
-                content = z.read(hf).decode("utf-8", errors="ignore")
-                text_parts.append(re.sub(r"<[^>]+>", " ", content))
-            text = "\n".join(text_parts)
+        text = parse_document(path.read_bytes(), path.name).text
     except Exception:
         return chunks
-    text = re.sub(r"\s+", " ", text).strip()
-    if len(text) < 50:
-        return chunks
-    for i, chunk in enumerate(chunk_text(text, 800, 100)):
+    for i, chunk in enumerate(chunk_text(text, source=str(path))):
         chunks.append({
             "title": f"{path.stem} epub-{i + 1}",
             "content": chunk,
@@ -279,16 +208,24 @@ def extract_epub(path: Path) -> list[dict]:
 # Utilities
 # ============================================================
 
-def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunks.append(text[start:end].strip())
-        if end == len(text):
-            break
-        start = end - overlap
-    return [c for c in chunks if len(c) > 20]
+def chunk_text(
+    text: str,
+    chunk_size: int = 520,
+    overlap: int = 80,
+    *,
+    source: str = "legacy.txt",
+) -> list[str]:
+    """Compatibility wrapper around the canonical document chunker."""
+    return [
+        item.content
+        for item in chunk_document(
+            text,
+            source=source,
+            chunk_size=chunk_size,
+            overlap=overlap,
+        )
+        if len(item.content.strip()) > 20
+    ]
 
 
 def infer_tags(text: str) -> tuple:

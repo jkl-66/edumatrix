@@ -1,0 +1,616 @@
+{
+  "schema_version": "edumatrix.course-source-license-manifest.v1",
+  "course_id": "course-embedded-machine-learning-engineering-v2",
+  "source_repository": {
+    "key": "edge-impulse-courseware",
+    "url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning",
+    "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+    "source_path": "README.md",
+    "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7"
+  },
+  "license_spdx": "CC-BY-NC-SA-4.0",
+  "license_file": "LICENSE-AND-ATTRIBUTION.md",
+  "youtube_assets_bundled": 0,
+  "materials": [
+    {
+      "path": "materials/嵌入式机器学习与边缘智能工程手册.pdf",
+      "bytes": 43390,
+      "sha256": "22da12c2373b20b53a212e8778122d278d29711dd741fb3e38fe1796852724e2",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "team_authored_pdf_handbook_from_frozen_course_outline",
+        "page_count": 28
+      }
+    },
+    {
+      "path": "media/课程导览_嵌入式机器学习工程实践.mp4",
+      "bytes": 113028,
+      "sha256": "53b511102834809c2e685ce4d68d646c367f8ff6fab69a9eb7f191b79c4fe0e5",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "team_authored_local_video",
+        "external_video_downloaded": false
+      }
+    },
+    {
+      "path": "chapters/01_边缘机器学习导论与责任边界.md",
+      "bytes": 1978,
+      "sha256": "0514ed7aebe7d1fdb081ae7619250db22bfa3042a8891e7d794e519cd162b2bb",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      }
+    },
+    {
+      "path": "materials/module-01/1.3.6.sample-tensorflow-code.3.docx",
+      "bytes": 217410,
+      "sha256": "0114346b253b4ff974ec08597408eaa34daec82dbe8b4c4b2139c0011eaf2cc9",
+      "source_path": "Module 1 - Introduction to Machine Learning/1.3.6.sample-tensorflow-code.3.docx",
+      "source_bytes": 217410,
+      "source_sha256": "0114346b253b4ff974ec08597408eaa34daec82dbe8b4c4b2139c0011eaf2cc9",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "materials/module-01/1.2.1.limitations-and-ethics.1.pptx",
+      "bytes": 275207,
+      "sha256": "c36d419344b2669135b8215efd5a66e09f20a6a84437bb34b7dee208b70c5461",
+      "source_path": "Module 1 - Introduction to Machine Learning/1.2.1.limitations-and-ethics.1.pptx",
+      "source_bytes": 275207,
+      "source_sha256": "c36d419344b2669135b8215efd5a66e09f20a6a84437bb34b7dee208b70c5461",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "chapters/02_神经网络训练与嵌入式约束.md",
+      "bytes": 2182,
+      "sha256": "7c1c15be1deb25d8f4e78cf271a02e504e0584112bb00bd429ad07488c7c53e8",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      }
+    },
+    {
+      "path": "materials/module-02/2.2.2.initialization-and-learning.3.docx",
+      "bytes": 109650,
+      "sha256": "dca86199708080845f9a7703821905772b1e43a89a6c1b294bc509c5997105b1",
+      "source_path": "Module 2 - Getting Started with Deep Learning/2.2.2.initialization-and-learning.3.docx",
+      "source_bytes": 109650,
+      "source_sha256": "dca86199708080845f9a7703821905772b1e43a89a6c1b294bc509c5997105b1",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "materials/module-02/2.2.1.introduction-to-neural-networks.1.pptx",
+      "bytes": 31820,
+      "sha256": "e4acd84d1c2f88b1f2d6e04a489ab31e29c03584f508f8278a57ff2c93fb3217",
+      "source_path": "Module 2 - Getting Started with Deep Learning/2.2.1.introduction-to-neural-networks.1.pptx",
+      "source_bytes": 31820,
+      "source_sha256": "e4acd84d1c2f88b1f2d6e04a489ab31e29c03584f508f8278a57ff2c93fb3217",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "chapters/03_端到端机器学习工程工作流.md",
+      "bytes": 2135,
+      "sha256": "623e505416b65fab255457817391f133ad747ad6721d31f3ee6dd7c3f434c16b",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      }
+    },
+    {
+      "path": "materials/module-03/3.1.4.machine-learning-lifecycle.3.docx",
+      "bytes": 188560,
+      "sha256": "5df978cb5423aaef11500ecbb2a21b404de8423444360f250041f4f04a5ef033",
+      "source_path": "Module 3 - Machine Learning Workflow/3.1.4.machine-learning-lifecycle.3.docx",
+      "source_bytes": 188560,
+      "source_sha256": "5df978cb5423aaef11500ecbb2a21b404de8423444360f250041f4f04a5ef033",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "materials/module-03/3.3.5.how-to-evaluate-a-model.1.pptx",
+      "bytes": 255296,
+      "sha256": "4c4988fab71e38423892db1ae7c14f235505c892b7520ef46e0eb990a717aed2",
+      "source_path": "Module 3 - Machine Learning Workflow/3.3.5.how-to-evaluate-a-model.1.pptx",
+      "source_bytes": 255296,
+      "source_sha256": "4c4988fab71e38423892db1ae7c14f235505c892b7520ef46e0eb990a717aed2",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "chapters/04_量化、编译与设备部署.md",
+      "bytes": 1776,
+      "sha256": "ca76635d46e52c856958023f7adf405b3641eb2a9768d7a4ade3a3b64bfad95d",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      }
+    },
+    {
+      "path": "materials/module-04/4.1.1.why-quantization.3.docx",
+      "bytes": 142919,
+      "sha256": "e751d9f6bdc2fd1a83d4bd9a584f87f434638e6aaf4d882d7ca4f9be82099843",
+      "source_path": "Module 4 - Model Deployment/4.1.1.why-quantization.3.docx",
+      "source_bytes": 142919,
+      "source_sha256": "e751d9f6bdc2fd1a83d4bd9a584f87f434638e6aaf4d882d7ca4f9be82099843",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "materials/module-04/4.3.1.using-a-model-for-inference.1.pptx",
+      "bytes": 542083,
+      "sha256": "bf9de675d1faa47e8bfb79652d7708b47e8580d9d46005ed6b1f7dff1ab17df6",
+      "source_path": "Module 4 - Model Deployment/4.3.1.using-a-model-for-inference.1.pptx",
+      "source_bytes": 542083,
+      "source_sha256": "bf9de675d1faa47e8bfb79652d7708b47e8580d9d46005ed6b1f7dff1ab17df6",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "chapters/05_边缘异常检测与阈值治理.md",
+      "bytes": 1539,
+      "sha256": "0c0e9c38c961407226964c162c07505473a3c50bc5d27ccd2ce7df2b548e7c68",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      }
+    },
+    {
+      "path": "materials/module-05/5.1.1.introduction-to-anomaly-detection.3.docx",
+      "bytes": 40369,
+      "sha256": "056c0f46d770c7af33afe574fece606c542f59fec5241eded42ee52d7f96b1fb",
+      "source_path": "Module 5 - Anomaly Detection/5.1.1.introduction-to-anomaly-detection.3.docx",
+      "source_bytes": 40369,
+      "source_sha256": "056c0f46d770c7af33afe574fece606c542f59fec5241eded42ee52d7f96b1fb",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "materials/module-05/5.3.1.anomaly-detection-in-edge-impulse.1.pptx",
+      "bytes": 36194,
+      "sha256": "6042a0341d98f6b8cf267f680da81c14fa75db5b1bd671f822c57a0854b16cc9",
+      "source_path": "Module 5 - Anomaly Detection/5.3.1.anomaly-detection-in-edge-impulse.1.pptx",
+      "source_bytes": 36194,
+      "source_sha256": "6042a0341d98f6b8cf267f680da81c14fa75db5b1bd671f822c57a0854b16cc9",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "chapters/06_嵌入式图像分类与迁移学习.md",
+      "bytes": 1899,
+      "sha256": "5f666e8a257780efdf83182e98b8ad5212c5c3f3c86f3fb67314f18c986bcba6",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      }
+    },
+    {
+      "path": "materials/module-06/6.2.10.solution-cnn.3.docx",
+      "bytes": 216652,
+      "sha256": "13850f6f4064487ebb1bed0cecef2278d9ebeb2829c534285d328d82ba0391e2",
+      "source_path": "Module 6 - Image Classification with Deep Learning/6.2.10.solution-cnn.3.docx",
+      "source_bytes": 216652,
+      "source_sha256": "13850f6f4064487ebb1bed0cecef2278d9ebeb2829c534285d328d82ba0391e2",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "materials/module-06/6.3.7.transfer-learning-and-mobilenet.2.pptx",
+      "bytes": 128543,
+      "sha256": "db39caf98c8be37959220b1008d955e172246b981dcaf9aaa715671d3488cf4d",
+      "source_path": "Module 6 - Image Classification with Deep Learning/6.3.7.transfer-learning-and-mobilenet.2.pptx",
+      "source_bytes": 128543,
+      "source_sha256": "db39caf98c8be37959220b1008d955e172246b981dcaf9aaa715671d3488cf4d",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "chapters/07_目标检测、定位误差与负责任 AI.md",
+      "bytes": 1888,
+      "sha256": "aaaf8acf48d72359aa3ef7c7304be43572707141c7a0a63462f8dbcc73ef1e53",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      }
+    },
+    {
+      "path": "materials/module-07/7.1.5.digging-deeper-into-object-detection.2.docx",
+      "bytes": 15738,
+      "sha256": "240f3909a429784f9980071c82c2660d23f57df239f5f3784c9238d22b2bd5f0",
+      "source_path": "Module 7 - Object Detection/7.1.5.digging-deeper-into-object-detection.2.docx",
+      "source_bytes": 15738,
+      "source_sha256": "240f3909a429784f9980071c82c2660d23f57df239f5f3784c9238d22b2bd5f0",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "materials/module-07/7.1.1.introduction-to-object-detection.2.pptx",
+      "bytes": 1312043,
+      "sha256": "69211ececb0aee4692abef8624476e164120ffefb757a0232f9a237f58665dc7",
+      "source_path": "Module 7 - Object Detection/7.1.1.introduction-to-object-detection.2.pptx",
+      "source_bytes": 1312043,
+      "source_sha256": "69211ececb0aee4692abef8624476e164120ffefb757a0232f9a237f58665dc7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "chapters/08_关键词唤醒系统与持续监控.md",
+      "bytes": 1431,
+      "sha256": "3ddb9cec6b22400b8229f25c4407e3429daa2c508883c144dafaf0f95c627140",
+      "source_path": "README.md",
+      "source_bytes": 83267,
+      "source_sha256": "50579dd4b48732f0132ee8da41bb41d63444e4d18d69c265ea63bf6569b5d2b7",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "bilingual_module_summary_with_team_authored_engineering_checks"
+      }
+    },
+    {
+      "path": "materials/module-08/8.1.5.keyword-spotting-application-architecture.3.docx",
+      "bytes": 40995,
+      "sha256": "51b5a90d98abbd4a2eb5b48b4dfb31db58d20071b8f5b2b606090590016a2be6",
+      "source_path": "Module 8 - Keyword Spotting/8.1.5.keyword-spotting-application-architecture.3.docx",
+      "source_bytes": 40995,
+      "source_sha256": "51b5a90d98abbd4a2eb5b48b4dfb31db58d20071b8f5b2b606090590016a2be6",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    },
+    {
+      "path": "materials/module-08/8.3.1.deploy-audio-classifier.1.pptx",
+      "bytes": 227806,
+      "sha256": "69a0a78c8936be8a463b23696a7bf73e0a1ae60c8a390495ee4fe151b8565494",
+      "source_path": "Module 8 - Keyword Spotting/8.3.1.deploy-audio-classifier.1.pptx",
+      "source_bytes": 227806,
+      "source_sha256": "69a0a78c8936be8a463b23696a7bf73e0a1ae60c8a390495ee4fe151b8565494",
+      "license_spdx": "CC-BY-NC-SA-4.0",
+      "attribution": [
+        "Edge Impulse",
+        "Harvard TinyML / Prof. Vijay Janapa Reddi",
+        "EduMatrix team"
+      ],
+      "obligations": [
+        "attribution",
+        "noncommercial",
+        "share_alike",
+        "indicate_changes"
+      ],
+      "conversion": {
+        "strategy": "unchanged_frozen_binary"
+      }
+    }
+  ]
+}

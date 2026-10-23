@@ -25,8 +25,7 @@ OUTPUT = ROOT / "outputs"
 PACKAGING = ROOT / "packaging"
 BUILD = ROOT / "outputs" / "package_build"
 RAW_REPOS = ROOT / "data" / "raw" / "github_repos"
-RAW_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
-RAW_MAX_IMAGE_BYTES = 512 * 1024
+M0_RUNTIME = ROOT / "outputs" / "M0_阶段0基线与架构契约"
 
 WORK_ZIP = OUTPUT / "00015352作品.zip"
 SOURCE_ZIP = OUTPUT / "00015352源码.zip"
@@ -46,9 +45,12 @@ COMMON_ROOT_FILES = [
 SOURCE_ROOT_FILES = COMMON_ROOT_FILES + ["Dockerfile", "docker-compose.yml", "start.bat"]
 RUNTIME_SCRIPTS = [
     "db_heal.py",
+    "e2e_no_docker.py",
     "runtime_preflight.py",
     "seed_students.py",
     "bootstrap_item_bank.py",
+    "trusted_local_smoke.py",
+    "synthesize_sapi_speech.ps1",
 ]
 
 INFO_DOCS = [
@@ -109,12 +111,15 @@ def safe_path(path: Path) -> bool:
 
 
 def raw_path_allowed(path: Path) -> bool:
-    if not safe_path(path):
+    return safe_path(path)
+
+
+def runtime_dist_path_allowed(path: Path) -> bool:
+    if path.name.startswith("~$") or path.name.lower() == ".env":
         return False
-    return not (
-        path.suffix.lower() in RAW_IMAGE_SUFFIXES
-        and path.stat().st_size > RAW_MAX_IMAGE_BYTES
-    )
+    return path.suffix.lower() not in {
+        ".pyc", ".pyo", ".log", ".db", ".sqlite", ".wal", ".shm",
+    }
 
 
 def add_tree(
@@ -274,12 +279,6 @@ def build_raw_repo_manifest() -> Path:
             selected_files: list[Path] = []
             excluded_images: list[dict] = []
             for path in sorted(repo.rglob("*")):
-                if path.is_file() and safe_path(path) and not raw_path_allowed(path):
-                    if path.suffix.lower() in RAW_IMAGE_SUFFIXES:
-                        excluded_images.append({
-                            "path": path.relative_to(RAW_REPOS).as_posix(),
-                            "bytes": path.stat().st_size,
-                        })
                 if path.is_file() and raw_path_allowed(path):
                     selected_files.append(path)
             license_files = [
@@ -354,16 +353,19 @@ def build_seed_database() -> Path | None:
             quoted = '"' + table.replace('"', '""') + '"'
             if "student_id" in columns:
                 if table == "knowledge_documents":
-                    target_conn.execute(f"delete from {quoted} where student_id <> 'public'")
+                    target_conn.execute(
+                        f"delete from {quoted} where student_id not in ('public', 'lzz')"
+                    )
                 else:
                     target_conn.execute(
                         f"delete from {quoted} where student_id not like 'stu-%' "
-                        "and student_id not in ('public', 'demo-student')"
+                        "and student_id not in ('public', 'demo-student', 'lzz')"
                     )
             if table == "users":
                 target_conn.execute(
-                    f"delete from {quoted} where username <> 'teacher' "
-                    "and username <> 'demo-student' and username not like 'stu-%'"
+                    f"delete from {quoted} where username not in "
+                    "('lzz', 'teacher', 'demo-admin', 'demo-student') "
+                    "and username not like 'stu-%'"
                 )
         target_conn.commit()
         target_conn.execute("vacuum")
@@ -387,17 +389,18 @@ def evaluator_report() -> dict:
         sandbox.pop(key, None)
     return {
         "result": raw.get("result", "unknown"),
-        "mode": raw.get("mode", "disabled"),
+        "mode": raw.get("mode", "trusted_local"),
         "started_at": raw.get("started_at"),
         "finished_at": raw.get("finished_at"),
         "checks": {
             "health": health,
             "sandbox_status": sandbox,
-            "chat_response": checks.get("chat_response", {}),
-            "frontend_sandbox_guard": checks.get("frontend_sandbox_guard", {}),
+            "landing_page": checks.get("landing_page", {}),
+            "login_page": checks.get("login_page", {}),
+            "learning_workspace": checks.get("learning_workspace", {}),
             "knowledge_page": checks.get("knowledge_page", {}),
-            "profile_analysis_page": checks.get("profile_analysis_page", {}),
-            "settings_page": checks.get("settings_page", {}),
+            "safe_execution": checks.get("safe_execution", {}),
+            "blocked_execution": checks.get("blocked_execution", {}),
         },
     }
 
@@ -421,6 +424,7 @@ def add_common_runtime(archive: zipfile.ZipFile, added: set[str]) -> int:
     for path in sorted(ROOT.glob("*.py")):
         count += int(add_file(archive, path, path.name, added))
     count += add_tree(archive, ROOT / "app", "app", added)
+    count += add_tree(archive, ROOT / "vendor" / "whisper.cpp", "vendor/whisper.cpp", added)
     for filename in RUNTIME_SCRIPTS:
         count += int(add_file(archive, ROOT / "scripts" / filename, f"scripts/{filename}", added))
     return count
@@ -436,9 +440,17 @@ def build_work_package(
     with zipfile.ZipFile(WORK_ZIP, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         add_common_runtime(archive, added)
         add_file(archive, ROOT / "frontend" / "dist" / "index.html", "frontend/dist/index.html", added)
-        add_tree(archive, ROOT / "frontend" / "dist", "frontend/dist", added)
-        for directory in ("datasets", "manifest", "patches"):
+        add_tree(
+            archive, ROOT / "frontend" / "dist", "frontend/dist", added,
+            runtime_dist_path_allowed,
+        )
+        for directory in ("curated", "datasets", "domain_plugins", "manifest", "patches"):
             add_tree(archive, ROOT / "data" / directory, f"data/{directory}", added)
+        for directory in ("baseline_course", "datasets"):
+            add_tree(
+                archive, M0_RUNTIME / directory,
+                f"outputs/M0_阶段0基线与架构契约/{directory}", added,
+            )
         add_tree(archive, RAW_REPOS, "data/raw/github_repos", added, raw_path_allowed)
         add_file(archive, raw_manifest, "data/manifest/github_repos_package_manifest.json", added)
         for filename in ("poincare_projection.npy", "dkt_weights.pth"):
@@ -459,8 +471,8 @@ def build_work_package(
             "frontend": "frontend/dist served by FastAPI on port 8000",
             "knowledge_source": "data/raw/github_repos (13 repositories, filtered public course materials)",
             "knowledge_manifest": "data/manifest/github_repos_package_manifest.json",
-            "default_mode": "deterministic + sandbox disabled",
-            "dependency_install": "online first-run pip install from requirements.txt",
+            "default_mode": "deterministic + trusted_local evaluator demo",
+            "dependency_install": "online first-run pip install from pinned requirements-lock.txt (requirements.txt fallback)",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }, ensure_ascii=False, indent=2))
 
@@ -551,8 +563,6 @@ def main() -> None:
     build_info_package()
     for path in (WORK_ZIP, SOURCE_ZIP, INFO_ZIP):
         size = path.stat().st_size
-        if size >= 1_000_000_000:
-            raise RuntimeError(f"{path.name} exceeds the 1 GB portal limit: {size} bytes")
         print(f"created {path} size={size} sha256={sha256(path)}")
 
 

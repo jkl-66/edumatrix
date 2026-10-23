@@ -42,8 +42,15 @@ export const useContextStore = defineStore('context', () => {
       return null
     }
     const r = await api.get(`/v1/courses/${encodeURIComponent(courseId)}`, { headers: buildHeaders() })
-    course.value = r.data
-    localStorage.setItem('edumatrix_course_id', courseId)
+    return setCourse(r.data)
+  }
+
+  function setCourse(value) {
+    course.value = value || null
+    if (course.value?.id) {
+      localStorage.setItem('edumatrix_course_id', course.value.id)
+      localStorage.setItem('edumatrix_course_title', course.value.title || '')
+    }
     return course.value
   }
 
@@ -53,5 +60,5 @@ export const useContextStore = defineStore('context', () => {
     loadedToken.value = ''
   }
 
-  return { identity, course, loading, role, isOperator, ensureIdentity, loadCourse, clear }
+  return { identity, course, loading, role, isOperator, ensureIdentity, loadCourse, setCourse, clear }
 })

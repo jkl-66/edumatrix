@@ -18,7 +18,9 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_URL = os.getenv("EDUMATRIX_SMOKE_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-OUTPUT_PATH = ROOT / "outputs" / "trusted_local_smoke.json"
+OUTPUT_PATH = Path(
+    os.getenv("EDUMATRIX_SMOKE_OUTPUT_PATH", str(ROOT / "outputs" / "trusted_local_smoke.json"))
+).resolve()
 PASSWORD = "EduMatrix123!"
 
 

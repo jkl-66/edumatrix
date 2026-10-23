@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 import uuid
 
 from pydantic import ConfigDict, Field
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from app.database import DBModelCall, DBModelQuotaBucket
+from app.database import DBModelCall, DBModelPriceVersion, DBModelQuotaBucket
 from app.m2_contracts import StrictModel
 from app.m5_capabilities import Capability, CapabilityContract, M5CapabilityError, QualityMode
 
@@ -28,6 +28,10 @@ class ModelRegistration(StrictModel):
     context_length: int = Field(ge=1)
     input_cost_per_million: float = Field(default=0.0, ge=0)
     output_cost_per_million: float = Field(default=0.0, ge=0)
+    pricing_version: str = Field(default="unpriced", min_length=1, max_length=64)
+    pricing_currency: str = Field(default="USD", min_length=3, max_length=8)
+    pricing_basis: Literal["provider_catalog", "operator_config", "deterministic_zero", "unpriced"] = "unpriced"
+    pricing_source_url: str = Field(default="", max_length=2000)
     data_region: str = Field(default="unspecified", min_length=1, max_length=64)
 
 
@@ -52,6 +56,7 @@ class GatewayPolicy(StrictModel):
     daily_user_cost_limit: float = Field(default=10.0, ge=0)
     daily_course_call_limit: int = Field(default=1000, ge=1)
     daily_model_call_limit: int = Field(default=10000, ge=1)
+    per_call_cost_limit: float | None = Field(default=None, ge=0)
 
 
 class ModelSelection(StrictModel):
@@ -64,6 +69,22 @@ class QuotaUsage(StrictModel):
     call_count: int = Field(ge=0)
     token_count: int = Field(ge=0)
     estimated_cost: float = Field(ge=0)
+
+
+def resolve_registration_pricing(session: Any, registration: ModelRegistration) -> ModelRegistration:
+    row = session.query(DBModelPriceVersion).filter_by(
+        provider=registration.provider, model=registration.model, active=True,
+    ).order_by(DBModelPriceVersion.effective_at.desc()).first()
+    if row is None:
+        return registration
+    return registration.model_copy(update={
+        "input_cost_per_million": row.input_cost_per_million,
+        "output_cost_per_million": row.output_cost_per_million,
+        "pricing_version": row.version,
+        "pricing_currency": row.currency,
+        "pricing_basis": "operator_config",
+        "pricing_source_url": row.source_url,
+    })
 
 
 def select_model(
@@ -92,16 +113,34 @@ def select_model(
     candidates = [item for item in candidates if item.tier in preferred]
     if not candidates:
         raise M5CapabilityError("model_quality_unavailable", "no registered model satisfies the requested quality mode")
+    estimated_input_tokens = max(1, len(contract.model_dump_json()) // 4)
+    estimated_output_tokens = max(1, (contract.output_constraints.max_length or 4096) // 4)
+    if policy.per_call_cost_limit is not None:
+        candidates = [item for item in candidates if (
+            estimated_input_tokens * item.input_cost_per_million
+            + estimated_output_tokens * item.output_cost_per_million
+        ) / 1_000_000 <= policy.per_call_cost_limit]
+        if not candidates:
+            raise M5CapabilityError("model_budget_unavailable", "no registered model satisfies the per-call cost limit")
     ordered = sorted(
         candidates,
-        key=lambda item: (preferred.index(item.tier) if item.tier in preferred else len(preferred), item.provider, item.model),
+        key=lambda item: (
+            preferred.index(item.tier) if item.tier in preferred else len(preferred),
+            item.input_cost_per_million + item.output_cost_per_million,
+            item.provider,
+            item.model,
+        ),
     )
     primary = ordered[0]
     fallbacks = tuple(
         ModelRef(provider=item.provider, model=item.model)
         for item in ordered[1:]
     )
-    return ModelSelection(registration=primary, fallback_models=fallbacks, reason=f"quality_mode:{contract.quality_mode.value}")
+    return ModelSelection(
+        registration=primary,
+        fallback_models=fallbacks,
+        reason=f"quality_mode:{contract.quality_mode.value};pricing_version:{primary.pricing_version};budget_checked:true",
+    )
 
 
 def _daily_rows(session: Any, *, now: datetime) -> Any:
@@ -226,3 +265,44 @@ def reserve_daily_quota(
         if result.rowcount != 1:
             session.rollback()
             raise M5CapabilityError(error_code, f"{scope_type} daily model quota is exhausted")
+
+
+def reconcile_daily_quota(
+    session: Any,
+    *,
+    owner_public_id: str | None,
+    course_id: str | None,
+    registration: ModelRegistration,
+    reserved_input_tokens: int,
+    reserved_output_tokens: int,
+    actual_input_tokens: int,
+    actual_output_tokens: int,
+    now: datetime | None = None,
+) -> None:
+    """Replace a call's conservative reservation with its terminal token estimate."""
+    now = now or datetime.now(timezone.utc)
+    utc_day = now.astimezone(timezone.utc).date().isoformat()
+    reserved_tokens = max(0, reserved_input_tokens) + max(0, reserved_output_tokens)
+    actual_tokens = max(0, actual_input_tokens) + max(0, actual_output_tokens)
+    reserved_cost = (
+        max(0, reserved_input_tokens) * registration.input_cost_per_million
+        + max(0, reserved_output_tokens) * registration.output_cost_per_million
+    ) / 1_000_000
+    actual_cost = (
+        max(0, actual_input_tokens) * registration.input_cost_per_million
+        + max(0, actual_output_tokens) * registration.output_cost_per_million
+    ) / 1_000_000
+    scopes = []
+    if owner_public_id:
+        scopes.append(("user", owner_public_id))
+    if course_id:
+        scopes.append(("course", course_id))
+    scopes.append(("model", f"{registration.provider}:{registration.model}"))
+    for scope_type, scope_key in scopes:
+        row = session.query(DBModelQuotaBucket).filter_by(
+            scope_type=scope_type, scope_key=scope_key, utc_day=utc_day,
+        ).first()
+        if row is None:
+            continue
+        row.reserved_tokens = max(0, int(row.reserved_tokens or 0) - reserved_tokens + actual_tokens)
+        row.reserved_cost = max(0.0, float(row.reserved_cost or 0) - reserved_cost + actual_cost)

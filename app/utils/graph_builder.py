@@ -23,6 +23,8 @@ from app.utils.exceptions import (
 from app.utils.graph_models import (
     AlignedTriplet,
     EntityAlignment,
+    GraphFact,
+    GraphFactProvenance,
     GraphBuildReport,
     GraphQueryResult,
     Triplet,
@@ -340,9 +342,12 @@ class GraphRepository(Protocol):
     """图存储后端协议。"""
     def merge_node(self, label: str, name: str) -> None: ...
     def merge_edge(self, source: str, target: str, relation: str) -> None: ...
+    def merge_fact(self, fact: GraphFact) -> bool: ...
+    def record_candidate(self, fact: GraphFact) -> None: ...
     def query_prerequisites(self, target: str) -> GraphQueryResult: ...
     def count_nodes(self) -> int: ...
     def count_edges(self) -> int: ...
+    def governance_counts(self) -> dict[str, int]: ...
 
 
 class InMemoryGraphRepository:
@@ -351,6 +356,8 @@ class InMemoryGraphRepository:
     def __init__(self) -> None:
         self.nodes: set[str] = set()
         self.edges: list[tuple[str, str, str]] = []
+        self.facts: list[GraphFact] = []
+        self.candidates: list[GraphFact] = []
         self._forward: dict[str, set[str]] = defaultdict(set)
         self._reverse: dict[str, set[str]] = defaultdict(set)
 
@@ -358,6 +365,24 @@ class InMemoryGraphRepository:
         self.nodes.add(name)
 
     def merge_edge(self, source: str, target: str, relation: str) -> None:
+        fact = GraphFact(
+            triplet=Triplet(source=source, target=target, relation=relation),
+            provenance=GraphFactProvenance(
+                source_kind="legacy_manual",
+                verification_status="verified",
+                extraction_method="legacy_repository_call",
+            ),
+        )
+        self.merge_fact(fact)
+
+    def merge_fact(self, fact: GraphFact) -> bool:
+        validate_graph_fact(fact)
+        if fact.provenance.verification_status != "verified":
+            self.record_candidate(fact)
+            return False
+        source = fact.triplet.source
+        target = fact.triplet.target
+        relation = fact.triplet.relation
         self.nodes.add(source)
         self.nodes.add(target)
         self._forward[source].add(target)
@@ -365,6 +390,14 @@ class InMemoryGraphRepository:
         edge = (source, target, relation)
         if edge not in self.edges:
             self.edges.append(edge)
+        if fact not in self.facts:
+            self.facts.append(fact)
+        return True
+
+    def record_candidate(self, fact: GraphFact) -> None:
+        validate_graph_fact(fact)
+        if fact not in self.candidates:
+            self.candidates.append(fact)
 
     def query_prerequisites(self, target: str) -> GraphQueryResult:
         visited: set[str] = set()
@@ -383,6 +416,24 @@ class InMemoryGraphRepository:
 
     def count_edges(self) -> int:
         return len(self.edges)
+
+    def governance_counts(self) -> dict[str, int]:
+        return {
+            "verified_facts": len(self.facts),
+            "canonical_course_facts": sum(
+                fact.provenance.source_kind == "canonical_course" for fact in self.facts
+            ),
+            "builtin_seed_facts": sum(
+                fact.provenance.source_kind == "builtin_seed" for fact in self.facts
+            ),
+            "legacy_manual_facts": sum(
+                fact.provenance.source_kind == "legacy_manual" for fact in self.facts
+            ),
+            "candidate_relations": len(self.candidates),
+            "co_occurrence_candidates": sum(
+                fact.provenance.source_kind == "co_occurrence" for fact in self.candidates
+            ),
+        }
 
 
 class Neo4jGraphRepository:
@@ -431,25 +482,66 @@ class Neo4jGraphRepository:
             self._local_fallback.merge_node(label, name)
 
     def merge_edge(self, source: str, target: str, relation: str) -> None:
+        fact = GraphFact(
+            triplet=Triplet(source=source, target=target, relation=relation),
+            provenance=GraphFactProvenance(
+                source_kind="legacy_manual",
+                verification_status="verified",
+                extraction_method="legacy_repository_call",
+            ),
+        )
+        self.merge_fact(fact)
+
+    def merge_fact(self, fact: GraphFact) -> bool:
+        validate_graph_fact(fact)
+        if fact.provenance.verification_status != "verified":
+            self.record_candidate(fact)
+            return False
+        source = fact.triplet.source
+        target = fact.triplet.target
+        relation = fact.triplet.relation
         safe_rel = _safe_relation(relation)
         query = (
             "MERGE (s:Concept {name: $source}) "
             "MERGE (t:Concept {name: $target}) "
             f"MERGE (s)-[r:{safe_rel}]->(t) "
-            "SET r.type = $relation"
+            "SET r.type = $relation, r.verification_status = 'verified', "
+            "r.source_kind = $source_kind, r.course_id = $course_id, "
+            "r.source_ref_id = $source_ref_id, r.evidence_id = $evidence_id, "
+            "r.content_hash = $content_hash, r.manifest_hash = $manifest_hash"
         )
         try:
-            self._run_query(query, {"source": source, "target": target, "relation": relation})
+            self._run_query(
+                query,
+                {
+                    "source": source,
+                    "target": target,
+                    "relation": relation,
+                    "source_kind": fact.provenance.source_kind,
+                    "course_id": fact.provenance.course_id,
+                    "source_ref_id": fact.provenance.source_ref_id,
+                    "evidence_id": fact.provenance.evidence_id,
+                    "content_hash": fact.provenance.content_hash,
+                    "manifest_hash": fact.provenance.manifest_hash,
+                },
+            )
+            return True
         except GraphRepositoryError:
-            self._local_fallback.merge_edge(source, target, relation)
+            return self._local_fallback.merge_fact(fact)
+
+    def record_candidate(self, fact: GraphFact) -> None:
+        validate_graph_fact(fact)
+        self._local_fallback.record_candidate(fact)
 
     def query_prerequisites(self, target: str) -> GraphQueryResult:
         query = (
-            "MATCH (t:Concept {name: $target})<-[:PREREQUISITE_OF*1..]-(p:Concept) "
+            "MATCH (t:Concept {name: $target})<-[rels:PREREQUISITE_OF*1..]-(p:Concept) "
+            "WHERE ALL(r IN rels WHERE r.verification_status = 'verified') "
             "RETURN COLLECT(DISTINCT p.name) AS prerequisites"
         )
         downstream_query = (
-            "MATCH (s:Concept {name: $target})-[:PREREQUISITE_OF]->(d:Concept) "
+            "MATCH (s:Concept {name: $target})-[r:PREREQUISITE_OF]->(d:Concept) "
+            "WHERE r.verification_status = 'verified' "
             "RETURN COLLECT(DISTINCT d.name) AS downstream"
         )
         try:
@@ -470,10 +562,31 @@ class Neo4jGraphRepository:
 
     def count_edges(self) -> int:
         try:
-            result = self._run_query("MATCH ()-[r:PREREQUISITE_OF]->() RETURN COUNT(r) AS cnt")
+            result = self._run_query("MATCH ()-[r:PREREQUISITE_OF]->() WHERE r.verification_status = 'verified' RETURN COUNT(r) AS cnt")
             return result[0].get("cnt", 0) if result else 0
         except GraphRepositoryError:
             return self._local_fallback.count_edges()
+
+    def governance_counts(self) -> dict[str, int]:
+        try:
+            rows = self._run_query(
+                "MATCH ()-[r:PREREQUISITE_OF]->() "
+                "WHERE r.verification_status = 'verified' "
+                "RETURN r.source_kind AS source_kind, COUNT(r) AS cnt"
+            )
+            by_kind = {str(row.get("source_kind") or "unknown"): int(row.get("cnt") or 0) for row in rows}
+            local = self._local_fallback.governance_counts()
+            verified = sum(by_kind.values())
+            return {
+                "verified_facts": verified + local["verified_facts"],
+                "canonical_course_facts": by_kind.get("canonical_course", 0) + local["canonical_course_facts"],
+                "builtin_seed_facts": by_kind.get("builtin_seed", 0) + local["builtin_seed_facts"],
+                "legacy_manual_facts": by_kind.get("legacy_manual", 0) + local["legacy_manual_facts"],
+                "candidate_relations": local["candidate_relations"],
+                "co_occurrence_candidates": local["co_occurrence_candidates"],
+            }
+        except GraphRepositoryError:
+            return self._local_fallback.governance_counts()
 
     def close(self) -> None:
         if self._driver is not None:
@@ -484,6 +597,30 @@ class Neo4jGraphRepository:
 def _safe_relation(relation: str) -> str:
     """Sanitize relation name for Cypher (alphanumeric + underscore only)."""
     return re.sub(r"[^A-Za-z0-9_]", "_", relation.upper()) or "PREREQUISITE_OF"
+
+
+def validate_graph_fact(fact: GraphFact) -> None:
+    triplet = fact.triplet.normalized()
+    provenance = fact.provenance
+    if not triplet.source or not triplet.target or triplet.source == triplet.target:
+        raise GraphBuilderError("graph fact requires two distinct non-empty concepts")
+    if provenance.verification_status == "verified":
+        if triplet.relation != "PREREQUISITE_OF":
+            raise GraphBuilderError("only prerequisite relations may enter the verified fact graph")
+        if provenance.source_kind not in {"builtin_seed", "canonical_course", "legacy_manual"}:
+            raise GraphBuilderError("extracted or co-occurrence relations cannot be verified automatically")
+        if provenance.source_kind == "canonical_course":
+            required = (
+                provenance.course_id,
+                provenance.source_ref_id,
+                provenance.evidence_id,
+                provenance.content_hash,
+                provenance.manifest_hash,
+            )
+            if not all(required) or len(provenance.content_hash) != 64 or len(provenance.manifest_hash) != 64:
+                raise GraphBuilderError("canonical course facts require complete source provenance")
+    elif provenance.source_kind in {"builtin_seed", "canonical_course"}:
+        raise GraphBuilderError("governed graph sources must be explicitly verified")
 
 
 def create_graph_repository(
@@ -535,6 +672,8 @@ class GraphBuilder:
         all_raw: list[Triplet] = []
         all_aligned: list[AlignedTriplet] = []
         written_edges = 0
+        candidate_edges = 0
+        rejected_edges = 0
 
         for chunk_text in chunks:
             try:
@@ -546,9 +685,22 @@ class GraphBuilder:
             for triplet in raw_triplets:
                 aligned = self._align_triplet(triplet)
                 all_aligned.append(aligned)
-                if aligned.both_aligned or aligned.source_alignment.method != "fallback":
-                    self._write_triplet(aligned.aligned)
-                    written_edges += 1
+                if not aligned.both_aligned:
+                    rejected_edges += 1
+                    continue
+                source_kind = "model_candidate" if self.llm is not None else "rule_candidate"
+                candidate = GraphFact(
+                    triplet=aligned.aligned,
+                    provenance=GraphFactProvenance(
+                        source_kind=source_kind,
+                        verification_status="candidate",
+                        extraction_method=(
+                            "llm_or_rule_fallback" if self.llm is not None else "deterministic_rule"
+                        ),
+                    ),
+                )
+                self.repository.record_candidate(candidate)
+                candidate_edges += 1
 
         duration_ms = int((time.monotonic() - t0) * 1000)
         aligned_count = sum(1 for a in all_aligned if a.both_aligned)
@@ -566,6 +718,8 @@ class GraphBuilder:
             duration_ms=duration_ms,
             triplets=tuple(all_raw),
             aligned=tuple(all_aligned),
+            candidate_edges=candidate_edges,
+            rejected_edges=rejected_edges,
         )
 
     def build_from_text(self, text: str, *, source: str = "manual-input") -> GraphBuildReport:
@@ -608,14 +762,21 @@ class GraphBuilder:
                     return True
         return False
 
-    def _write_triplet(self, triplet: Triplet) -> None:
+    def _write_triplet(
+        self,
+        triplet: Triplet,
+        provenance: GraphFactProvenance | None = None,
+    ) -> bool:
         # 环路检测：如果 target 已经能到达 source，写出(source→target)会导致环
         if self._has_path(triplet.target, triplet.source, set()):
             print(f"  [GraphBuilder] 检测到环路风险: {triplet.target} -> {triplet.source}，拒绝写入边 ({triplet.source} -> {triplet.target})")
-            return
-        self.repository.merge_node("Concept", triplet.source)
-        self.repository.merge_node("Concept", triplet.target)
-        self.repository.merge_edge(triplet.source, triplet.target, triplet.relation)
+            return False
+        governed = provenance or GraphFactProvenance(
+            source_kind="legacy_manual",
+            verification_status="verified",
+            extraction_method="legacy_graph_builder_call",
+        )
+        return self.repository.merge_fact(GraphFact(triplet=triplet, provenance=governed))
 
 
 def seed_default_graph(builder: GraphBuilder | None = None) -> GraphBuildReport:
@@ -648,8 +809,16 @@ def seed_default_graph(builder: GraphBuilder | None = None) -> GraphBuildReport:
     for triplet in triplets:
         a = b._align_triplet(triplet)
         aligned.append(a)
-        b._write_triplet(a.aligned)
-        written += 1
+        if b._write_triplet(
+            a.aligned,
+            GraphFactProvenance(
+                source_kind="builtin_seed",
+                verification_status="verified",
+                manifest_hash="builtin-seed-v1",
+                extraction_method="reviewed_static_seed",
+            ),
+        ):
+            written += 1
     duration_ms = int((time.monotonic() - t0) * 1000)
     both_aligned = sum(1 for a in aligned if a.both_aligned)
     return GraphBuildReport(

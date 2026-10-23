@@ -1,4 +1,4 @@
-import { api, buildHeaders } from './common'
+import { api, buildHeaders, errorMessageText } from './common'
 
 export async function processMessage(message, studentId = 'stu-' + Date.now()) {
   const r = await api.post('/process', { message, student_id: studentId }, { headers: buildHeaders() })
@@ -28,46 +28,63 @@ export function abortAllStreams() {
   _activeStreamControllers.clear()
 }
 
-export function streamChat(message, studentId, onEvent, onError, mode = 'chat', images = [], activeDocIds = [], retries = 3) {
-  // 强制终止该学生的旧连接，防止并发泄漏
+function openChatStream(studentId, body, onEvent, onError, retries) {
   abortStream(studentId)
 
   const controller = new AbortController()
   _activeStreamControllers.set(studentId, controller)
   const { signal } = controller
-
   const headers = buildHeaders()
-  const url = '/api/stream/chat'
   let retryCount = 0
 
-  function doFetch() {
-    if (signal.aborted) return
+  function clearActiveController() {
+    // A delayed retry/error from an older stream must not remove a newer stream.
+    if (_activeStreamControllers.get(studentId) === controller) {
+      _activeStreamControllers.delete(studentId)
+    }
+  }
 
-    fetch(url, {
+  function doFetch() {
+    if (signal.aborted) {
+      clearActiveController()
+      return
+    }
+    fetch('/api/stream/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify({ message, student_id: studentId, mode, images, active_doc_ids: activeDocIds }),
+      body: JSON.stringify(body),
       signal,
     }).then(response => {
       if (!response.ok) {
-        if (signal.aborted) return
-        // 断线自动重连（最多 retries 次）
-        if (retryCount < retries) {
-          retryCount++
-          const delay = Math.min(1000 * Math.pow(2, retryCount), 5000)
-          console.warn(`[Chat] 连接断开(${response.status})，${delay}ms后重试(${retryCount}/${retries})`)
-          setTimeout(doFetch, delay)
+        if (signal.aborted) {
+          clearActiveController()
           return
         }
-        onError?.(new Error(`HTTP ${response.status}`))
+        if (retryCount < retries && response.status >= 500) {
+          retryCount++
+          window.setTimeout(doFetch, Math.min(1000 * (2 ** retryCount), 5000))
+          return
+        }
+        response.text().then((raw) => {
+          let detail = raw
+          try { detail = raw ? JSON.parse(raw) : raw } catch {}
+          const error = new Error(errorMessageText(detail, `请求失败（HTTP ${response.status}）`))
+          error.status = response.status
+          error.response = { status: response.status, data: detail }
+          clearActiveController()
+          onError?.(error)
+        }).catch(() => {
+          clearActiveController()
+          onError?.(new Error(`请求失败（HTTP ${response.status}）`))
+        })
         return
       }
 
-      // 连接成功，重置重试计数
       retryCount = 0
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let currentEvent = ''
 
       function read() {
         if (signal.aborted) {
@@ -75,58 +92,66 @@ export function streamChat(message, studentId, onEvent, onError, mode = 'chat', 
           return
         }
         reader.read().then(({ done, value }) => {
-          if (signal.aborted) return
           if (done) {
-            _activeStreamControllers.delete(studentId)
+            clearActiveController()
             return
           }
           buffer += decoder.decode(value, { stream: true })
           const lines = buffer.split('\n')
           buffer = lines.pop() || ''
-          let currentEvent = ''
           for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              currentEvent = line.slice(7).trim()
-            } else if (line.startsWith('data: ')) {
+            if (line.startsWith('event: ')) currentEvent = line.slice(7).trim()
+            if (line.startsWith('data: ')) {
               try {
-                const data = JSON.parse(line.slice(6))
-                onEvent?.(currentEvent, data)
+                onEvent?.(currentEvent, JSON.parse(line.slice(6)))
               } catch {}
             }
           }
           read()
-        }).catch(err => {
-          if (err.name === 'AbortError') return
-          // 断线自动重连
+        }).catch(error => {
+          if (error.name === 'AbortError') return
           if (retryCount < retries) {
             retryCount++
-            const delay = Math.min(1000 * Math.pow(2, retryCount), 5000)
-            console.warn(`[Chat] 流断开，${delay}ms后重试(${retryCount}/${retries})`)
-            setTimeout(doFetch, delay)
+            window.setTimeout(doFetch, Math.min(1000 * (2 ** retryCount), 5000))
             return
           }
-          onError?.(err)
+          clearActiveController()
+          onError?.(error)
         })
       }
       read()
-    }).catch(err => {
-      if (err.name === 'AbortError') return
-      // 网络错误自动重连
+    }).catch(error => {
+      if (error.name === 'AbortError') return
       if (retryCount < retries) {
         retryCount++
-        const delay = Math.min(1000 * Math.pow(2, retryCount), 5000)
-        console.warn(`[Chat] 网络错误，${delay}ms后重试(${retryCount}/${retries})`)
-        setTimeout(doFetch, delay)
+        window.setTimeout(doFetch, Math.min(1000 * (2 ** retryCount), 5000))
         return
       }
-      onError?.(err)
+      clearActiveController()
+      onError?.(error)
     })
   }
 
   doFetch()
-
-  // 返回 abort 函数供组件销毁时调用
   return () => abortStream(studentId)
+}
+
+export function streamChat(message, studentId, onEvent, onError, mode = 'chat', images = [], activeDocIds = [], retries = 3, contextSessionId = '') {
+  return openChatStream(studentId, {
+    message,
+    student_id: studentId,
+    mode,
+    images,
+    active_doc_ids: activeDocIds,
+    context_session_id: contextSessionId || undefined,
+  }, onEvent, onError, retries)
+}
+
+export function streamCanonicalChat(userMessageId, studentId, onEvent, onError, retries = 2) {
+  return openChatStream(studentId, {
+    student_id: studentId,
+    user_message_id: userMessageId,
+  }, onEvent, onError, retries)
 }
 
 export async function regenerateComponent(studentId, role, resourceType, query, overview = null, pathway = null) {

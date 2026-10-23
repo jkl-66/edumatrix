@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
 
 from app.auth import get_current_user
+from app.agent_audit import public_agent_audit_payload
 from app.database import DBArtifact, DBGenerationTask, DBProfileSnapshot, DBTaskEvent, DBUser, run_db_op
 from app.m1_repository import M1Repository
 from app.m2_contracts import GenerationContext, StrictModel
@@ -18,11 +20,12 @@ from app.m3_agents import (
     M3_COLLABORATION_CAPABILITY,
     complete_m3_agent_run,
     create_m3_collaboration_task,
+    fail_m3_agent_run,
     start_m3_agent_run,
     start_m3_collaboration_task,
 )
 from app.m3_baseline import seed_m3_profile_for_owner
-from app.m3_debate import AtomicClaimInput, conduct_m3_debate, persist_m3_debate_report
+from app.m3_debate import AtomicClaimInput, DebateRoundOutput, conduct_m3_debate, persist_m3_debate_report
 from app.m3_decisions import build_m3_decision_comparison, persist_m3_decision_comparison
 from app.m3_interactive import (
     InteractiveAction,
@@ -35,6 +38,9 @@ from app.m3_interactive import (
 from app.m3_matching import build_m3_matching_report, persist_m3_matching_report
 from app.m3_profiles import load_m3_gold_profiles
 from app.m3_resources import M3PersonalizedResourceGenerator, persist_m3_resource_bundle
+from app.m5_capabilities import Capability, M5CapabilityError
+from app.m5_gateway import execute_registered_structured_call
+from llm_client import parse_json_object
 from swarm_factory import build_swarm_from_headers
 
 
@@ -52,26 +58,68 @@ class M3InteractiveSessionCreate(StrictModel):
 
 
 class _LLMDebateReviewer:
-    def __init__(self, llm: Any):
+    def __init__(self, llm: Any, *, session: Any | None = None, owner_public_id: str | None = None, course_id: str | None = None, task_id: str | None = None, trace_id: str | None = None):
         self.llm = llm
+        self.session = session
+        self.owner_public_id = owner_public_id
+        self.course_id = course_id
+        self.task_id = task_id
+        self.trace_id = trace_id
 
     async def review_claim(self, claim: dict[str, Any], *, round_number: int, previous_rounds: list[dict[str, Any]]):
         system_prompt = (
-            "Return JSON only. Act as independent Prover, Challenger and conservative Judge. "
+            "Return JSON only and satisfy the provided JSON Schema exactly. "
+            "Act as independent Prover, Challenger and conservative Judge. "
             "Use only proposed_source_ref_ids. Verdict must be keep, revise, reject or uncertain."
         )
-        payload = {
+        original_request = {
             "claim": claim,
             "round_number": round_number,
             "previous_rounds": previous_rounds,
-            "required_schema": {
-                "prover": {"support_status": "supported|partial|unsupported", "evidence_ref_ids": [], "applicable_conditions": [], "rationale": ""},
-                "challenger": {"issue_types": [], "evidence_ref_ids": [], "rationale": ""},
-                "judge": {"verdict": "keep|revise|reject|uncertain", "rationale": "", "evidence_ref_ids": [], "confidence": 0.0},
-            },
+            "required_schema": DebateRoundOutput.model_json_schema(),
         }
-        raw = await self.llm.generate(system_prompt, json.dumps(payload, ensure_ascii=False), role="evidence_review")
-        return json.loads(raw)
+        validation_error: Exception | None = None
+        for _attempt in range(2):
+            payload = original_request
+            if validation_error is not None:
+                payload = {
+                    "original_request": original_request,
+                    "validation_feedback": {
+                        "message": str(validation_error),
+                        "instruction": "Regenerate the complete object using only enum values allowed by required_schema.",
+                    },
+                }
+            try:
+                if self.session is None:
+                    raise RuntimeError("debate reviewer requires a governed database session")
+
+                def validate_review(value):
+                    output = DebateRoundOutput.model_validate(value)
+                    allowed = set(claim.get("proposed_source_ref_ids") or [])
+                    cited = set(output.prover.evidence_ref_ids) | set(output.challenger.evidence_ref_ids) | set(output.judge.evidence_ref_ids)
+                    if not cited.issubset(allowed):
+                        raise ValueError("reviewer cited evidence outside proposed_source_ref_ids")
+                    return output
+
+                result = await execute_registered_structured_call(
+                    self.session,
+                    backend=self.llm,
+                    capability=Capability.DECISION,
+                    system_prompt=system_prompt,
+                    user_prompt=json.dumps(payload, ensure_ascii=False),
+                    role="evidence_review",
+                    operation=f"m3_evidence_review_round_{round_number}_attempt_{_attempt + 1}",
+                    response_model=DebateRoundOutput,
+                    response_validator=validate_review,
+                    owner_public_id=self.owner_public_id,
+                    course_id=self.course_id,
+                    task_id=self.task_id,
+                    trace_id=self.trace_id,
+                )
+                return result.structured_output
+            except (TypeError, ValueError, json.JSONDecodeError, M5CapabilityError) as exc:
+                validation_error = exc
+        raise ValueError(f"debate reviewer failed strict repair: {validation_error}")
 
 
 def _llm_from_request(request: Request):
@@ -133,6 +181,51 @@ def _redact(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact(item) for item in value]
     return value
+
+
+def _public_failure(exc: Exception) -> tuple[str, str]:
+    chain = []
+    current: BaseException | None = exc
+    while current is not None and current not in chain:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    messages = [" ".join(str(item).split()) for item in chain]
+    lowered = " ".join(messages).lower()
+    codes = [str(getattr(item, "code", "")) for item in chain]
+    code = next((item for item in codes if item), "agent_stage_failed")
+    message = messages[0]
+    if "capacity" in lowered or "overloaded" in lowered:
+        code = "model_capacity"
+        message = "The selected model is temporarily at capacity."
+    elif (
+        "structured_output_invalid" in codes
+        or "validation" in lowered
+        or "schema" in lowered
+        or "invalid json" in lowered
+    ):
+        code = "validation_failed"
+        message = "The stage output did not satisfy the required validation contract."
+    message = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "[redacted]", message)
+    message = re.sub(r"\bBearer\s+\S+", "[redacted]", message, flags=re.IGNORECASE)
+    return code[:64], message[:1000]
+
+
+def _persist_role_failure(session: Any, *, task_id: str, owner_public_id: str, role: M3AgentRole, exc: Exception) -> None:
+    session.rollback()
+    try:
+        start_m3_agent_run(session, task_id=task_id, owner_public_id=owner_public_id, role=role)
+        code, message = _public_failure(exc)
+        fail_m3_agent_run(
+            session,
+            task_id=task_id,
+            owner_public_id=owner_public_id,
+            role=role,
+            error_code=code,
+            error_message=message,
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
 
 
 def _artifact_payload(session: Any, artifact: DBArtifact) -> dict[str, Any]:
@@ -231,6 +324,22 @@ async def get_task(task_id: str, current_user: DBUser = Depends(get_current_user
     return await run_db_op(lambda session: _task_payload(session, _owned_task(session, task_id, current_user.public_id)))
 
 
+@router.get("/tasks/{task_id}/agent-audit")
+async def get_agent_audit(task_id: str, current_user: DBUser = Depends(get_current_user)):
+    try:
+        return await run_db_op(
+            lambda session: public_agent_audit_payload(
+                session,
+                task_id=task_id,
+                owner_public_id=current_user.public_id,
+            )
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail={"code": "task_forbidden", "message": str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": str(exc)}) from exc
+
+
 @router.post("/tasks/{task_id}/start")
 async def start_task(task_id: str, current_user: DBUser = Depends(get_current_user)):
     def start(session):
@@ -250,7 +359,16 @@ async def diagnose(task_id: str, current_user: DBUser = Depends(get_current_user
         try:
             agent = start_m3_agent_run(session, task_id=task_id, owner_public_id=current_user.public_id, role=M3AgentRole.DIAGNOSIS)
             if agent.status == "running":
-                complete_m3_agent_run(session, task_id=task_id, owner_public_id=current_user.public_id, role=M3AgentRole.DIAGNOSIS)
+                context = _task_context(session, task_id, current_user.public_id)
+                complete_m3_agent_run(
+                    session,
+                    task_id=task_id,
+                    owner_public_id=current_user.public_id,
+                    role=M3AgentRole.DIAGNOSIS,
+                    candidate_summary=f"Profile evidence was mapped to {len(context.target_knowledge_point_ids)} target knowledge points.",
+                    validation="Course, profile snapshot and target references passed context validation.",
+                    decision_summary="Use the verified profile context for personalized generation.",
+                )
             task = _owned_task(session, task_id, current_user.public_id)
             session.commit()
             return _task_payload(session, task)
@@ -267,17 +385,30 @@ async def generate(task_id: str, request: Request, current_user: DBUser = Depend
         try:
             context = _task_context(session, task_id, current_user.public_id)
             agent = start_m3_agent_run(session, task_id=task_id, owner_public_id=current_user.public_id, role=M3AgentRole.DOMAIN_GENERATION)
-            bundle = asyncio.run(M3PersonalizedResourceGenerator(llm).generate(session, context=context))
+            bundle = asyncio.run(M3PersonalizedResourceGenerator(llm).generate(session, context=context, task_id=task_id))
             manifest, manifest_version, resources, created = persist_m3_resource_bundle(session, task_id=task_id, context=context, bundle=bundle)
             if agent.status == "running":
                 complete_m3_agent_run(
                     session, task_id=task_id, owner_public_id=current_user.public_id,
                     role=M3AgentRole.DOMAIN_GENERATION, output_artifact_version_id=manifest_version.id,
+                    candidate_summary=(
+                        "Generated lesson, training guide and tiered quiz candidates with "
+                        f"difficulty {bundle.lesson.personalization.difficulty_band} and "
+                        f"{bundle.lesson.personalization.scaffolding} scaffolding."
+                    ),
+                    validation=f"Generated resources cite {len(context.source_ref_ids)} verified source references.",
+                    decision_summary="Forward the three personalized candidates to evidence review.",
                 )
             session.commit()
             return {"created": created, "manifest": _artifact_payload(session, manifest), "resources": [_artifact_payload(session, item) for item in resources]}
         except Exception as exc:
-            session.rollback()
+            _persist_role_failure(
+                session,
+                task_id=task_id,
+                owner_public_id=current_user.public_id,
+                role=M3AgentRole.DOMAIN_GENERATION,
+                exc=exc,
+            )
             raise _domain_error(exc)
     return await run_db_op(run)
 
@@ -288,6 +419,13 @@ async def review(task_id: str, request: Request, current_user: DBUser = Depends(
     def run(session):
         try:
             context = _task_context(session, task_id, current_user.public_id)
+            task = _owned_task(session, task_id, current_user.public_id)
+            if isinstance(reviewer, _LLMDebateReviewer):
+                reviewer.session = session
+                reviewer.owner_public_id = current_user.public_id
+                reviewer.course_id = context.course_id
+                reviewer.task_id = task_id
+                reviewer.trace_id = task.trace_id
             resources = session.query(DBArtifact).filter(
                 DBArtifact.creating_task_id == task_id,
                 DBArtifact.artifact_type.in_(["lesson", "lab_guide", "tiered_quiz"]),
@@ -314,11 +452,32 @@ async def review(task_id: str, request: Request, current_user: DBUser = Depends(
                 complete_m3_agent_run(
                     session, task_id=task_id, owner_public_id=current_user.public_id,
                     role=M3AgentRole.EVIDENCE_REVIEW, output_artifact_version_id=version.id,
+                    candidate_summary=f"Reviewed {len(report.results)} atomic claims across generated resources.",
+                    disagreement=(
+                        f"{sum(result.final_verdict != 'keep' for result in report.results)} claims required challenge, revision or rejection."
+                    ),
+                    validation=f"Cross-check result: {report.overall_status}; cited evidence remained inside the proposed source scope.",
+                    revision=(
+                        "Candidates requiring revision remain retained and cannot be treated as publication-ready."
+                        if report.overall_status != "passed"
+                        else "No content revision was required by the final verdicts."
+                    ),
+                    decision_summary=(
+                        "Evidence review passed; continue to decision orchestration."
+                        if report.overall_status == "passed"
+                        else "Resolve the recorded review findings before publication."
+                    ),
                 )
             session.commit()
             return {"created": created, "report": report.model_dump(mode="json"), "artifact": _artifact_payload(session, artifact)}
         except Exception as exc:
-            session.rollback()
+            _persist_role_failure(
+                session,
+                task_id=task_id,
+                owner_public_id=current_user.public_id,
+                role=M3AgentRole.EVIDENCE_REVIEW,
+                exc=exc,
+            )
             raise _domain_error(exc)
     return await run_db_op(run)
 

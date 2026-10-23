@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 
-from app.identity import ROLE_ADMIN, ROLE_ASSISTANT, ROLE_TEACHER, ROLE_VISITOR
+from app.identity import ROLE_ADMIN, ROLE_STUDENT, ROLE_TEACHER, VALID_ROLES
 from app.database import DBCourseMembership
 
 
@@ -36,13 +36,15 @@ def can_access_object(
     role = str(getattr(user, "role", "student") or "student").lower()
     public_id = str(getattr(user, "public_id", "") or "")
 
+    if role not in VALID_ROLES:
+        return False
     if action == "read" and obj.visibility == "public":
         return True
     if role == ROLE_ADMIN:
         return True
     if obj.owner_public_id and obj.owner_public_id == public_id:
         return True
-    if course_role in {ROLE_ADMIN, ROLE_TEACHER, ROLE_ASSISTANT}:
+    if course_role in {ROLE_ADMIN, ROLE_TEACHER}:
         return action in {"read", "create", "update", "review"}
     if course_role == "student":
         return action in {"read", "create"} and obj.object_type in {
@@ -52,8 +54,6 @@ def can_access_object(
             "learning_path",
             "assessment",
         }
-    if role == ROLE_VISITOR:
-        return action == "read" and obj.visibility == "public"
     return False
 
 

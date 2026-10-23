@@ -22,10 +22,10 @@ const feedback = ref({ completed: true, accuracy: 67, help_requests: 1, self_rep
 const capabilities = ['lesson.generate_verified', 'lab_guide.generate_verified', 'tiered_quiz.generate_verified']
 const resourceTabs = [
   { type: 'lesson', label: '讲义', icon: BookOpen },
-  { type: 'lab_guide', label: '实操指南', icon: FlaskConical },
+  { type: 'lab_guide', label: '实训任务书', icon: FlaskConical },
   { type: 'tiered_quiz', label: '分阶测试', icon: ClipboardCheck },
 ]
-const stepLabels = ['讲义', '实操指南', '分阶测试', '质量检查']
+const stepLabels = ['讲义', '实训任务书', '分阶测试', '质量检查']
 const context = computed(() => baseline.value?.generation_context || null)
 const target = computed(() => baseline.value?.target_knowledge_point_title || '未装配')
 const resourceMap = computed(() => Object.fromEntries((bundle.value?.resources || []).map(item => [item.artifact_type, item])))
@@ -164,8 +164,8 @@ onMounted(load)
       </div>
       <div class="head-actions">
         <button class="icon-button" title="刷新" aria-label="刷新" :disabled="loading" @click="load"><RefreshCw :size="16" /></button>
-        <button v-if="!task" class="primary-command" :disabled="action" @click="createTask"><Play :size="15" />创建任务</button>
-        <button v-else-if="canGenerate" class="primary-command" :disabled="action" @click="continueGeneration">
+        <button v-if="!task" class="primary-command" :disabled="Boolean(action)" @click="createTask"><Play :size="15" />创建任务</button>
+        <button v-else-if="canGenerate" class="primary-command" :disabled="Boolean(action)" @click="continueGeneration">
           <LoaderCircle v-if="action === 'generate'" class="spin" :size="15" />
           <Play v-else :size="15" />{{ action === 'generate' ? '处理中' : '生成并检查' }}
         </button>
@@ -233,7 +233,7 @@ onMounted(load)
           <label><span>正确率 <strong>{{ feedback.accuracy }}%</strong></span><input v-model="feedback.accuracy" type="range" min="0" max="100" step="1" /></label>
           <label><span>求助次数</span><input v-model.number="feedback.help_requests" type="number" min="0" max="100" /></label>
           <label><span>主观难度</span><select v-model.number="feedback.self_reported_difficulty"><option v-for="value in 5" :key="value" :value="value">{{ value }}</option></select></label>
-          <button class="primary-command" :disabled="!canSubmitFeedback || action" @click="sendFeedback"><Send :size="15" />{{ action === 'feedback' ? '提交中' : '提交反馈' }}</button>
+          <button class="primary-command" :disabled="!canSubmitFeedback || Boolean(action)" @click="sendFeedback"><Send :size="15" />{{ action === 'feedback' ? '提交中' : '提交反馈' }}</button>
         </div>
         <div v-else class="decision-row">
           <div><strong>{{ decision?.execution_impact?.recommended_candidate || 'collect_more_evidence' }}</strong><span>候选决策 · {{ decision?.status || 'proposed' }}</span></div>

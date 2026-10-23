@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import re
 import uuid
@@ -17,6 +18,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.database import DBWebSearchHistory, run_db_op
 from app.legacy_repositories import LegacyReadRepository
+from app.legacy_migration_governance import (
+    ActivityExecutionSearchCanonicalReader,
+    observe_legacy_shadow_read,
+    project_web_search_rows,
+)
+from app.m5_legacy_calls import audited_legacy_text_call
 from app.auth import enforce_student_access, get_current_user
 from document_parser import chunk_document
 from rag_engine import hybrid_rag
@@ -43,6 +50,14 @@ _search_cache: TTLBoundedCache[str, tuple[float, list[dict[str, str]]]] = TTLBou
     ttl_seconds=CONFIG.cache_ttl_seconds,
 )
 _SEARCH_CACHE_TTL = 300  # 5分钟
+
+
+class WebSearchResults(list[dict[str, str]]):
+    """List-compatible search results with an honest provider outcome."""
+
+    def __init__(self, items=(), *, status: str = "ready"):
+        super().__init__(items)
+        self.status = status
 
 
 @router.post("/search")
@@ -205,7 +220,20 @@ async def web_search(
         )
 
         try:
-            summary = await llm.generate(system_prompt, user_prompt, role="极客助教")
+            summary = await audited_legacy_text_call(
+                llm,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                role="极客助教",
+                operation="web_search_summary",
+                capability="summarize",
+                owner_public_id=current_user.public_id,
+                input_summary={
+                    "query_chars": len(query),
+                    "result_count": len(final_structured_results),
+                    "result_text_included": False,
+                },
+            )
         except Exception:
             summary = f"已搜索到 {len(final_structured_results)} 条关于 '{query}' 的结果"
 
@@ -285,7 +313,7 @@ def _is_result_relevant(query: str, title: str, snippet: str) -> bool:
     return True
 
 
-async def _perform_web_search(query: str, max_results: int = 5) -> list[dict[str, str]]:
+async def _perform_web_search(query: str, max_results: int = 5) -> WebSearchResults:
     import httpx
 
     candidates = _get_optimized_query_candidates(query)
@@ -295,11 +323,15 @@ async def _perform_web_search(query: str, max_results: int = 5) -> list[dict[str
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
 
+    provider_attempts = 0
+    provider_successes = 0
+
     for candidate in candidates:
         encoded_q = urllib.parse.quote(candidate)
         results = []
 
         # 尝试 1: DuckDuckGo Lite 搜索
+        provider_attempts += 1
         try:
             async with httpx.AsyncClient(timeout=10.0, trust_env=False, follow_redirects=True) as client:
                 resp = await client.post(
@@ -308,6 +340,7 @@ async def _perform_web_search(query: str, max_results: int = 5) -> list[dict[str
                     headers=headers,
                 )
                 if resp.status_code == 200:
+                    provider_successes += 1
                     resp.encoding = "utf-8"
                     results = _parse_duckduckgo_lite_html(resp.text, max_results * 2)
         except Exception:
@@ -315,11 +348,13 @@ async def _perform_web_search(query: str, max_results: int = 5) -> list[dict[str
 
         # 尝试 2: Bing CN 引擎
         if not results:
+            provider_attempts += 1
             try:
                 search_url = f"https://cn.bing.com/search?q={encoded_q}&count=50"
                 async with httpx.AsyncClient(timeout=10.0, trust_env=False, follow_redirects=True) as client:
                     resp = await client.get(search_url, headers=headers)
                     if resp.status_code == 200:
+                        provider_successes += 1
                         resp.encoding = "utf-8"
                         results = _parse_bing_html(resp.text, max(max_results * 2, 20))
             except Exception as e:
@@ -327,11 +362,13 @@ async def _perform_web_search(query: str, max_results: int = 5) -> list[dict[str
 
         # 尝试 3: Baidu 引擎
         if not results:
+            provider_attempts += 1
             try:
                 search_url = f"https://www.baidu.com/s?wd={encoded_q}&rn=30"
                 async with httpx.AsyncClient(timeout=10.0, trust_env=False, follow_redirects=True) as client:
                     resp = await client.get(search_url, headers=headers)
                     if resp.status_code == 200:
+                        provider_successes += 1
                         resp.encoding = "utf-8"
                         results = _parse_baidu_html(resp.text, max(max_results * 2, 20))
             except Exception as e:
@@ -343,13 +380,77 @@ async def _perform_web_search(query: str, max_results: int = 5) -> list[dict[str
                 r for r in results if _is_result_relevant(query, r.get("title", ""), r.get("snippet", ""))
             ]
             if relevant_results:
-                return relevant_results[:max_results]
+                valid_results = [
+                    r for r in relevant_results
+                    if _public_search_url(r.get("url"))
+                ]
+                if valid_results:
+                    return WebSearchResults(valid_results[:max_results], status="ready")
 
-    return [{
-        "title": f"关于 '{query}' 的搜索结果",
-        "url": "",
-        "snippet": f"已收录关于 {query} 的知识，将在问答中直接应用。"
-    }]
+    status = "provider_failed" if provider_attempts and provider_successes == 0 else "no_results"
+    return WebSearchResults(status=status)
+
+
+def _public_search_url(value: Any) -> str:
+    url = str(value or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return ""
+    if parsed.username or parsed.password:
+        return ""
+    return parsed.geturl()
+
+
+def _parse_youtube_search_html(html: str, max_results: int = 5) -> list[dict[str, str]]:
+    """Extract concrete video pages from the public YouTube search response."""
+    pattern = re.compile(
+        r'"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"'
+        r'.{0,2400}?"title":\{"runs":\[\{"text":"((?:\\.|[^"\\])*)"',
+        re.DOTALL,
+    )
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for video_id, raw_title in pattern.findall(html):
+        if video_id in seen:
+            continue
+        try:
+            title = str(json.loads(f'"{raw_title}"')).strip()
+        except (json.JSONDecodeError, TypeError):
+            title = raw_title.replace('\\"', '"').strip()
+        if not title:
+            continue
+        seen.add(video_id)
+        results.append({
+            "title": title,
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "snippet": title,
+        })
+        if len(results) >= max(1, int(max_results or 5)):
+            break
+    return results
+
+
+async def _search_youtube_videos(query: str, max_results: int = 5) -> list[dict[str, str]]:
+    """Use the live public YouTube result page when other video providers return no items."""
+    try:
+        import httpx
+
+        search_url = (
+            "https://www.youtube.com/results?search_query="
+            f"{urllib.parse.quote(_clean_search_query(query))}"
+        )
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        }
+        async with httpx.AsyncClient(timeout=15.0, trust_env=True, follow_redirects=True) as client:
+            response = await client.get(search_url, headers=headers)
+        if response.status_code != 200:
+            return []
+        return _parse_youtube_search_html(response.text, max_results=max_results)
+    except Exception as exc:
+        print(f"  [search_videos] YouTube search failed: {exc}")
+        return []
 
 
 def _parse_duckduckgo_lite_html(html: str, max_results: int) -> list[dict[str, str]]:
@@ -552,7 +653,20 @@ async def load_url(
         llm = await _get_llm(request)
         system_prompt = "你是一个知识提取助手。请从以下网页内容中提取关键知识要点。以中文回复，分点列出。"
         user_prompt = f"URL: {url}\n标题: {title}\n\n内容摘要:\n{text_content[:3000]}"
-        summary = await llm.generate(system_prompt, user_prompt, role="极客助教")
+        summary = await audited_legacy_text_call(
+            llm,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            role="极客助教",
+            operation="url_content_summary",
+            capability="summarize",
+            owner_public_id=current_user.public_id,
+            input_summary={
+                "content_chars": min(len(text_content), 3000),
+                "source_host": parsed.netloc[:253],
+                "web_content_included": False,
+            },
+        )
     except Exception:
         summary = f"已从 {url} 加载内容并索引"
 
@@ -610,7 +724,16 @@ async def get_search_history(
 ) -> list[dict[str, Any]]:
     student_id = enforce_student_access(student_id, current_user)
     def fetch_history(session):
-        return LegacyReadRepository(session).web_search_history(student_id, limit=limit)
+        records = LegacyReadRepository(session).web_search_history(student_id, limit=limit)
+        observe_legacy_shadow_read(
+            session,
+            chain_id="activity-execution-search",
+            legacy_result=records,
+            canonical_loader=lambda: ActivityExecutionSearchCanonicalReader(session).web_search_history(student_id, limit=limit),
+            legacy_projector=project_web_search_rows,
+            actor_public_id=current_user.public_id,
+        )
+        return records
         
     records = await run_db_op(fetch_history)
     return [
@@ -806,10 +929,10 @@ def to_embedded_player_url(url: str) -> str:
     if "bilibili.com" in url_lower or "b23.tv" in url_lower:
         bvid_match = re.search(r'(BV[a-zA-Z0-9]{10})', url, re.IGNORECASE)
         if bvid_match:
-            return f"//player.bilibili.com/player.html?bvid={bvid_match.group(1)}&high_quality=1&as_wide=1"
+            return f"https://player.bilibili.com/player.html?bvid={bvid_match.group(1)}&high_quality=1&as_wide=1"
         avid_match = re.search(r'/av([0-9]+)', url, re.IGNORECASE)
         if avid_match:
-            return f"//player.bilibili.com/player.html?aid={avid_match.group(1)}&high_quality=1&as_wide=1"
+            return f"https://player.bilibili.com/player.html?aid={avid_match.group(1)}&high_quality=1&as_wide=1"
             
     # 2. YouTube 视频链接适配
     if "youtube.com" in url_lower or "youtu.be" in url_lower:
@@ -937,7 +1060,15 @@ async def search_videos(query: str, max_results: int = 5) -> list[dict]:
                     search_results = search_results + generic_results
                 except Exception:
                     pass
-        
+
+        # B 站可能因地区或反爬策略返回 412；当实时搜索引擎也没有候选时，
+        # 继续从当前查询请求 YouTube 的公开搜索页，仍只接受具体视频页面。
+        if not search_results:
+            youtube_results = await _search_youtube_videos(query, max_results=max_results)
+            if youtube_results:
+                search_results = youtube_results
+                network_online = True
+
         for r in search_results:
             url = r.get("url", "")
             title = r.get("title", "")
@@ -996,91 +1127,8 @@ async def search_videos(query: str, max_results: int = 5) -> list[dict]:
     except Exception as e:
         print(f"  [search_videos] Online video search failed: {e}")
 
-    # 3. 确保至少推荐一个在线视频（网络连通时）
-    has_online = any(v["source"] in ("B站视频", "YouTube", "腾讯视频", "优酷视频", "网络视频") for v in online_videos)
-    if not has_online and network_online:
-        fallback_keyword = "卷积神经网络" if any(k in query.lower() for k in ("卷积", "池化", "cnn", "pooling")) else "机器学习"
-        print(f"  [search_videos] No online video found for '{query}'. Running real-time fallback search for '{fallback_keyword}'...")
-        fallback_results = []
-        try:
-            import uuid
-            import random
-            import httpx
-            import urllib.parse
-            buvid3 = f"{str(uuid.uuid4()).upper()}{''.join(str(random.randint(0, 9)) for _ in range(5))}infoc"
-            bili_api_url = (
-                f"https://api.bilibili.com/x/web-interface/search/type"
-                f"?search_type=video&keyword={urllib.parse.quote(fallback_keyword)}&page=1&page_size=5"
-            )
-            bili_headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": "https://www.bilibili.com/",
-                "Origin": "https://www.bilibili.com",
-                "Cookie": f"buvid3={buvid3}"
-            }
-            async with httpx.AsyncClient(timeout=6.0, trust_env=False) as client:
-                resp = await client.get(bili_api_url, headers=bili_headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("code") == 0:
-                        for item in data.get("data", {}).get("result", []):
-                            bvid = item.get("bvid", "")
-                            aid = item.get("aid")
-                            title = item.get("title", "").replace('<em class="keyword">', "").replace("</em>", "")
-                            desc = item.get("description", "")[:200]
-                            url = f"https://www.bilibili.com/video/{bvid}" if bvid else f"https://www.bilibili.com/video/av{aid}"
-                            fallback_results.append({
-                                "title": title,
-                                "url": url,
-                                "snippet": desc
-                            })
-        except Exception as e:
-            print(f"  [search_videos] Fallback Bilibili API failed: {e}")
-            
-        if not fallback_results:
-            try:
-                fallback_results = await _perform_web_search(f"{fallback_keyword} site:bilibili.com", 5)
-            except Exception as e:
-                print(f"  [search_videos] Fallback search engine failed: {e}")
-                
-        for r in fallback_results:
-            url = r.get("url", "")
-            title = r.get("title", "")
-            snippet = r.get("snippet", "")
-            if url:
-                url_lower = url.lower()
-                is_valid = "/video/" in url_lower or "/watch?" in url_lower or "embed" in url_lower or "/video/bv" in url_lower
-                if is_valid:
-                    embed_url = to_embedded_player_url(url)
-                    clean_title = re.sub(r"_哔哩哔哩_bilibili|_bilibili", "", title).strip()
-                    online_videos.append({
-                        "title": clean_title,
-                        "url": embed_url,
-                        "source": "B站视频" if "bilibili" in url_lower else "网络视频",
-                        "description": snippet
-                    })
-                    break  # Take the first one (highest score/relevance)
-
-    # 4. 网络不通时使用静态保底视频
-    if not network_online:
-        is_cnn = any(k in query.lower() for k in ("卷积", "池化", "cnn", "pooling"))
-        if is_cnn:
-            static_fallback = {
-                "title": "卷积神经网络 (CNN) - 3Blue1Brown 经典模型直观演示",
-                "url": "//player.bilibili.com/player.html?bvid=BV1xx411c7m9&high_quality=1&as_wide=1",
-                "source": "B站视频",
-                "description": "3Blue1Brown 制作的经典卷积神经网络可视化视频，生动展示了卷积、池化与特征提取 of 直观过程。"
-            }
-        else:
-            static_fallback = {
-                "title": "【西瓜书】周志华《机器学习》全套微课精讲",
-                "url": "//player.bilibili.com/player.html?bvid=BV1ks2bYGETs&high_quality=1&as_wide=1",
-                "source": "B站视频",
-                "description": "经典周志华《机器学习》（西瓜书）全套知识体系与公式推导微课视频。"
-            }
-        online_videos.append(static_fallback)
-
-    # 5. 合并列表并去重，同时保证相关度评分最高的那个在线视频（即 online_videos[0]）处于最前面
+    # 3. 合并列表并去重。网络不可用或无相关结果时返回空列表，
+    #    由调用方显示真实失败/空状态；不再注入固定占位视频。
     unique_videos = []
     seen_urls = set()
     

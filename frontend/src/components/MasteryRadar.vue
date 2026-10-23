@@ -14,6 +14,73 @@ const props = defineProps({
 
 const chartRef = ref(null)
 let chartInstance = null
+let hoveredDimensionIndex = -1
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[char])
+}
+
+function currentSeriesDataIndex() {
+  return props.showComparison ? 3 : 2
+}
+
+function dimensionIndexFromEvent(params) {
+  const dimensionIndex = params?.event?.target?.__dimIdx
+  return Number.isInteger(dimensionIndex) ? dimensionIndex : -1
+}
+
+function hideRadarTooltip() {
+  hoveredDimensionIndex = -1
+  chartInstance?.dispatchAction({ type: 'hideTip' })
+}
+
+function handleRadarMouseOver(params) {
+  const dimensionIndex = dimensionIndexFromEvent(params)
+  if (
+    dimensionIndex < 0 ||
+    dimensionIndex >= props.concepts.length ||
+    params?.dataIndex !== currentSeriesDataIndex()
+  ) {
+    return
+  }
+
+  hoveredDimensionIndex = dimensionIndex
+  chartInstance?.dispatchAction({
+    type: 'showTip',
+    seriesIndex: params.seriesIndex ?? 0,
+    dataIndex: currentSeriesDataIndex(),
+    position: [params.event.offsetX, params.event.offsetY]
+  })
+}
+
+function handleRadarMouseOut(params) {
+  if (dimensionIndexFromEvent(params) >= 0) {
+    hideRadarTooltip()
+  }
+}
+
+function handleRadarGlobalOut() {
+  hideRadarTooltip()
+}
+
+function disposeChart() {
+  if (!chartInstance) {
+    hoveredDimensionIndex = -1
+    return
+  }
+  chartInstance.off('mouseover', handleRadarMouseOver)
+  chartInstance.off('mouseout', handleRadarMouseOut)
+  chartInstance.off('globalout', handleRadarGlobalOut)
+  chartInstance.dispose()
+  chartInstance = null
+  hoveredDimensionIndex = -1
+}
 
 function buildOption(useZeroValues = false) {
   const names = props.concepts.map(c => c.name)
@@ -40,9 +107,9 @@ function buildOption(useZeroValues = false) {
   seriesData.push({
     value: upperBounds,
     name: '置信度上限 (测不准偏差)',
-    areaStyle: { color: 'rgba(99, 102, 241, 0.09)' },
-    lineStyle: { color: 'rgba(99, 102, 241, 0.25)', type: 'dashed', width: 1 },
-    itemStyle: { color: 'rgba(99, 102, 241, 0.4)' },
+    areaStyle: { color: 'rgba(37, 55, 69, 0.09)' },
+    lineStyle: { color: 'rgba(37, 55, 69, 0.28)', type: 'dashed', width: 1 },
+    itemStyle: { color: 'rgba(37, 55, 69, 0.45)' },
     symbol: 'none'
   })
 
@@ -51,8 +118,8 @@ function buildOption(useZeroValues = false) {
     value: lowerBounds,
     name: '置信度下限',
     areaStyle: { color: 'rgba(255, 255, 255, 0.85)' },
-    lineStyle: { color: 'rgba(99, 102, 241, 0.25)', type: 'dashed', width: 1 },
-    itemStyle: { color: 'rgba(99, 102, 241, 0.4)' },
+    lineStyle: { color: 'rgba(37, 55, 69, 0.28)', type: 'dashed', width: 1 },
+    itemStyle: { color: 'rgba(37, 55, 69, 0.45)' },
     symbol: 'none'
   })
 
@@ -72,9 +139,9 @@ function buildOption(useZeroValues = false) {
   seriesData.push({
     value: currentValues,
     name: '当前掌握度 (BKT卡尔曼估计值)',
-    areaStyle: { color: 'rgba(99, 102, 241, 0.12)' },
-    lineStyle: { color: '#6366f1', width: 2.5, shadowBlur: 6, shadowColor: 'rgba(99, 102, 241, 0.5)' },
-    itemStyle: { color: '#6366f1' },
+    areaStyle: { color: 'rgba(91, 64, 48, 0.12)' },
+    lineStyle: { color: '#253745', width: 2.5 },
+    itemStyle: { color: '#253745' },
     symbol: 'circle',
     symbolSize: 6
   })
@@ -89,8 +156,9 @@ function buildOption(useZeroValues = false) {
       center: ['50%', '52%'],
       splitNumber: 4,
       axisName: {
-        color: '#64748b',
-        fontSize: 10,
+        show: false,
+        color: '#4a5c6a',
+        fontSize: 14,
         padding: [2, 4],
       },
       axisNameGap: 5,
@@ -104,7 +172,7 @@ function buildOption(useZeroValues = false) {
       show: props.showComparison,
       data: legendData,
       bottom: 0,
-      textStyle: { color: '#94a3b8', fontSize: 10 },
+      textStyle: { color: '#60727c', fontSize: 14 },
       itemWidth: 12,
       itemHeight: 8,
     },
@@ -114,30 +182,25 @@ function buildOption(useZeroValues = false) {
     }],
     tooltip: {
       trigger: 'item',
+      triggerOn: 'none',
       confine: true,
-      enterable: true,
-      hideDelay: 400,
       backgroundColor: 'rgba(15, 23, 42, 0.95)',
       borderWidth: 0,
       textStyle: { color: '#fff' },
-      formatter: (params) => {
-        return `<div style="padding: 6px; font-size: 10px; font-family: sans-serif; max-width: 280px;">
-          <div style="font-weight: 600; margin-bottom: 6px; color: #cbd5e1; border-b: 1px solid rgba(255,255,255,0.15); padding-bottom: 4px;">
-            ${props.showComparison ? '掌握度对比' : '当前能力状态'}
-          </div>
-          <div style="max-height: 130px; overflow-y: auto; display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 12px; padding-right: 4px;">
-            ${props.concepts.map((c, i) => {
-              const curVal = currentValues[i].toFixed(0)
-              const initVal = initialValues[i].toFixed(0)
-              return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px dashed rgba(255,255,255,0.05); padding-bottom: 2px;">
-                <span style="color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70px;" title="${c.name}">${c.name}</span>
-                ${props.showComparison 
-                  ? `<span style="font-weight: 500; font-size: 9px; white-space: nowrap;">${initVal}%→<span style="color: #60a5fa; font-weight: 700;">${curVal}%</span></span>`
-                  : `<span style="font-weight: 700; color: #60a5fa; white-space: nowrap;">${curVal}%</span>`
-                }
-              </div>`
-            }).join('')}
-          </div>
+      formatter: () => {
+        const concept = props.concepts[hoveredDimensionIndex]
+        if (!concept) return ''
+
+        const curVal = currentValues[hoveredDimensionIndex].toFixed(0)
+        const initVal = initialValues[hoveredDimensionIndex].toFixed(0)
+        const name = escapeHtml(concept.name)
+        const value = props.showComparison
+          ? `${initVal}% → ${curVal}%`
+          : `${curVal}%`
+
+        return `<div style="padding: 8px 10px; font-size: 14px; font-family: sans-serif; max-width: 260px;">
+          <div style="font-weight: 600; margin-bottom: 6px; color: #f8fafc;">${name}</div>
+          <div style="color: #cbd5e1;">掌握度：<span style="font-weight: 700; color: #fff;">${value}</span></div>
         </div>`
       },
     },
@@ -152,11 +215,11 @@ function initChart() {
   const height = chartRef.value.clientHeight
   if (width === 0 || height === 0) return // Skip initialization if element is hidden/has zero size
   
-  if (chartInstance) {
-    chartInstance.dispose()
-    chartInstance = null
-  }
+  disposeChart()
   chartInstance = echarts.init(chartRef.value)
+  chartInstance.on('mouseover', handleRadarMouseOver)
+  chartInstance.on('mouseout', handleRadarMouseOut)
+  chartInstance.on('globalout', handleRadarGlobalOut)
   chartInstance.setOption(buildOption(true))
   setTimeout(() => {
     if (chartInstance) {
@@ -200,10 +263,7 @@ onUnmounted(() => {
     resizeObserver.disconnect()
     resizeObserver = null
   }
-  if (chartInstance) {
-    chartInstance.dispose()
-    chartInstance = null
-  }
+  disposeChart()
 })
 
 watch(() => props.concepts, (newVal) => {
@@ -216,10 +276,7 @@ watch(() => props.concepts, (newVal) => {
       }
     })
   } else {
-    if (chartInstance) {
-      chartInstance.dispose()
-      chartInstance = null
-    }
+    disposeChart()
   }
 }, { deep: true })
 
@@ -233,7 +290,7 @@ watch(() => props.showComparison, () => {
 <template>
   <div class="w-full h-full min-h-[200px]">
     <div v-show="props.concepts && props.concepts.length > 0" ref="chartRef" class="w-full h-full min-h-[200px]" />
-    <div v-if="!props.concepts || props.concepts.length === 0" class="flex flex-col items-center justify-center min-h-[200px] text-xs text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200 p-4 text-center h-full">
+    <div v-if="!props.concepts || props.concepts.length === 0" class="flex flex-col items-center justify-center min-h-[200px] text-sm text-slate-500 bg-[#f3f6f6] rounded-lg border border-dashed border-[#ccd0cf] p-4 text-center h-full">
       <span class="font-medium text-slate-500 mb-1">能力掌握度雷达图</span>
       <span>完成对话后将动态更新您的能力状态</span>
     </div>

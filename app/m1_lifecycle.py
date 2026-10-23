@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import func
 
+from app.audit_log import record_backend_audit
 from app.database import (
     DBAuditLog,
     DBArtifact,
@@ -35,18 +36,17 @@ def record_audit(
     object_type: str, object_id: str, trace_id: str | None = None,
     outcome: str = "success", metadata: dict[str, Any] | None = None
 ) -> DBAuditLog:
-    sanitized = {
-        key: value for key, value in (metadata or {}).items()
-        if key.lower() not in {"password", "token", "api_key", "secret", "content"}
-    }
-    row = DBAuditLog(
-        actor_public_id=actor_public_id, action=action, object_type=object_type,
-        object_id=object_id, trace_id=trace_id or f"trace-{uuid.uuid4().hex}",
-        outcome=outcome, metadata_json=sanitized
+    return record_backend_audit(
+        session,
+        actor_public_id=actor_public_id,
+        action=action,
+        object_type=object_type,
+        object_id=object_id,
+        trace_id=trace_id,
+        outcome=outcome,
+        context=metadata,
+        reject_sensitive=False,
     )
-    session.add(row)
-    session.flush()
-    return row
 
 
 def add_plan_version(

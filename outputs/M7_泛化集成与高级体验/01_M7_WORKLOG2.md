@@ -1,23 +1,26 @@
 # EduMatrix M7 WORKLOG2
 
-## WL2-M7-20260728-002 - 受限垂直领域插件契约
+## WL2-M7-20260803-002 - xAPI 集成沙箱闭环与 M7 比赛范围退出
 
-- 状态：`PARTIAL`（M7-007/009）。
-- 契约：新增 `edumatrix.domain-plugin.v1`，声明稳定插件/领域 ID、SemVer、许可、数据资产、受支持正式工件 checker 和白名单动作。
-- 安全边界：插件是声明式数据包，不加载 Python；Schema 强制 `requires_network=false`、`requires_secrets=false`、`executable_code=false`，动作只允许校验数据、注册领域和注册 checker。
-- 完整性：资产只能是安全相对路径，限制为 JSON/Markdown/CSV；验证文件存在、SHA-256、字节数，JSON 资产还必须可解析；路径穿越、重复资产、篡改和越权能力均拒绝。
-- 验证：插件 2 项、xAPI/outbox 3 项、企业门禁 7 项合计 `12 passed`。
-- 真实声明：测试构造的 robotics JSON 只用于验证契约，不是正式第二领域数据包，不能视为 M7-008 第二领域迁移通过。正式注册/卸载、兼容性矩阵、领域包 UI 和无复制迁移报告仍待实现。
-- 时间：2026-07-28（Asia/Shanghai）。
+- 状态：`PASS（M7-005 比赛子集；M7-010）`。M7 总状态更新为 `COMPETITION_READY / FULL_SCOPE_DEFERRED`；真实 LRS/cmi5/SSO/HR/LMS、公共市场和空间画布不写成完成。
+- 正式事件链：新增认证 M7 API 和 `/integration-sandbox` 管理员工作台，复用 M6 教师干预生成的正式 `teacher_confirmed` 学习事件。入队前验证事件所有者是目标组织的有效成员，跨组织事件返回 409，普通学员访问返回 403。
+- xAPI 与 outbox：事件映射为最小 xAPI 语句，组织、目标、事件和映射版本形成幂等交付；重复入队返回原记录。外部失败只更新 `integration_deliveries` 的状态、尝试次数、错误码和下次重试时间，不修改本地学习事件。
+- 模拟边界：首批发送器明确是 `local_simulation`。工作台显示 `network_sent=false` 和“真实 LRS 兼容性未声明”；没有读取外部凭证或发送网络请求。
+- 自动验证：原 xAPI/outbox 3 项、受限插件 2 项和新增 API 4 项合计 `9 passed, 5 warnings`；项目全量 `545 passed, 6 warnings in 101.43s`；Vue 生产构建 `3114 modules transformed` 成功，仅保留既有大 chunk 警告。
+- 浏览器证据：`evidence/integration-sandbox-e2e-20260803/` 使用隔离 SQLite 和本机无头 Chromium，完成正式教师事件、xAPI 入队、幂等重放、模拟 LRS 失败、本地证据保持、恢复送达和 390×844 移动端。最终状态 `delivered`、尝试 2 次、SQLite integrity `ok`；manifest 中 8 个文件 SHA-256 全部复核通过。
+- 视觉检查：桌面失败态清楚显示错误码、幂等键、本地事件未改变和恢复命令；移动端采用纵向信息带与堆叠事件行，无重叠，已送达状态可见。
+- 试错记录：首次 E2E 的失败状态已写入数据库，但路由在 `run_db_op` 关闭会话后读取 ORM 交付对象，触发 `DetachedInstanceError` 并返回 500。改为在数据库操作闭包内序列化响应，并新增模拟会话剥离的回归测试；没有修改 outbox 权限或状态规则。全量回归第一次调用因工具超时设为 1 秒而在收集早期终止，使用 240 秒上限重新运行后 545 项全部通过。
+- 插件结论：受限数据插件 manifest、hash、路径和能力边界继续作为已测试契约；尚无注册/导入/参考领域的评委闭环，因此不提升为完整插件框架声明。
+- 下一步：M7 不因全量延期项常规重开。主线进入 M8，先用最新 M3-M7 关闭证据修订旧 M8 索引和最终退出审计，再完成可自主执行的安全、部署、浏览器与交付门禁。
+- 时间：2026-08-03（Asia/Shanghai）。
 
-## WL2-M7-20260728-001 - xAPI 映射与可重放企业集成出站箱
+## WL2-M7-20260803-001 - M7 进入与既有集成/插件基线审计
 
-- 状态：`PARTIAL`（M7-005/006/009）。
-- 正式对象：新增 `integration_deliveries`，保存组织、适配器类型/版本、目标、幂等键、内部来源对象、最小化 payload、哈希、状态、尝试次数、错误码、重试时间和投递时间。
-- 迁移：新增 `20260728_011` 幂等建表与索引；空库顺序迁移和注册迁移治理测试均通过。
-- xAPI：将正式学习事件映射为 actor/verb/object/result/context/timestamp，并保留内部事件 ID、课程和 Schema 版本；不复制聊天正文、答案或原始 Prompt。当前映射版本声明为 `xapi-1.0.3-map-v1`。
-- 可靠性：同一组织/目标/内部事件幂等入队；外部失败只更新出站状态并指数退避，达到上限进入 dead letter，不回滚或修改本地学习事件；成功投递为终态。
-- 验证：xAPI/outbox 3 项与企业门禁 7 项合计 `10 passed`；语法、空库迁移和迁移治理均通过。
-- 当前问题：未连接真实 LRS、SSO、HR 或 LMS，也未验证具体客户字段和协议；本批只能声明服务层映射、模拟投递和队列语义，不能声明完整 xAPI/cmi5 或企业兼容。
-- 当前问题：出站 worker、签名 Webhook、服务账号、速率/IP 治理、周期对账、人工修复、cmi5 启动/退出语义尚未实现。
-- 时间：2026-07-28（Asia/Shanghai）。
+- 状态：`IN_PROGRESS`；M6 已按比赛范围退出，M7 成为唯一开发主阶段。
+- 复用基线：`app/m7_integrations.py` 已把正式 `DBLearningEvent` 映射为 xAPI 语句，并以组织、目标和事件版本组成幂等键写入正式 `DBIntegrationDelivery`；外部失败只改变 outbox，不改变本地学习事件。
+- 失败语义：既有实现支持 pending、failed、delivered 和 dead_letter，失败采用有上限的指数退避，delivered 为终态；目前没有实际网络发送器、API、工作台或浏览器证据。
+- 插件基线：`app/m7_plugins.py` 是受限数据契约而非 Python 扩展加载器。它拒绝绝对/穿越路径、资产 hash 篡改、网络、密钥、可执行代码和未声明动作；目前没有注册服务、领域导入、参考插件包或 UI。
+- 已有自动证据：`tests/test_m7_integrations.py` 3 项与 `tests/test_m7_plugins.py` 2 项已包含在最新全量 `541 passed` 中；这些测试只能证明服务契约，不能写成企业 LRS/插件市场已完成。
+- 比赛优先选择：先闭合 `M6 正式学习事件 -> xAPI outbox -> 模拟 LRS 失败 -> 本地权威事件保持 -> 重试成功 -> 审计展示`。真实 SSO/HR/LMS/LRS、公共市场和空间画布保留全量计划，不作为首批阻塞项。
+- 外部数据：本批只读审计，没有网络发送、真实员工数据或密钥读取。
+- 时间：2026-08-03（Asia/Shanghai）。

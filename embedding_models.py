@@ -116,7 +116,7 @@ def _tokens(text: str) -> tuple[str, ...]:
 
 
 class CachingEmbeddingBackend:
-    def __init__(self, backend: EmbeddingBackend):
+    def __init__(self, backend: EmbeddingBackend, *, cache_path: str | None = None):
         self._backend = backend
         self._cache: TTLBoundedCache[str, tuple[float, ...]] = TTLBoundedCache(
             maxsize=CONFIG.cache_max_entries,
@@ -127,7 +127,7 @@ class CachingEmbeddingBackend:
         # Initialize SQLite DB in workspace root
         import os
         import sqlite3
-        self._db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embeddings_cache.db")
+        self._db_path = cache_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "embeddings_cache.db")
         try:
             conn = sqlite3.connect(self._db_path, timeout=10.0)
             with conn:
@@ -138,9 +138,20 @@ class CachingEmbeddingBackend:
         except Exception:
             pass
 
+    def _cache_key(self, text: str) -> str:
+        identity = {
+            "name": str(getattr(self._backend, "name", type(self._backend).__name__)),
+            "model": str(getattr(self._backend, "model_name", getattr(self._backend, "model", ""))),
+            "dim": int(getattr(self._backend, "dim", 0) or 0),
+            "text": text,
+        }
+        canonical = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def embed(self, text: str) -> tuple[float, ...]:
-        if text in self._cache:
-            return self._cache[text]
+        cache_key = self._cache_key(text)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
             
         import sqlite3
         import json
@@ -149,19 +160,19 @@ class CachingEmbeddingBackend:
         try:
             conn = sqlite3.connect(self._db_path, timeout=10.0)
             cursor = conn.cursor()
-            cursor.execute("SELECT vector_json FROM embedding_cache WHERE text = ?", (text,))
+            cursor.execute("SELECT vector_json FROM embedding_cache WHERE text = ?", (cache_key,))
             row = cursor.fetchone()
             conn.close()
             if row:
                 vec = tuple(float(x) for x in json.loads(row[0]))
-                self._cache[text] = vec
+                self._cache[cache_key] = vec
                 return vec
         except Exception:
             pass
             
         # Fallback to computing embedding
         vec = self._backend.embed(text)
-        self._cache[text] = vec
+        self._cache[cache_key] = vec
         
         # Persist to SQLite
         try:
@@ -169,7 +180,7 @@ class CachingEmbeddingBackend:
             with conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO embedding_cache (text, vector_json) VALUES (?, ?)",
-                    (text, json.dumps(vec)),
+                    (cache_key, json.dumps(vec)),
                 )
             conn.close()
         except Exception:
@@ -181,6 +192,13 @@ class CachingEmbeddingBackend:
         q_vec = self.embed(query)
         d_vec = self.embed(document)
         return cosine_similarity(q_vec, d_vec)
+
+    def identity(self) -> dict[str, str | int]:
+        return {
+            "name": str(getattr(self._backend, "name", type(self._backend).__name__)),
+            "model": str(getattr(self._backend, "model_name", getattr(self._backend, "model", ""))),
+            "dim": int(getattr(self._backend, "dim", 0) or 0),
+        }
 
 
 def build_embedding_backend() -> EmbeddingBackend:

@@ -10,6 +10,32 @@ export async function getReviewPlans(studentId) {
   return r.data.due_reviews || r.data.plans || r.data
 }
 
+export async function getReviewSchedule(month, courseId = 'all') {
+  const r = await api.get('/v1/review-schedule', {
+    params: { month, course_id: courseId },
+    headers: buildHeaders(),
+  })
+  return r.data
+}
+
+export async function completeReviewScheduleTask(taskId, payload) {
+  const r = await api.post(
+    `/v1/review-schedule/tasks/${encodeURIComponent(taskId)}/complete`,
+    payload,
+    { headers: buildHeaders() },
+  )
+  return r.data
+}
+
+export async function createReviewResourceJob(taskId, idempotencyKey) {
+  const r = await api.post(
+    `/v1/review-schedule/tasks/${encodeURIComponent(taskId)}/resource-jobs`,
+    { idempotency_key: idempotencyKey },
+    { headers: buildHeaders() },
+  )
+  return r.data
+}
+
 export async function createReviewPlan(studentId, data) {
   const r = await api.post(`/review/${studentId}`, data, { headers: buildHeaders() })
   return r.data
@@ -40,11 +66,12 @@ export async function getCheckinHistory(studentId, concept = '') {
   return r.data
 }
 
-export async function reviewFlashcard(studentId, concept, quality) {
+export async function reviewFlashcard(studentId, concept, quality, cardId = '') {
   const r = await api.post('/flashcard/review', {
     student_id: studentId,
     concept,
     quality,
+    ...(cardId ? { card_id: cardId } : {}),
   }, { headers: buildHeaders() })
   return r.data
 }
@@ -52,6 +79,14 @@ export async function reviewFlashcard(studentId, concept, quality) {
 export async function getDueFlashcards(studentId, maxCount = 20) {
   const r = await api.get('/flashcard/due', {
     params: { student_id: studentId, max_count: maxCount },
+    headers: buildHeaders(),
+  })
+  return r.data
+}
+
+export async function getAllFlashcards(studentId) {
+  const r = await api.get('/flashcard/all', {
+    params: { student_id: studentId },
     headers: buildHeaders(),
   })
   return r.data

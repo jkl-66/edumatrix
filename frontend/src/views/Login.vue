@@ -1,88 +1,156 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { loginUser, registerUser, getStudentProfile } from '../api'
-import { BrainCircuit, LogIn, User, Lock, Eye, EyeOff, UserPlus } from '@lucide/vue'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Eye,
+  EyeOff,
+  GraduationCap,
+  Lock,
+  Presentation,
+  ShieldCheck,
+  User,
+  UserPlus,
+} from '@lucide/vue'
+import { clearAuthSession, getOnboardingStatus, getStudentProfile, loginUser, registerUser } from '../api'
+import { useContextStore } from '../stores/context'
+import { useCourseContextStore } from '../stores/courseContext'
+import { roleLandingPath } from '../utils/roleLanding'
 
 const router = useRouter()
 const route = useRoute()
-const isRegister = ref(false)
 
-// Input Fields
+const roles = [
+  { value: 'student', label: '学生', icon: GraduationCap, destination: '进入个人学习空间' },
+  { value: 'teacher', label: '教师', icon: Presentation, destination: '进入教学工作区' },
+  { value: 'admin', label: '管理员', icon: ShieldCheck, destination: '进入系统管理' },
+]
+
+const demoAccounts = {
+  student: { username: 'lzz', password: '404404aA', label: '学生演示账号' },
+  teacher: { username: 'teacher', password: 'admin123', label: '教师演示账号' },
+  admin: { username: 'demo-admin', password: 'EduMatrix-Demo-2026', label: '管理员演示账号' },
+}
+
+const selectedRole = ref('student')
+const isRegister = ref(false)
 const username = ref('')
 const password = ref('')
 const displayName = ref('')
 const confirmPassword = ref('')
-
 const loading = ref(false)
-const error = ref(route.query.reason === 'session-expired' ? '登录状态已失效，请重新登录' : '')
-const showPwd = ref(false)
+const error = ref(route.query.reason === 'session-expired' ? '登录状态已失效，请重新登录。' : '')
+const showPassword = ref(false)
 
-async function handleAction() {
-  if (isRegister.value) {
-    await register()
-  } else {
-    await login()
+const currentRole = computed(() => roles.find((item) => item.value === selectedRole.value) || roles[0])
+const currentDemo = computed(() => demoAccounts[selectedRole.value])
+
+function setRole(role) {
+  selectedRole.value = role
+  error.value = ''
+}
+
+function useDemoAccount() {
+  const account = currentDemo.value
+  username.value = account.username
+  password.value = account.password
+  error.value = ''
+}
+
+function persistSession(data, fallbackUsername) {
+  clearAuthSession()
+  useContextStore().clear()
+  useCourseContextStore().clear({ keepCourse: false })
+  localStorage.setItem('edumatrix_token', data.access_token)
+  localStorage.setItem('edumatrix_username', data.username || fallbackUsername)
+  localStorage.setItem('edumatrix_display_name', data.display_name || data.username || fallbackUsername)
+  localStorage.setItem('edumatrix_role', data.role || 'student')
+  localStorage.setItem('edumatrix_student_id', data.student_id || data.username || fallbackUsername)
+}
+
+async function routeAfterStudentLogin(data) {
+  try {
+    const status = await getOnboardingStatus()
+    const complete = status.finalized || (!status.featureEnabled && status.legacyComplete)
+      || (!status.exists && status.legacyComplete)
+    if (!complete) {
+      localStorage.removeItem('edumatrix_onboarded')
+      await router.push('/onboarding')
+      return
+    }
+    localStorage.setItem('edumatrix_onboarded', 'true')
+    await router.push(data.landing_path || '/')
+  } catch {
+    try {
+      const profile = await getStudentProfile(data.student_id)
+      if (!profile?.major || !profile?.target_course) {
+        localStorage.removeItem('edumatrix_onboarded')
+        await router.push('/onboarding')
+        return
+      }
+      localStorage.setItem('edumatrix_onboarded', 'true')
+      await router.push('/')
+    } catch {
+      await router.push('/')
+    }
   }
 }
 
 async function login() {
-  if (!username.value.trim() || !password.value.trim()) return
+  const normalizedUsername = username.value.trim()
+  if (!normalizedUsername || !password.value) {
+    error.value = '请输入账号和密码。'
+    return
+  }
+
   loading.value = true
   error.value = ''
   try {
-    const data = await loginUser(username.value.trim(), password.value.trim())
-    localStorage.setItem('edumatrix_token', data.access_token)
-    localStorage.setItem('edumatrix_username', data.username || username.value.trim())
-    localStorage.setItem('edumatrix_display_name', data.display_name || data.username || username.value.trim())
-    localStorage.setItem('edumatrix_role', data.role || 'student')
-    localStorage.setItem('edumatrix_student_id', data.student_id || data.username || username.value.trim())
-    
-    if (data.role === 'teacher') {
-      router.push('/teacher')
-    } else {
-      try {
-        const profile = await getStudentProfile(data.student_id)
-        if (!profile || !profile.major || !profile.target_course) {
-          localStorage.removeItem('edumatrix_onboarded')
-          router.push('/onboarding')
-        } else {
-          localStorage.setItem('edumatrix_onboarded', 'true')
-          router.push('/')
-        }
-      } catch (err) {
-        router.push('/')
-      }
+    const data = await loginUser(normalizedUsername, password.value)
+    const actualRole = data.role || 'student'
+    if (actualRole !== selectedRole.value) {
+      const actual = roles.find((item) => item.value === actualRole)?.label || '其他'
+      error.value = `该账号属于${actual}身份，请切换上方角色后重新登录。`
+      return
     }
-  } catch (e) {
-    error.value = e.response?.data?.detail || '登录失败，请检查用户名和密码'
+
+    persistSession(data, normalizedUsername)
+    if (actualRole === 'student') {
+      await routeAfterStudentLogin(data)
+    } else {
+      await router.push(data.landing_path || roleLandingPath(actualRole))
+    }
+  } catch (requestError) {
+    const detail = requestError?.detail || requestError?.response?.data?.detail
+    error.value = typeof detail === 'string' ? detail : '登录失败，请检查账号和密码。'
   } finally {
     loading.value = false
   }
 }
 
 async function register() {
-  if (!username.value.trim() || !password.value.trim()) return
-  if (password.value !== confirmPassword.value) {
-    error.value = '两次输入的密码不一致'
+  const normalizedUsername = username.value.trim()
+  if (!normalizedUsername || !password.value) {
+    error.value = '请填写用户名和密码。'
     return
   }
+  if (password.value !== confirmPassword.value) {
+    error.value = '两次输入的密码不一致。'
+    return
+  }
+
   loading.value = true
   error.value = ''
   try {
-    const name = displayName.value.trim() || username.value.trim()
-    const data = await registerUser(username.value.trim(), password.value.trim(), name)
-    localStorage.setItem('edumatrix_token', data.access_token)
-    localStorage.setItem('edumatrix_username', data.username || username.value.trim())
-    localStorage.setItem('edumatrix_display_name', data.display_name || name)
-    localStorage.setItem('edumatrix_role', 'student')
-    localStorage.setItem('edumatrix_student_id', data.student_id || data.username || username.value.trim())
+    const name = displayName.value.trim() || normalizedUsername
+    const data = await registerUser(normalizedUsername, password.value, name)
+    persistSession({ ...data, role: 'student' }, normalizedUsername)
     localStorage.removeItem('edumatrix_onboarded')
-    
-    // 新注册学生必须进入初始化向导
-    router.push('/onboarding')
-  } catch (e) {
-    error.value = e.response?.data?.detail || '注册失败，用户名可能已存在且密码需至少4位'
+    await router.push('/onboarding')
+  } catch (requestError) {
+    const detail = requestError?.detail || requestError?.response?.data?.detail
+    error.value = typeof detail === 'string' ? detail : '注册失败，用户名可能已存在。'
   } finally {
     loading.value = false
   }
@@ -90,163 +158,413 @@ async function register() {
 
 function toggleMode() {
   isRegister.value = !isRegister.value
+  selectedRole.value = 'student'
   error.value = ''
   password.value = ''
   confirmPassword.value = ''
 }
+
+function submit() {
+  return isRegister.value ? register() : login()
+}
 </script>
 
 <template>
-  <div class="login-page min-h-screen bg-[#f1f5f2] text-slate-800 flex items-center justify-center p-4 relative overflow-hidden font-sans">
-    <!-- Fine grain overlay -->
-    <div class="absolute inset-0 bg-noise opacity-[0.02] pointer-events-none"></div>
-    
-    <!-- Glow spots -->
-    <div class="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] bg-emerald-200 opacity-[0.24] blur-[180px] rounded-full pointer-events-none ambient-float"></div>
-    <div class="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] bg-sky-200 opacity-[0.22] blur-[180px] rounded-full pointer-events-none ambient-float"></div>
-
-    <div class="w-full max-w-md z-10 relative">
-      <!-- Logo -->
-      <div class="text-center mb-8">
-        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#67e8f9] via-[#60a5fa] to-[#6366f1] flex items-center justify-center mx-auto mb-4 shadow-xl shadow-blue-500/20">
-          <BrainCircuit :size="28" class="text-[#0b0f19]" />
-        </div>
-        <h1 class="text-2xl font-bold tracking-tight text-white">EduMatrix 智教矩阵</h1>
-        <p class="text-xs text-gray-400 mt-1">智能多智能体个性化自适应教育系统</p>
+  <div class="login-page">
+    <header class="login-header">
+      <button type="button" class="back-link" @click="router.push('/landing')">
+        <ArrowLeft :size="17" />
+        返回作品展示
+      </button>
+      <div class="login-brand">
+        <span>E</span>
+        <strong>EduMatrix</strong>
       </div>
+    </header>
 
-      <!-- Login/Register Card -->
-      <div class="bg-[#131c2d]/78 backdrop-blur-xl rounded-3xl border border-white/[0.08] p-8 shadow-2xl shadow-black/30">
-        <div class="space-y-5">
-          <div class="flex items-center justify-between border-b border-white/[0.04] pb-3 mb-2">
-            <span class="text-sm font-bold text-white">{{ isRegister ? '新用户注册' : '账号登录' }}</span>
-            <button @click="toggleMode" class="text-xs text-[#0ea5e9] hover:underline">
-              {{ isRegister ? '已有账号？去登录' : '没有账号？立即注册' }}
-            </button>
-          </div>
+    <main class="login-main">
+      <section class="login-panel" aria-labelledby="login-title">
+        <div class="login-heading">
+          <h1 id="login-title">{{ isRegister ? '开始建立你的学习画像' : '登录 EduMatrix' }}</h1>
+          <span>{{ isRegister ? '注册后进入自然语言画像引导。' : '选择身份后使用账号登录，或一键填入演示账号。' }}</span>
+        </div>
 
-          <div>
-            <label class="text-xs font-medium text-gray-400 mb-1.5 block">用户名 / 账号</label>
-            <div class="relative">
-              <User :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-              <input 
-                v-model="username" 
-                class="w-full pl-9 pr-3 py-2.5 text-sm rounded-xl border border-white/[0.08] bg-[#0d121f] text-white focus:border-[#0ea5e9] focus:ring-2 focus:ring-[#0ea5e9]/10 outline-none transition-all" 
-                :placeholder="isRegister ? '设置用户名' : '请输入用户名'" 
-                @keydown.enter="handleAction" 
-              />
-            </div>
-          </div>
-
-          <!-- Display Name (Nickname) only shown in Registration -->
-          <div v-if="isRegister">
-            <label class="text-xs font-medium text-gray-400 mb-1.5 block">个性化昵称 (选填)</label>
-            <div class="relative">
-              <User :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-              <input 
-                v-model="displayName" 
-                class="w-full pl-9 pr-3 py-2.5 text-sm rounded-xl border border-white/[0.08] bg-[#0d121f] text-white focus:border-[#0ea5e9] focus:ring-2 focus:ring-[#0ea5e9]/10 outline-none transition-all" 
-                placeholder="输入展示的昵称" 
-                @keydown.enter="handleAction" 
-              />
-            </div>
-          </div>
-          
-          <div>
-            <label class="text-xs font-medium text-gray-400 mb-1.5 block">密码</label>
-            <div class="relative">
-              <Lock :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-              <input 
-                v-model="password" 
-                :type="showPwd ? 'text' : 'password'" 
-                class="w-full pl-9 pr-9 py-2.5 text-sm rounded-xl border border-white/[0.08] bg-[#0d121f] text-white focus:border-[#0ea5e9] focus:ring-2 focus:ring-[#0ea5e9]/10 outline-none transition-all" 
-                :placeholder="isRegister ? '设置登录密码' : '请输入密码'" 
-                @keydown.enter="handleAction" 
-              />
-              <button class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300" @click="showPwd = !showPwd">
-                <Eye v-if="!showPwd" :size="14" />
-                <EyeOff v-else :size="14" />
-              </button>
-            </div>
-          </div>
-
-          <!-- Password confirmation only shown in Registration -->
-          <div v-if="isRegister">
-            <label class="text-xs font-medium text-gray-400 mb-1.5 block">确认密码</label>
-            <div class="relative">
-              <Lock :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-              <input 
-                v-model="confirmPassword" 
-                :type="showPwd ? 'text' : 'password'" 
-                class="w-full pl-9 pr-9 py-2.5 text-sm rounded-xl border border-white/[0.08] bg-[#0d121f] text-white focus:border-[#0ea5e9] focus:ring-2 focus:ring-[#0ea5e9]/10 outline-none transition-all" 
-                placeholder="再次输入密码" 
-                @keydown.enter="handleAction" 
-              />
-            </div>
-          </div>
-          
-          <div v-if="error" class="text-xs text-red-400 bg-red-950/40 border border-red-900/30 rounded-lg px-3 py-2.5">
-            {{ error }}
-          </div>
-          
-          <button 
-            class="w-full py-3 text-sm font-semibold rounded-xl bg-gradient-to-r from-[#67e8f9] via-[#60a5fa] to-[#818cf8] text-[#0b1220] hover:brightness-110 hover:-translate-y-0.5 shadow-lg shadow-blue-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-            :disabled="loading || !username.trim() || !password.trim() || (isRegister && !confirmPassword.trim())" 
-            @click="handleAction"
+        <div v-if="!isRegister" class="role-segments" role="tablist" aria-label="登录身份">
+          <button
+            v-for="item in roles"
+            :key="item.value"
+            type="button"
+            role="tab"
+            :aria-selected="selectedRole === item.value"
+            :class="{ active: selectedRole === item.value }"
+            :data-testid="`login-role-${item.value}`"
+            @click="setRole(item.value)"
           >
-            <component :is="isRegister ? UserPlus : LogIn" :size="14" /> 
-            <span>{{ loading ? (isRegister ? '账号创建中...' : '登录中...') : (isRegister ? '创建并启动学习' : '启动学习') }}</span>
+            <component :is="item.icon" :size="17" />
+            {{ item.label }}
           </button>
-          
-          <div class="text-[10px] text-gray-500 text-center leading-relaxed mt-4 border-t border-white/[0.04] pt-4">
-            教师账号: teacher / admin123<br>
-            学生可自行注册或使用演示账号: stu-cs-001 / 123456
-          </div>
         </div>
-      </div>
-    </div>
+
+        <form class="login-form" @submit.prevent="submit">
+          <label v-if="isRegister" class="field-label">
+            <span>显示名称 <small>选填</small></span>
+            <span class="field-control">
+              <User :size="17" />
+              <input v-model.trim="displayName" autocomplete="name" placeholder="例如：林同学" />
+            </span>
+          </label>
+
+          <label class="field-label">
+            <span>账号</span>
+            <span class="field-control">
+              <User :size="17" />
+              <input
+                v-model.trim="username"
+                name="username"
+                autocomplete="username"
+                :placeholder="isRegister ? '设置登录账号' : '请输入账号'"
+                data-testid="login-username"
+              />
+            </span>
+          </label>
+
+          <label class="field-label">
+            <span>密码</span>
+            <span class="field-control">
+              <Lock :size="17" />
+              <input
+                v-model="password"
+                name="password"
+                :type="showPassword ? 'text' : 'password'"
+                :autocomplete="isRegister ? 'new-password' : 'current-password'"
+                :placeholder="isRegister ? '设置登录密码' : '请输入密码'"
+                data-testid="login-password"
+              />
+              <button
+                type="button"
+                class="password-toggle"
+                :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+                :title="showPassword ? '隐藏密码' : '显示密码'"
+                @click="showPassword = !showPassword"
+              >
+                <EyeOff v-if="showPassword" :size="17" />
+                <Eye v-else :size="17" />
+              </button>
+            </span>
+          </label>
+
+          <label v-if="isRegister" class="field-label">
+            <span>确认密码</span>
+            <span class="field-control">
+              <Lock :size="17" />
+              <input v-model="confirmPassword" :type="showPassword ? 'text' : 'password'" autocomplete="new-password" placeholder="再次输入密码" />
+            </span>
+          </label>
+
+          <div v-if="error" class="login-error" role="alert" data-testid="login-error">{{ error }}</div>
+
+          <button type="submit" class="login-submit" :disabled="loading" data-testid="login-submit">
+            <span>{{ loading ? (isRegister ? '正在创建账号' : '正在登录') : (isRegister ? '创建账号并继续' : '登录') }}</span>
+            <UserPlus v-if="isRegister" :size="17" />
+            <ArrowRight v-else :size="17" />
+          </button>
+        </form>
+
+        <details v-if="!isRegister" class="demo-account" open>
+          <summary>演示账号</summary>
+          <div class="demo-account__body">
+            <div>
+              <strong>{{ currentDemo.label }}</strong>
+              <span>{{ currentDemo.username }}</span>
+            </div>
+            <button type="button" data-testid="fill-demo-account" @click="useDemoAccount">填入账号</button>
+          </div>
+        </details>
+
+        <button type="button" class="register-link" @click="toggleMode">
+          {{ isRegister ? '已有账号，返回登录' : '没有学生账号？创建账号' }}
+        </button>
+      </section>
+    </main>
   </div>
 </template>
 
 <style scoped>
 .login-page {
-  color: #243128;
+  display: grid;
+  height: 100vh;
+  grid-template-rows: 64px minmax(0, 1fr);
+  overflow: auto;
+  color: var(--color-text);
+  background: var(--color-page);
 }
 
-.login-page [class*="bg-[#0b1220]"],
-.login-page [class*="bg-[#0d121f]"],
-.login-page [class*="bg-[#131c2d]"] {
-  background-color: rgba(255, 255, 255, 0.92) !important;
+.login-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 40px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
 }
 
-.login-page [class*="text-[#f3f7ff]"],
-.login-page [class*="text-white"] {
-  color: #243128 !important;
+.back-link,
+.register-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  color: var(--color-text-secondary);
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
 }
-.login-page [class*="text-[#0b0f19]"] { color: #ffffff !important; }
 
-.login-page [class*="border-white"] {
-  border-color: #dbe5df !important;
+.back-link:hover,
+.register-link:hover {
+  color: var(--color-text);
 }
 
-.login-page [class*="text-gray-400"] { color: #64756b !important; }
-.login-page [class*="text-gray-500"] { color: #829188 !important; }
-.login-page [class*="text-gray-300"] { color: #52645a !important; }
-.login-page [class*="text-[#0ea5e9]"] { color: #147d68 !important; }
-.login-page [class*="focus:border-[#0ea5e9]"]:focus { border-color: #2d9b7d !important; }
-.login-page [class*="focus:ring-[#0ea5e9]"]:focus { --tw-ring-color: rgba(45, 155, 125, 0.16) !important; }
-.login-page [class*="text-red-400"] { color: #c2414f !important; }
-.login-page [class*="bg-red-950"] { background-color: #fff1f2 !important; }
-.login-page [class*="border-red-900"] { border-color: #fecdd3 !important; }
-.login-page [class*="border-t"] { border-color: #e8efea !important; }
-.login-page button[class*="bg-gradient-to-r"] {
-  color: #ffffff !important;
-  background: #258b70 !important;
-  box-shadow: 0 10px 24px rgba(37, 139, 112, 0.18) !important;
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
 }
-.login-page button[class*="bg-gradient-to-r"]:hover { background: #1f765f !important; }
-.login-page > div[class*="bg-[#131c2d]"] { border-color: #dbe5df !important; }
-.bg-noise {
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+
+.login-brand span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: #ffffff;
+  border-radius: 5px;
+  background: var(--color-accent);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.login-brand strong {
+  font-size: 16px;
+}
+
+.login-main {
+  display: grid;
+  min-height: 704px;
+  place-items: center;
+  padding: 40px;
+}
+
+.login-panel {
+  width: min(100%, 500px);
+  padding: 34px 36px 30px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface);
+  box-shadow: 0 18px 48px rgb(23 23 23 / 7%);
+}
+
+.login-heading p,
+.login-heading h1,
+.login-heading span {
+  margin: 0;
+}
+
+.login-heading p {
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.login-heading h1 {
+  margin-top: 5px;
+  color: var(--color-text);
+  font-size: 28px;
+  font-weight: 680;
+  line-height: 1.35;
+}
+
+.login-heading > span {
+  display: block;
+  margin-top: 6px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.role-segments {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  margin-top: 24px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-subtle);
+}
+
+.role-segments button {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--color-text-secondary);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.role-segments button.active {
+  color: #ffffff;
+  background: var(--color-accent);
+}
+
+.login-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.field-label {
+  display: grid;
+  gap: 7px;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.field-label small {
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.field-control {
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+}
+
+.field-control:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgb(49 91 125 / 10%);
+}
+
+.field-control input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0;
+  color: var(--color-text);
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 15px;
+}
+
+.password-toggle {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: var(--color-text-secondary);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.login-error {
+  padding: 10px 12px;
+  color: #8c3434;
+  border: 1px solid #e5c5c5;
+  border-radius: 6px;
+  background: #fbefef;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.login-submit {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: #ffffff;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-control);
+  background: var(--color-accent);
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.login-submit:hover:not(:disabled) {
+  background: var(--color-text);
+}
+
+.login-submit:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.demo-account {
+  margin-top: 18px;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.demo-account summary {
+  padding: 12px 0;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.demo-account__body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 0 13px;
+}
+
+.demo-account__body > div {
+  display: grid;
+}
+
+.demo-account__body strong,
+.demo-account__body span {
+  font-size: 14px;
+}
+
+.demo-account__body span {
+  color: #85898f;
+}
+
+.demo-account__body button {
+  min-height: 36px;
+  padding: 0 12px;
+  color: var(--color-accent);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-accent-soft);
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.register-link {
+  margin: 18px auto 0;
 }
 </style>

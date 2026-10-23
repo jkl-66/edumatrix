@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
 import uuid
-from typing import Any
+from typing import Any, Literal
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from pydantic import Field
 
-from app.database import DBQuizRecord, DBReviewPlan, DBStudentProfile, get_db, run_db_op
+from app.database import DBQuizRecord, DBReviewPlan, DBStudentProfile, DBUser, DBWrongQuestion, get_db, run_db_op
 from app.auth import enforce_request_student_scope, enforce_student_access, get_current_user
 from app.crud import load_student_profile, save_student_profile
 from app.legacy_repositories import LegacyReadRepository
+from app.legacy_migration_governance import (
+    AssessmentReviewCalibrationCanonicalReader,
+    ActivityExecutionSearchCanonicalReader,
+    observe_legacy_shadow_read,
+    project_checkin_rows,
+    project_model_row,
+)
 from learning_event_bus import (
     LearningEventBus,
     publish_quiz_event,
@@ -21,6 +30,21 @@ from learning_event_bus import (
 from swarm_factory import build_swarm_from_headers
 from code_exec_api import SANDBOX_RUNNER
 from app.m5_assessment import AssessmentEvidenceInput, record_legacy_assessment_evidence
+from app.m5_assessment_core import (
+    AssessmentCoreError,
+    ensure_legacy_misconception_candidate,
+    legacy_quiz_diagnosis_payload,
+    record_legacy_quiz_attempt,
+)
+from app.m2_contracts import StrictModel
+from app.m5_gateway import StreamingModelCallLifecycle
+from app.wrong_question_read_model import (
+    WrongQuestionRedoError,
+    build_wrong_question_read_model,
+    prepare_wrong_question_redo,
+)
+from config import CONFIG
+from llm_client import parse_json_object
 
 # 启动时注册默认事件订阅器
 register_default_subscribers()
@@ -28,6 +52,99 @@ register_default_subscribers()
 router = APIRouter(prefix="/api/quiz", tags=["quiz"], dependencies=[Depends(enforce_request_student_scope)])
 
 import json as _json_mod
+
+
+class QuizGenerationOutput(StrictModel):
+    question: str = Field(min_length=1, max_length=8000)
+    reference_answer: str = Field(min_length=1, max_length=16000)
+    concept: str = Field(min_length=1, max_length=256)
+    difficulty: Literal["easy", "medium", "hard"]
+    hints: list[str] = Field(default_factory=list, max_length=10)
+    options: list[str] = Field(default_factory=list, max_length=20)
+
+
+class GradingBreakdown(StrictModel):
+    key_points_coverage: float = Field(ge=0.0, le=1.0)
+    semantic_correctness: float = Field(ge=0.0, le=1.0)
+    depth_and_detail: float = Field(ge=0.0, le=1.0)
+    clarity_and_logic: float = Field(ge=0.0, le=1.0)
+
+
+class QuizGradingOutput(StrictModel):
+    accuracy_score: float = Field(ge=0.0, le=1.0)
+    ai_confidence: float = Field(ge=0.0, le=1.0)
+    score_breakdown: GradingBreakdown
+    feedback: str = Field(min_length=1, max_length=16000)
+    misconceptions: list[str] = Field(default_factory=list, max_length=50)
+    missing_points: list[str] = Field(default_factory=list, max_length=50)
+    next_action: Literal["review", "practice", "advance"]
+    metacognitive_gap: str = Field(default="", max_length=8000)
+
+
+class SimilarQuizOutput(StrictModel):
+    question: str = Field(min_length=1, max_length=8000)
+    options: list[str] = Field(default_factory=list, max_length=20)
+    correct_answer: str = Field(min_length=1, max_length=16000)
+    explanation: str = Field(min_length=1, max_length=16000)
+    python_validator: str = Field(default="", max_length=16000)
+    difficulty: Literal["easy", "medium", "hard"]
+
+
+async def _call_quiz_model(
+    llm: Any,
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: type[StrictModel],
+    owner_public_id: str,
+    operation: str,
+    trace_id: str,
+    attempt: int = 1,
+    database_runner=run_db_op,
+) -> dict[str, Any]:
+    provider = (
+        "deterministic"
+        if llm.__class__.__name__ == "AsyncDeterministicEducationLLM"
+        else CONFIG.llm_provider
+    )
+    model = getattr(
+        llm,
+        "model",
+        "deterministic" if provider == "deterministic" else CONFIG.llm_model,
+    )
+    lifecycle = StreamingModelCallLifecycle(
+        capability="quiz",
+        prompt_key=f"legacy_quiz_{operation}",
+        prompt_version="1.0",
+        provider=provider or "unknown",
+        model=model or "unknown",
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        owner_public_id=owner_public_id,
+        trace_id=trace_id,
+        input_summary={
+            "operation": operation,
+            "attempt": attempt,
+            "structured_schema": response_model.__name__,
+        },
+        database_runner=database_runner,
+    )
+    await lifecycle.start()
+    try:
+        raw = await llm.generate(system_prompt, user_prompt, role="考官智能体")
+    except asyncio.CancelledError:
+        await asyncio.shield(lifecycle.fail("client_disconnected"))
+        raise
+    except Exception:
+        await lifecycle.fail("quiz_provider_failed")
+        raise
+    try:
+        parsed = response_model.model_validate(parse_json_object(raw))
+    except Exception:
+        await lifecycle.fail("quiz_output_invalid", raw)
+        raise
+    await lifecycle.complete(raw)
+    return parsed.model_dump(mode="json")
 
 
 def _parse_llm_json(text: str) -> dict | None:
@@ -566,10 +683,15 @@ async def generate_quiz(
             "请生成一道完全针对此学生定制的简答题，鼓励学生用自己的话回答。"
         )
         try:
-            response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-            result = _parse_llm_json(response)
-            if not result:
-                raise ValueError("parse failed")
+            result = await _call_quiz_model(
+                llm,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=QuizGenerationOutput,
+                owner_public_id=current_user.public_id,
+                operation="generate",
+                trace_id=f"m5-quiz-{uuid.uuid4().hex}",
+            )
             raw_hints = result.get("hints", [])
             result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
         except Exception:
@@ -765,12 +887,15 @@ async def evaluate_answer(
         user_prompt += "请严格评估并返回JSON。"
 
         try:
-            response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-            result = _parse_llm_json(response)
-            if not result:
-                raise ValueError("parse failed")
-            # === 任务 6: JSON Schema 结构校验，防止 LLM 幻觉输出 ===
-            result = _validate_grading_result(result)
+            result = await _call_quiz_model(
+                llm,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=QuizGradingOutput,
+                owner_public_id=current_user.public_id,
+                operation="grade",
+                trace_id=f"m5-quiz-{uuid.uuid4().hex}",
+            )
         except Exception:
             result = GRADING_FALLBACK.copy()
             result["feedback"] = f"你的答案包含一些正确要点。参考答案:{quiz_record.correct_answer[:100]}..."
@@ -948,6 +1073,23 @@ async def evaluate_answer(
                         profile.weak_points.append(blocking_concept)
                     save_student_profile(session, profile)
                 session.commit()
+                if created:
+                    wrong = session.query(DBWrongQuestion).filter_by(
+                        student_id=student_id,
+                        quiz_record_id=quiz_id,
+                        concept_name=blocking_concept,
+                    ).first()
+                    observe_legacy_shadow_read(
+                        session,
+                        chain_id="assessment-review-calibration",
+                        legacy_result=wrong,
+                        canonical_loader=lambda: AssessmentReviewCalibrationCanonicalReader(session).wrong_question_by_quiz(
+                            student_id, quiz_id, blocking_concept,
+                        ),
+                        legacy_projector=project_model_row,
+                        actor_public_id=current_user.public_id,
+                        mode="canonical_write_postcheck",
+                    )
             
         return profile.concept_mastery.get(local_record.target_concept if local_record else "", 0.5)
 
@@ -956,21 +1098,65 @@ async def evaluate_answer(
     # Canonical dual-write: an immediate quiz answer is contact evidence only.
     def _record_m5_evidence(session):
         local_record = LegacyReadRepository(session).quiz_record(quiz_id, student_id)
+        owner = session.query(DBUser).filter_by(username=student_id).first()
+        if local_record is None or owner is None:
+            raise ValueError("canonical legacy quiz owner or record is missing")
         base_time = local_record.created_at if local_record and local_record.created_at else datetime(2000, 1, 1)
         occurred_at = base_time.replace(tzinfo=timezone.utc) + timedelta(seconds=max(0, attempt_number))
+        assessment_result = record_legacy_quiz_attempt(
+            session,
+            owner_public_id=owner.public_id,
+            quiz_record=local_record,
+            attempt_number=attempt_number,
+            student_answer=student_answer,
+            score=accuracy_score,
+            confidence=student_confidence,
+            duration_seconds=int(duration_seconds) if duration_seconds is not None else None,
+        )
         evidence = AssessmentEvidenceInput(
             idempotency_key=f"legacy-quiz-{quiz_id}-{attempt_number}",
             source_type="quiz_attempt", source_object_id=quiz_id,
-            target_object_type="quiz", target_object_id=quiz_id,
+            attempt_id=assessment_result["attempt_id"],
+            target_object_type="assessment_question_version",
+            target_object_id=assessment_result["question_version_id"],
             occurred_at=occurred_at, correct=accuracy_score >= 0.6,
             confidence=student_confidence,
             actual_minutes=max(0, int(duration_seconds / 60)) if duration_seconds is not None else None,
         )
         evidence_result = record_legacy_assessment_evidence(session, student_id=student_id, evidence=evidence)
+        misconception_result = None
+        if accuracy_score < 0.6:
+            raw_misconceptions = result.get("misconceptions") or []
+            primary_text = str(raw_misconceptions[0]) if raw_misconceptions else "判卷证据不足，需要学习者确认错因"
+            category = (
+                "programming_error" if "代码" in local_record.question or "python" in local_record.question.lower()
+                else "concept_confusion" if raw_misconceptions
+                else "insufficient_evidence"
+            )
+            review, review_created = ensure_legacy_misconception_candidate(
+                session,
+                owner_public_id=owner.public_id,
+                attempt_id=assessment_result["attempt_id"],
+                category=category,
+                rationale=primary_text,
+                evidence={
+                    "source": "legacy_quiz_grading",
+                    "quiz_id": quiz_id,
+                    "accuracy_score": accuracy_score,
+                    "next_action": result.get("next_action", "review"),
+                },
+                model_confidence=ai_confidence,
+            )
+            misconception_result = {
+                "id": review.id,
+                "status": review.status,
+                "candidate_category": review.candidate_category,
+                "created": review_created,
+            }
         session.commit()
-        return evidence_result
+        return evidence_result, assessment_result, misconception_result
 
-    canonical_evidence = await run_db_op(_record_m5_evidence)
+    canonical_evidence, canonical_assessment, misconception_candidate = await run_db_op(_record_m5_evidence)
 
     # MCMC 题库参数校准已移至离线批处理脚本中定时运行
 
@@ -1045,6 +1231,8 @@ async def evaluate_answer(
         "confidence_calibration": abs(student_confidence - accuracy_score),
         "irt": irt_info,
         "canonical_evidence": canonical_evidence,
+        "canonical_assessment": canonical_assessment,
+        "misconception_candidate": misconception_candidate,
     }
 
 
@@ -1176,15 +1364,19 @@ async def adapt_quiz(
         )
 
         try:
-            response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-            result = _parse_llm_json(response)
-            if result:
-                raw_hints = result.get("hints", [])
-                result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
-                if meta_bias < -0.35:
-                    result["hints"] = list(result["hints"]) + ["考官提示：你的实力被低估了，放轻松！"]
-            else:
-                raise ValueError("parse failed")
+            result = await _call_quiz_model(
+                llm,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=QuizGenerationOutput,
+                owner_public_id=current_user.public_id,
+                operation="adapt",
+                trace_id=f"m5-quiz-{uuid.uuid4().hex}",
+            )
+            raw_hints = result.get("hints", [])
+            result["hints"] = [re.sub(r'^提示\d*[:：]\s*', '', str(h)) for h in raw_hints]
+            if meta_bias < -0.35:
+                result["hints"] = list(result["hints"]) + ["考官提示：你的实力被低估了，放轻松！"]
         except Exception:
             result = _get_fallback_quiz(target, difficulty)
 
@@ -1339,14 +1531,21 @@ async def generate_similar_quiz(
     max_attempts = 3
     result = {}
     sandbox_passed = False
+    quiz_trace_id = f"m5-quiz-{uuid.uuid4().hex}"
 
     while attempts < max_attempts and not sandbox_passed:
         attempts += 1
         try:
-            response = await llm.generate(system_prompt, user_prompt, role="考官智能体")
-            result = _parse_llm_json(response)
-            if not result:
-                result = {}
+            result = await _call_quiz_model(
+                llm,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=SimilarQuizOutput,
+                owner_public_id=current_user.public_id,
+                operation="similar",
+                trace_id=quiz_trace_id,
+                attempt=attempts,
+            )
 
             # Step 3: 沙箱自校验
             python_code = result.get("python_validator", "")
@@ -1447,34 +1646,56 @@ async def get_wrong_questions(
     student_id = enforce_student_access(student_id, current_user)
 
     def fetch_wrong_questions(session):
-        results = []
-        records = LegacyReadRepository(session).wrong_questions(
-            student_id, concept, limit
+        owner = session.query(DBUser).filter_by(username=student_id).first()
+        if owner is None:
+            return []
+        return build_wrong_question_read_model(
+            session,
+            student_id=student_id,
+            owner_public_id=owner.public_id,
+            concept=concept,
+            limit=limit,
         )
-        for r, qr in records:
-            quiz_detail = None
-            if qr:
-                quiz_detail = {
-                    "question": qr.question[:200],
-                    "student_answer": qr.student_answer[:200],
-                    "correct_answer": qr.correct_answer[:200],
-                    "options": list(qr.options or []),
-                    "accuracy_score": qr.accuracy_score,
-                    "feedback": qr.feedback[:200] if qr.feedback else "",
-                }
-            results.append({
-                "id": r.id,
-                "quiz_record_id": r.quiz_record_id,
-                "concept_name": r.concept_name,
-                "wrong_reason_category": r.wrong_reason_category,
-                "pinned": bool(r.pinned),
-                "notes": r.notes or "",
-                "created_at": r.created_at.isoformat() if r.created_at else "",
-                "quiz_detail": quiz_detail,
-            })
-        return results
 
     return await run_db_op(fetch_wrong_questions)
+
+
+@router.post("/wrong-questions/{wrong_id}/prepare-redo")
+async def prepare_wrong_question_for_redo(
+    wrong_id: int,
+    student_id: str,
+    current_user=Depends(get_current_user),
+) -> dict:
+    """Bind a legacy wrong question to a replayable canonical version on demand."""
+    student_id = enforce_student_access(student_id, current_user)
+
+    def prepare(session):
+        owner = session.query(DBUser).filter_by(username=student_id).first()
+        if owner is None:
+            raise WrongQuestionRedoError("wrong_question_unknown", "错题记录不存在或无权操作")
+        result = prepare_wrong_question_redo(
+            session,
+            wrong_id=wrong_id,
+            student_id=student_id,
+            owner_public_id=owner.public_id,
+        )
+        session.commit()
+        return result
+
+    try:
+        return await run_db_op(prepare)
+    except WrongQuestionRedoError as exc:
+        status_code = 404 if exc.code == "wrong_question_unknown" else 403 if exc.code == "wrong_question_forbidden" else 422
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except AssessmentCoreError as exc:
+        status_code = 409 if exc.code.endswith("conflict") else 422
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
 
 
 @router.get("/wrong-concepts/{student_id}")
@@ -1604,7 +1825,7 @@ async def checkin_review(
         if existing:
             existing.duration_minutes += duration_minutes
             repository.commit()
-            return {"checked_in": True, "streak": _calc_streak(repository, student_id), "first_today": False}
+            return {"checked_in": True, "streak": _calc_streak(repository, student_id, actor_public_id=current_user.public_id), "first_today": False}
         else:
             log = DBCheckinLog(
                 student_id=student_id,
@@ -1613,7 +1834,7 @@ async def checkin_review(
                 concepts_reviewed=[concept] if concept else [],
             )
             repository.save_checkin(log)
-            return {"checked_in": True, "streak": _calc_streak(repository, student_id), "first_today": True}
+            return {"checked_in": True, "streak": _calc_streak(repository, student_id, actor_public_id=current_user.public_id), "first_today": True}
 
     return await run_db_op(do_checkin)
 
@@ -1628,7 +1849,9 @@ async def get_checkin_streak(
     student_id = enforce_student_access(student_id, current_user)
 
     def fetch_streak(session):
-        return {"streak": _calc_streak(LegacyReadRepository(session), student_id)}
+        return {"streak": _calc_streak(
+            LegacyReadRepository(session), student_id, actor_public_id=current_user.public_id,
+        )}
 
     return await run_db_op(fetch_streak)
 
@@ -1644,6 +1867,14 @@ async def get_checkin_history(
 
     def fetch_history(session):
         records = LegacyReadRepository(session).checkin_history(student_id)
+        observe_legacy_shadow_read(
+            session,
+            chain_id="activity-execution-search",
+            legacy_result=records,
+            canonical_loader=lambda: ActivityExecutionSearchCanonicalReader(session).checkin_history(student_id),
+            legacy_projector=project_checkin_rows,
+            actor_public_id=current_user.public_id,
+        )
 
         results = []
         for r in records:
@@ -1664,7 +1895,9 @@ async def get_checkin_history(
     return await run_db_op(fetch_history)
 
 
-def _calc_streak(repository, student_id: str, tz_offset: int = 8) -> int:
+def _calc_streak(
+    repository, student_id: str, tz_offset: int = 8, actor_public_id: str | None = None,
+) -> int:
     """计算连续打卡天数。支持时区偏移，避免跨时区截断 bug。"""
     from datetime import datetime, timezone, timedelta
 
@@ -1672,6 +1905,14 @@ def _calc_streak(repository, student_id: str, tz_offset: int = 8) -> int:
     # repository objects internally.
     if hasattr(repository, "checkin_dates"):
         records = repository.checkin_dates(student_id)
+        if isinstance(repository, LegacyReadRepository):
+            observe_legacy_shadow_read(
+                repository.session,
+                chain_id="activity-execution-search",
+                legacy_result=records,
+                canonical_loader=lambda: ActivityExecutionSearchCanonicalReader(repository.session).checkin_dates(student_id),
+                actor_public_id=actor_public_id,
+            )
     else:
         records = LegacyReadRepository(repository).checkin_dates(student_id)
     if not records:

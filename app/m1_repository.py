@@ -31,9 +31,23 @@ def learner_safe_artifact_content(artifact_type: str, content: str) -> str:
     try:
         from app.m2_contracts import TieredQuizArtifact
 
-        quiz = TieredQuizArtifact.model_validate(json.loads(content))
+        payload = json.loads(content)
+        if payload.get("schema_version") == "m3.tiered_quiz.v1":
+            from app.m3_resources import M3TieredQuizArtifact
+
+            quiz = M3TieredQuizArtifact.model_validate(payload)
+        else:
+            quiz = TieredQuizArtifact.model_validate(payload)
+        learner_payload = quiz.model_dump(mode="json")
+        personalization = learner_payload.get("personalization")
+        if isinstance(personalization, dict):
+            personalization.pop("rationale_refs", None)
+        for tier in learner_payload["tiers"]:
+            for question in tier["questions"]:
+                question.pop("answer_key", None)
+                question.pop("explanation", None)
         return json.dumps(
-            quiz.learner_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            learner_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
     except Exception:
         return json.dumps(
@@ -104,6 +118,7 @@ class M1Repository:
             "capability": task.capability, "model": task.model, "status": task.status,
             "progress": task.progress, "failure_code": task.failure_code,
             "failure_reason": task.failure_reason,
+            "estimated_cost": task.estimated_cost, "actual_cost": task.actual_cost,
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "steps": [{"id": step.id, "sequence": step.sequence, "attempt": step.attempt,
                        "agent_role": step.agent_role, "tool_name": step.tool_name,

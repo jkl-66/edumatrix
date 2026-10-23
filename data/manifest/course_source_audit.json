@@ -1,0 +1,579 @@
+{
+  "schema_version": "edumatrix.course-source-audit.v1",
+  "source_manifest_sha256": "76fa0cb4337c0c74bbc37c293592a38d33fd845b518c6ade2e28645d868a3c2a",
+  "source_count": 15,
+  "local_git_source_count": 13,
+  "status_counts": {
+    "approved_default_course_candidate": 7,
+    "blocked_no_local_license": 2,
+    "external_reference_only": 2,
+    "manual_obligation_review_required": 4
+  },
+  "default_course_allowlist": [
+    "data-science-from-scratch",
+    "dtreeviz",
+    "edge-impulse-courseware",
+    "mlbook-dafriedman",
+    "nyandwi-machine-learning-complete",
+    "rasbt-ml-book-code",
+    "ruban-iris-classification"
+  ],
+  "sources": [
+    {
+      "key": "machine-learning-refined",
+      "url": "https://github.com/neonwatty/machine-learning-refined.git",
+      "kind": "git",
+      "asset_type": "pdf,pptx,ipynb,py",
+      "topics": [
+        "linear_regression",
+        "logistic_regression",
+        "optimization",
+        "neural_networks",
+        "visualization"
+      ],
+      "language": "en",
+      "redistribution_policy": "local_test_only_check_repo_license",
+      "notes": "Book PDFs, chapter PDFs, PPTX slides, notebooks and exercises.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/machine-learning-refined",
+      "local_repo_present": true,
+      "git_revision": "7edb5a0572f87d300520ac36cb688310b8d2876a",
+      "license_files": [
+        {
+          "path": "LICENSE.md",
+          "sha256": "c746a9f2494eed658d7bfb57b06dc8634d2bc32fbd5170dbd89f1c43b4cf6b3f",
+          "detected_spdx": "CC-BY-NC-SA-4.0"
+        }
+      ],
+      "material_file_counts": {
+        ".ipynb": 97,
+        ".md": 5,
+        ".txt": 1
+      },
+      "material_bytes": 114329192,
+      "default_course_eligibility": "manual_obligation_review_required",
+      "eligibility_reason": "license is recognized but redistribution obligations require explicit acceptance",
+      "obligations": [
+        "attribution",
+        "noncommercial_only",
+        "sharealike"
+      ]
+    },
+    {
+      "key": "compsci-589",
+      "url": "https://github.com/mlds-lab/COMPSCI-589.git",
+      "kind": "git",
+      "asset_type": "pdf,tex,ipynb,py",
+      "topics": [
+        "regression",
+        "classification",
+        "clustering",
+        "dimensionality_reduction",
+        "evaluation"
+      ],
+      "language": "en",
+      "redistribution_policy": "GPL-3.0",
+      "notes": "Open applied ML course with slides, handouts and demos.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/compsci-589",
+      "local_repo_present": true,
+      "git_revision": "d852718c9c3987f883b06ec86cc4fd1585125cbe",
+      "license_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "53927bd0b739d38c87a0a82236fd9b070c2dfff11c0c119be50372005d5047ad",
+          "detected_spdx": "GPL-3.0"
+        }
+      ],
+      "material_file_counts": {
+        ".md": 1,
+        ".pdf": 49,
+        ".pptx": 8,
+        ".tex": 23
+      },
+      "material_bytes": 51155433,
+      "default_course_eligibility": "manual_obligation_review_required",
+      "eligibility_reason": "license is recognized but redistribution obligations require explicit acceptance",
+      "obligations": [
+        "copyleft_and_source_distribution_review"
+      ]
+    },
+    {
+      "key": "mlcourse-ai",
+      "url": "https://github.com/Yorko/mlcourse.ai.git",
+      "kind": "git",
+      "asset_type": "ipynb,md,images,data",
+      "topics": [
+        "pandas",
+        "visualization",
+        "trees",
+        "logistic_regression",
+        "ensembles",
+        "pca",
+        "clustering"
+      ],
+      "language": "en,zh",
+      "redistribution_policy": "CC-BY-NC-SA-4.0_check_bonus_restrictions",
+      "notes": "Practice-heavy course with notebooks, images, Chinese materials and links.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/mlcourse-ai",
+      "local_repo_present": true,
+      "git_revision": "f966c2c9dfdc684e3cf4d338b4af08a75ca8ed1b",
+      "license_files": [
+        {
+          "path": "LICENSE.md",
+          "sha256": "a04e4b6381362123fc0a2e87fe20620b5e4b78f19074b1dd553debad82e5f4b5",
+          "detected_spdx": "CC-BY-NC-SA-4.0"
+        }
+      ],
+      "material_file_counts": {
+        ".csv": 67,
+        ".ipynb": 383,
+        ".json": 2,
+        ".md": 80,
+        ".pdf": 6,
+        ".py": 10,
+        ".txt": 2
+      },
+      "material_bytes": 117388909,
+      "default_course_eligibility": "manual_obligation_review_required",
+      "eligibility_reason": "license is recognized but redistribution obligations require explicit acceptance",
+      "obligations": [
+        "attribution",
+        "noncommercial_only",
+        "sharealike"
+      ]
+    },
+    {
+      "key": "mlbook-dafriedman",
+      "url": "https://github.com/dafriedman97/mlbook.git",
+      "kind": "git",
+      "asset_type": "pdf,ipynb,py",
+      "topics": [
+        "linear_regression",
+        "logistic_regression",
+        "naive_bayes",
+        "trees",
+        "ensembles",
+        "neural_networks"
+      ],
+      "language": "en",
+      "redistribution_policy": "CC-BY-NC-SA",
+      "notes": "Machine Learning from Scratch book and examples.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/mlbook-dafriedman",
+      "local_repo_present": true,
+      "git_revision": "35f1d80b8a180e12f66924fa9afa0b4866bf2868",
+      "license_files": [
+        {
+          "path": "LICENSE.md",
+          "sha256": "b704b2f4690fe12a508ae8b31ebe51d2cf499bacb1aa472726d5b9c9dbdfceb5",
+          "detected_spdx": "MIT"
+        }
+      ],
+      "material_file_counts": {
+        ".docx": 4,
+        ".ipynb": 160,
+        ".json": 2,
+        ".md": 94,
+        ".pdf": 1,
+        ".py": 57,
+        ".txt": 1
+      },
+      "material_bytes": 7545492,
+      "default_course_eligibility": "approved_default_course_candidate",
+      "eligibility_reason": "recognized permissive license file is present and hashed",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ]
+    },
+    {
+      "key": "data-science-from-scratch",
+      "url": "https://github.com/joelgrus/data-science-from-scratch.git",
+      "kind": "git",
+      "asset_type": "py",
+      "topics": [
+        "linear_algebra",
+        "statistics",
+        "gradient_descent",
+        "classification",
+        "clustering"
+      ],
+      "language": "en",
+      "redistribution_policy": "MIT",
+      "notes": "Pure Python teaching code.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/data-science-from-scratch",
+      "local_repo_present": true,
+      "git_revision": "d5d0f117f41b3ccab3b07f1ee1fa21cfcf69afa1",
+      "license_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "4d5210d93813b603f0980d57989524cfe879c8c3f394bae53039fc8f822a46fd",
+          "detected_spdx": "MIT"
+        }
+      ],
+      "material_file_counts": {
+        ".csv": 4,
+        ".md": 6,
+        ".py": 85,
+        ".txt": 11
+      },
+      "material_bytes": 3329647,
+      "default_course_eligibility": "approved_default_course_candidate",
+      "eligibility_reason": "recognized permissive license file is present and hashed",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ]
+    },
+    {
+      "key": "nyandwi-machine-learning-complete",
+      "url": "https://github.com/Nyandwi/machine_learning_complete.git",
+      "kind": "git",
+      "asset_type": "ipynb,images",
+      "topics": [
+        "python",
+        "numpy",
+        "pandas",
+        "visualization",
+        "classical_ml",
+        "deep_learning"
+      ],
+      "language": "en",
+      "redistribution_policy": "MIT",
+      "notes": "Beginner-friendly notebooks and visuals.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/nyandwi-machine-learning-complete",
+      "local_repo_present": true,
+      "git_revision": "8aabb071866027dd5c83de6de0c82a17f2ebe79e",
+      "license_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "f07443d2dfac63d0b837b0ffd31bc0de0eac7f9fe825622345e188688b00444d",
+          "detected_spdx": "MIT"
+        }
+      ],
+      "material_file_counts": {
+        ".csv": 7,
+        ".ipynb": 72,
+        ".md": 10,
+        ".pdf": 1
+      },
+      "material_bytes": 125176934,
+      "default_course_eligibility": "approved_default_course_candidate",
+      "eligibility_reason": "recognized permissive license file is present and hashed",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ]
+    },
+    {
+      "key": "pumpkin-book",
+      "url": "https://github.com/datawhalechina/pumpkin-book.git",
+      "kind": "git",
+      "asset_type": "pdf,md,images",
+      "topics": [
+        "watermelon_book",
+        "formula_derivation",
+        "linear_model",
+        "decision_tree",
+        "svm",
+        "ensemble"
+      ],
+      "language": "zh",
+      "redistribution_policy": "check_repo_license",
+      "notes": "Open companion formula derivations for 周志华《机器学习》.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/pumpkin-book",
+      "local_repo_present": true,
+      "git_revision": "58add39800dfbef65c93b2226d9a514f4cc9da0e",
+      "license_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "047d2259741a3ebb30d8c8a43d4ba79b5b229a069acd1d2bea49f22b297d8e98",
+          "detected_spdx": "CC-BY-NC-SA-4.0"
+        }
+      ],
+      "material_file_counts": {
+        ".json": 2,
+        ".md": 22,
+        ".pdf": 5,
+        ".pptx": 2
+      },
+      "material_bytes": 1171427,
+      "default_course_eligibility": "manual_obligation_review_required",
+      "eligibility_reason": "license is recognized but redistribution obligations require explicit acceptance",
+      "obligations": [
+        "attribution",
+        "noncommercial_only",
+        "sharealike"
+      ]
+    },
+    {
+      "key": "vay-keen-watermelon-notes",
+      "url": "https://github.com/Vay-keen/Machine-learning-learning-notes.git",
+      "kind": "git",
+      "asset_type": "md,images",
+      "topics": [
+        "watermelon_book",
+        "chinese_notes",
+        "classification",
+        "trees",
+        "svm",
+        "bayes"
+      ],
+      "language": "zh",
+      "redistribution_policy": "local_test_only_check_repo_license",
+      "notes": "Chinese notes aligned to 西瓜书 chapters.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/vay-keen-watermelon-notes",
+      "local_repo_present": true,
+      "git_revision": "7a79eb545e24aefb263969f7ac006a0da2a19fdf",
+      "license_files": [],
+      "material_file_counts": {
+        ".md": 18
+      },
+      "material_bytes": 195014,
+      "default_course_eligibility": "blocked_no_local_license",
+      "eligibility_reason": "no repository-root license file is available for distribution review",
+      "obligations": []
+    },
+    {
+      "key": "watermelonbook-training",
+      "url": "https://github.com/relph1119/machinelearning-watermelonbook.git",
+      "kind": "git",
+      "asset_type": "ipynb,md,py",
+      "topics": [
+        "watermelon_book",
+        "notebooks",
+        "training_camp"
+      ],
+      "language": "zh",
+      "redistribution_policy": "local_test_only_check_repo_license",
+      "notes": "西瓜书 training materials and notebooks.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/watermelonbook-training",
+      "local_repo_present": true,
+      "git_revision": "177533b1e1dd093784e7a8ae35260fcfe78758c9",
+      "license_files": [],
+      "material_file_counts": {
+        ".csv": 1,
+        ".docx": 1,
+        ".ipynb": 30,
+        ".md": 18,
+        ".pdf": 2,
+        ".py": 10,
+        ".txt": 1
+      },
+      "material_bytes": 12053067,
+      "default_course_eligibility": "blocked_no_local_license",
+      "eligibility_reason": "no repository-root license file is available for distribution review",
+      "obligations": []
+    },
+    {
+      "key": "dtreeviz",
+      "url": "https://github.com/parrt/dtreeviz.git",
+      "kind": "git",
+      "asset_type": "py,ipynb,images",
+      "topics": [
+        "decision_tree",
+        "visualization",
+        "iris",
+        "interpretability"
+      ],
+      "language": "en",
+      "redistribution_policy": "MIT",
+      "notes": "Decision tree visualization and interpretation.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/dtreeviz",
+      "local_repo_present": true,
+      "git_revision": "9680ac83b778124c9e21d018261144fbcdde5265",
+      "license_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "4535a45c60e2eccec0776749eb7babfee420b7081a59d853e9c7d9e4705e5fbb",
+          "detected_spdx": "MIT"
+        }
+      ],
+      "material_file_counts": {
+        ".csv": 9,
+        ".ipynb": 14,
+        ".md": 1,
+        ".pdf": 7,
+        ".pptx": 1,
+        ".py": 47,
+        ".txt": 3
+      },
+      "material_bytes": 217938375,
+      "default_course_eligibility": "approved_default_course_candidate",
+      "eligibility_reason": "recognized permissive license file is present and hashed",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ]
+    },
+    {
+      "key": "edge-impulse-courseware",
+      "url": "https://github.com/edgeimpulse/courseware-embedded-machine-learning.git",
+      "kind": "git",
+      "asset_type": "slides,md,notebooks,video_metadata",
+      "topics": [
+        "embedded_ml",
+        "tinyml",
+        "applications"
+      ],
+      "language": "en",
+      "redistribution_policy": "check_repo_license",
+      "notes": "Applied ML and TinyML courseware.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/edge-impulse-courseware",
+      "local_repo_present": true,
+      "git_revision": "a3d5f9df06d0b6750d5227eb3e0359e9ffbbe1e6",
+      "license_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "32d800615ec98824dbbb7a626452100ee829b0568293025629aaf6f95da8e5c9",
+          "detected_spdx": "Clear-BSD"
+        }
+      ],
+      "material_file_counts": {
+        ".docx": 65,
+        ".ipynb": 20,
+        ".json": 2,
+        ".md": 1,
+        ".pptx": 83,
+        ".py": 1,
+        ".txt": 1
+      },
+      "material_bytes": 453967333,
+      "default_course_eligibility": "approved_default_course_candidate",
+      "eligibility_reason": "recognized permissive license file is present and hashed",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ]
+    },
+    {
+      "key": "rasbt-ml-book-code",
+      "url": "https://github.com/rasbt/machine-learning-book.git",
+      "kind": "git",
+      "asset_type": "ipynb,py",
+      "topics": [
+        "sklearn",
+        "pytorch",
+        "classification",
+        "evaluation",
+        "deep_learning"
+      ],
+      "language": "en",
+      "redistribution_policy": "code_repo_for_commercial_book_check_license",
+      "notes": "High-quality code examples for scikit-learn and PyTorch.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/rasbt-ml-book-code",
+      "local_repo_present": true,
+      "git_revision": "63bee951ca45420ac33ccf803ceb337afc3c0a91",
+      "license_files": [
+        {
+          "path": "LICENSE.txt",
+          "sha256": "1966e966c81599033981866d59e8867d8c3ade23c076ef8aa894735034beb0fb",
+          "detected_spdx": "MIT"
+        }
+      ],
+      "material_file_counts": {
+        ".ipynb": 34,
+        ".md": 22,
+        ".pdf": 9,
+        ".py": 36,
+        ".txt": 9
+      },
+      "material_bytes": 90889590,
+      "default_course_eligibility": "approved_default_course_candidate",
+      "eligibility_reason": "recognized permissive license file is present and hashed",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ]
+    },
+    {
+      "key": "ruban-iris-classification",
+      "url": "https://github.com/Ruban2205/Iris_Classification.git",
+      "kind": "git",
+      "asset_type": "ipynb,pdf,csv,streamlit",
+      "topics": [
+        "iris",
+        "classification",
+        "visualization",
+        "student_project"
+      ],
+      "language": "en",
+      "redistribution_policy": "MIT",
+      "notes": "Simple end-to-end Iris classification project.",
+      "local_path": "D:/project-edumatrix/edumatrix-main/data/raw/github_repos/ruban-iris-classification",
+      "local_repo_present": true,
+      "git_revision": "c0df3e97bbc18b53e2c7a757716162f499768968",
+      "license_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "8b3b08e6dab8893c81891354f9c357af2bb08ba783309662bcc77c7c3df07711",
+          "detected_spdx": "MIT"
+        }
+      ],
+      "material_file_counts": {
+        ".csv": 1,
+        ".ipynb": 1,
+        ".md": 1,
+        ".pdf": 1,
+        ".py": 1,
+        ".txt": 1
+      },
+      "material_bytes": 1264072,
+      "default_course_eligibility": "approved_default_course_candidate",
+      "eligibility_reason": "recognized permissive license file is present and hashed",
+      "obligations": [
+        "retain_copyright_notice",
+        "retain_license"
+      ]
+    },
+    {
+      "key": "uci-iris",
+      "url": "https://archive.ics.uci.edu/static/public/53/iris.zip",
+      "kind": "direct",
+      "asset_type": "zip,csv,metadata",
+      "topics": [
+        "iris",
+        "classification",
+        "dataset"
+      ],
+      "language": "en",
+      "redistribution_policy": "UCI_dataset_terms",
+      "notes": "Canonical Iris dataset.",
+      "local_path": "",
+      "local_repo_present": false,
+      "git_revision": "",
+      "license_files": [],
+      "material_file_counts": {},
+      "material_bytes": 0,
+      "default_course_eligibility": "external_reference_only",
+      "eligibility_reason": "direct source is not bundled as a reviewed repository",
+      "obligations": [
+        "verify_upstream_terms_at_import_time"
+      ]
+    },
+    {
+      "key": "sklearn-iris-decision-surface",
+      "url": "https://scikit-learn.org/stable/_downloads/1935e293d69b820c51b298c649c34b39/plot_iris_dtc.py",
+      "kind": "direct",
+      "asset_type": "py",
+      "topics": [
+        "iris",
+        "decision_tree",
+        "decision_boundary",
+        "visualization"
+      ],
+      "language": "en",
+      "redistribution_policy": "BSD-3-Clause_sklearn",
+      "notes": "Decision tree decision surface example over Iris feature pairs.",
+      "local_path": "",
+      "local_repo_present": false,
+      "git_revision": "",
+      "license_files": [],
+      "material_file_counts": {},
+      "material_bytes": 0,
+      "default_course_eligibility": "external_reference_only",
+      "eligibility_reason": "direct source is not bundled as a reviewed repository",
+      "obligations": [
+        "verify_upstream_terms_at_import_time"
+      ]
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
@@ -22,6 +23,30 @@ from manifold_alignment import ManifoldAlignmentVerifier
 from models import AgentOutput, LearningSignal, LearningStrategyPlan, ResourcePackage, StudentProfile
 from observability import TELEMETRY, timed_span
 from rag_engine import HybridRAGPipeline, hybrid_rag
+from app.m2_contracts import StrictModel
+from app.database import run_db_op
+from app.m5_gateway import StreamingModelCallLifecycle
+from app.m5_legacy_calls import audited_legacy_text_call
+from app.m5_intent import classify_academic_intent
+from llm_client import parse_json_object
+from pydantic import Field
+
+
+class ProfileExtraction(StrictModel):
+    course: str = Field(default="", max_length=256)
+    major: str = Field(default="", max_length=256)
+    goals: list[str] = Field(default_factory=list, max_length=20)
+    weak_points: list[str] = Field(default_factory=list, max_length=100)
+    preferences: list[str] = Field(default_factory=list, max_length=20)
+    learning_state_causes: list[str] | dict[str, object] = Field(default_factory=list)
+    mastery_updates: dict[str, float] = Field(default_factory=dict)
+
+
+class QuantitativeEvaluation(StrictModel):
+    accuracy: float = Field(ge=0.0, le=1.0)
+    completeness: float = Field(ge=0.0, le=1.0)
+    depth_match: float = Field(ge=0.0, le=1.0)
+    needs_replan: bool
 
 
 @dataclass(frozen=True)
@@ -135,8 +160,9 @@ class ProfileProbeAgent:
     任务 7.2 升级：3轮滑动上下文窗口 + 口语指代消解。
     """
 
-    def __init__(self, llm: AsyncLLMBackend = DEFAULT_ASYNC_LLM):
+    def __init__(self, llm: AsyncLLMBackend = DEFAULT_ASYNC_LLM, *, database_runner=None):
         self.llm = llm
+        self._database_runner = database_runner
         # 滑动上下文窗口：保存最近 3 轮的消息对 (user, assistant)
         self._context_window: list[tuple[str, str]] = []
         self._extraction_cache: TTLBoundedCache[str, dict] = TTLBoundedCache(
@@ -165,7 +191,14 @@ class ProfileProbeAgent:
             lines.append(f"[{role}]: {msg.replace(chr(10), ' ')[:120]}")
         return "\n".join(lines[-6:])  # 最多 3 轮对话
 
-    async def async_update(self, profile: StudentProfile, message: str) -> StudentProfile:
+    async def async_update(
+        self,
+        profile: StudentProfile,
+        message: str,
+        *,
+        owner_public_id: str | None = None,
+        course_id: str | None = None,
+    ) -> StudentProfile:
         # Step 1: 基础更新（触发情感推断、特征提取等）
         profile.update_from_message(message)
 
@@ -204,7 +237,11 @@ class ProfileProbeAgent:
 
         # Step 5: 用消解后的消息 + 滑动上下文 调用 LLM 动态链接与抽取
         extracted = await self._async_extract_with_llm(
-            resolved_message, active_concepts, sliding_context,
+            resolved_message,
+            active_concepts,
+            sliding_context,
+            owner_public_id=owner_public_id,
+            course_id=course_id,
         )
         profile.apply_llm_features(extracted, source_text=message)
         return profile
@@ -214,9 +251,10 @@ class ProfileProbeAgent:
         message: str,
         active_concepts: list[str],
         history_context: str = "",
+        *,
+        owner_public_id: str | None = None,
+        course_id: str | None = None,
     ) -> dict:
-        import re
-        import json
 
         # 1. 快速过滤与分词精确/子串匹配（快轨）：
         # 如果消息极短，或者是单纯地提问某个概念，并且该概念直接存在于活跃列表中，则直接返回映射画像，绕过大模型
@@ -276,13 +314,43 @@ class ProfileProbeAgent:
             "请从中抽取画像特征，仅输出 JSON。"
         )
 
+        provider = "deterministic" if self.llm.__class__.__name__ == "AsyncDeterministicEducationLLM" else CONFIG.llm_provider
+        model = getattr(self.llm, "model", "deterministic" if provider == "deterministic" else CONFIG.llm_model)
+        lifecycle = StreamingModelCallLifecycle(
+            capability="answer",
+            prompt_key="legacy_profile_extraction",
+            prompt_version="1.0",
+            provider=provider or "unknown",
+            model=model or "unknown",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            owner_public_id=owner_public_id,
+            course_id=course_id,
+            input_summary={
+                "operation": "profile_extraction",
+                "active_concept_count": len(active_concepts),
+                "has_history_context": bool(history_context),
+            },
+            database_runner=self._database_runner,
+        )
         try:
+            await lifecycle.start()
             raw = await self.llm.generate(system_prompt, user_prompt, role="画像抽取器")
-            match = re.search(r"\{.*\}", raw, flags=re.S)
-            if not match:
-                return {}
-            data = json.loads(match.group(0))
+            parsed = ProfileExtraction.model_validate(parse_json_object(raw))
+            data = parsed.model_dump(mode="json")
+            allowed = set(active_concepts)
+            data["weak_points"] = [item for item in data["weak_points"] if item in allowed]
+            data["mastery_updates"] = {
+                key: value for key, value in data["mastery_updates"].items() if key in allowed
+            }
+            await lifecycle.complete(raw)
+        except asyncio.CancelledError:
+            if lifecycle.call_id is not None:
+                await asyncio.shield(lifecycle.fail("client_disconnected"))
+            raise
         except Exception:
+            if lifecycle.call_id is not None:
+                await lifecycle.fail("profile_output_invalid")
             return {}
             
         data = data if isinstance(data, dict) else {}
@@ -350,7 +418,17 @@ class ZPDPlannerAgent:
     def __init__(self):
         self._last_path_plan: dict | None = None
 
-    def plan(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile, loop: Any = None, doc_constraint: str | list[str] | None = None):
+    def plan(
+        self,
+        rag: HybridRAGPipeline,
+        query: str,
+        profile: StudentProfile,
+        loop: Any = None,
+        doc_constraint: str | list[str] | None = None,
+        model_call_context: dict[str, Any] | None = None,
+        course_id: str | None = None,
+        actor: Any | None = None,
+    ):
         """执行 ZPD 路径规划。"""
         from bkt_engine import (
             BKTEngine,
@@ -362,7 +440,12 @@ class ZPDPlannerAgent:
         )
 
         # 确定目标知识点 (优先提取查询中的显式知识点，无显式指定时再fallback到画像诊断薄弱项)
-        target = self._extract_concept_from_query(query, profile, loop)
+        target = self._extract_concept_from_query(
+            query,
+            profile,
+            loop,
+            model_call_context=model_call_context,
+        )
         if not target:
             target = self._infer_target(profile)
 
@@ -423,10 +506,39 @@ class ZPDPlannerAgent:
             enhanced_query = cleaned_query
 
         # Step 5: 执行检索
-        retrieval = rag.retrieve(enhanced_query, target=target, profile=profile, doc_constraint=doc_constraint)
+        retrieve_kwargs = {
+            "target": target,
+            "profile": profile,
+            "doc_constraint": doc_constraint,
+            "course_id": course_id,
+            "actor": actor,
+        }
+        # Historical test/extension RAG implementations predate the canonical
+        # course boundary.  Preserve their public call shape while passing the
+        # new scope arguments to HybridRAGPipeline and other updated callers.
+        try:
+            import inspect
+
+            parameters = inspect.signature(rag.retrieve).parameters
+            retrieve_kwargs = {
+                key: value for key, value in retrieve_kwargs.items()
+                if key in parameters
+            }
+        except (TypeError, ValueError):
+            pass
+        retrieval = rag.retrieve(enhanced_query, **retrieve_kwargs)
         return retrieval
 
-    async def plan_async(self, rag: HybridRAGPipeline, query: str, profile: StudentProfile, doc_constraint: str | list[str] | None = None):
+    async def plan_async(
+        self,
+        rag: HybridRAGPipeline,
+        query: str,
+        profile: StudentProfile,
+        doc_constraint: str | list[str] | None = None,
+        model_call_context: dict[str, Any] | None = None,
+        course_id: str | None = None,
+        actor: Any | None = None,
+    ):
         """异步版本的 ZPD 路径规划。
 
         将同步的 plan() 卸载到默认线程池，避免阻塞事件循环上的其他协程
@@ -434,12 +546,29 @@ class ZPDPlannerAgent:
         """
         import asyncio
         loop = asyncio.get_running_loop()
-        return await asyncio.to_thread(self.plan, rag, query, profile, loop, doc_constraint)
+        return await asyncio.to_thread(
+            self.plan,
+            rag,
+            query,
+            profile,
+            loop,
+            doc_constraint,
+            model_call_context,
+            course_id,
+            actor,
+        )
 
     def get_path_plan(self) -> dict | None:
         return self._last_path_plan
 
-    def _extract_concept_from_query(self, query: str, profile: StudentProfile | None = None, loop: Any = None) -> str | None:
+    def _extract_concept_from_query(
+        self,
+        query: str,
+        profile: StudentProfile | None = None,
+        loop: Any = None,
+        *,
+        model_call_context: dict[str, Any] | None = None,
+    ) -> str | None:
         import asyncio
         if not query:
             return None
@@ -505,7 +634,9 @@ class ZPDPlannerAgent:
         pronouns = ("这个", "那个", "这", "那", "它", "上面", "刚才", "这个概念", "如何理解", "怎么算", "解释一下")
         has_pronoun = any(p in cleaned for p in pronouns)
 
-        if has_pronoun and profile and profile.history:
+        context = model_call_context or {}
+        owner_public_id = context.get("owner_public_id")
+        if has_pronoun and profile and profile.history and owner_public_id:
             # 提取最近 5 条对话作为上下文
             recent_history = profile.history[-5:] if len(profile.history) >= 5 else profile.history
             history_str = "\n".join(recent_history)
@@ -523,32 +654,51 @@ class ZPDPlannerAgent:
             try:
                 from llm_client import DEFAULT_ASYNC_LLM
                 response = None
-                if loop and loop.is_running():
-                    # 线程安全地在主事件循环中运行 async 函数并等待其完成
-                    coro = DEFAULT_ASYNC_LLM.generate(
+
+                def validate_resolution(raw: str) -> str:
+                    resolved = raw.strip()
+                    if resolved != "None" and resolved not in concepts:
+                        raise ValueError("coreference result is outside active concepts")
+                    return resolved
+
+                async def resolve_with_audit():
+                    return await audited_legacy_text_call(
+                        DEFAULT_ASYNC_LLM,
                         system_prompt=system_prompt,
                         user_prompt=prompt,
-                        role="user"
+                        role="学术指代消解",
+                        operation="coreference_resolution",
+                        capability="classify",
+                        owner_public_id=owner_public_id,
+                        course_id=context.get("course_id"),
+                        trace_id=context.get("trace_id"),
+                        input_summary={
+                            "active_concept_count": len(concepts),
+                            "history_turn_count": len(recent_history),
+                            "query_payload_included": False,
+                            "history_payload_included": False,
+                            "concept_payload_included": False,
+                        },
+                        response_validator=validate_resolution,
+                        database_runner=context.get("database_runner") or run_db_op,
                     )
+
+                if loop and loop.is_running():
+                    # 线程安全地在主事件循环中运行 async 函数并等待其完成
+                    coro = resolve_with_audit()
                     future = asyncio.run_coroutine_threadsafe(coro, loop)
                     response = future.result(timeout=10.0)
                 else:
                     # 兜底：如果是在非异步上下文中运行且没有 loop，
                     # 尝试直接运行协程
-                    async def _run_fallback():
-                        return await DEFAULT_ASYNC_LLM.generate(
-                            system_prompt=system_prompt,
-                            user_prompt=prompt,
-                            role="user"
-                        )
-                    response = asyncio.run(_run_fallback())
+                    response = asyncio.run(resolve_with_audit())
                 
                 resolved = response.strip() if response else "None"
                 # 过滤出合法的活跃概念
                 if resolved in concepts:
                     return resolved
-            except Exception as e:
-                print(f"  [Swarm Entity Resolution] LLM 指代消解失败: {e}")
+            except Exception:
+                print("  [Swarm Entity Resolution] LLM 指代消解失败，使用确定性回退。")
 
         return None
 
@@ -806,13 +956,30 @@ class EffectEvaluatorAgent:
     现在改为调用 LLM 做真实语义评估，传入学生画像和生成资源。
     """
 
-    def __init__(self, llm: AsyncLLMBackend | None = None):
+    def __init__(self, llm: AsyncLLMBackend | None = None, *, database_runner=None):
         self._llm = llm
+        self._database_runner = database_runner
 
-    async def evaluate_async(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+    async def evaluate_async(
+        self,
+        profile: StudentProfile,
+        resources: tuple[AgentOutput, ...],
+        *,
+        owner_public_id: str | None = None,
+        course_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> LearningSignal:
         if self._llm is not None and hasattr(self._llm, 'generate'):
             try:
-                return await self._async_llm_evaluate(profile, resources)
+                return await self._async_llm_evaluate(
+                    profile,
+                    resources,
+                    owner_public_id=owner_public_id,
+                    course_id=course_id,
+                    trace_id=trace_id,
+                )
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 pass
         return self._fallback_evaluate(profile, resources)
@@ -837,7 +1004,15 @@ class EffectEvaluatorAgent:
     def _llm_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
         return self.evaluate(profile, resources)
 
-    async def _async_llm_evaluate(self, profile: StudentProfile, resources: tuple[AgentOutput, ...]) -> LearningSignal:
+    async def _async_llm_evaluate(
+        self,
+        profile: StudentProfile,
+        resources: tuple[AgentOutput, ...],
+        *,
+        owner_public_id: str | None = None,
+        course_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> LearningSignal:
         prompt = (
             "你是 EduMatrix 的量化评估师。根据以下信息评估资源包的质量和学生的学习效果。\n"
             "请严格以JSON格式返回，字段如下：\n"
@@ -862,12 +1037,54 @@ class EffectEvaluatorAgent:
         for r in resources:
             user += f"  [{r.agent}] {r.resource_type}: {r.content[:100]}...\n"
 
+        provider = (
+            "deterministic"
+            if self._llm.__class__.__name__ == "AsyncDeterministicEducationLLM"
+            else CONFIG.llm_provider
+        )
+        model = getattr(
+            self._llm,
+            "model",
+            "deterministic" if provider == "deterministic" else CONFIG.llm_model,
+        )
+        lifecycle = StreamingModelCallLifecycle(
+            capability="evaluate",
+            prompt_key="legacy_quantitative_evaluation",
+            prompt_version="1.0",
+            provider=provider or "unknown",
+            model=model or "unknown",
+            system_prompt=prompt,
+            user_prompt=user,
+            owner_public_id=owner_public_id,
+            course_id=course_id,
+            trace_id=trace_id,
+            input_summary={
+                "operation": "resource_package_evaluation",
+                "resource_count": len(resources),
+                "resource_types": sorted({resource.resource_type for resource in resources}),
+                "has_profile": True,
+            },
+            database_runner=self._database_runner,
+        )
+        await lifecycle.start()
         try:
             content = await self._llm.generate(prompt, user, role="量化评估师")
-            import json
-            result = json.loads(content)
-            accuracy = max(0.0, min(1.0, float(result.get("accuracy", 0.7))))
-            needs_replan = bool(result.get("needs_replan", False))
+        except asyncio.CancelledError:
+            await asyncio.shield(lifecycle.fail("client_disconnected"))
+            raise
+        except Exception:
+            await lifecycle.fail("evaluation_provider_failed")
+            return self._fallback_evaluate(profile, resources)
+
+        try:
+            result = QuantitativeEvaluation.model_validate(parse_json_object(content))
+        except Exception:
+            await lifecycle.fail("evaluation_output_invalid", content)
+            return self._fallback_evaluate(profile, resources)
+        await lifecycle.complete(content)
+
+        try:
+            accuracy = result.accuracy
             sandbox_error_rate = 0.42
             has_code = any(r.resource_type == "代码实操案例" for r in resources)
             if has_code and profile.cognitive_load < 0.6:
@@ -1094,6 +1311,7 @@ class AsyncResourceFactory:
         mediation_instructions: dict[str, str] | None = None,
         regenerate_only: set[str] | None = None,
         event_callback = None,
+        model_call_context: dict[str, Any] | None = None,
     ) -> tuple[AgentOutput, ...]:
         import asyncio
 
@@ -1167,7 +1385,20 @@ class AsyncResourceFactory:
                 prev_code = next((r.content for r in previous_resources if r.resource_type == "代码实操案例"), "")
                 if prev_lecture and prev_code:
                     from app.agents.coder import async_refine_code_agent
-                    refined_code = await async_refine_code_agent(prev_lecture, prev_code, alignment_advice)
+                    context = model_call_context or {}
+                    owner_public_id = context.get("owner_public_id")
+                    if not owner_public_id:
+                        refined_code = prev_code
+                    else:
+                        refined_code = await async_refine_code_agent(
+                            prev_lecture,
+                            prev_code,
+                            alignment_advice,
+                            llm=self.generator.llm,
+                            owner_public_id=owner_public_id,
+                            course_id=context.get("course_id"),
+                            trace_id=context.get("trace_id"),
+                        )
                     prev_citations = next((r.citations for r in previous_resources if r.resource_type == "代码实操案例"), ())
                     res_out = AgentOutput(
                         agent=role,
@@ -1194,6 +1425,7 @@ class AsyncResourceFactory:
                 correction=correction,
                 conversation_memory=conversation_memory,
                 forced_instruction=forced_instruction,
+                model_call_context=model_call_context,
             )
             if event_callback:
                 await _trigger_event(event_callback, "agent_done", {
@@ -1330,38 +1562,22 @@ class EduMatrixSwarm:
         # 任务 7.3: 多门控自适应 FSM 路由器
         self.mediation_router = SwarmMediationRouter()
 
-    async def _check_academic_intent(self, message: str) -> dict[str, Any]:
-        """使用大语言模型快速分类学生输入的意图是学术学习相关，还是闲聊/无关内容。"""
-        system_prompt = (
-            "你是一个意图分类器。你需要判断用户输入的问题是否与学术学习、机器学习、数据科学、数学、人工智能、编程、计算机科学或此教学系统的使用说明相关。\n"
-            "如果输入仅仅是打招呼（如“你好”、“hello”），但在后续可能引发学术问题，也可以归为学术，但如果是纯粹的个人情况提问、系统无关闲聊（如“你是谁啊”、“你是谁”、“吃了吗”、“今天天气”、“给我讲个笑话”），请判定为非学术 (is_academic: false)。\n"
-            "回答必须是 JSON 格式：\n"
-            "{\n"
-            "  \"is_academic\": true 或 false,\n"
-            "  \"reason\": \"分类的理由简述\",\n"
-            "  \"reply\": \"如果 is_academic 为 false，请在此处提供一个友好的、引导学生回到学术学习范围的回复（Markdown格式，必须以 '## 智能答疑 / 系统说明\\n\\n' 开头）；如果为 true，此项为空串\"\n"
-            "}\n"
-            "引导回复示例：\n"
-            "\"## 智能答疑 / 系统说明\\n\\n您好！我是 EduMatrix 智能自适应助教。我专注于为您解答机器学习、深度学习、数据科学等学术与编程问题，并辅助您的学习进度。建议您向我提问相关的专业内容，例如：‘什么是梯度下降？’。\"\n"
-            "请严格遵循 JSON 格式返回，不要有任何 Markdown 包裹符之外的其他解释文本。"
+    async def _check_academic_intent(
+        self,
+        message: str,
+        *,
+        owner_public_id: str | None = None,
+        course_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await classify_academic_intent(
+            self.llm,
+            message,
+            owner_public_id=owner_public_id,
+            course_id=course_id,
         )
-        user_prompt = f"用户输入: \"{message}\""
-        try:
-            response_text = await self.llm.generate(system_prompt, user_prompt, role="意图分类")
-            clean_text = response_text.strip()
-            if clean_text.startswith("```"):
-                lines = clean_text.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                clean_text = "\n".join(lines).strip()
-            import json
-            return json.loads(clean_text)
-        except Exception:
-            return {"is_academic": True, "reason": "分类器异常放行", "reply": ""}
 
-    async def async_process(self, user_input: str, *, student_id: str = "demo-student", event_callback = None, forced_target_agent: str | None = None, doc_constraint: str | list[str] | None = None) -> ResourcePackage:
+    async def async_process(self, user_input: str, *, student_id: str = "demo-student", event_callback = None, forced_target_agent: str | None = None, doc_constraint: str | list[str] | None = None, owner_public_id: str | None = None, course_id: str | None = None) -> ResourcePackage:
+        matrix_trace_id = f"m5-matrix-{__import__('uuid').uuid4().hex}"
         with timed_span(TELEMETRY, "swarm.process", student_id=student_id):
             profile = self.profile_store.setdefault(student_id, StudentProfile(student_id=student_id))
             
@@ -1370,7 +1586,11 @@ class EduMatrixSwarm:
             if user_input.startswith("一键生成资源包:"):
                 classification = {"is_academic": True, "reply": ""}
             else:
-                classification = await self._check_academic_intent(user_input)
+                classification = await self._check_academic_intent(
+                    user_input,
+                    owner_public_id=owner_public_id,
+                    course_id=course_id,
+                )
             if not classification.get("is_academic", True):
                 from models import AlignmentReport, LearningSignal
                 reply = classification.get("reply") or "## 智能答疑 / 系统说明\n\n您好！我是 EduMatrix 智能自适应助教。我目前专注于为您解答机器学习和数据科学等学术问题，请提出与学习相关的疑问，谢谢！"
@@ -1427,11 +1647,31 @@ class EduMatrixSwarm:
                 )
 
             await _trigger_event(event_callback, "progress", {"step": "profile", "message": "正在使用画像探针更新认知与掌握度状态...", "progress": 25})
-            profile = await self.profile_probe.async_update(profile, user_input)
+            profile = await self.profile_probe.async_update(
+                profile,
+                user_input,
+                owner_public_id=owner_public_id,
+                course_id=course_id,
+            )
 
             await _trigger_event(event_callback, "progress", {"step": "planner", "message": "正在规划ZPD学习路径与检索知识库...", "progress": 40})
-            retrieval = await self.planner.plan_async(self.rag, user_input, profile, doc_constraint=doc_constraint)
-            debate_result = await self.debate.aclean(retrieval)
+            retrieval = await self.planner.plan_async(
+                self.rag,
+                user_input,
+                profile,
+                doc_constraint=doc_constraint,
+                model_call_context={
+                    "trace_id": matrix_trace_id,
+                    "owner_public_id": owner_public_id,
+                    "course_id": course_id,
+                },
+            )
+            debate_result = await self.debate.aclean(
+                retrieval,
+                owner_public_id=owner_public_id,
+                course_id=course_id,
+                trace_id=matrix_trace_id,
+            )
             TELEMETRY.record_metric(
                 "debate.keep_rate",
                 len(debate_result.clean_evidence) / max(1, len(retrieval.evidence)),
@@ -1458,11 +1698,21 @@ class EduMatrixSwarm:
             if retrieval.low_confidence and not forced_target_agent:
                 from models import AlignmentReport
                 refusal_msg = "抱歉，系统在知识库中未检索到与您提问相关的充足高置信度证据，为避免幻觉，建议您在‘课件管理’页面中上传包含该概念的教学资料。"
+                meaningful_out_of_domain = retrieval.out_of_domain and any(
+                    "\u4e00" <= char <= "\u9fff" for char in user_input
+                )
+                degradation_msg = (
+                    "\n\nEduMatrix 标准学科大纲知识图谱暂未涵盖该领域，系统已自动切换至多模态混合文本检索与实时互联网检索模式进行解答，您可以上传相关课件以扩充图谱。"
+                )
                 resources = tuple(
                     AgentOutput(
                         agent=role,
                         resource_type=rt,
-                        content=refusal_msg,
+                        content=(
+                            refusal_msg + degradation_msg
+                            if meaningful_out_of_domain and rt == "专业讲义"
+                            else refusal_msg
+                        ),
                         citations=(),
                         private_rationale="低置信度防幻觉硬拦截",
                     )
@@ -1475,7 +1725,13 @@ class EduMatrixSwarm:
                     conflicts=[],
                     advice="低置信度自动拦截",
                 )
-                learning_signal = await self.evaluator.evaluate_async(profile, resources)
+                learning_signal = await self.evaluator.evaluate_async(
+                    profile,
+                    resources,
+                    owner_public_id=owner_public_id,
+                    course_id=course_id,
+                    trace_id=matrix_trace_id,
+                )
                 TELEMETRY.record_metric("learning.estimated_accuracy", learning_signal.accuracy, target=retrieval.target)
                 if learning_signal.needs_replan:
                     profile.cognitive_load = min(1.0, profile.cognitive_load + 0.08)
@@ -1536,6 +1792,11 @@ class EduMatrixSwarm:
                     mediation_instructions=mediation_instructions,
                     regenerate_only=regenerate_only,
                     event_callback=event_callback,
+                    model_call_context={
+                        "trace_id": matrix_trace_id,
+                        "owner_public_id": owner_public_id,
+                        "course_id": course_id,
+                    },
                 )
 
                 await _trigger_event(event_callback, "progress", {
@@ -1543,7 +1804,13 @@ class EduMatrixSwarm:
                     "message": f"资源生成完毕，正在执行第 {attempt+1} 次图谱与语义对齐验证...",
                     "progress": 75 + attempt * 2
                 })
-                alignment_report = self.alignment.verify(resources)
+                alignment_report = self.alignment.verify(
+                    resources,
+                    target=retrieval.target,
+                    owner_public_id=owner_public_id,
+                    course_id=course_id,
+                    trace_id=matrix_trace_id,
+                )
                 if alignment_report.passed:
                     await _trigger_event(event_callback, "progress", {
                         "step": "alignment_passed",
@@ -1624,7 +1891,13 @@ class EduMatrixSwarm:
                 resources = tuple(new_resources)
 
             assert alignment_report is not None
-            learning_signal = await self.evaluator.evaluate_async(profile, resources)
+            learning_signal = await self.evaluator.evaluate_async(
+                profile,
+                resources,
+                owner_public_id=owner_public_id,
+                course_id=course_id,
+                trace_id=matrix_trace_id,
+            )
             TELEMETRY.record_metric("learning.estimated_accuracy", learning_signal.accuracy, target=retrieval.target)
             if learning_signal.needs_replan:
                 profile.cognitive_load = min(1.0, profile.cognitive_load + 0.08)

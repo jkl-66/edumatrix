@@ -1,0 +1,13 @@
+{
+  "schema_version": "edumatrix.course-processing-report.v1",
+  "course_id": "course-data-structures-algorithms-engineering-v1",
+  "source_revision": "28c1e74c1d3594fca7cc41b78a6bd18b700c5ce9",
+  "parser_version": "edumatrix-hello-algo-zh-hans-v1",
+  "output_manifest_sha256": "0ca6bdfdbfd7e69c28397134a53afd657c6a5b0076f38d978e3a009a0bd9193e",
+  "chapter_count": 14,
+  "knowledge_point_count": 25,
+  "license_sha256": "cedc775d9fcbe259aff8e5fd095536ff0bfe812b2c8d5051fb2df80fa2228d8a",
+  "network_calls": 0,
+  "external_model_calls": 0,
+  "source_file_count": 101
+}

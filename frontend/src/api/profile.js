@@ -16,8 +16,9 @@ export async function getStudentProfile(studentId) {
   return r.data
 }
 
-export async function getProfileAnalysis(studentId) {
-  const r = await api.get(`/profile/${studentId}/analysis`, { headers: buildHeaders() })
+export async function getProfileAnalysis(studentId, courseId = null) {
+  const params = courseId ? { course_id: courseId } : undefined
+  const r = await api.get(`/profile/${studentId}/analysis`, { params, headers: buildHeaders() })
   return r.data
 }
 

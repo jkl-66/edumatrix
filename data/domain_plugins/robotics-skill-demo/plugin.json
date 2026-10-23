@@ -1,0 +1,20 @@
+{
+  "schema_version": "edumatrix.domain-plugin.v1",
+  "plugin_id": "robotics-skill-demo",
+  "plugin_version": "1.0.0",
+  "domain_key": "robotics-skill-training",
+  "title": "机器人技能训练参考插件",
+  "license": "CC0-1.0",
+  "attribution": "EduMatrix 比赛合成参考数据；不代表真实企业岗位标准或专家认证。",
+  "source_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "source_version": "edumatrix-synthetic-2026-08-04",
+  "assets": [
+    {"path": "chapters.json", "sha256": "9fdbce4ac28ef8c974cc34647096d86d61f0c827a392741df596707ce86ff8c2", "media_type": "application/json", "purpose": "chapters"},
+    {"path": "evaluation_cases.json", "sha256": "221352906fddb062db0c16f726ddb56800c6e50ffbf2439fd506a979d26c9044", "media_type": "application/json", "purpose": "evaluation_cases"}
+  ],
+  "checkers": [],
+  "allowed_actions": ["validate_data", "register_domain"],
+  "requires_network": false,
+  "requires_secrets": false,
+  "executable_code": false
+}

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from models import Evidence, EvidenceModality
+from knowledge_base import load_evidence_from_file
 from rag_engine import VisRAG
 
 
@@ -51,3 +52,13 @@ def test_visrag_accepts_existing_traced_patch(monkeypatch, tmp_path):
     assert existing.is_file()
     assert visrag.patch_db == (evidence,)
     assert visrag.index.count() == 1
+
+
+def test_packaged_visual_seed_manifest_loads_all_verified_images():
+    evidence = load_evidence_from_file("data/evidences.json")
+    visrag = VisRAG()
+
+    assert len(evidence) == 7
+    assert len(visrag.patch_db) == 7
+    assert {item.id for item in visrag.patch_db} == {item.id for item in evidence}
+    assert all(item.metadata.get("license") for item in visrag.patch_db)

@@ -10,6 +10,7 @@ import concurrent.futures
 from datetime import datetime, timedelta, timezone
 
 from config import CONFIG
+from app.cross_language_retrieval import english_lexical_score, expand_ml_query
 from embedding_models import EMBEDDINGS
 from knowledge_base import load_evidence_from_file, load_seed_evidence
 from math_utils import cosine_similarity
@@ -108,6 +109,34 @@ def _similarity(query: str, item: Evidence) -> float:
     return min(1.0, embedding_score * 0.35 + jina_score * 0.35 + jaccard * 0.20 + anchor_boost + tag_boost)
 
 
+def _course_similarity(query: str, item: Evidence) -> float:
+    expansion = expand_ml_query(query)
+    scoring_query = expansion.expanded_query
+    query_tokens = _tokens(scoring_query)
+    doc_text = _evidence_text(item)
+    doc_tokens = _tokens(doc_text)
+    if not query_tokens or not doc_tokens:
+        return 0.0
+    overlap = len(query_tokens & doc_tokens)
+    jaccard = overlap / len(query_tokens | doc_tokens)
+    query_coverage = overlap / len(query_tokens)
+    embedding_score = EMBEDDINGS.score(scoring_query, doc_text)
+    jina_score = jinaclip_text_similarity(scoring_query, item)
+    anchor_boost = sum(1 for anchor in item.anchors if anchor and anchor in query) * 0.18
+    tag_boost = sum(1 for tag in item.tags if tag and tag.lower() in query.lower()) * 0.12
+    lexical_score = english_lexical_score(expansion, item.content)
+    return min(
+        1.0,
+        embedding_score * 0.18
+        + jina_score * 0.18
+        + jaccard * 0.12
+        + query_coverage * 0.32
+        + lexical_score * 0.20
+        + anchor_boost
+        + tag_boost,
+    )
+
+
 def _evidence_text(item: Evidence) -> str:
     return " ".join((item.title, item.content, " ".join(item.tags), " ".join(item.anchors)))
 
@@ -140,8 +169,9 @@ class GraphRAG:
         try:
             # InMemoryGraphRepository 和 Neo4jGraphRepository 都有 edges 属性或可用 query_prerequisites
             if hasattr(repository, "edges"):
-                for source, target, _relation in repository.edges:
-                    self._add_edge(source, target)
+                for source, target, relation in repository.edges:
+                    if relation == "PREREQUISITE_OF":
+                        self._add_edge(source, target)
             elif hasattr(repository, "query_prerequisites"):
                 # 如果仓库支持查询，尝试遍历所有已知节点
                 if hasattr(repository, "nodes"):
@@ -266,7 +296,8 @@ class GraphRAG:
 
 class VisRAG:
     def __init__(self, index: VectorIndex | None = None) -> None:
-        self.patch_db = self._verified_image_evidence(load_seed_evidence())
+        seed_evidence = load_seed_evidence()
+        self.patch_db = self._verified_image_evidence(tuple(seed_evidence))
         self.index = index or InMemoryVectorIndex("visrag-image-patches")
         self.index.upsert(self.patch_db)
 
@@ -341,7 +372,11 @@ def pre_filter_index(
     query: str,
     query_with_graph: str,
     doc_constraints: list[str] | str | None,
-    top_k: int
+    top_k: int,
+    *,
+    course_id: str | None = None,
+    owner_id: str = "",
+    allow_cross_course: bool = False,
 ) -> list[Evidence]:
     """Helper to pre-filter items of an index by doc_constraints and compute similarities."""
     matches = []
@@ -357,7 +392,18 @@ def pre_filter_index(
     # If it is a FAISSIndexSet, recurse on each of its loaded indexes
     if hasattr(index, "indexes") and isinstance(index.indexes, dict):
         for sub_index in index.indexes.values():
-            matches.extend(pre_filter_index(sub_index, query, query_with_graph, constraints_list, top_k))
+            matches.extend(
+                pre_filter_index(
+                    sub_index,
+                    query,
+                    query_with_graph,
+                    constraints_list,
+                    top_k,
+                    course_id=course_id,
+                    owner_id=owner_id,
+                    allow_cross_course=allow_cross_course,
+                )
+            )
         return sorted(matches, key=lambda x: x.score, reverse=True)[:top_k]
 
     # For InMemoryVectorIndex or FaissVectorIndex, get items from _items
@@ -368,11 +414,22 @@ def pre_filter_index(
         items = list(index.documents)
 
     for item in items:
+        visibility = item.metadata.get("visibility")
+        item_owner = str(item.metadata.get("owner_id") or "")
+        item_course = str(item.metadata.get("course_id") or "")
+        if visibility == "private" and (not owner_id or item_owner != owner_id):
+            continue
+        if course_id and not allow_cross_course:
+            is_current_course = item_course == course_id
+            is_authorized_private = visibility == "private" and item_owner == owner_id
+            if not is_current_course and not is_authorized_private:
+                continue
         source_val = (item.source or "").lower()
         title_val = (item.title or "").lower()
         # If constraints list is empty, treat as matching all items
         if not constraints_list or any(c in source_val or c in title_val for c in constraints_list):
-            score = _similarity(query_with_graph, item)
+            score_fn = _course_similarity if course_id else _similarity
+            score = score_fn(query_with_graph, item)
             matches.append(item.with_score(score))
 
     return sorted(matches, key=lambda x: x.score, reverse=True)[:top_k]
@@ -488,7 +545,18 @@ class HybridRAGPipeline:
         if matching_ids:
             TELEMETRY.record_metric("course_index.documents_removed", len(matching_ids))
 
-    def retrieve(self, query: str, target: str | None = None, top_k: int = CONFIG.retrieval_top_k, profile: Any | None = None, disable_external: bool = False, doc_constraint: str | list[str] | None = None) -> RetrievalBundle:
+    def retrieve(
+        self,
+        query: str,
+        target: str | None = None,
+        top_k: int = CONFIG.retrieval_top_k,
+        profile: Any | None = None,
+        disable_external: bool = False,
+        doc_constraint: str | list[str] | None = None,
+        course_id: str | None = None,
+        allow_cross_course: bool = False,
+        actor: Any | None = None,
+    ) -> RetrievalBundle:
         # === 关键修复：延迟加载，打破循环导入 ===
         from web_search_api import search_arxiv
 
@@ -516,7 +584,80 @@ class HybridRAGPipeline:
             else:
                 target = target or self._infer_target(cleaned_query)
                 graph_context = self.graph.get_context(target)
-                query_with_graph = f"{cleaned_query} {' '.join(graph_context.learning_path)}"
+                # The legacy graph covers the original ML demo curriculum. A
+                # scoped course owns a separate canonical KP graph, so injecting
+                # the legacy fallback path (often pooling) would pollute ranking.
+                query_with_graph = (
+                    cleaned_query
+                    if course_id
+                    else f"{cleaned_query} {' '.join(graph_context.learning_path)}"
+                )
+
+            owner_id = getattr(profile, "student_id", "") if profile else ""
+            prefilter_k = top_k * 5 if course_id else top_k
+
+            # Course-grounded retrieval has one source of truth: ready
+            # canonical DBSourceDocument/DBSourceRef rows.  The legacy in-memory
+            # indexes remain available for general questions and explicitly
+            # cross-course exploration, but cannot bypass the canonical status
+            # and locator contract for a scoped course query.
+            if course_id and not allow_cross_course:
+                from app.canonical_retrieval import retrieve_canonical_sources
+                from app.database import SessionLocal
+
+                try:
+                    with SessionLocal() as canonical_session:
+                        canonical = retrieve_canonical_sources(
+                            canonical_session,
+                            course_id=course_id,
+                            query=query_with_graph,
+                            top_k=top_k,
+                            actor=actor,
+                        )
+                except Exception as exc:
+                    print(f"  [RAG] canonical course retrieval failed: {exc}")
+                    canonical = {"evidence": (), "low_confidence": True}
+
+                canonical_evidence = list(canonical.get("evidence") or ())
+                # A learner's own notes are still valid auxiliary context, but
+                # they are not presented as canonical course citations.
+                personal = self._visible_user_evidence(
+                    pre_filter_index(
+                        self.user_index,
+                        query,
+                        query_with_graph,
+                        doc_constraint,
+                        top_k,
+                        owner_id=owner_id,
+                        allow_cross_course=True,
+                    ),
+                    owner_id,
+                )
+                personal = [
+                    item.with_content(item.content)
+                    for item in personal
+                    if (
+                        owner_id
+                        and item.metadata.get("visibility") == "private"
+                        and item.metadata.get("owner_id") == owner_id
+                        and not item.metadata.get("canonical_source")
+                    )
+                ]
+                final_evidence = sorted(
+                    [*canonical_evidence, *personal],
+                    key=lambda item: item.score,
+                    reverse=True,
+                )[:top_k]
+                result = RetrievalBundle(
+                    query=query,
+                    target=graph_context.target,
+                    graph_context=graph_context,
+                    evidence=tuple(final_evidence),
+                    low_confidence=bool(canonical.get("low_confidence")) and not personal,
+                    out_of_domain=out_of_domain,
+                )
+                TELEMETRY.record_metric("retrieval.evidence_count", len(result.evidence), target=result.target)
+                return result
 
             if doc_constraint:
                 # Convert string or list to doc_constraints list
@@ -527,21 +668,92 @@ class HybridRAGPipeline:
                     doc_constraints = doc_constraint
 
                 # 1. 前置过滤 visual_index
-                candidates = pre_filter_index(self.visual_index, query, query_with_graph, doc_constraints, top_k)
+                candidates = pre_filter_index(
+                    self.visual_index,
+                    query,
+                    query_with_graph,
+                    doc_constraints,
+                    prefilter_k,
+                    course_id=course_id,
+                    owner_id=owner_id,
+                    allow_cross_course=allow_cross_course,
+                )
                 
                 # 2. 前置过滤本地文本库
                 if self.faiss_indexes is not None:
-                    local_hits = pre_filter_index(self.faiss_indexes, query, query_with_graph, doc_constraints, top_k)
+                    local_hits = pre_filter_index(
+                        self.faiss_indexes,
+                        query,
+                        query_with_graph,
+                        doc_constraints,
+                        prefilter_k,
+                        course_id=course_id,
+                        owner_id=owner_id,
+                        allow_cross_course=allow_cross_course,
+                    )
                 else:
-                    local_hits = pre_filter_index(self.text_index, query, query_with_graph, doc_constraints, top_k)
+                    local_hits = pre_filter_index(
+                        self.text_index,
+                        query,
+                        query_with_graph,
+                        doc_constraints,
+                        prefilter_k,
+                        course_id=course_id,
+                        owner_id=owner_id,
+                        allow_cross_course=allow_cross_course,
+                    )
                 candidates.extend(local_hits)
                 
                 # 3. 前置过滤 user_index
                 user_hits = self._visible_user_evidence(
-                    pre_filter_index(self.user_index, query, query_with_graph, doc_constraints, top_k),
-                    getattr(profile, "student_id", "") if profile else "",
+                    pre_filter_index(
+                        self.user_index,
+                        query,
+                        query_with_graph,
+                        doc_constraints,
+                        prefilter_k,
+                        course_id=course_id,
+                        owner_id=owner_id,
+                        allow_cross_course=allow_cross_course,
+                    ),
+                    owner_id,
                 )
                 candidates.extend(user_hits)
+            elif course_id and not allow_cross_course:
+                # Course-scoped retrieval filters before ranking so evidence from
+                # another public course cannot crowd the current course out of top-k.
+                candidates = pre_filter_index(
+                    self.visual_index,
+                    query,
+                    query_with_graph,
+                    None,
+                    prefilter_k,
+                    course_id=course_id,
+                    owner_id=owner_id,
+                )
+                local_index = self.faiss_indexes if self.faiss_indexes is not None else self.text_index
+                candidates.extend(
+                    pre_filter_index(
+                        local_index,
+                        query,
+                        query_with_graph,
+                        None,
+                        prefilter_k,
+                        course_id=course_id,
+                        owner_id=owner_id,
+                    )
+                )
+                candidates.extend(
+                    pre_filter_index(
+                        self.user_index,
+                        query,
+                        query_with_graph,
+                        None,
+                        prefilter_k,
+                        course_id=course_id,
+                        owner_id=owner_id,
+                    )
+                )
             else:
                 candidates = list(self.visual_index.search_evidence(query_with_graph, top_k=top_k))
 
@@ -573,7 +785,7 @@ class HybridRAGPipeline:
 
                 user_results = self._visible_user_evidence(
                     self.user_index.search(query_with_graph, top_k=top_k),
-                    getattr(profile, "student_id", "") if profile else "",
+                    owner_id,
                 )
                 candidates.extend(user_results)
 
@@ -644,9 +856,10 @@ class HybridRAGPipeline:
                 final_evidence.append(images[0])
                 if len(images) > 1 and top_k > 4:
                     final_evidence.append(images[1])
-                    
+
+            pre_expansion_limit = prefilter_k if course_id else top_k
             for item in ranked:
-                if len(final_evidence) >= top_k:
+                if len(final_evidence) >= pre_expansion_limit:
                     break
                 if item not in final_evidence:
                     final_evidence.append(item)
@@ -673,7 +886,11 @@ class HybridRAGPipeline:
                 else:
                     dummy_key = (item.source, id(item))
                     parent_expanded[dummy_key] = item
-            final_evidence = sorted(parent_expanded.values(), key=lambda x: x.score, reverse=True)
+            final_evidence = sorted(
+                parent_expanded.values(), key=lambda x: x.score, reverse=True
+            )
+            if course_id:
+                final_evidence = final_evidence[:top_k]
 
             # === F3 修复：学生画像感知的个性化重排序 ===
             if profile is not None and hasattr(profile, "concept_mastery"):
@@ -681,7 +898,19 @@ class HybridRAGPipeline:
 
             # 置信度评估：无证据或最高分低于阈值 -> 触发幻觉拒答
             top_score = final_evidence[0].score if final_evidence else 0.0
-            low_confidence = (not final_evidence) or top_score < 0.30
+            if course_id and final_evidence:
+                query_tokens = _tokens(expand_ml_query(cleaned_query).expanded_query)
+                lexical_coverage = max(
+                    (
+                        len(query_tokens & _tokens(_evidence_text(item))) / len(query_tokens)
+                        if query_tokens
+                        else 0.0
+                    )
+                    for item in final_evidence
+                )
+                low_confidence = top_score < 0.20 or lexical_coverage < 0.08
+            else:
+                low_confidence = (not final_evidence) or top_score < 0.30
 
             result = RetrievalBundle(
                 query=query,
@@ -825,8 +1054,14 @@ class FAISSIndexSet:
         self.indexes: dict[str, FaissVectorIndex] = {}
         self.categories = ["courseware", "code", "textbook", "dataset", "ppt"]
 
-        for cat in self.categories:
-            index_path = index_dir / f"{cat}_index"
+        candidates = {cat: index_dir / f"{cat}_index" for cat in self.categories}
+        if index_dir.is_dir():
+            for faiss_file in index_dir.glob("*.faiss"):
+                stem = faiss_file.stem
+                if (index_dir / f"{stem}.json").is_file():
+                    candidates.setdefault(stem.removesuffix("_index"), index_dir / stem)
+
+        for cat, index_path in candidates.items():
             faiss_file = index_path.with_suffix(".faiss")
             meta_file = index_path.with_suffix(".json")
             if faiss_file.exists() and meta_file.exists():
@@ -845,6 +1080,7 @@ class FAISSIndexSet:
             "textbook": 1.0,
             "dataset": 0.6,
             "ppt": 0.8,
+            "licensed_ml_course": 1.1,
         }
 
         all_results = []

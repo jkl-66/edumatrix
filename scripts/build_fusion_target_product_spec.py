@@ -1,0 +1,1114 @@
+#!/usr/bin/env python3
+"""Generate the complete target-route product specification.
+
+The output is a planning artifact. It expands shared page contracts into every
+target route so a future implementation cannot mistake a route name for a
+complete product specification.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+
+FIELDS = (
+    "path",
+    "label",
+    "role",
+    "navigation",
+    "purpose",
+    "primary_action",
+    "layout",
+    "inputs",
+    "outputs",
+    "states",
+    "interactions",
+    "linkage",
+    "baseline_code",
+    "candidate_code",
+    "refactor_code",
+    "hidden_or_removed",
+    "acceptance",
+    "phase",
+)
+
+
+RESOURCE_PACKAGE_TYPES = (
+    "个性化讲义",
+    "思维导图",
+    "测验题资源",
+    "实训任务书",
+    "代码沙盒任务",
+    "视频推荐",
+    "PPT/网页课件",
+    "可交互模型",
+    "费曼复述任务",
+)
+
+
+GLOBAL_PRODUCT_CONTRACTS = {
+    "scope": "本周期只设计和验收桌面端；移动端、平板端和响应式专项统一列为后续延期，不进入F0-F10完成门禁。",
+    "visual_system": (
+        "黑、白、灰为主，正文近黑、辅助文字中灰、边框浅灰；仅允许一个低饱和语义强调色用于选中、进度和链接。"
+        "中文优先使用思源黑体/Noto Sans CJK SC，Windows回退微软雅黑，数字与英文可用Inter；正文字号15-16px、"
+        "辅助文字不低于14px、页标题24px、区块标题18px，字重400/500/600，行高1.55-1.7，字距为0。"
+        "全局侧栏224px、顶栏56px、内容区最大1440px、页面横向留白24-32px；普通区块不做漂浮卡片，"
+        "重复条目或工具面板圆角不超过8px，阴影只用于弹层。禁止蓝紫渐变、发光背景、光球、过量毛玻璃和卡片套卡片。"
+    ),
+    "navigation": (
+        "学生一级入口固定为首页、个人中心、学习画像、学习空间、智能对话、知识库、学习市场、设置；"
+        "教师一级入口为教学总览、课程与资源、学生学情、测评与干预；管理员一级入口为账号权限、模型配置、内容审核、系统状态。"
+        "其余页面只能作为二级导航或上下文深链。"
+    ),
+    "page_hierarchy": (
+        "每页首屏必须依次回答当前位置、当前状态、当前任务和唯一主动作；解释、依据、Agent过程和高级参数默认折叠。"
+        "按钮按主动作、次动作、文本动作三级呈现；图标按钮使用统一图标并提供tooltip。"
+    ),
+    "state_contract": (
+        "每个异步页面必须区分首次加载、空状态、处理中、部分成功、失败可重试、断点恢复和完成。"
+        "长任务离开页面后继续运行，返回时恢复进度；失败保留输入和已完成产物，重试不得重复写入。"
+    ),
+    "evidence_contract": (
+        "普通浏览、展开、搜索、下载和查看来源不改变掌握度。只有作答、代码运行加解释、实验观察、费曼两轮复述、"
+        "有完成条件的资源任务和正式测评等证据行为写入画像；重复提交通过幂等键只计一次。"
+    ),
+    "agent_visibility": (
+        "只展示Agent职责、使用的课程/画像/来源输入、候选结果、分歧、校验、修订和最终决策摘要；"
+        "私有思维链、系统提示词和原始Agent日志永不进入用户界面。"
+    ),
+    "resource_package": "完整资源包固定包含：" + "、".join(RESOURCE_PACKAGE_TYPES) + "。",
+}
+
+
+def spec(**kwargs: str) -> dict[str, str]:
+    missing = [field for field in FIELDS if not kwargs.get(field)]
+    if missing:
+        raise ValueError(f"Missing fields for {kwargs.get('path', '<unknown>')}: {missing}")
+    return {field: kwargs[field] for field in FIELDS}
+
+
+def resource_detail(
+    *,
+    path: str,
+    label: str,
+    purpose: str,
+    body: str,
+    inputs: str,
+    outputs: str,
+    interactions: str,
+    linkage: str,
+    baseline: str,
+    candidate: str,
+    refactor: str,
+    acceptance: str,
+    phase: str = "F5",
+    primary_action: str = "按当前状态显示“开始学习”“继续学习”或“完成本资源”，三者同时只出现一个",
+    states: str = "",
+    layout: str = "",
+    shared_interactions: str = "",
+    hidden_or_removed: str = "",
+) -> dict[str, str]:
+    resolved_layout = layout or (
+        f"共用资源详情壳：顶部标题/进度/版本，中部主体为{body}，左侧为章节或资源目录，"
+        "右侧默认显示学习目标、AI伙伴和下一步；来源与Agent校验放入按需展开抽屉。"
+    )
+    resolved_interactions = shared_interactions or (
+        "查看目录与来源、选择内容即时提问、保存/导出、加入笔记或复习；"
+        "只有满足该资源明示完成条件后才出现完成动作"
+    )
+    return spec(
+        path=path,
+        label=label,
+        role="学生；教师可在课程资源预览中按权限查看",
+        navigation="学习空间 > 学习资源；允许从首页、路径、画像节点、知识库和对话结果深链进入",
+        purpose=purpose,
+        primary_action=primary_action,
+        layout=resolved_layout,
+        inputs=f"统一资源对象、资源版本、课程/章节/知识点、适用画像、学习目标、来源引用、完成记录；{inputs}",
+        outputs=f"阅读/操作进度、完成记录、可恢复位置、提问上下文和下一步深链；{outputs}",
+        states=states or "加载骨架、资源生成中、可学习、编辑未保存、保存版本中、来源不足、生成/导出失败可重试、历史版本只读、完成；离开后回到最近位置。",
+        interactions=f"{resolved_interactions}；{interactions}",
+        linkage=linkage,
+        baseline_code=baseline,
+        candidate_code=candidate,
+        refactor_code=refactor,
+        hidden_or_removed=hidden_or_removed or "隐藏对象 ID、哈希、任务租约、内部 Schema 和全量 Agent 日志；不把同类型当前工作台继续保留为一级导航。",
+        acceptance=f"可从至少三种上游入口带上下文打开；刷新后恢复；完成只计一次并跨页更新；桌面1440x900与1366x768均可读；{acceptance}",
+        phase=phase,
+    )
+
+
+def teacher_route(
+    *, path: str, label: str, purpose: str, action: str, layout: str,
+    inputs: str, outputs: str, states: str, interactions: str, linkage: str,
+    baseline: str, candidate: str, refactor: str, acceptance: str,
+) -> dict[str, str]:
+    return spec(
+        path=path,
+        label=label,
+        role="教师；管理员可按审计权限查看",
+        navigation=f"教师端 > {label}",
+        purpose=purpose,
+        primary_action=action,
+        layout=layout,
+        inputs=inputs,
+        outputs=outputs,
+        states=states,
+        interactions=interactions,
+        linkage=linkage,
+        baseline_code=baseline,
+        candidate_code=candidate,
+        refactor_code=refactor,
+        hidden_or_removed="隐藏企业 HR/LMS/SSO、认证、模型租约、对象 ID 和评委旅程；技术证据只在授权详情中出现。",
+        acceptance=acceptance,
+        phase="F9",
+    )
+
+
+def admin_route(
+    *, path: str, label: str, purpose: str, action: str, layout: str,
+    inputs: str, outputs: str, states: str, interactions: str, linkage: str,
+    baseline: str, candidate: str, refactor: str, acceptance: str,
+) -> dict[str, str]:
+    return spec(
+        path=path,
+        label=label,
+        role="管理员",
+        navigation=f"管理员端 > {label}",
+        purpose=purpose,
+        primary_action=action,
+        layout=layout,
+        inputs=inputs,
+        outputs=outputs,
+        states=states,
+        interactions=interactions,
+        linkage=linkage,
+        baseline_code=baseline,
+        candidate_code=candidate,
+        refactor_code=refactor,
+        hidden_or_removed="不展示给学生/教师；密钥、原始提示、敏感输入、真实日志正文和数据库内部字段必须脱敏或隐藏。",
+        acceptance=acceptance,
+        phase="F9",
+    )
+
+
+TARGET_ROUTES: list[dict[str, str]] = [
+    spec(
+        path="/landing", label="作品展示页", role="未登录访客、评委",
+        navigation="公开入口；未登录访问产品路由时回到此页",
+        purpose="在不阅读长说明的情况下理解 EduMatrix 是从画像、Agent 生成到反馈更新的垂直技能学习闭环。",
+        primary_action="开启学习旅程",
+        layout="第一屏使用 7.20 的浅色产品气质，展示 AI/ML 课程、一个真实学习目标和四段闭环缩略过程；下方只露出一小段差异化资源/反馈结果，不做卡片堆叠式营销页。",
+        inputs="公开产品名称、演示课程摘要、两类差异化学习者示例和可用状态；不读取私人画像。",
+        outputs="进入 `/login`；授权演示模式可携带只读示例目标，不初始化数据库。",
+        states="默认、演示摘要加载失败时使用静态可信内容、已登录用户自动进入角色落点、离线仍可看到核心价值。",
+        interactions="切换两个背景示例以查看资源难度/表达差异；点击唯一主按钮进入登录；次要文本链接查看数据说明。",
+        linkage="只说明闭环，不写学习事件；真正画像和课程上下文在登录/引导后建立。",
+        baseline_code="7.20 `frontend/src/views/Landing.vue` 的访客产品页和浅色视觉。",
+        candidate_code="当前 `Landing.vue` 的学习路径表达；competition showcase 仅提供演示内容素材。",
+        refactor_code="重构 `Landing.vue` 的内容层级和角色跳转；不新建第二个营销站。",
+        hidden_or_removed="移除助教、企业、集成和内部评委角色入口；移除泛化功能清单、工程状态和无法验证的成绩宣称。",
+        acceptance="10 秒内能说出目标用户、输入、核心过程和结果；只有一个主按钮；未登录不能越权访问私有页面。",
+        phase="F1",
+    ),
+    spec(
+        path="/login", label="登录", role="学生、教师、管理员",
+        navigation="作品展示页 > 登录",
+        purpose="用三类清晰身份进入正确工作区，并为评委提供一键演示账号。",
+        primary_action="登录",
+        layout="居中登录表单；角色采用三段选择，账号密码在其下；演示账号放入可展开区并支持一键填入，注册放低优先级入口。",
+        inputs="角色、用户名、密码；可选演示账号选择。",
+        outputs="服务端身份令牌、角色、用户公开 ID、是否完成引导和角色落点。",
+        states="空表单、字段校验、登录中、凭据错误、角色不匹配、服务不可用、成功跳转；重复登录不创建新用户。",
+        interactions="选择角色、填写或一键填入演示账号、显示/隐藏密码、提交；错误定位到字段并保留非密码输入。",
+        linkage="登录不改变画像；学生未引导进入 `/onboarding`，已引导进入 `/`，教师/管理员进入各自首页。",
+        baseline_code="7.20 `Login.vue`、`frontend/src/api/auth.js`、`app/auth.py`。",
+        candidate_code="当前 `Login.vue`、`app/main.py` auth 端点和 `role_landing.py`。",
+        refactor_code="收敛 `Login.vue` 和路由守卫；统一后端角色枚举与演示账号配置。",
+        hidden_or_removed="隐藏 assistant、visitor、enterprise 等产品角色；不在页面显示 JWT、API 前缀或权限调试信息。",
+        acceptance="三类账号分别进入正确落点；错误账号可恢复；浏览器前端改角色值不能越过后端权限。",
+        phase="F1",
+    ),
+    spec(
+        path="/onboarding", label="首次学习引导", role="首次登录学生",
+        navigation="学生首次登录自动进入；完成后不再强制显示，可从设置重做目标与偏好",
+        purpose="通过系统主动发起的自然语言多轮交流，逐步确认学生背景、目标、基础、困难和偏好，并基于团队预置课程知识库进入入学诊断。",
+        primary_action="回答当前问题；信息足够后变为“确认画像并开始诊断”",
+        layout="桌面三段式向导：顶部为当前阶段与完成度，中部约68%为一次只问一个问题的连续对话，右侧约32%为实时画像快照。右栏按学习背景、目标技能、已有基础、困难、偏好五组显示已确认值、待确认值和来源；可选个人资料入口放在输入框附件菜单，不占主流程。",
+        inputs="自然语言回答、所选预置课程、目标技能、学习期限和可选个人成绩单/课程表/个人经历资料；不接收学生上传课程课件、教材或课程大纲作为首次流程前提。",
+        outputs="经学生确认的背景与偏好字段、目标课程与知识点范围、待诊断能力假设、可选资料抽取结果和诊断会话草稿。",
+        states="首次欢迎、等待回答、模型追问中、字段待确认、字段冲突、可选资料上传/解析/失败、信息足够、保存中、模型不可用时使用结构化追问模板、完成。",
+        interactions="回答、修改上一条回答、点击右栏字段查看依据、确认或纠正字段、可选上传/删除个人资料、跳过资料、确认画像并进入 `/workspace/assessment/entry`；刷新后恢复到最近一轮。",
+        linkage="只把学生确认的背景、目标和偏好写入初始画像；普通对话不写掌握度，掌握度必须由随后入学诊断建立。预置课程知识库直接提供诊断范围。",
+        baseline_code="7.20 `Onboarding.vue` 和 `updateStudentProfile`。",
+        candidate_code="当前 media context/OCR、M3 profiles、course/source objects 与 assessment core。",
+        refactor_code="重构 `Onboarding.vue` 为可恢复对话状态机；新增画像字段确认、预置课程选择和可选个人资料解析适配层。",
+        hidden_or_removed="删除强制上传课程材料、四步表单堆叠、内部三画像策略名、对象哈希、冻结上下文和完整Agent日志；不要求一次填写所有高级偏好。",
+        acceptance="不上传任何文件也能完成；系统至少主动询问背景、目标、基础、困难和偏好；右侧画像逐轮变化；附件失败不阻塞；完成后诊断范围与预置课程一致。",
+        phase="F3",
+    ),
+    spec(
+        path="/", label="学生首页", role="学生",
+        navigation="学生一级入口：首页",
+        purpose="让学生第一眼知道当前课程、今天做什么、为什么做和完成条件。",
+        primary_action="根据状态仅显示：开始入学诊断、生成/确认路径、继续今日学习、开始巩固测评或继续离线资源之一",
+        layout="顶部课程与目标及四项克制摘要；主体约 70% 为唯一主任务和最多三项核心知识策略，右侧约 30% 为复习/日历摘要与最近动态。每项策略显示状态、理由、建议资源、预计时间和开始动作；原版丰富推荐保留到画像/路径详情。",
+        inputs="统一课程上下文、画像摘要、路径版本、今日工作项、复习队列、最近学习事件和资源可用状态。",
+        outputs="带课程/任务/资源上下文的目标深链；不在首页创建第二套画像或路径。",
+        states="未选课程、未诊断、无路径、路径待确认、有任务、今日完成、生成中、模型失败可继续已有资源、无历史数据。",
+        interactions="切换课程、开始/继续主任务、打开薄弱点策略、查看最近动态来源；低频统计进入个人中心。",
+        linkage="资源/测评完成后由统一事件处理器更新路径、画像、复习和动态，再刷新首页；首页只消费聚合结果。",
+        baseline_code="7.20 `Dashboard.vue` 的仪表盘、推荐、画像/路径/复习入口。",
+        candidate_code="当前 `Dashboard.vue`、`app/m5_learning.py`、`profile_summary.py`、workspace overview/today API。",
+        refactor_code="保护性重构 `Dashboard.vue`，新增/整理首页聚合接口和单一主动作决策器。",
+        hidden_or_removed="首屏移除 A*、多路线通关、M5、冻结状态、证据 ID、全量资源类型和英文状态；不删除其有价值的深链。",
+        acceptance="不同状态只出现一个主动作；完成一项任务后首页、路径和画像一致；数据为空和模型失败时仍有可执行动作。",
+        phase="F4",
+    ),
+    spec(
+        path="/profile", label="个人中心", role="学生",
+        navigation="学生一级入口：个人中心",
+        purpose="回答最近学了多少、坚持情况和发生了什么变化，不重复完整学习画像。",
+        primary_action="查看最近一条学习动态",
+        layout="顶部个人摘要，其下四项核心统计与热力图；中部左侧趋势、右侧最近动态；下部为画像摘要、周/月报告和路径/复习入口。完整画像不复制到本页；图表采用清晰坐标和课程筛选。",
+        inputs="统一学习事件、任务完成、测评、复习、代码/实验、笔记和画像快照的时间聚合。",
+        outputs="按天/课程筛选结果、报告深链、学习对象回链；页面本身不写掌握度。",
+        states="无学习数据、加载、正常、筛选无结果、部分聚合失败、报告生成中/失败/完成。",
+        interactions="切换课程和周期、点击热力图日期、打开动态来源、查看画像/路径、生成阶段报告。",
+        linkage="所有数字由统一事件聚合；点击动态恢复原资源/题目/会话；报告冻结来源和时间。",
+        baseline_code="7.20 `ProfileDashboard.vue` 的掌握、推荐和最近活动。",
+        candidate_code="当前 profile summary、learning events、teaching analytics 的聚合逻辑。",
+        refactor_code="重构 `ProfileDashboard.vue`，新增个人活动聚合/报告适配层；不复制教师报告页面。",
+        hidden_or_removed="不展示完整十维画像、算法名、数据库计数或虚构趋势；完整画像进入 `/profile/learning`。",
+        acceptance="无数据不伪造图表；任一动态可回到来源；时间/任务数字可由事件重算；1366x768下图表标签不重叠。",
+        phase="F8",
+    ),
+    spec(
+        path="/profile/learning", label="学习画像", role="学生；教师从学生详情只读进入",
+        navigation="学生一级入口：学习画像；兼容 `/student-analysis`",
+        purpose="完整回答掌握什么、不会什么、判断依据和下一步，同时以资源难度匹配曲线和路径规划图呈现个性化决策，并保护 7.20 十维画像等丰富能力。",
+        primary_action="打开当前最薄弱知识点的下一步学习资源",
+        layout="总览带下以约 74% 大画布展示知识掌握图谱，右侧约 26% 固定节点详情；下方为资源难度匹配曲线、路径规划图和十维/认知/负荷/偏好/趋势标签区，画像编辑进入抽屉。首屏突出图谱、依据与下一步，原版分析不删除。",
+        inputs="画像快照、课程知识图谱、答题/代码/实验/复述/阅读证据、误区、学习偏好和路径状态。",
+        outputs="节点证据解释、知识盲区定位、资源难度匹配曲线、学习路径规划图、资源/练习/复习深链、可编辑背景字段、画像变化历史。",
+        states="加载、无诊断、部分证据、图谱为空、旧快照可用但新计算失败、编辑未保存/冲突、完整。",
+        interactions="搜索/筛选图谱、点节点看依据、切换分析标签、生成资源、加入复习、开始练习、编辑用户字段、查看变化来源。",
+        linkage="明确事件权重；用户编辑背景不覆盖推断掌握度；下一步动作进入学习空间并由完成证据反向更新画像。",
+        baseline_code="7.20 `StudentAnalysis.vue` 1276 行、十维分析/雷达/建议/画像编辑/资源生成；`ProfileDashboard.vue` 为摘要。",
+        candidate_code="当前 `StudentAnalysis.vue`、M3 profiles、profile summary/evidence、knowledge graph fact governance。",
+        refactor_code="保护性重构 `StudentAnalysis.vue` 与 profile API；增加图谱掌握覆盖层、节点证据侧栏和变化解释，不另建画像工作台。",
+        hidden_or_removed="算法名移入依据；隐藏内部 evidence ID、trace、卡尔曼参数和候选状态；不得删掉十维分析、编辑和资源动作。",
+        acceptance="逐项通过四页保护清单；每个可见掌握结论能查看依据；资源难度匹配曲线能解释画像与资源难度的对应关系；路径规划图能回链到当前任务；至少答题和代码两类事件造成可解释差异；原版功能均可找到。",
+        phase="F4",
+    ),
+    spec(
+        path="/profile/history", label="历史与学习记录", role="学生",
+        navigation="个人中心 > 历史与动态；智能对话可打开同一会话筛选",
+        purpose="按课程和目标找回对话、资源和学习事件，并从原上下文继续。",
+        primary_action="继续所选会话或学习对象",
+        layout="左侧课程/时间筛选，中间历史时间线，右侧来源与关联资源摘要；对话、资源、测评和系统事件使用可理解标签。",
+        inputs="对话历史、统一学习事件、资源深链、来源引用和恢复上下文。",
+        outputs="继续对话、回到来源、打开资源或从会话生成资源的上下文深链。",
+        states="无历史、加载、筛选无结果、上下文可恢复、来源已撤回、恢复失败、完成。",
+        interactions="筛选、搜索、展开一次会话/事件、继续、打开来源、生成资源；不提供无证据的画像回滚按钮。",
+        linkage="查看历史不写事件；继续提问或学习后按真实动作记录；资源/来源撤回状态要可见。",
+        baseline_code="7.20 `History.vue` 的会话、继续对话、自适应小测和认知状态入口。",
+        candidate_code="当前 `History.vue`、history/session API、workspace timeline。",
+        refactor_code="重构 `History.vue` 为个人中心深链，并统一恢复上下文协议。",
+        hidden_or_removed="隐藏 1+3+5 Swarm 工程文案、内部 trace 和无审计依据的画像回滚；不删除继续对话和关联动作。",
+        acceptance="可按课程找回会话并恢复；历史对象失效时说明原因；不因查看历史改变画像。",
+        phase="F8",
+    ),
+    spec(
+        path="/workspace", label="学习空间总览", role="学生",
+        navigation="学生一级入口：学习空间",
+        purpose="在同一课程上下文中组织今日任务、测评、路径、资源、实操、复习和沉淀，避免多个工作台割裂。",
+        primary_action="继续当前任务",
+        layout="固定课程上下文栏、今日任务、恢复上次学习、四组二级导航和最近资源；不在总览内嵌所有工具。",
+        inputs="课程、今日任务、路径版本、资源摘要、诊断状态、复习队列和最近位置。",
+        outputs="带目标/资源/任务的深链、任务恢复位置和空间筛选状态。",
+        states="未选课程、未诊断、无路径、任务加载、无今日任务、进行中、需复测、今日完成、服务失败可回退。",
+        interactions="切换课程、继续任务、打开二级模块、恢复最近资源、查看任务完成条件；课程切换前提示未保存内容。",
+        linkage="所有子路由共享 course/goal/task 上下文；完成事件更新今日任务、画像、路径、复习和个人动态。",
+        baseline_code="7.20 首页、Chat、路径、复习和笔记共同构成学习主线。",
+        candidate_code="当前 `LearningWorkspace.vue`、`app/m5_workspace.py`、today/workspace/action API。",
+        refactor_code="重构 `LearningWorkspace.vue` 为轻量容器；抽取课程上下文、任务恢复和二级导航组件。",
+        hidden_or_removed="移除任务步骤、租约、M5、内部状态机和多套上下文创建表单；Tutor 作为右侧 AI 伙伴。",
+        acceptance="在子模块间切换不丢课程与任务；主动作唯一；任一失败能回到已有资源；不出现独立能力入口堆叠。",
+        phase="F5",
+    ),
+    spec(
+        path="/learn", label="智能对话", role="学生；教师在课程资源场景可使用",
+        navigation="学生一级入口：智能对话",
+        purpose="保留 7.20 核心对话体验，提供多模态、来源约束、可审计 Agent 过程和轻量下一步动作。",
+        primary_action="发送问题",
+        layout="左侧会话列表、中部当前对话、右侧上下文/协作管线；回答正文占主区域，附件队列在输入框上方，四阶段 Agent 进度位于回答下方可展开。回答生成单题时可嵌入紧凑练习卡，但完整题组仍进入学习空间。",
+        inputs="文本、解析完成的图片/PDF/PPT/DOCX/Markdown、当前课程、资源/选文、知识点和对话历史。",
+        outputs="流式回答、可定位引用、四阶段摘要、最多三项下一步、保存到资源中心的生成任务。",
+        states="空会话、附件上传/解析/失败、发送中、流式回答、来源不足、模型容量/超时/限流、已有内容回退、完成。",
+        interactions="上传/移除附件、选择本次上下文、发送/停止、引用追问、展开来源/Agent 分歧、生成资源、加入笔记；若回答含单题，可原位作答、判分、看解析、修改重答和继续追问。",
+        linkage="提问写question事件但不直接改变掌握；生成结果进入学习空间；对话单题与测验题资源共用同一题目和attempt协议；完整题组进入`/workspace/resources/quizzes/:resourceId`，整卷正式考试进入智能组卷，代码和联网搜索分别进入沙盒与知识库并保留上下文。",
+        baseline_code="7.20 `Chat.vue` 的流式问答、多模态、来源、笔记、测验、代码、联网和资源生成。",
+        candidate_code="当前 Chat、stream API、M3 agents/debate/decision、media context/OCR、Tutor context。",
+        refactor_code="保护性拆分 `Chat.vue`；保留对话内核，抽离重型测验/代码/搜索工作台，统一生成任务和来源侧栏。",
+        hidden_or_removed="移除内嵌完整代码工作台、整套测验、联网搜索页、双曲圆盘按钮和完整资源正文；不展示私有思维链。",
+        acceptance="原版问答和多模态可用；资源生成后有可恢复深链；对话生成一道题后无需跳页即可提交且结果与练习历史一致；模型失败不丢输入；引用可定位；首屏不再同时出现四套工具。",
+        phase="F7",
+    ),
+    spec(
+        path="/knowledge", label="知识库首页", role="学生、教师",
+        navigation="学生一级入口：知识库；教师从课程与资源进入同一课程库",
+        purpose="从团队预先构建、解析和索引的课程书架进入章节、文档、知识点、问答和资源生成；学生首次使用不需要上传课程材料。",
+        primary_action="打开当前课程文档",
+        layout="首页按我的书架、智能推荐教材、联网找教材三段纵向组织：首屏先显示预置课程书架和继续阅读，中部双列推荐教材，下部为联网发现搜索。进入课程后再使用课程树、文档列表和概览三栏；正文阅读进入独立深链。",
+        inputs="预置课程书架、章节、文档、解析/索引状态、来源/许可、推荐、阅读历史和搜索词。",
+        outputs="课程/文档/图谱/发现深链、加入书架任务和筛选状态。",
+        states="无课程、课程加载、文档解析中、可阅读、无检索结果、来源撤回、解析失败可重试。",
+        interactions="从预置书架继续阅读、查看课程来源、加入推荐教材、联网发现候选资料、进入课程、打开文档/图谱；学生不需要先上传课程文件。",
+        linkage="知识库是问答和生成的来源；加入教材先为候选，确认/审核后才成为课程权威来源。",
+        baseline_code="7.20 `Knowledge.vue` 的上传、文档列表、图谱统计和跨模态搜索。",
+        candidate_code="当前 Knowledge、knowledge/source API、M1 课程结构、OCR、source locator、RAG。",
+        refactor_code="重构 `Knowledge.vue` 为课程化壳；新增书架/候选来源聚合，不复制教师资源页。",
+        hidden_or_removed="移除平铺文件为唯一信息架构和学生首次进入时的上传课程提示；隐藏向量、chunk、哈希和OCR内部状态正文。",
+        acceptance="学生登录后可直接看到至少一门预置课程；从课程到章节再到正文不超过三步；无来源时明确提示；教师/学生权限正确；1366x768下三栏仍可阅读。",
+        phase="F7",
+    ),
+    spec(
+        path="/marketplace", label="学习市场", role="学生、教师",
+        navigation="学生一级入口：学习市场",
+        purpose="在轻量校内演示社区中发现、预览和保存资源、资源包或学习路径。",
+        primary_action="保存所选内容到我的学习空间",
+        layout="搜索与少量筛选在顶部，主体为紧凑列表/网格，点击条目打开右侧预览；我的内容和发布为页内入口。",
+        inputs="公开演示条目、课程/知识点/难度/类型、来源许可、收藏和推荐上下文。",
+        outputs="条目详情深链、收藏、个人不可变副本和学习空间入口。",
+        states="加载、空市场、搜索无结果、预览、保存中、许可证/来源不可用、保存失败、完成。",
+        interactions="搜索、筛选、预览、收藏、保存副本、打开发布/我的内容；复杂举报与分叉不在首屏。",
+        linkage="保存写 marketplace_saved，不改掌握；副本进入资源中心，学习完成后才进入画像/路径。",
+        baseline_code="7.20 无市场；首页推荐仅可作为推荐表达参考。",
+        candidate_code="当前 marketplace、course sharing、resource bundle 和 recommendations 能力。",
+        refactor_code="重构 `MarketplaceWorkspace.vue` 为轻市场；将 forks/recommendations 合入详情和我的内容。",
+        hidden_or_removed="隐藏组织市场、责任事件、复杂举报治理、三方差异和上游哈希；保留后台代码但不占导航。",
+        acceptance="能发布/搜索/预览/保存三类内容；保存后个人副本可学习且不受上游直接覆盖；来源许可可见。",
+        phase="F9",
+    ),
+    spec(
+        path="/settings", label="设置", role="学生、教师、管理员按权限",
+        navigation="各角色一级/用户菜单入口：设置",
+        purpose="用少量可理解配置控制学习偏好、多模态、模型连接和个人数据。",
+        primary_action="保存当前设置",
+        layout="基础设置默认展开：学习偏好、多模态开关、通知/数据；模型连接按角色显示；记忆治理、开源致谢和高级诊断折叠。",
+        inputs="教学风格、语言/可访问性、多模态开关、模型端点/模型名/密钥（仅本地安全存储）、记忆授权和数据操作。",
+        outputs="版本化用户设置、脱敏连接状态、测试结果和撤回/导出动作。",
+        states="加载、编辑未保存、保存中、保存失败、连接测试中、容量不足/超时/认证失败、成功。",
+        interactions="修改、保存、测试文本/视觉连接、显示/隐藏密钥、撤回记忆、导出或清理个人数据（需二次确认）。",
+        linkage="偏好影响资源表达和对话，不直接改变掌握；模型设置由管理员默认值与个人覆盖规则决定。",
+        baseline_code="7.20 `Settings.vue` 的 LLM、多模态、教学风格和开源致谢。",
+        candidate_code="当前 Settings、model governance/operations、memory subscriptions 和 speech runtime。",
+        refactor_code="保护性重构 `Settings.vue`；统一设置 Schema、连接错误映射和角色可见性。",
+        hidden_or_removed="隐藏 API 内部字段、配额租约、价格版本和冗长说明；密钥永不回显完整值。",
+        acceptance="普通学生无需理解技术术语即可保存；连接失败原因清晰；密钥不出现在日志/响应/DOM 明文。",
+        phase="F1/F9",
+    ),
+]
+
+
+TARGET_ROUTES.extend(
+    [
+        spec(
+            path="/workspace/assessment", label="测评中心", role="学生",
+            navigation="学习空间 > 测评与路径 > 测评中心",
+            purpose="只承载入学诊断和智能组卷两类正式测评，避免与学习空间中的测验题资源混淆。",
+            primary_action="未诊断时为“开始入学诊断”；已诊断且今日必做完成时为“进入智能组卷”；其余状态不显示可用主按钮",
+            layout="顶部用一句话说明当前课程的测评阶段；主体左右两列分别为入学诊断和智能组卷，每列显示用途、状态、预计时长、最近结果和进入动作。底部只显示这两类正式测评的最近记录，不出现第三类测评入口。",
+            inputs="课程、入学诊断状态、今日必做任务清单与完成证据、智能组卷历史和最近正式测评报告。",
+            outputs="入学诊断或智能组卷深链、未解锁原因、最近正式测评报告入口。",
+            states="未选择课程、待入学诊断、诊断进行中、诊断完成、智能组卷锁定并列出缺失任务、智能组卷已解锁、试卷生成中、历史为空、历史可查看。",
+            interactions="进入或继续入学诊断；查看智能组卷缺失任务并回到总路径；解锁后进入组卷；继续未完成试卷或查看报告。",
+            linkage="测评结果写题目级证据、错题、画像和路径；测评中心不自行计算另一套得分。",
+            baseline_code="7.20 Chat 自适应测验、Review、WrongQuestionBook。",
+            candidate_code="AssessmentWorkspace、FormalExamWorkspace、M5 assessment/exam/retest API。",
+            refactor_code="新增只含两类正式测评的中心壳；分阶题、即时练习和复测能力迁入测验题资源或复习中心。",
+            hidden_or_removed="删除额外练习与独立复测卡；隐藏CAT参数、IRT内部状态、题目版本ID和审核工作台术语。",
+            acceptance="页面只出现入学诊断和智能组卷；锁定原因与总路径一致；中断可恢复；结果只写一次并与画像、路径、错题和复习一致。",
+            phase="F3/F6",
+        ),
+        spec(
+            path="/workspace/assessment/entry", label="入学诊断", role="学生",
+            navigation="测评中心 > 入学诊断；首次引导完成后直接进入",
+            purpose="用 6-10 道理论、应用和工程判断题建立课程起点、盲区与难度匹配。",
+            primary_action="提交当前题",
+            layout="顶部显示诊断范围、进度和保存状态；桌面左侧约 18% 为题号导航，中间约 62% 为单题/答案/理解程度，右侧约 20% 为范围、难度分布和作答进度。完成后切换为窄分数摘要与宽分析正文，呈现强项、薄弱点、判断依据、知识点掌握和路径草稿。",
+            inputs="确认课程范围、题目版本、来源、答案、理解程度、置信度和用时。",
+            outputs="作答、评分、能力初值、盲区、匹配报告、画像快照和路径草稿。",
+            states="准备、取题、作答、判分、题源不足、网络中断恢复、已完成、结果生成失败但作答已保存。",
+            interactions="选择/输入答案、标记理解程度、提交、查看来源、继续下一题、完成后确认路径或调整目标。",
+            linkage="diagnostic_completed 建立画像证据并进入路径；自评不能单独决定掌握度。",
+            baseline_code="7.20 Onboarding 与 Chat 测验。",
+            candidate_code="AssessmentWorkspace、M3 diagnose/matching、M5 CAT/ability/attempt。",
+            refactor_code="保护性拆分 AssessmentWorkspace，新增诊断会话聚合与结果过渡。",
+            hidden_or_removed="隐藏模型能力参数、选题轨迹 ID 和内部三画像标签。",
+            acceptance="不同背景样例产生可解释差异；刷新恢复到当前题；完成后首页/画像/路径立刻一致。",
+            phase="F3",
+        ),
+        spec(
+            path="/workspace/assessment/exams", label="智能组卷", role="学生；教师另从教师测评入口管理发布",
+            navigation="测评中心 > 智能组卷",
+            purpose="按主题、课程/章节、知识点、题型、难度、数量和时间创建整卷并管理历史试卷。",
+            primary_action="今日必做未完成时无可点击主动作；全部完成后显示“生成试卷”",
+            layout="锁定时顶部显示明确锁定条和缺失任务列表，每项可回到总路径；解锁后左侧约35%为主题、课程/章节、知识点、难度和题型数量步进器，右侧约65%为整卷预览、知识覆盖和来源摘要，下方保留我的试卷列表。Word/Excel发布等教师工具不进入学生页面。",
+            inputs="主题、课程/章节/知识点、题型、数量、难度、预计时间、来源约束，以及总路径中今日必做任务及其完成证据。",
+            outputs="试卷草稿、覆盖摘要、可替换题目、考试场次和详情深链。",
+            states="locked_missing_required_tasks、unlocked、配置中、生成中、部分题型题源不足、草稿、可开始、生成失败保留配置、历史可恢复。",
+            interactions="锁定时查看缺失任务并回到对应资源；解锁后选择范围、调整题型/数量、预览覆盖、生成、替换题目、保存并开始考试。",
+            linkage="生成不改画像；交卷后才写测评证据；来源不足时缩小范围而非幻觉补题。",
+            baseline_code="7.20 Chat 生成测验，无整卷向导。",
+            candidate_code="FormalExamWorkspace、M5 exam/question/version/report API。",
+            refactor_code="拆分教师发布与学生组卷；建立简单向导和覆盖校验。",
+            hidden_or_removed="隐藏发布/封卷/人工复核等教师状态，学生只见个人组卷与考试。",
+            acceptance="只以今日必做任务完成证据解锁，不要求完成可选资源；缺失任务逐项可回链；所有配置维度可用；题量与覆盖准确；生成失败保留配置；历史试卷可恢复。",
+            phase="F6",
+        ),
+        spec(
+            path="/workspace/assessment/exams/:examId", label="试卷作答与报告", role="学生",
+            navigation="我的试卷或教师分配任务深链",
+            purpose="完成整卷在线作答、交卷和逐题复盘。",
+            primary_action="作答中为保存/下一题，全部完成后为交卷；交卷后二者变为查看错题与复习",
+            layout="题目导航、主作答区、剩余时间/保存状态；交卷后切换为总分、知识覆盖、逐题解析、错因和下一步。",
+            inputs="试卷版本、考试场次、题目、答案、时间和保存状态。",
+            outputs="提交记录、评分报告、画像证据、错题、复习计划、路径更新和下一日安排。",
+            states="未开始、作答、自动保存、保存失败、时间结束、提交中、待评分/复核、报告可用、导出失败。",
+            interactions="题间跳转、保存、标记、交卷确认、查看解析/来源、确认错因、加入复习、生成复测。",
+            linkage="报告按知识点幂等更新画像、总路径、科目路径和下一日安排；错误进入错题本并创建复习计划；人工复核不覆盖原始作答。",
+            baseline_code="7.20 Chat 测验与错题本。",
+            candidate_code="FormalExamWorkspace、M5 sitting/response/review/report。",
+            refactor_code="重构为学生考试详情，保留教师复核在教师路由。",
+            hidden_or_removed="隐藏内部状态码、版本 ID 和审核责任事件。",
+            acceptance="答案自动保存；重复交卷幂等；报告逐题可追溯；中断恢复不丢答案；交卷后画像、路径、下一日安排、错题本和复习计划均出现同一事件版本的更新。",
+            phase="F6",
+        ),
+        spec(
+            path="/workspace/path", label="学习路径", role="学生；教师从学生详情只读查看",
+            navigation="学习空间 > 测评与路径 > 学习路径；兼容 `/learning-path`",
+            purpose="统筹多个科目的今日与后续学习，允许学生从今日知识点主动生成完整资源包，并以明确任务完成条件控制智能组卷解锁。",
+            primary_action="未生成资源时为“为今日知识点生成完整资源包”；生成后为“继续下一项今日必做任务”；全部必做完成后为“进入智能组卷”",
+            layout="顶部只保留总路径/科目路径两个标签、当前日期和总进度；总路径主体约72%按今天、接下来、本阶段排列跨科目任务，右侧约28%显示各科目进度和调整入口。今日每项固定显示知识点、资源类型、必做/可选、预计时长、完成条件、状态和进入动作；资源未生成时在知识点行内显示唯一生成按钮，生成进度在原位展开。",
+            inputs="总路径与科目路径版本、课程知识依赖、今日知识点、画像、掌握证据、最近学习事件、资源生成状态、任务必做标记、完成条件、预算和节奏。",
+            outputs="九类资源生成任务与对应资源深链、今日任务状态、智能组卷锁定/解锁状态、计划调整草稿、版本差异和历史版本。",
+            states="无路径、路径草稿待确认、今日知识点待生成、九类资源生成中、部分成功可单项重试、资源就绪、必做任务进行中、必做已完成并解锁组卷、调整待确认、重规划失败可恢复、阶段完成。",
+            interactions="切换总路径/科目路径；点击今日知识点生成完整资源包；查看九类产物逐项状态并重试失败项；进入任务、按明示完成条件完成或勾选；查看尚缺必做项；全部完成后进入智能组卷；调整预算/节奏、预览影响、确认重建或恢复旧版本。",
+            linkage="资源生成不改变掌握度；各产物分别归档到资源中心。满足完成条件后统一事件幂等更新任务；只有今日必做任务全部完成才解锁智能组卷，可选资源不参与门禁；正式测评结果再更新画像和后续路径。",
+            baseline_code="7.20 `LearningPathGraph.vue` 1247 行，含知识关系、动态路线、推荐和资源入口。",
+            candidate_code="当前 LearningPathGraph、path draft、M5 plans/paths/today、A* 推荐。",
+            refactor_code="保护性重构原页面和path API；新增总路径聚合、今日任务契约、九类资源批量生成编排、部分成功恢复和组卷解锁计算；保留原版知识关系、预算调整和推荐。",
+            hidden_or_removed="默认隐藏 A* 参数、内部状态、英文异常和对象 ID；不得删除预算调整、知识关系、资源入口。",
+            acceptance="今日/科目/总路径一致；每项任务信息完整；一键生成后九类资源分别可打开；单项失败不丢其他产物；完成必做项自动打勾并解锁组卷；可选项未完成不阻塞；重规划在合法状态成功且可恢复。",
+            phase="F4",
+        ),
+        spec(
+            path="/workspace/resources", label="资源中心", role="学生；教师可在课程资源中使用同一资源模型",
+            navigation="学习空间 > 学习资源 > 资源中心；兼容 `/resources`",
+            purpose="统一保存、分类、搜索、预览、编辑和恢复所有个性化学习产物。",
+            primary_action="打开并继续最近资源",
+            layout="左侧按九类资源及数量分组，顶部为搜索、课程、知识点、状态和版本筛选，中部为紧凑资源网格或列表，选中项在约30%右侧栏或就近气泡显示标题、类型、知识点、摘要、难度、时长、生成状态、完成状态、来源、版本和打开动作。",
+            inputs="统一资源对象、版本、类型、课程、知识点、来源、状态、完成记录和生成任务。",
+            outputs="资源详情/资源包深链、搜索状态、版本比较、归档与导出。",
+            states="无资源、整包生成中、单项排队、单项生成中、部分成功、可用、筛选无结果、失败可重试、已归档、来源撤回、版本冲突。",
+            interactions="搜索筛选、预览、打开、比较/恢复版本、归档、导出、从自定义知识点发起生成。",
+            linkage="对话/知识库/画像/复习生成的产物全部进入此处；打开不提分，完成写统一事件。",
+            baseline_code="7.20 Chat 生成资源、Notes/Knowledge 分散保存。",
+            candidate_code="ResourceCenter、M2/M5 resources/tasks/artifacts、resource bundles。",
+            refactor_code="重构 ResourceCenter 为用户资源库；统一资源 Schema 和生成任务摘要。",
+            hidden_or_removed="移除工程事件列表、局部返工按钮和任务步骤首屏；这些进入失败详情。",
+            acceptance="九类资源均可独立检索、预览和打开；同一资源包按知识点关联但不堆在一个页面；历史和版本可恢复；部分生成失败可单项重试；无内部ID。",
+            phase="F5",
+        ),
+    ]
+)
+
+
+TARGET_ROUTES.extend(
+    [
+        resource_detail(
+            path="/workspace/resources/handouts/:resourceId", label="个性化讲义",
+            purpose="按当前画像用来源约束的概念、示例、反例、公式和小测完成知识讲解。",
+            body="标题区、摘要、目录、关键概念、图表/公式、例子、反例、代码片段、小测、来源脚注和版本编辑器",
+            inputs="表达偏好、难度匹配、先验误区、讲义结构和来源定位", outputs="阅读进度、讲义新版本、嵌入小测结果、导出文件和AI伙伴上下文",
+            interactions="目录定位、调整解释深度、展开例子/反例、复制或运行代码、完成段落小测、选择正文提问、编辑并另存版本、导出",
+            linkage="小测写测评证据；完成讲义更新路径；错误加入复习。",
+            baseline="7.20 Chat Markdown/Katex 回答与资源生成。",
+            candidate="M3 resources、M5 artifact/version/source、IncrementalMarkdownRenderer。",
+            refactor="新增高质量讲义Schema、模板、详情页和版本编辑；复用现有Markdown/KaTeX/图表渲染与来源定位。",
+            acceptance="标题、摘要、目录、关键概念、图表/公式、例子、反例、代码、小测、来源脚注、AI伙伴、进度、编辑版本和导出均有真实内容与状态。",
+            layout="顶部为课程/知识点、标题、难度、预计时长、版本和导出；左侧20%为目录与进度，中部58%为宽正文，右侧22%为AI伙伴、学习目标和来源摘要。正文按摘要、关键概念、图表/公式、例子、反例、代码、小测、来源脚注顺序排版，使用白底、清晰层级和有限语义色。",
+            primary_action="未开始为“开始阅读”，阅读中为“继续到下一节”，完成全部必做小测后为“完成讲义学习”",
+            states="生成中、结构已生成正文补全中、可阅读、图表或公式局部失败、编辑未保存、版本保存中、导出中/失败、来源不足、完成；局部失败不遮挡已生成正文。",
+        ),
+        resource_detail(
+            path="/workspace/resources/training-tasks/:resourceId", label="实训任务书",
+            purpose="把 AI/ML 理论转成有环境、步骤、检查点、提交物和评分标准的工程任务。",
+            body="目标、前置条件、环境、数据、步骤、预期现象、检查点、常见错误和验收标准",
+            inputs="领域技能标准、工程任务、环境、冻结数据、代码沙盒/交互模型入口和风险规则", outputs="步骤状态、检查点结果、提交物、评分摘要和实操证据",
+            interactions="查看目标和交付标准、逐步执行并勾选、打开代码沙盒或交互模型、提交检查点、上传/填写提交物、对失败步骤提问",
+            linkage="步骤不直接提分；检查点、代码运行和解释共同形成技能证据并更新路径。",
+            baseline="7.20 Chat 代码沙箱和资源讲解。",
+            candidate="DomainPack/JobTask/SkillStandard、M3 resource、workspace actions。",
+            refactor="新增实训任务书模板/详情与检查点协议，连接代码沙盒和可交互模型深链。",
+            acceptance="目标、环境、数据、步骤、检查点、提交物和评分标准完整；至少一个AI/ML工程任务可从理论走到可验证结果；页面不承担代码编辑或参数实验本身。",
+            phase="F5/F6",
+            layout="顶部显示任务目标、预计时长、难度和提交状态；左侧24%为步骤与检查点，中部52%为当前步骤说明、环境、数据、预期现象和常见错误，右侧24%为提交物、评分标准、AI答疑及进入代码沙盒/交互模型的动作。",
+            primary_action="按当前步骤显示“开始任务”“提交检查点”或“提交最终产物”，完成条件未满足时不允许手工宣告完成",
+            states="生成中、可开始、步骤进行中、等待代码/实验结果、检查点失败可重试、提交物缺失、评分中、需要修改、完成。",
+        ),
+        resource_detail(
+            path="/workspace/resources/mindmaps/:resourceId", label="思维导图",
+            purpose="以可展开的层级图快速理解或复习单份资源结构，不与课程知识图谱混淆。",
+            body="可缩放、折叠、搜索和聚焦的资源结构导图",
+            inputs="讲义/文档结构、节点摘要和关联来源", outputs="浏览位置、选中节点和关联学习动作",
+            interactions="缩放、拖拽、折叠、搜索、点节点提问/生成练习/记笔记",
+            linkage="节点动作携带来源进入对话/练习；仅浏览不改变掌握度。",
+            baseline="7.20 CollapsibleMindmap 和 Chat 思维导图画板。",
+            candidate="当前 CollapsibleMindmap、artifact relation/source。",
+            refactor="将导图从 Chat 重型画板迁入资源详情，统一恢复状态。",
+            acceptance="大图可操作，1366x768下控制不遮挡画布，节点来源和动作正确。",
+        ),
+        resource_detail(
+            path="/workspace/resources/videos/:resourceId", label="视频推荐",
+            purpose="观看或跳转到与当前知识点和画像匹配、具有合法来源和章节定位的视频。",
+            body="视频播放器、字幕、章节、来源和关联练习",
+            inputs="视频资产/输出版本、字幕、播放位置、课程绑定和许可", outputs="播放进度、微测/实验结果和完成记录",
+            interactions="播放、字幕/倍速、章节跳转、保存位置、完成微测、打开实验",
+            linkage="观看进度、微测和实验分别写事件；完成条件由资源定义。",
+            baseline="7.20 LocalVideoPlayer/VideoPlayerCard 和动画 API。",
+            candidate="video catalog/import/chapter/practice/media context；视频生成能力后置。",
+            refactor="统一视频资源详情，优先导入/合法来源，生成入口移入教师后台。",
+            acceptance="刷新恢复位置；字幕可用；来源可见；视频生成不可用时仍可播放预置素材。",
+            phase="F5/F7",
+        ),
+        resource_detail(
+            path="/workspace/resources/decks/:resourceId", label="PPT/网页课件",
+            purpose="学习、编辑和导出结构清晰的个性化演示课件。",
+            body="幻灯片缩略图、当前页画布、讲者/学习说明和播放模式",
+            inputs="课件/页面/版本、主题、来源、播放位置和导出能力", outputs="新版本、播放进度和 HTML/PDF/PPTX 导出",
+            interactions="翻页、播放、编辑页面、增加/删除/排序、保存版本、恢复和导出",
+            linkage="编辑不改画像；完成课件和页内练习后更新路径。",
+            baseline="7.20 无独立 PPT；Chat 可生成结构化内容。",
+            candidate="WebDeckWorkspace、DBWebDeck/Slide/Version 与导出 API。",
+            refactor="将 WebDeck 工作台套入统一资源壳，简化工程字段。",
+            acceptance="可预览、修改、版本恢复和导出；文本不溢出；来源可定位。",
+        ),
+        resource_detail(
+            path="/workspace/resources/models/:resourceId", label="可交互模型",
+            purpose="通过参数、滑块、图表和实验观察理解模型规律；它不是工程步骤说明，也不是自由代码编辑环境。",
+            body="参数控制、曲线/决策边界/指标结果、观察问题和结论对比",
+            inputs="实验模板、参数范围、冻结数据、知识点和历史运行", outputs="运行结果、参数版本、观察答案和实操证据",
+            interactions="调参数、运行、重置、保存对比、回答观察问题、请求提示",
+            linkage="只有运行加解释/观察题构成技能证据；结果可进入笔记、画像和路径。",
+            baseline="7.20 SandboxVisualizer/ManifoldVisualizer 等可视化。",
+            candidate="InteractiveLabWorkspace、teaching animation、interactive lab API。",
+            refactor="优先产品化学习率/正则化/树深/噪声/阈值五类 ML 模板。",
+            acceptance="至少一个端到端参数实验稳定运行；参数变化立即反映到图表与结论；结果非空、可比较、可解释；页面不出现代码编辑器或工程提交物。",
+            phase="F6",
+            layout="顶部显示知识点、实验目标和观察问题；左侧28%为分组参数、滑块、步进器与重置，中央48%为主图表/模型状态，右侧24%为当前参数摘要、现象解释、对比历史和保存结论。",
+            primary_action="参数变更后为“运行实验”，运行完成后为“保存本次对比”，回答观察问题后才显示“完成交互学习”",
+            states="模板加载、可调整、参数非法、运行中、结果可用、图表失败可重试、对比不足、观察题待答、保存中/失败、完成。",
+            shared_interactions="可交互模型的完成必须包含至少一次有效运行和观察题回答，不能仅浏览后手工完成",
+        ),
+        resource_detail(
+            path="/workspace/resources/bundles/:bundleId", label="资源包",
+            purpose="承接学生从总路径对今日知识点发起的一键生成，聚合九类产物的生成、归档和学习状态，但不把完整产物堆在一个页面。",
+            body="知识点目标、九类资源清单、每项生成/完成状态、必做标记、版本和整体进度",
+            inputs="资源包版本、九类资源项、画像快照、知识点、来源、最近学习事件、必做任务和完成条件", outputs="九类资源深链、部分成功摘要、聚合进度、版本和失败恢复决定",
+            interactions="查看生成进度、打开下一项、单独重试失败资源、比较/恢复版本、打开来源、回到总路径",
+            linkage="每项分别归档并写自己的学习事件，资源包只聚合；只按路径标记的今日必做任务计算组卷解锁，不要求完成九类全部产物。",
+            baseline="7.20 Chat 一键生成专属教学资源包。",
+            candidate="ResourceBundleWorkspace、bundle/version/item API。",
+            refactor="把工程版本工作台改成九类学习产物聚合页，新增批量任务部分成功和单项重试协议，保留版本恢复。",
+            acceptance="九类产物名称和状态齐全；每项可独立打开与恢复；失败项可单独重试；必做门禁与总路径一致；版本历史可恢复。",
+            primary_action="生成中为“查看下一项已就绪资源”，就绪后为“开始下一项今日必做任务”",
+            states="待生成、九类任务排队、生成中、部分成功、失败项可重试、全部归档、学习进行中、今日必做完成、历史版本只读。",
+        ),
+        resource_detail(
+            path="/workspace/resources/quizzes/:resourceId", label="测验题资源",
+            purpose="在单个知识点上完成基础、应用和挑战层练习并即时获得反馈。",
+            body="分阶题目导航、作答区、即时反馈和解析",
+            inputs="题目资源版本、难度层、答案、置信度、来源", outputs="评分、错因候选、相似题和下一难度决定",
+            interactions="作答、提交、追问、重答、切换层级、确认错因",
+            linkage="正确稳定则进阶，错误则降维/复习；结果更新画像、路径和错题。",
+            baseline="7.20 Chat 自适应测验和 WrongQuestionBook。",
+            candidate="M3 tiered questions、M5 assessment/misconception/retest。",
+            refactor="建立测验题资源详情并复用统一题目、attempt、评分和追问组件；删除测评中心的练习会话入口。",
+            acceptance="三层可达、即时判分、来源/解析、重答和跨页更新完整。",
+            phase="F6",
+            primary_action="未作答为“提交当前答案”，已判分为“修改后重答”或“进入下一题”，完成题组后为“完成本项任务”",
+            states="生成中、可作答、答案未保存、提交中、客观题已判分、主观题待结构化反馈、评分失败保留答案、可重答、题组完成。",
+        ),
+        resource_detail(
+            path="/workspace/code/:resourceId", label="代码沙盒",
+            purpose="在受限本地模式中运行 AI/ML 代码，并基于代码和真实输出获得问题、风险和改进建议。",
+            body="左侧任务/历史、中部Monaco编辑器与标准输入、右侧真实输出/错误/图表与AI点评",
+            inputs="代码、语言/环境、任务目标、标准输入、测试数据、运行限制、点评重点和历史输出", outputs="执行结果、异常、图表、点评重点、问题、风险、改进代码、应用建议、代码版本和完成证据",
+            interactions="选择任务或历史、编辑、填写标准输入、运行/停止、重置、保存、查看输出/错误/图表、填写点评重点、请求点评、应用改进代码后重跑、满足任务检查点后完成学习",
+            linkage="运行证据与解释/测试共同更新实操画像；失败进入针对性练习而非直接扣分。",
+            baseline="7.20 Chat 内 SandboxConsole/SandboxVisualizer 和 code API。",
+            candidate="code_exec_api、DBCodeExecution、interactive lab、coder Agent。",
+            refactor="从 Chat 抽离代码区，统一可信本地/受限运行和输出上限/进程清理。",
+            acceptance="左侧任务/历史、中部编辑器/标准输入、右侧结果/点评三栏完整；无需Docker的评委模式可运行预置示例；真实输出、错误和图表不被无故截断；进程可停止；点评引用本次代码与运行证据；应用建议后能重跑。",
+            phase="F6",
+            layout="桌面三栏固定为22%/50%/28%。左栏列任务说明、完成条件、当前文件和历史版本；中栏上部为编辑器、下部为标准输入与运行工具；右栏用标签切换真实输出、错误、图表和AI点评。点评必须分成问题定位、点评重点、潜在风险、改进代码和应用建议。",
+            primary_action="空闲时为“运行代码”，运行中变为“停止”；运行成功后才允许“AI点评”，满足任务检查点后才显示“完成学习”",
+            states="任务加载、代码未保存、排队、运行中、用户停止、成功、运行错误、超时、输出过大但核心结果保留、图表渲染失败、点评中、点评失败但运行结果保留、建议已应用待重跑、完成。",
+            shared_interactions="代码沙盒不提供普通手工标记完成；所有完成动作由运行结果、任务检查点和学生解释共同决定",
+        ),
+        resource_detail(
+            path="/workspace/feynman/:resourceId", label="费曼复述", purpose="通过两轮复述、追问和差异评分验证学生是否真正理解。",
+            body="两轮进度、复述输入、评分/遗漏、追问回答和最终对比",
+            inputs="根据当前课程、知识点、画像、掌握证据和最近学习事件动态生成的复述任务，文本或语音转写、评分规则、来源和两轮记录", outputs="两轮评分、遗漏差异、提升项、仍需解决的问题、后续动作和复述证据",
+            interactions="提交第一轮、查看评分与优缺点、输入真实疑问、阅读AI回答、提交第二轮、查看真实差异、完成并应用到画像/错题/复习/路径",
+            linkage="两轮结果进入画像；重复误区进入错题/复习；提升充分可解锁进阶。",
+            baseline="7.20 对话、测验和复习可提供基础，无完整两轮状态机。",
+            candidate="speech API、assessment grading、learning events；文本必须为主回退。",
+            refactor="新增 Feynman 资源类型和两轮会话聚合，不依赖视频生成。",
+            acceptance="任务随知识点和画像变化，任何示例题只作为演示内容而非固定产品行为；文本路径稳定；语音不可用可回退；两轮原文、评分规则、AI答复和提升差异真实可追溯。",
+            phase="F6",
+            layout="顶部显示动态任务标题和五阶段进度：第一次复述、第一次评价、学习询问、第二次复述、提升对比。主体一次只展开当前阶段，已完成阶段折叠成摘要；最终区显示两轮分数、提升、仍需解决的问题和应用到后续学习的动作。",
+            primary_action="按状态依次为“提交第一次复述”“提交疑问”“提交第二次复述”“完成并应用学习结果”，不得跨阶段",
+            states="任务生成中、等待第一轮、第一轮评分中、等待追问、AI回答中、等待第二轮、第二轮评分中、对比生成中、可完成、任一评分失败可从已保存原文重试、完成。",
+            shared_interactions="费曼资源不允许跳过当前阶段或直接手工完成；阶段推进只依据已保存的复述、追问和评价记录",
+        ),
+        spec(
+            path="/workspace/review", label="复习中心", role="学生", navigation="学习空间 > 复习与反馈 > 复习中心；兼容 `/review`",
+            purpose="在真实日历和今日队列中统一处理闪卡、错题、知识点、费曼和复测。", primary_action="开始今天最高优先级复习",
+            layout="月历与今日清单为首屏，下方按逾期/误区/闪卡/复测分组；详情抽屉提供资源生成和测评入口。",
+            inputs="复习计划、SM-2、错题、闪卡、误区、复测任务、路径和日历。", outputs="复习结果、下一次日期、资源/测评深链和完成事件。",
+            states="无计划、今日无任务、逾期、复习中、提交中、结果失败可重试、完成。",
+            interactions="切换日期、开始任务、闪卡评分、打开错题/资源、生成复习包、跳转组卷、完成。",
+            linkage="完成更新复习队列、画像和个人动态；路径中的复习任务同步打勾。",
+            baseline_code="7.20 Review + RevisionCalendar + WrongQuestionBook。", candidate_code="当前 Review、M5 review queue/retest、flashcard、checkin。",
+            refactor_code="保护性合并三页能力到复习壳，保留错题和日历独立深链。", hidden_or_removed="隐藏诊断导出工程字段和候选误区内部状态；不得删除真实日历、打卡和闪卡。",
+            acceptance="日历/今日清单一致；逾期明确；完成一次只计一次；原版复习能力均可找到。", phase="F8",
+        ),
+        spec(
+            path="/workspace/review/calendar", label="复习日历", role="学生", navigation="复习中心 > 日历；兼容 `/revision-calendar`",
+            purpose="查看真实月历、每天安排、打卡历史和复习时长趋势。", primary_action="打开选中日期的复习安排",
+            layout="桌面采用58%月历与42%选中日任务列表；顶部保留课程筛选和月份切换，任务行显示到期时间、状态、类型和去复习动作。",
+            inputs="复习计划、next_review_at、打卡、时长和完成事件。", outputs="日期筛选、任务深链、打卡记录和统计。",
+            states="无计划、今日空、选中日期有任务、逾期、加载失败、打卡中/完成。",
+            interactions="切月、选日期、打开任务、查看趋势和详细打卡；打卡由真实完成自动产生，避免空签到。",
+            linkage="完成复习写统一事件并更新日历；日历不单独制造掌握度。",
+            baseline_code="7.20 `RevisionCalendar.vue` 的日历、曲线、趋势和详细记录。", candidate_code="当前兼容路由、Review、DBReviewPlan/CheckinLog。",
+            refactor_code="把原组件能力嵌入复习中心并统一事件来源。", hidden_or_removed="隐藏内部 SM-2 参数默认值但保留可理解的下次复习日期。",
+            acceptance="通过保护支撑清单；日期/清单/打卡一致；无伪造日期和趋势。", phase="F8",
+        ),
+        spec(
+            path="/workspace/review/wrong-questions", label="错题本", role="学生", navigation="复习中心 > 错题本；兼容 `/wrong-questions`",
+            purpose="保留 7.20 筛选、解析、反思、相似题、笔记、闪卡和重做，突出错因确认与复测。", primary_action="未确认错因时为确认错因；已确认时为开始复测；复测通过后为按计划复习",
+            layout="筛选列表 + 详情；详情固定顺序为题目、我的答案、正确答案/解析、错因、下一步，扩展视频进入更多。",
+            inputs="错题、历次答案、解析、错因候选、反思/备注、固定状态、闪卡和复测。", outputs="确认错因、相似题、复测/复习任务、笔记和画像证据。",
+            states="无错题、筛选无结果、待确认、生成相似题、复测中、判分失败可重试、已掌握。",
+            interactions="筛选/固定、展开解析、编辑备注、确认错因、生成相似题/闪卡、重做、导出。",
+            linkage="候选错因不自动确认；复测结果更新画像/路径；复习任务进入统一队列。",
+            baseline_code="7.20 `WrongQuestionBook.vue` 1151 行及 13 个核心 API。", candidate_code="当前 WrongQuestionBook、M5 misconception/retest、flashcard、wrong-question video 扩展。",
+            refactor_code="保护性重构原页面并作为复习深链；统一错因与复测对象。", hidden_or_removed="视频生成、审核状态和对象 ID 后置；不得删除筛选、解析、相似题、备注、闪卡、重做。",
+            acceptance="通过四页保护清单；错因确认与候选分离；复测闭环可见；原版所有核心动作可达。", phase="F8",
+        ),
+        spec(
+            path="/workspace/notes", label="笔记本", role="学生", navigation="学习空间 > 练习与沉淀 > 笔记本；兼容 `/notes`",
+            purpose="保留 7.20 编辑、AI 排版、知识库笔记、标签、闪卡和导出，并增强来源/课程/复习联动。", primary_action="保存笔记",
+            layout="笔记选择、主编辑器、来源/学习关联侧栏；上下文工具栏按选择内容显示 AI 排版、练习、闪卡、复习和导出。",
+            inputs="笔记内容/版本、课程/章节/知识点、来源片段、标签、错题反思和闪卡。", outputs="保存版本、来源关联、闪卡/复习/练习任务、PDF 和个人动态。",
+            states="无笔记、新建、编辑未保存、保存中/失败/冲突、AI 排版中、闪卡复习、导出失败、完成。",
+            interactions="新建/选择/搜索、编辑、保存、AI 排版、关联来源、制成闪卡、生成练习、加入复习、导出。",
+            linkage="保存进入个人动态但不直接提分；闪卡/练习结果进入画像和复习。",
+            baseline_code="7.20 `Notes.vue` 975 行，编辑/排版/知识库笔记/Anki/导出。", candidate_code="当前 Notes 未丢行，note/flashcard/review API、M5 resource context。",
+            refactor_code="保护性重排 `Notes.vue`，补课程/来源关联和版本冲突处理。", hidden_or_removed="同屏低频按钮移入情境工具栏；不得将编辑器改成只读卡片或删除原功能。",
+            acceptance="通过四页保护清单；保存失败不丢内容；来源可回链；闪卡和复习联动真实。", phase="F8",
+        ),
+    ]
+)
+
+
+TARGET_ROUTES.extend(
+    [
+        spec(
+            path="/knowledge/courses/:courseId", label="课程知识库", role="学生、教师按权限", navigation="知识库 > 课程",
+            purpose="查看团队预先解析完成的一门课程的章节、文档、知识点、来源状态和可生成学习资源。", primary_action="打开当前章节核心文档",
+            layout="顶部为课程名称、来源说明和解析状态；左侧章节树，中部文档列表与知识点，右侧课程概览和知识图谱摘要。教师按权限看到维护动作，学生不看到‘先上传课程资料’提示。",
+            inputs="预置课程、章节、知识点、文档、来源/许可、解析索引和成员权限。", outputs="文档/图谱深链、课程筛选、资源生成上下文。",
+            states="课程不存在/无权限、空课程、解析中、部分文档失败、可用、来源撤回。",
+            interactions="切章节、搜索、打开文档/图谱、查看来源、从当前文件或知识点生成资源；教师可上传/替换来源并查看解析状态。",
+            linkage="课程是画像、路径、资源和测评的共同 scope；替换来源不改历史资源版本。",
+            baseline_code="7.20 Knowledge 文档列表。", candidate_code="M1 course/chapter/knowledge point/source、Knowledge current enhancements。",
+            refactor_code="新增课程知识库深链与聚合接口，复用 Knowledge 壳。", hidden_or_removed="隐藏内部 source ref ID、chunk 和向量状态。",
+            acceptance="学生首次进入即可看到预置课程，无需上传资料；课程权限正确；章节/文档数量一致；来源撤回可见；生成资源携带正确courseId。", phase="F7",
+        ),
+        spec(
+            path="/knowledge/documents/:documentId", label="文档阅读器", role="学生、教师按权限", navigation="知识库 > 课程 > 文档",
+            purpose="在大窗口阅读正文，对文本划选或图片区域框选后提问、定位来源，并从当前文件生成学习资源。", primary_action="继续阅读；形成有效选区时变为“针对选区提问”",
+            layout="桌面20%/58%/22%三栏：左侧页码与章节，中间大窗口正文/PDF/图片，右侧来源、概览、问答和文件级生成。文本划选或图片拖拽框选后，在选区附近显示仅含提问、记笔记、生成资源三项的紧凑操作条。",
+            inputs="文档版本、解析文本、页码、页面渲染尺寸、图片框选坐标、区域OCR、来源许可、阅读位置和选区。", outputs="带文档版本、页码、文本范围或图片坐标的SelectionContext，提问/笔记/资源任务、导出和位置恢复。",
+            states="解析中、文本可读、PDF预览、图片可框选、正在框选、区域OCR中、OCR部分失败仍保留截图、来源撤回、问答中、资源生成中、导出失败、阅读位置恢复。",
+            interactions="页码/章节跳转、搜索、文本划选、在图片上按下拖拽并调整框选区域、针对选区提问、记笔记、生成讲义/实训任务书/测验题/思维导图、导出、查看来源；取消选区不写学习事件。",
+            linkage="选区进入对话或生成任务时保留文档版本、页码、文本范围/图片坐标和OCR结果；阅读进度与有证据完成事件分离。",
+            baseline_code="7.20 Knowledge 文档详情和跨模态搜索。", candidate_code="knowledge document/OCR/source locator/media context/RAG。",
+            refactor_code="新增统一阅读器和 selection context；复用现有解析与下载能力。", hidden_or_removed="隐藏 OCR 外部化测试、块 ID 和索引细节。",
+            acceptance="PDF/PPT/DOCX/Markdown/图片至少按支持能力预览；文本划选和图片区域框选均可形成可定位引用；框选OCR失败仍能把区域截图交给视觉模型；刷新恢复阅读位置。", phase="F7",
+        ),
+        spec(
+            path="/knowledge/graph/:courseId", label="课程知识图谱", role="学生、教师", navigation="知识库 > 课程 > 知识图谱",
+            purpose="查看课程概念、章节、先修和来源关系；学生可叠加掌握状态但不替代学习画像。", primary_action="打开选中节点的来源或学习资源",
+            layout="主图占大区域，顶部搜索/筛选/图例，右侧节点概览、来源和动作；双曲圆盘只作为“关系投影视图”次级切换。",
+            inputs="课程知识点、章节、关系、来源、可选学生掌握摘要和坐标缓存。", outputs="节点/来源/资源深链和选中状态。",
+            states="图谱构建中、空图、部分来源、布局失败回退列表、可交互、筛选无结果。",
+            interactions="缩放/拖拽、搜索、按章节/关系/掌握筛选、切换关系投影、点节点打开来源或资源。",
+            linkage="课程图谱是知识事实；掌握覆盖来自画像且只读；节点动作进入学习空间。",
+            baseline_code="7.20 KnowledgeGraphExplorer、LearningPathGraph、Chat 双曲圆盘/流形视图。", candidate_code="当前 graph_builder/models、concept coordinates、KnowledgeGraphExplorer。",
+            refactor_code="统一课程图谱视觉与节点侧栏；双曲视图降为可选关系投影而非对话按钮。", hidden_or_removed="隐藏图算法参数、原始坐标、派生关系内部置信字段。",
+            acceptance="图例清晰；大图非空；布局失败有列表回退；节点来源与画像覆盖正确。", phase="F7",
+        ),
+        spec(
+            path="/knowledge/discover", label="教材与来源发现", role="学生、教师", navigation="知识库 > 发现教材",
+            purpose="联网搜索教材、论文和课程资料，预览来源/许可后加入书架并解析。", primary_action="将确认的候选资料加入书架",
+            layout="搜索区、来源类型/许可筛选、结果列表和右侧预览；加入前显示来源、可用格式和解析影响。",
+            inputs="搜索词、课程目标、Web/arXiv 结果、文件 URL、来源许可和用户确认。", outputs="候选来源、下载/解析任务、书架条目和课程绑定建议。",
+            states="未搜索、搜索中、无结果、来源不可达、下载中、许可待确认、解析中、失败、已加入。",
+            interactions="搜索、预览、打开原站、确认许可/用途、下载、加入书架、查看解析进度。",
+            linkage="候选资料不自动成为权威知识库；教师审核或个人确认后按范围进入检索。",
+            baseline_code="7.20 Chat 联网搜索、Knowledge 上传/跨模态搜索。", candidate_code="web search/load/arXiv、add web source/download、course sharing。",
+            refactor_code="把联网搜索从 Chat 移入发现页，建立候选来源状态和许可提示。", hidden_or_removed="隐藏爬虫/缓存内部字段；禁止声称所有互联网内容可合法复用。",
+            acceptance="能搜索、预览来源、加入书架、解析和检索；失败可重试；权威/候选状态清楚。", phase="F7",
+        ),
+        spec(
+            path="/marketplace/items/:itemId", label="市场条目详情", role="学生、教师", navigation="学习市场 > 条目",
+            purpose="完整预览分享内容、来源许可、适用对象和保存后的变化。", primary_action="保存到我的学习空间",
+            layout="资源/路径主体预览、右侧概览和来源、作者/课程/难度、相关条目；不嵌套治理卡片。",
+            inputs="市场条目、冻结发布版本、来源/许可、评论/评价摘要和当前用户副本状态。", outputs="收藏、个人副本、学习空间深链和使用后评价入口。",
+            states="加载、已下架、来源撤回、可预览、已收藏、保存中/失败、已有副本。",
+            interactions="预览、查看来源、收藏、保存副本、打开副本、使用后评价。",
+            linkage="保存副本不改画像；副本学习事件只属于当前用户；上游更新需显式接受。",
+            baseline_code="7.20 无市场详情。", candidate_code="MarketplaceWorkspace/Fork/Recommendation、course sharing/resource bundle。",
+            refactor_code="新增简洁详情页，将分叉决策缩为上游更新提示。", hidden_or_removed="隐藏举报责任事件、三方 diff 和组织字段。",
+            acceptance="三类条目均可预览/保存；来源和演示标识可见；下架不破坏已有个人副本。", phase="F9",
+        ),
+        spec(
+            path="/marketplace/publish", label="发布学习内容", role="学生、教师", navigation="学习市场 > 发布",
+            purpose="从个人/课程资源中选择一个资源、资源包或路径，以带来源的冻结版本发布。", primary_action="发布",
+            layout="三步向导：选择内容、补充标题/适用对象/许可、预览并发布。",
+            inputs="个人可发布对象、版本、来源许可、标题摘要、课程知识点、难度和可见范围。", outputs="不可变发布快照、市场条目和审核状态。",
+            states="无可发布内容、草稿、来源/许可不完整、预览、提交中、待审核/已发布、失败。",
+            interactions="选择、编辑公开元数据、确认来源许可、预览、发布、返回我的内容。",
+            linkage="发布不改变学习事实；后续保存产生个人副本；撤回不删除他人已有合法副本。",
+            baseline_code="7.20 无发布页。", candidate_code="course sharing publication、marketplace listing/decision。",
+            refactor_code="建立轻量发布向导，复用审核/发布模型但隐藏复杂治理。", hidden_or_removed="不提供组织市场、价格、责任链和高级分叉配置。",
+            acceptance="三类对象均能发布；来源不完整时阻止；成功后详情可搜索。", phase="F9",
+        ),
+        spec(
+            path="/marketplace/mine", label="我的分享与收藏", role="学生、教师", navigation="学习市场 > 我的内容",
+            purpose="管理自己的发布、收藏和保存副本，并处理简化的上游更新。", primary_action="继续使用最近保存的资源",
+            layout="发布、收藏、个人副本三个标签；每项显示版本、状态和学习空间入口。",
+            inputs="用户发布、收藏、获取副本、上游版本/撤回和个人使用状态。", outputs="详情深链、撤回发布、更新决定和学习空间入口。",
+            states="空、加载、已发布/待审核/撤回、上游有更新、有冲突、决定失败。",
+            interactions="筛选、打开、撤回发布、取消收藏、保留本地或接受上游更新。",
+            linkage="市场对象与个人学习资源分离；更新不覆盖用户笔记和完成记录。",
+            baseline_code="7.20 无。", candidate_code="MarketplaceForkWorkspace、course sharing decisions、favorites/acquisitions。",
+            refactor_code="将当前分叉工作台转成少量用户可理解的更新选择。", hidden_or_removed="隐藏三方差异原始 JSON、不可变事件和内部版本 ID。",
+            acceptance="发布/收藏/副本不混淆；更新可拒绝；个人学习数据不被覆盖。", phase="F9",
+        ),
+    ]
+)
+
+
+TARGET_ROUTES.extend(
+    [
+        teacher_route(
+            path="/teacher/overview", label="教学总览", purpose="用班级进度、薄弱点、待办和最近证据决定今天先处理什么。",
+            action="打开最高优先级学生或班级待办",
+            layout="班级筛选、关键摘要、薄弱知识点、需要关注学生、近期测评/干预；一个待办列表替代多套工作台。",
+            inputs="教学班、课程、学生画像摘要、测评/复习/路径和干预待办。", outputs="学生、课程、测评或干预深链。",
+            states="无教学班、无学生、加载、部分指标失败、无待办、正常。",
+            interactions="切班级/课程、打开薄弱点、学生、报告或待办。", linkage="只读聚合不改画像；发布干预进入专门路由。",
+            baseline="7.20 `Teacher.vue` 教学总览、薄弱概念、学生和报告。", candidate="当前 Teacher、teaching analytics、M6 interventions。",
+            refactor="以 Teacher.vue 为壳收敛布局和四项教师导航。", acceptance="教师 10 秒内找到最需关注对象；统计可下钻到证据；无企业噪音。",
+        ),
+        teacher_route(
+            path="/teacher/courses", label="课程与资源", purpose="维护课程、章节、来源和面向学生的学习资源。",
+            action="打开当前课程",
+            layout="课程列表、状态、学生数、来源/资源摘要和待审核提示；新建课程为次要动作。",
+            inputs="教师有权课程、章节、成员、来源、资源和教学任务。", outputs="课程详情、资源预览和导入/生成入口。",
+            states="无课程、加载、草稿、已发布、来源待处理、权限失败。",
+            interactions="搜索/筛选、打开课程、新建/导入、查看待审核资源。", linkage="课程与学生知识库使用同一事实源；发布任务进入学生路径。",
+            baseline="7.20 教师端无完整课程治理。", candidate="CourseGovernanceWorkspace、course/source/artifact、content review。",
+            refactor="将治理术语改为课程维护任务，复用知识库阅读器。", acceptance="课程/章节/来源/资源一致；教师不能越权查看其他课程。",
+        ),
+        teacher_route(
+            path="/teacher/courses/:courseId", label="课程详情", purpose="在一处维护章节、来源、资源、成员和教学任务。",
+            action="发布当前教学任务或保存当前资源修改",
+            layout="概览、章节与来源、资源、学生/分组、教学任务标签；正文复用知识库和资源预览。",
+            inputs="课程、章节、来源、资源版本、教学班/组/成员和任务草稿。", outputs="课程版本、发布资源、教学任务和学生可见状态。",
+            states="草稿、来源解析中、资源审核中、已发布、撤回、并发冲突、保存失败。",
+            interactions="编辑结构、上传来源、生成/编辑资源、预览学生视图、分配/发布任务、撤回。",
+            linkage="资源通过审核后进入学生课程；任务成为路径/首页待办；历史资源不覆盖。",
+            baseline="7.20 Knowledge 和 Teacher 提供部分能力。", candidate="CourseGovernance、Knowledge、M5 resources、ContentReview。",
+            refactor="建立课程聚合详情而非保留多个治理工作台。", acceptance="学生视图预览与实际一致；发布/撤回权限和历史正确。",
+        ),
+        teacher_route(
+            path="/teacher/students", label="学生学情", purpose="按班级、课程和风险状态找到学生并查看有证据的学习状态。",
+            action="查看当前优先学生",
+            layout="班级/课程筛选、紧凑学生列表、掌握/进度/复习/近期变化摘要。",
+            inputs="教师授权范围、学生画像摘要、路径、测评、复习和最近事件。", outputs="学生详情、报告和干预深链。",
+            states="无班级、无学生、筛选无结果、加载、部分证据、正常。",
+            interactions="筛选/搜索/排序、打开学生、查看报告、发起干预。", linkage="列表只读；干预必须携带证据和明确任务。",
+            baseline="7.20 Teacher 学生管理与画像/路径链接。", candidate="Teacher、teaching analytics、profile summary。",
+            refactor="重排原 Teacher 学生视图并接统一聚合。", acceptance="权限隔离；每个风险标签可解释；不以虚构评分排序。",
+        ),
+        teacher_route(
+            path="/teacher/students/:studentId", label="学生详情", purpose="查看一名学生的画像、路径、作答、实操和干预证据。",
+            action="根据证据发布一个干预任务",
+            layout="学生摘要、画像/路径只读嵌入、证据时间线、测评/错题/实操、干预历史。",
+            inputs="学生授权学习事实、画像快照、路径版本、测评、代码/实验、复习和干预。", outputs="证据下钻、报告和干预草稿。",
+            states="无权限、学生不存在、部分数据、加载失败、正常、干预草稿。",
+            interactions="切换证据类型、打开来源、查看画像/路径、创建干预、查看历史。", linkage="教师备注不改画像；学生完成干预中的真实任务后才更新。",
+            baseline="7.20 Teacher -> StudentAnalysis/LearningPath。", candidate="profile evidence、M5 assessment/path、M6 intervention。",
+            refactor="复用学生画像/路径组件只读模式，新增教师证据聚合。", acceptance="所有结论可追溯；无权限返回明确状态；干预不直接改掌握度。",
+        ),
+        teacher_route(
+            path="/teacher/assessment", label="测评管理", purpose="创建/分配测评并查看班级结果和需要复核的答案。",
+            action="发布测评",
+            layout="测评列表、组卷向导、分配对象、结果摘要和复核队列；学生作答页不复制。",
+            inputs="课程范围、题型/数量、题目版本、班级/学生、场次、答案和复核。", outputs="已发布试卷、分配、报告、复核决定和干预候选。",
+            states="草稿、生成、题源不足、已发布、作答中、待复核、已封卷、报告失败。",
+            interactions="组卷/替换题、预览、分配、发布、查看报告、完成复核。", linkage="发布创建学生任务；评分进入画像；教师复核保留原自动评分。",
+            baseline="7.20 教师报告，Chat 测验。", candidate="FormalExamWorkspace、M5 exam/review/report。",
+            refactor="将 FormalExam 教师动作迁入教师端，学生动作留在学习空间。", acceptance="发布、作答、评分、复核和报告完整；教师权限正确。",
+        ),
+        teacher_route(
+            path="/teacher/interventions", label="测评与干预", purpose="把薄弱点或测评结果转成学生可执行、教师可跟踪的干预任务。",
+            action="发布干预任务",
+            layout="待处理证据、干预草稿、已发布/待复核任务和结果；每项显示目标、截止、完成条件。",
+            inputs="学生、课程、证据、推荐资源/练习、教师说明和截止时间。", outputs="干预任务、学生首页/路径待办、完成证据和教师复核。",
+            states="无待办、草稿、发布中、已发布、学生进行中、待复核、已关闭、失败。",
+            interactions="选择证据、编辑动作、预览学生视图、发布、查看进度、确认完成或调整。", linkage="学生完成任务写学习事件；教师确认只关闭干预，不伪造掌握度。",
+            baseline="7.20 Teacher 干预建议。", candidate="TeacherInterventions、M6 teacher、M5 task/path。",
+            refactor="嵌入教师四入口并统一学生任务协议。", acceptance="学生端能看到并完成；教师能跟踪；跨页状态一致。",
+        ),
+        admin_route(
+            path="/admin/accounts", label="账号权限", purpose="维护学生、教师、管理员账号和课程/班级权限。",
+            action="保存当前账号或权限变更",
+            layout="账号搜索列表、角色/状态、详情抽屉和权限范围；高风险操作二次确认。",
+            inputs="用户公开 ID、角色、状态、课程/班级成员关系和审计信息。", outputs="账号/角色状态、会话撤销和审计记录。",
+            states="无账号、加载、编辑、冲突、保存失败、停用/恢复、权限不足。",
+            interactions="搜索、创建/编辑、分配角色/课程、停用、重置演示账号。", linkage="权限变更不修改画像；后端守卫立即生效。",
+            baseline="7.20 auth/user 基础，无完整管理员页。", candidate="DBUser/CourseMembership/TeachingClassMember、auth。",
+            refactor="新增最小账号管理聚合接口和页面。", acceptance="三类正式角色；越权被后端拒绝；高风险操作可审计。",
+        ),
+        admin_route(
+            path="/admin/models", label="模型配置", purpose="配置文本/视觉模型并处理容量、超时、认证和配额问题。",
+            action="保存并测试当前模型配置",
+            layout="默认模型、视觉模型、连接测试、能力映射和近期告警；令牌/价格/worker 细节进入高级折叠。",
+            inputs="端点、模型名、密钥引用、能力映射、超时/令牌上限和近期调用摘要。", outputs="脱敏配置、连接结果、降级状态和审计。",
+            states="未配置、测试中、正常、认证失败、模型不支持、容量不足、限流、超时、保存失败。",
+            interactions="编辑、测试文本/视觉、选择能力模型、启用降级、查看脱敏错误。", linkage="配置影响 Agent 调用但不改学习事实；失败回退已有资源/冻结演示。",
+            baseline="7.20 Settings LLM/视觉连接。", candidate="model governance/operations/dashboard、settings。",
+            refactor="管理员配置与个人偏好分离，统一错误分类和密钥存储。", acceptance="容量/认证/超时可区分；密钥不泄露；学生端有稳定降级。",
+        ),
+        admin_route(
+            path="/admin/content-review", label="内容审核", purpose="审核生成资源的专业性、来源、答案一致性和风险后决定可见性。",
+            action="批准或退回当前资源版本",
+            layout="审核队列、资源大预览、来源/质量/Claim 检查、决定和历史；多级审核仅内部复用。",
+            inputs="资源版本、来源引用、质量/声明检查、Agent 分歧、审核规则和意见。", outputs="审核决定、发布状态、退回原因和责任记录。",
+            states="无待办、加载、待审核、来源缺失、检查失败、批准/退回中、完成。",
+            interactions="筛选、预览、定位来源、查看分歧、填写意见、批准/退回。", linkage="审核改变资源可见性；不改变学生掌握度；退回触发资源新版本。",
+            baseline="7.20 无独立审核页。", candidate="ContentReviewWorkspace、Quality/Claim/ReviewDecision/Publication。",
+            refactor="收敛内容审核和多级状态，不暴露企业责任术语。", acceptance="每个决定有来源和意见；未通过资源学生不可见；历史不可覆盖。",
+        ),
+        admin_route(
+            path="/admin/system", label="系统状态", purpose="快速判断服务、任务、数据库和模型是否可用，并恢复失败任务。",
+            action="处理当前最高优先级故障",
+            layout="健康摘要、失败任务、模型告警、存储/缓存和最近审计；内部对象/部署预检为授权深链。",
+            inputs="health、任务失败、模型调用摘要、数据库/缓存状态、运行时能力和审计。", outputs="重试/取消/降级动作、状态和审计。",
+            states="正常、部分降级、模型不可用、任务堆积、存储异常、恢复中、恢复失败。",
+            interactions="查看故障、重试/取消任务、启用降级、打开脱敏详情、确认恢复。", linkage="系统恢复不改业务事实；任务重试必须幂等。",
+            baseline="7.20 health、code status、settings 测试。", candidate="model operations、M5 tasks/workers、M8 preflight、internal objects。",
+            refactor="新增最小系统状态聚合，不把高级能力目录当管理员首页。", acceptance="核心依赖一屏可判；失败任务可恢复且不重复写数据；敏感信息隐藏。",
+        ),
+    ]
+)
+
+
+def validate_routes(routes: list[dict[str, str]]) -> None:
+    counts = Counter(route["path"] for route in routes)
+    duplicates = sorted(path for path, count in counts.items() if count != 1)
+    if duplicates:
+        raise ValueError("Duplicate target routes: " + ", ".join(duplicates))
+    for route in routes:
+        missing = [field for field in FIELDS if not route.get(field)]
+        if missing:
+            raise ValueError(f"Incomplete target route {route['path']}: {missing}")
+    route_map = {route["path"]: route for route in routes}
+    forbidden_paths = {
+        "/workspace/assessment/practice/:sessionId",
+        "/workspace/practice/:resourceId",
+        "/workspace/labs/:resourceId",
+    }
+    present_forbidden = sorted(forbidden_paths & set(route_map))
+    if present_forbidden:
+        raise ValueError("Forbidden legacy target routes: " + ", ".join(present_forbidden))
+    required_paths = {
+        "/onboarding",
+        "/workspace/assessment",
+        "/workspace/assessment/entry",
+        "/workspace/assessment/exams",
+        "/workspace/assessment/exams/:examId",
+        "/workspace/path",
+        "/workspace/resources",
+        "/workspace/resources/handouts/:resourceId",
+        "/workspace/resources/training-tasks/:resourceId",
+        "/workspace/resources/quizzes/:resourceId",
+        "/workspace/resources/models/:resourceId",
+        "/workspace/code/:resourceId",
+        "/workspace/feynman/:resourceId",
+        "/knowledge/documents/:documentId",
+    }
+    missing_paths = sorted(required_paths - set(route_map))
+    if missing_paths:
+        raise ValueError("Missing required target routes: " + ", ".join(missing_paths))
+    forbidden_route_terms = ("390x844", "桌面和366x768", "移动端", "实操指南", "学习中练习")
+    for route in routes:
+        route_text = "\n".join(route[field] for field in FIELDS)
+        found = [term for term in forbidden_route_terms if term in route_text]
+        if found:
+            raise ValueError(f"Forbidden route terms in {route['path']}: {found}")
+    if [
+        route["path"]
+        for route in routes
+        if route["path"].startswith("/workspace/assessment")
+    ] != [
+        "/workspace/assessment",
+        "/workspace/assessment/entry",
+        "/workspace/assessment/exams",
+        "/workspace/assessment/exams/:examId",
+    ]:
+        raise ValueError("Assessment center must contain only entry diagnosis and intelligent exams")
+    semantic_checks = {
+        "/onboarding": ("自然语言多轮交流", "预置课程", "不接收学生上传课程课件"),
+        "/workspace/path": ("九类资源", "今日必做", "智能组卷"),
+        "/workspace/assessment/exams": ("locked_missing_required_tasks", "今日必做"),
+        "/workspace/resources/handouts/:resourceId": ("例子", "反例", "来源脚注", "编辑版本"),
+        "/workspace/resources/training-tasks/:resourceId": ("环境", "检查点", "提交物", "评分标准"),
+        "/workspace/code/:resourceId": ("22%/50%/28%", "标准输入", "潜在风险", "应用建议"),
+        "/workspace/feynman/:resourceId": ("第一次复述", "学习询问", "第二次复述", "提升对比"),
+        "/knowledge/documents/:documentId": ("图片上按下拖拽", "图片坐标", "区域OCR"),
+    }
+    for path, terms in semantic_checks.items():
+        route_text = "\n".join(route_map[path][field] for field in FIELDS)
+        missing_terms = [term for term in terms if term not in route_text]
+        if missing_terms:
+            raise ValueError(f"Incomplete semantic contract for {path}: {missing_terms}")
+    resource_type_paths = {
+        "个性化讲义": "/workspace/resources/handouts/:resourceId",
+        "思维导图": "/workspace/resources/mindmaps/:resourceId",
+        "测验题资源": "/workspace/resources/quizzes/:resourceId",
+        "实训任务书": "/workspace/resources/training-tasks/:resourceId",
+        "代码沙盒任务": "/workspace/code/:resourceId",
+        "视频推荐": "/workspace/resources/videos/:resourceId",
+        "PPT/网页课件": "/workspace/resources/decks/:resourceId",
+        "可交互模型": "/workspace/resources/models/:resourceId",
+        "费曼复述任务": "/workspace/feynman/:resourceId",
+    }
+    missing_resource_types = [
+        label for label, path in resource_type_paths.items() if path not in route_map
+    ]
+    if missing_resource_types:
+        raise ValueError("Missing resource package detail routes: " + ", ".join(missing_resource_types))
+
+
+def sentence(value: str) -> str:
+    value = value.strip()
+    return value if value.endswith(("。", "！", "？", ";", "；", ".", "!", "?")) else value + "。"
+
+
+def render_markdown(routes: list[dict[str, str]]) -> str:
+    lines = [
+        "# EduMatrix 终版目标路由与逐页产品规格",
+        "",
+        "> 状态：`TARGET-PRODUCT-SPECIFICATION / IMPLEMENTATION-PENDING`。本文描述未来融合重构后的目标产品，不宣称当前代码已实现。当前 69 条路由如何迁移见 `evidence/route_product_spec/route_product_spec.md`。",
+        "",
+        f"- 目标产品路由：{len(routes)} 条；每条均包含角色、导航、价值、主动作、布局、输入输出、状态、交互、联动、两版代码、重构范围、隐藏项、验收和阶段。",
+        "- 一级导航仍只有已批准的学生 8 项、教师 4 项和管理员 4 项；深链不是一级菜单。",
+        "- 所有页面共用：加载、空、处理中、失败恢复和完成状态；下方每条规格写明本页特有状态。",
+        "",
+        "## 全局产品合同",
+        "",
+        "| 合同 | 不可变要求 |",
+        "|---|---|",
+    ]
+    for key, value in GLOBAL_PRODUCT_CONTRACTS.items():
+        lines.append(f"| `{key}` | {value} |")
+    lines += [
+        "",
+        "## 路由总览",
+        "",
+        "| 路由 | 页面 | 角色 | 导航归属 | 主动作 | 阶段 |",
+        "|---|---|---|---|---|---|",
+    ]
+    for route in routes:
+        lines.append(
+            f"| `{route['path']}` | {route['label']} | {route['role']} | {route['navigation']} | {route['primary_action']} | {route['phase']} |"
+        )
+    for route in routes:
+        lines.extend(
+            [
+                "",
+                f"## `{route['path']}` {route['label']}",
+                "",
+                f"- **允许角色与权限**：{sentence(route['role'])}",
+                f"- **导航位置**：{sentence(route['navigation'])}",
+                f"- **用户价值**：{sentence(route['purpose'])}",
+                f"- **唯一主动作**：{sentence(route['primary_action'])}",
+                f"- **页面结构**：{sentence(route['layout'])}",
+                f"- **数据输入**：{sentence(route['inputs'])}",
+                f"- **产品输出**：{sentence(route['outputs'])}",
+                f"- **完整状态与恢复**：{sentence(route['states'])}",
+                f"- **交互步骤**：{sentence(route['interactions'])}",
+                f"- **画像/路径/资源/测评联动**：{sentence(route['linkage'])}",
+                f"- **7.20 代码与体验基线**：{sentence(route['baseline_code'])}",
+                f"- **当前版候选实现**：{sentence(route['candidate_code'])}",
+                f"- **需要新增或重构**：{sentence(route['refactor_code'])}",
+                f"- **应隐藏、合并或舍弃**：{sentence(route['hidden_or_removed'])}",
+                f"- **验收证据**：{sentence(route['acceptance'])}",
+                f"- **未来实施顺序**：{route['phase']}；当前阶段不得执行。",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    validate_routes(TARGET_ROUTES)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(render_markdown(TARGET_ROUTES), encoding="utf-8")
+    args.output.with_suffix(".json").write_text(
+        json.dumps(TARGET_ROUTES, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    args.output.with_name("target_product_global_contracts.json").write_text(
+        json.dumps(
+            {
+                "resource_package_types": RESOURCE_PACKAGE_TYPES,
+                "global_product_contracts": GLOBAL_PRODUCT_CONTRACTS,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    role_counts = Counter(route["role"] for route in TARGET_ROUTES)
+    print(json.dumps({"routes": len(TARGET_ROUTES), "role_variants": len(role_counts)}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

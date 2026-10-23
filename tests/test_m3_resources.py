@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, DBArtifact, DBArtifactRelation, DBArtifactVersion
+from app.agent_audit import public_agent_audit_payload
 from app.m1_repository import M1Repository
 from app.m3_agents import (
     M3AgentRole,
@@ -122,6 +123,73 @@ class ProfileAwareFakeLLM:
         )
 
 
+class RepairingProfileAwareFakeLLM(ProfileAwareFakeLLM):
+    def __init__(self):
+        super().__init__()
+        self.received_requests = []
+
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        request = json.loads(user_prompt)
+        self.received_requests.append(request)
+        original = request.get("original_request", request)
+        result = await super().generate(
+            system_prompt,
+            json.dumps(original, ensure_ascii=False),
+            role=role,
+        )
+        if len(self.calls) == 1:
+            payload = json.loads(result)
+            payload["tiered_quiz"]["pass_rules"] = {"foundation": "2 分"}
+            return json.dumps(payload, ensure_ascii=False)
+        return result
+
+
+class PersonalizationRepairingFakeLLM(ProfileAwareFakeLLM):
+    def __init__(self):
+        super().__init__()
+        self.received_requests = []
+
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        request = json.loads(user_prompt)
+        self.received_requests.append(request)
+        original = request.get("original_request", request)
+        result = await super().generate(
+            system_prompt,
+            json.dumps(original, ensure_ascii=False),
+            role=role,
+        )
+        if len(self.calls) == 1:
+            payload = json.loads(result)
+            for step in payload["lab_guide"]["steps"]:
+                step["command_or_action"] = ""
+            return json.dumps(payload, ensure_ascii=False)
+        return result
+
+
+class AlwaysInvalidProfileAwareFakeLLM(ProfileAwareFakeLLM):
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        request = json.loads(user_prompt)
+        original = request.get("original_request", request)
+        result = await super().generate(
+            system_prompt,
+            json.dumps(original, ensure_ascii=False),
+            role=role,
+        )
+        payload = json.loads(result)
+        payload["tiered_quiz"]["pass_rules"] = {"foundation": "2 分"}
+        return json.dumps(payload, ensure_ascii=False)
+
+
+class SplitOnlyProfileAwareFakeLLM(ProfileAwareFakeLLM):
+    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        request = json.loads(user_prompt)
+        if "artifact_type" not in request:
+            self.calls.append((system_prompt, request, role))
+            return "not-json"
+        full = await super().generate(system_prompt, user_prompt, role=role)
+        return json.dumps(json.loads(full)[request["artifact_type"]], ensure_ascii=False)
+
+
 def _session():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(bind=engine)
@@ -133,7 +201,7 @@ def test_three_profiles_generate_formal_different_resources_with_unchanged_stand
     llm = ProfileAwareFakeLLM()
     try:
         fixtures = seed_m3_profile_baselines(session).fixtures
-        lesson_bodies, lab_step_counts, difficulty_bands = [], [], []
+        lesson_bodies, lab_step_counts, difficulty_bands, audit_summaries = [], [], [], []
         for fixture in fixtures:
             context = fixture.generation_context
             task, _ = create_m3_collaboration_task(
@@ -157,6 +225,12 @@ def test_three_profiles_generate_formal_different_resources_with_unchanged_stand
             lesson_bodies.append(bundle.lesson.sections[0].body_markdown)
             lab_step_counts.append(len(bundle.lab_guide.steps))
             difficulty_bands.append(bundle.lesson.personalization.difficulty_band)
+            audit = public_agent_audit_payload(
+                session,
+                task_id=task.id,
+                owner_public_id=context.owner_public_id,
+            )
+            audit_summaries.append(audit["items"][-1]["candidateSummary"])
             assert all(
                 artifact.personalization.fact_standard == "unchanged"
                 and artifact.personalization.safety_standard == "unchanged"
@@ -170,6 +244,7 @@ def test_three_profiles_generate_formal_different_resources_with_unchanged_stand
         assert len(set(lesson_bodies)) == 3
         assert lab_step_counts == [4, 3, 2]
         assert difficulty_bands == ["L0-L1", "L1-L2", "L2-L4"]
+        assert len(set(audit_summaries)) == 3
         assert session.query(DBArtifact).count() == 12
         assert session.query(DBArtifactVersion).count() == 12
         assert session.query(DBArtifactRelation).count() == 9
@@ -196,6 +271,138 @@ def test_resource_contract_rejects_claimed_personalization_from_another_profile(
                 profile=first.gold_profile,
             )
         assert raised.value.code == "personalization_evidence_mismatch"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_resource_contract_rejects_metadata_only_beginner_scaffolding():
+    engine, session = _session()
+    try:
+        fixture = seed_m3_profile_baselines(session).fixtures[0]
+        bundle = asyncio.run(
+            M3PersonalizedResourceGenerator(ProfileAwareFakeLLM()).generate(
+                session, context=fixture.generation_context
+            )
+        )
+        payload = bundle.model_dump(mode="json")
+        for step in payload["lab_guide"]["steps"]:
+            step["command_or_action"] = ""
+
+        with pytest.raises(M3ResourceError) as raised:
+            validate_m3_resource_bundle(
+                payload,
+                context=fixture.generation_context,
+                profile=fixture.gold_profile,
+            )
+        assert raised.value.code == "personalization_structure_mismatch"
+        assert "command_or_action" in str(raised.value)
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_resource_contract_rejects_theory_lesson_without_debugging_check():
+    engine, session = _session()
+    try:
+        fixture = seed_m3_profile_baselines(session).fixtures[1]
+        bundle = asyncio.run(
+            M3PersonalizedResourceGenerator(ProfileAwareFakeLLM()).generate(
+                session, context=fixture.generation_context
+            )
+        )
+        payload = bundle.model_dump(mode="json")
+        payload["lesson"]["retrieval_questions"] = []
+
+        with pytest.raises(M3ResourceError) as raised:
+            validate_m3_resource_bundle(
+                payload,
+                context=fixture.generation_context,
+                profile=fixture.gold_profile,
+            )
+        assert raised.value.code == "personalization_structure_mismatch"
+        assert "application_debugging" in str(raised.value)
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_generator_retries_once_with_validation_feedback_and_keeps_strict_contract():
+    engine, session = _session()
+    llm = RepairingProfileAwareFakeLLM()
+    try:
+        fixture = seed_m3_profile_baselines(session).fixtures[0]
+        bundle = asyncio.run(
+            M3PersonalizedResourceGenerator(llm).generate(
+                session, context=fixture.generation_context
+            )
+        )
+        assert bundle.tiered_quiz.pass_rules.keys() == {"foundation", "application", "advanced"}
+        assert len(llm.calls) == 2
+        assert "validation_feedback" in llm.received_requests[1]
+        assert llm.received_requests[1]["validation_feedback"]["code"] == "m3_resource_schema_invalid"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_generator_repairs_metadata_only_personalization_before_persistence():
+    engine, session = _session()
+    llm = PersonalizationRepairingFakeLLM()
+    try:
+        fixture = seed_m3_profile_baselines(session).fixtures[0]
+        bundle = asyncio.run(
+            M3PersonalizedResourceGenerator(llm).generate(
+                session, context=fixture.generation_context
+            )
+        )
+        assert all(step.command_or_action for step in bundle.lab_guide.steps)
+        assert len(llm.calls) == 2
+        feedback = llm.received_requests[1]["validation_feedback"]
+        assert feedback["code"] == "personalization_structure_mismatch"
+        assert "command_or_action" in feedback["message"]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_generator_stops_after_bundle_and_first_split_repairs_fail():
+    engine, session = _session()
+    llm = AlwaysInvalidProfileAwareFakeLLM()
+    try:
+        fixture = seed_m3_profile_baselines(session).fixtures[0]
+        with pytest.raises(M3ResourceError) as raised:
+            asyncio.run(
+                M3PersonalizedResourceGenerator(llm).generate(
+                    session, context=fixture.generation_context
+                )
+            )
+        assert raised.value.code == "m3_split_resource_invalid"
+        assert "lesson" in str(raised.value)
+        assert len(llm.calls) == 4
+        assert session.query(DBArtifact).count() == 0
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_generator_falls_back_to_three_strict_small_objects_after_bundle_failure():
+    engine, session = _session()
+    llm = SplitOnlyProfileAwareFakeLLM()
+    try:
+        fixture = seed_m3_profile_baselines(session).fixtures[0]
+        bundle = asyncio.run(
+            M3PersonalizedResourceGenerator(llm).generate(
+                session, context=fixture.generation_context
+            )
+        )
+        assert bundle.lesson.artifact_type == "lesson"
+        assert bundle.lab_guide.artifact_type == "lab_guide"
+        assert bundle.tiered_quiz.artifact_type == "tiered_quiz"
+        assert len(llm.calls) == 4
+        assert [call[1].get("artifact_type") for call in llm.calls[-3:]] == [
+            "lesson", "lab_guide", "tiered_quiz"
+        ]
     finally:
         session.close()
         engine.dispose()

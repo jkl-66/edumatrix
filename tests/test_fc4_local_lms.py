@@ -16,6 +16,7 @@ from app.database import (
     DBOrganizationMembership, DBSkillEvidence, DBTrainingAssignment,
     DBTrainingCohort, DBTrainingProgram, DBUser,
 )
+from app.database import DBSourceDocument
 from app.main import app
 from app.migrations import apply_registered_migrations
 
@@ -50,6 +51,8 @@ def _fixture():
     session.add(level); session.flush()
     session.add(program); session.flush()
     session.add(course); session.flush()
+    session.add(DBSourceDocument(id=course.id + "-source", course_id=course.id, title="合成课程资料", filename="lesson.md", file_format="md", content_hash="1" * 64, processing_status="ready"))
+    session.flush()
     session.add(cohort); session.flush()
     session.add(assignment); session.flush()
     session.add_all([

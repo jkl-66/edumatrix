@@ -38,6 +38,7 @@ async def audited_legacy_text_call(
     course_id: str | None = None,
     trace_id: str | None = None,
     response_validator: Callable[[str], Any] | None = None,
+    images: list[str] | None = None,
     database_runner=run_db_op,
 ) -> str:
     provider, model = model_identity(llm)
@@ -52,17 +53,24 @@ async def audited_legacy_text_call(
         owner_public_id=owner_public_id,
         course_id=course_id,
         trace_id=trace_id,
-        input_summary={"operation": operation, **input_summary},
+        input_summary={"operation": operation, "thinking_mode": getattr(llm, "thinking_mode", ""),
+                       "reasoning_effort": getattr(llm, "reasoning_effort", ""),
+                       "image_count": len(images or []), **input_summary},
         database_runner=database_runner,
     )
     await lifecycle.start()
+    output = ""
     try:
-        output = await llm.generate(system_prompt, user_prompt, role=role)
+        if images:
+            async for chunk in llm.generate_stream(system_prompt, user_prompt, role=role, images=images):
+                output += str(chunk or "")
+        else:
+            output = await llm.generate(system_prompt, user_prompt, role=role)
     except asyncio.CancelledError:
-        await asyncio.shield(lifecycle.fail("client_disconnected"))
+        await asyncio.shield(lifecycle.fail("client_disconnected", output))
         raise
     except Exception:
-        await lifecycle.fail(f"{operation}_provider_failed")
+        await lifecycle.fail(f"{operation}_provider_failed", output)
         raise
     if response_validator is not None:
         try:

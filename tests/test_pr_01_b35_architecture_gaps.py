@@ -43,7 +43,7 @@ def test_selected_course_automatically_freezes_authorized_course_sources() -> No
         response = client.post(
             f"/api/v1/chat/conversations/{conversation.json()['id']}/messages",
             headers=headers,
-            json={"content": "根据当前课程资料解释这个概念", "idempotency_key": _key("message")},
+            json={"content": "根据当前课程资料解释决策树如何选择划分特征", "idempotency_key": _key("message")},
         )
         assert response.status_code == 201, response.text
         assistant = response.json()["assistantMessage"]

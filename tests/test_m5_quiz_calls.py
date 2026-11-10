@@ -118,3 +118,43 @@ def test_similar_quiz_retries_share_trace_and_keep_attempt_records():
         ("failed", "quiz_output_invalid"),
         ("completed", ""),
     ]
+
+
+@pytest.mark.parametrize("passes", [True, False])
+def test_canonical_similar_question_checks_answers_and_preserves_source(monkeypatch, passes):
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+    from tests.test_f8_t02_wrong_questions import _canonical_session
+    from app.database import DBWrongQuestion, DBAssessmentQuestionVersion
+    import quiz_api
+    session, user, version, wrong_id = _canonical_session()
+    session.get(DBWrongQuestion, wrong_id).source_object_id = version.id
+    session.commit()
+    calls = []
+    class Request:
+        async def json(self):
+            return {"student_id": user.username, "question_version_id": version.id}
+    async def backend(_): return object()
+    async def generate(*args, **kwargs):
+        calls.append(kwargs)
+        return {"question": "下一步应朝什么方向？", "options": ["A. 正梯度", "B. 负梯度"],
+            "correct_answer": "B", "explanation": "负梯度使局部损失下降。",
+            "python_validator": "assert 1 == 1", "difficulty": "medium"}
+    async def run(code):
+        return "", ("AssertionError" if not passes or len(calls) == 1 else ""), 0.01
+    monkeypatch.setattr(quiz_api, "_get_llm", backend)
+    monkeypatch.setattr(quiz_api, "_call_quiz_model", generate)
+    monkeypatch.setattr(quiz_api, "SANDBOX_RUNNER", SimpleNamespace(run=run))
+    if passes:
+        result = asyncio.run(quiz_api.generate_similar_quiz(Request(), session, user))
+        created = session.get(DBAssessmentQuestionVersion, result["question_version_id"])
+        assert len(calls) == 2 and result["sandbox_validated"]
+        assert created.source_ref_ids == version.source_ref_ids
+        assert created.primary_knowledge_point_id == version.primary_knowledge_point_id
+        assert created.answer_key == {"choice": "B"}
+        assert version.prompt in calls[0]["user_prompt"]
+    else:
+        with pytest.raises(HTTPException) as failure:
+            asyncio.run(quiz_api.generate_similar_quiz(Request(), session, user))
+        assert failure.value.status_code == 502 and len(calls) == 3
+        assert session.query(DBAssessmentQuestionVersion).count() == 1

@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import HTTPException, status
 
 from app.identity import ROLE_ADMIN, ROLE_STUDENT, ROLE_TEACHER, VALID_ROLES
-from app.database import DBCourseMembership
+from app.database import DBCourse, DBCourseMembership
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ def require_object_access(
     if not can_access_object(user, obj, action=action, course_role=course_role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"无权对{obj.object_type}执行{action}操作",
+            detail="当前账号无权查看或修改这项内容，请返回自己的学习空间。",
         )
 
 
@@ -96,12 +96,14 @@ def require_course_access(
     course_role = active_course_role(
         session, course_id=course_id, user_public_id=str(user.public_id)
     )
+    course = session.get(DBCourse, course_id)
     require_object_access(
         user,
         ObjectAccess(
             object_type="course",
             object_id=course_id,
             course_id=course_id,
+            owner_public_id=course.owner_public_id if course else None,
             visibility=visibility,
         ),
         action=action,

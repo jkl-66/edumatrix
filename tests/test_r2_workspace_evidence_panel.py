@@ -35,7 +35,7 @@ def _session():
 
 def _overview(session):
     learner = session.query(DBUser).filter_by(username="lzz").one()
-    return workspace_overview(session, current_user=learner)
+    return workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
 
 
 def test_workspace_evidence_panel_projects_canonical_location_license_and_boundaries():

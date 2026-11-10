@@ -1,11 +1,12 @@
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import Field
 
 from config import CONFIG
 from app.auth import get_current_user
 from app.database import DBUser, run_db_op
+from app.generation_dispatch import submit_resource_job
 from app.m2_contracts import StrictModel
 from app.resource_bundles import (
     GENERATION_RESOURCE_TYPES,
@@ -27,6 +28,7 @@ from app.resource_bundles import (
     recover_generation_job,
     restore_version,
     retry_generation_item,
+    revise_generation_job,
     workspace_context,
 )
 
@@ -64,7 +66,7 @@ class GenerationItemInput(StrictModel):
     type: str = Field(min_length=1, max_length=32)
     title: str = Field(min_length=1, max_length=256)
     source_ref_ids: list[str] = Field(min_length=1)
-    completion_rule: str = Field(default="", max_length=512)
+    completion_rule: str = ""
 
 
 class GenerationJobInput(StrictModel):
@@ -74,11 +76,12 @@ class GenerationJobInput(StrictModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
     path_id: str | None = Field(default=None, max_length=64)
     task_id: str | None = Field(default=None, max_length=64)
-    learning_goal: str = Field(default="", max_length=512)
+    learning_goal: str = ""
     conversation_id: str | None = Field(default=None, max_length=64)
     message_id: str | None = Field(default=None, max_length=64)
     resource_intent: str | None = Field(default=None, max_length=64)
-    user_instruction: str = Field(default="", max_length=4000)
+    user_instruction: str = ""
+    verification_mode: Literal["cove"] | None = None
     context_snapshot_id: str | None = Field(default=None, max_length=128)
     selected_resource_types: list[str] | None = Field(default=None, max_length=len(GENERATION_RESOURCE_TYPES))
     scope: Literal["bundle", "single"] = "bundle"
@@ -86,13 +89,27 @@ class GenerationJobInput(StrictModel):
 
 
 class GenerationCompleteInput(StrictModel):
-    content: str = Field(min_length=1, max_length=200000)
+    content: str = Field(min_length=1)
     content_format: str = Field(default="markdown", max_length=16)
 
 
 class GenerationFailureInput(StrictModel):
     error_code: str = Field(min_length=1, max_length=64)
-    error_message: str = Field(min_length=1, max_length=2000)
+    error_message: str = Field(min_length=1)
+
+
+class GenerationRevisionInput(StrictModel):
+    feedback: str = Field(min_length=1)
+    resource_types: list[str] = Field(max_length=len(GENERATION_RESOURCE_TYPES))
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    active_requirements: dict[str, Any] | None = None
+    review_decisions: list[dict[str, Any]] | None = None
+    source_ref_ids_by_type: dict[str, list[str]] | None = None
+
+
+class QuizPracticeInput(StrictModel):
+    resource_id: str = Field(min_length=1, max_length=64)
+    version_id: str = Field(min_length=1, max_length=64)
 
 
 def _http(exc: ResourceBundleError) -> HTTPException:
@@ -158,7 +175,8 @@ async def version_restore(bundle_id: str, payload: RestoreInput, current_user: D
 
 @router.post("/generation-jobs", status_code=201)
 async def generation_job_create(payload: GenerationJobInput, current_user: DBUser = Depends(get_current_user)):
-    return await run_db_op(_op(lambda db: create_generation_job(
+    def create_and_submit(db):
+        result = create_generation_job(
         db,
         current_user,
         course_id=payload.course_id,
@@ -174,14 +192,29 @@ async def generation_job_create(payload: GenerationJobInput, current_user: DBUse
         message_id=payload.message_id,
         resource_intent=payload.resource_intent,
         user_instruction=payload.user_instruction,
+        verification_mode=payload.verification_mode,
         context_snapshot_id=payload.context_snapshot_id,
         selected_resource_types=payload.selected_resource_types,
-    ), True))
+        )
+        return {**submit_resource_job(db, current_user, result["job_id"]), "created": result["created"]}
+    return await run_db_op(_op(create_and_submit, True))
 
 
 @router.get("/generation-jobs/{task_id}")
 async def generation_job_detail(task_id: str, current_user: DBUser = Depends(get_current_user)):
     return await run_db_op(_op(lambda db: generation_job_payload(db, current_user, task_id)))
+
+
+@router.post("/generation-jobs/from-quiz", status_code=201)
+async def quiz_practice_create(payload: QuizPracticeInput, background_tasks: BackgroundTasks,
+                               current_user: DBUser = Depends(get_current_user)):
+    from app.quiz_practice import create_quiz_practice
+    result = await run_db_op(_op(lambda db: create_quiz_practice(
+        db, current_user, resource_id=payload.resource_id, version_id=payload.version_id), True))
+    if result.get("created"):
+        result = {**await run_db_op(_op(lambda db: submit_resource_job(db, current_user, result["job_id"]), True)),
+                  "created": True}
+    return result
 
 
 @router.post("/generation-jobs/{task_id}/execute-demo")
@@ -199,7 +232,7 @@ async def generation_job_execute_demo(task_id: str, current_user: DBUser = Depen
 
 @router.post("/generation-jobs/{task_id}/execute")
 async def generation_job_execute(task_id: str, current_user: DBUser = Depends(get_current_user)):
-    return await run_db_op(_op(lambda db: execute_generation_job(db, current_user, task_id), True))
+    return await run_db_op(_op(lambda db: submit_resource_job(db, current_user, task_id), True))
 
 
 @router.post("/generation-jobs/{task_id}/items/{resource_type}/start")
@@ -249,6 +282,12 @@ async def generation_job_item_retry(task_id: str, resource_type: str, current_us
 @router.post("/generation-jobs/{task_id}/recover")
 async def generation_job_recover(task_id: str, current_user: DBUser = Depends(get_current_user)):
     return await run_db_op(_op(lambda db: recover_generation_job(db, current_user, task_id), True))
+
+
+@router.post("/generation-jobs/{task_id}/revise")
+async def generation_job_revise(task_id: str, payload: GenerationRevisionInput, current_user: DBUser = Depends(get_current_user)):
+    return await run_db_op(_op(lambda db: revise_generation_job(
+        db, current_user, task_id, **payload.model_dump()), True))
 
 
 @router.post("/generation-jobs/{task_id}/cancel")

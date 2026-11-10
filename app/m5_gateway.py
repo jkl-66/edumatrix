@@ -29,7 +29,7 @@ class PromptSpec(StrictModel):
 
     key: str = Field(min_length=1, max_length=64)
     version: str = Field(min_length=1, max_length=64)
-    system_prompt: str = Field(min_length=1, max_length=20000)
+    system_prompt: str = Field(min_length=1)
 
 
 class GatewayRequest(StrictModel):
@@ -37,7 +37,9 @@ class GatewayRequest(StrictModel):
     owner_public_id: str | None = Field(default=None, max_length=64)
     task_id: str | None = Field(default=None, max_length=64)
     prompt: PromptSpec
-    user_prompt: str = Field(min_length=1, max_length=200000)
+    # Callers batch complete teaching tasks for the provider's context window.
+    # A character ceiling here rejects valid later batches before any call.
+    user_prompt: str = Field(min_length=1)
     role: str = Field(default="m5_gateway", min_length=1, max_length=128)
 
 
@@ -65,6 +67,20 @@ def _estimate_tokens(text: str) -> int:
 
 def _parse_json_object(raw: str) -> dict[str, Any]:
     return parse_json_object(raw)
+
+
+def _provider_failure_details(error: Exception) -> dict[str, Any]:
+    """Keep actionable failure types without persisting request URLs or secrets."""
+    kinds, statuses, seen = [], [], set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        kinds.append(type(current).__name__)
+        status = getattr(getattr(current, "response", None), "status_code", None)
+        if isinstance(status, int) and 100 <= status <= 599:
+            statuses.append(status)
+        current = current.__cause__ or current.__context__
+    return {"exception_types": kinds, "http_statuses": statuses}
 
 
 DatabaseRunner = Callable[..., Awaitable[Any]]
@@ -308,6 +324,8 @@ class M5ModelGateway:
             failure_cost = input_tokens * registration.input_cost_per_million / 1_000_000
             row.status = "failed"
             row.error_code = "provider_call_failed"
+            row.input_summary = {**(row.input_summary or {}),
+                                 "provider_failure": _provider_failure_details(exc)}
             row.estimated_cost = failure_cost
             row.duration_ms = max(0, int((time.perf_counter() - started) * 1000))
             row.completed_at = datetime.now(timezone.utc)
@@ -355,7 +373,11 @@ class M5ModelGateway:
                     if task is not None:
                         task.estimated_cost = float(task.estimated_cost or 0) + failure_cost
                 session.commit()
-                raise M5CapabilityError("structured_output_invalid", "model output failed strict schema validation") from exc
+                error = M5CapabilityError("structured_output_invalid", "model output failed strict schema validation")
+                error.raw_output = raw
+                error.validation_error = str(exc)
+                error.call_id = row.id
+                raise error from exc
 
         cost = (
             input_tokens * registration.input_cost_per_million
@@ -476,6 +498,24 @@ async def execute_registered_structured_call(
         "model",
         "deterministic" if provider == "deterministic" else CONFIG.llm_model,
     ) or "unknown"
+    from app.learning_generation_jobs import CURRENT_JOB, component_cache, generate_learning_json
+    if CURRENT_JOB.get():
+        original_backend = backend
+        completed, save = component_cache(session)
+        class ResumableBackend:
+            async def generate(self, system, user, *, role):
+                try:
+                    output = await generate_learning_json(original_backend, system=system,
+                        request=json.loads(user), role=role, completed=completed, save=save,
+                        validate=response_validator or response_model.model_validate)
+                except Exception as exc:
+                    if hasattr(exc, 'raw_output'):
+                        # The gateway records the original malformed response
+                        # as a structured-output failure, with actual tokens.
+                        return exc.raw_output
+                    raise
+                return json.dumps(output, ensure_ascii=False)
+        backend = ResumableBackend()
     registration = ModelRegistration(
         registration_version="next-compat-registry-v1",
         provider=provider,
@@ -489,11 +529,6 @@ async def execute_registered_structured_call(
         policy_version="next-compat-policy-v1",
         allowed_models=(ModelRef(provider=provider, model=model),),
         allowed_capabilities=(capability,),
-        daily_user_call_limit=10000,
-        daily_user_token_limit=100_000_000,
-        daily_user_cost_limit=10000,
-        daily_course_call_limit=100000,
-        daily_model_call_limit=100000,
     )
     digest = hashlib.sha256(
         f"{operation}:{owner_public_id}:{course_id}:{task_id}:{user_prompt}".encode("utf-8")

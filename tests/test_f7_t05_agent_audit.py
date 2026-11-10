@@ -12,11 +12,13 @@ from app.agent_audit import (
     build_selection_agent_audit,
 )
 from app.chat_api import (
+    append_chat_stage_event,
     begin_stream_message,
     complete_stream_message,
     fail_stream_message,
     message_payload,
     persist_stream_content,
+    record_chat_orchestration_metadata,
 )
 from app.database import (
     Base,
@@ -203,6 +205,33 @@ def test_chat_stream_persists_audit_and_keeps_failed_run_separate_from_history(t
             "tasks": session.query(DBGenerationTask).count(),
             "runs": session.query(DBAgentRun).count(),
         } == protected_before
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_professional_review_failure_does_not_invent_a_failed_synthesizer(tmp_path) -> None:
+    engine, session = _session(tmp_path)
+    try:
+        actor = DBUser(public_id="usr-review-end", username="review_end", hashed_password="x", role="student")
+        conversation = DBChatConversation(id="chat-review-end", owner_public_id=actor.public_id, title="核对失败测试")
+        current = _message(message_id="chatmsg-review-end", owner_id=actor.public_id,
+                           conversation_id=conversation.id, sequence=2, status="queued")
+        session.add_all([actor, conversation, current])
+        session.commit()
+        record_chat_orchestration_metadata(session, actor, current.id, mode="course_professional",
+                                           grounding_level="A", answerability="answerable", course_grounding="strict")
+        begin_stream_message(session, actor, current.id)
+        append_chat_stage_event(session, actor, current.id, event_type="stage.completed", stage_id="synthesizer",
+                                public_status="completed", owner="Synthesizer", summary="已整理讲解，接着核对。")
+        append_chat_stage_event(session, actor, current.id, event_type="stage.started", stage_id="revision_verification",
+                                public_status="running", owner="Verifier", summary="正在核对修订内容。")
+        failed = fail_stream_message(session, actor, current.id, "chat_professional_chain_failed", "讲解尚未核对完成。")
+        events = failed.stream_checkpoint["runEvents"]
+        assert not any(event["stageId"] == "synthesizer" and event["publicStatus"] == "failed" for event in events)
+        assert any(event["stageId"] == "professional_chain" and event["publicStatus"] == "failed" for event in events)
+        assert events[-1]["summary"] == "这次回答已中断，可以继续回答。"
+        assert failed.status == "failed" and not failed.content
     finally:
         session.close()
         engine.dispose()

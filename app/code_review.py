@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from pydantic import Field
 
 from app.agent_audit import PublicAgentRun, assert_public_audit_is_sanitized, sanitize_public_value
-from app.code_sandbox import CodeSandboxError, CodeSandboxRunState, _owned_run, _owned_resource
+from app.code_sandbox import CodeSandboxError, CodeSandboxRunState, SUPPORTED_MODULES, validate_code, _owned_run, _owned_resource
 from app.database import DBArtifact, DBArtifactVersion
 from app.m1_lifecycle import record_audit
 from app.m1_repository import add_artifact_version
@@ -93,11 +93,19 @@ class StructuredCodeReviewModelAdapter:
             "reliability, readability, custom. improvedCode is a non-empty string. applicationAdvice is a non-empty "
             "array of strings. Base every conclusion only on the supplied execution evidence. Do not include markdown, "
             "private reasoning, prompts, API keys, or any additional top-level keys."
+            " Write explanations and advice in natural Chinese for a learner. Keep improvedCode executable Python."
+            " Preserve the exercise inputs, output labels, and requiredChecks. Use only runtime.supportedModules;"
+            " or the supplied runtime.projectModules. Do not add unsupported imports (including typing)."
+            " improvedCode replaces only the entry file; keep the other supplied files unchanged. Prefer simple built-in annotations."
         )
 
         def parse_and_validate(raw: str) -> CodeReviewModelOutput:
             cleaned = _redact_sensitive_value(parse_json_object(raw))
-            return CodeReviewModelOutput.model_validate(cleaned)
+            result = CodeReviewModelOutput.model_validate(cleaned)
+            code_error = validate_code(result.improvedCode, local_modules=frozenset(payload.get("runtime", {}).get("projectModules", [])))
+            if code_error:
+                raise ValueError(f"建议代码无法在当前练习环境运行：{code_error}")
+            return result
 
         raw = self.backend.generate(system_prompt, _canonical(payload), role="代码运行证据点评")
         try:
@@ -106,7 +114,7 @@ class StructuredCodeReviewModelAdapter:
             # A live model can return semantically useful JSON with one omitted field.
             # Ask that same model to repair its own JSON once; never substitute local rules.
             repair_prompt = (
-                f"Your previous JSON failed the required schema: {type(validation_error).__name__}. "
+                f"Your previous JSON or code failed validation: {validation_error}. "
                 "Return a corrected JSON object with every required field and enum value. "
                 "Do not explain the correction and do not use markdown. Previous JSON:\n"
                 f"{_bounded_excerpt(raw, 12000)}"
@@ -431,16 +439,19 @@ def _model_payload(run: CodeSandboxRunState, strategy: ReviewFocusStrategy) -> d
     return _redact_sensitive_value({
         "schemaVersion": "f6.code-review-model-input.v1",
         "focusStrategy": strategy.model_dump(mode="json"),
+        "runtime": {"supportedModules": sorted(SUPPORTED_MODULES), "projectModules": sorted({item.path.replace("\\", "/").split("/")[0].removesuffix(".py") for item in run.files if item.path.endswith(".py")})},
         "run": {
             "status": run.status,
             "entryFile": run.entryFile,
             "code": run.code,
+            "files": [item.model_dump(mode="json") for item in run.files],
             "standardInput": run.standardInput,
             "stdout": run.stdout,
             "stderr": run.stderr,
             "exitCode": run.exitCode,
             "stopReason": run.stopReason,
             "checks": [item.model_dump(mode="json") for item in run.checks],
+            "requiredChecks": [item.model_dump(mode="json") for item in run.requiredChecks],
             "plots": [
                 {"id": item.id, "title": item.title, "bytes": item.bytes, "sha256": _digest_text(item.dataUrl)}
                 for item in run.plots
@@ -466,37 +477,37 @@ def _agent_audit(
             runId=f"{review_id}-evidence",
             role=contracts[M3AgentRole.EVIDENCE_REVIEW].role.value,
             inputRefs=input_refs,
-            candidateSummary=f"Reviewed terminal run {run.status}; found {len(findings)} review items.",
+            candidateSummary=f"已结合这次运行结果，整理出{len(findings)}条学习建议。",
             disagreement=(
-                "Runtime status and required checks disagree; the conservative result keeps the failed checks visible."
+                "程序已经结束，但仍有练习要求没有达到，请逐项核对。"
                 if run.status == "success" and failed_checks
-                else "No material conflict between terminal runtime evidence and required checks was found."
+                else "运行结果与本次练习的检查情况一致。"
             ),
-            validation="Code hash, run ownership, resource version, stdout, stderr, exit status, and required checks were verified.",
-            revision="Converted raw execution evidence into bounded public findings and risks.",
-            decisionSummary="Only conclusions traceable to the selected run are included.",
+            validation="已核对你选择的代码、输入、输出和练习检查结果。",
+            revision="把运行中发现的问题整理成了具体的改进建议。",
+            decisionSummary="本次点评针对这一次运行，其他输入还需要继续练习。",
             status="completed",
         ),
         PublicAgentRun(
             runId=f"{review_id}-candidate",
             role=contracts[M3AgentRole.DOMAIN_GENERATION].role.value,
             inputRefs=(run.runAttemptId, f"focus:{_digest_text(focus)}" if focus else "focus:general"),
-            candidateSummary="Prepared one conservative improved-code draft without changing the original run snapshot.",
-            disagreement="Automatic edits are limited to locally verifiable patterns; uncertain changes remain recommendations.",
-            validation="The suggested draft remains valid text inside the current code-resource size boundary.",
-            revision="Kept the original code immutable and moved the candidate to an explicit apply-as-new-version action.",
-            decisionSummary="The learner chooses whether to apply and rerun the draft.",
+            candidateSummary="已提供一份改进代码，原来的代码与结果仍可查看。",
+            disagreement="改进建议仍需要通过实际运行确认效果。",
+            validation="已检查建议代码能否使用当前练习环境。",
+            revision="应用建议后会另存为新版本，便于比较前后变化。",
+            decisionSummary="读懂建议后，可以应用并再次运行。",
             status="completed",
         ),
         PublicAgentRun(
             runId=f"{review_id}-decision",
             role=contracts[M3AgentRole.DECISION_ORCHESTRATION].role.value,
             inputRefs=(run.runAttemptId, review_id),
-            candidateSummary="Compared the original run evidence with the bounded improvement candidate.",
-            disagreement="A review or applied draft alone is not accepted as mastery evidence.",
-            validation="Completion remains owned by the existing code_tests_passed server rule after a qualifying rerun.",
-            revision="Separated review, apply, rerun, and learning-completion actions.",
-            decisionSummary="Apply as a new draft, rerun, compare evidence, then complete learning only if checks pass.",
+            candidateSummary="已明确本次练习接下来的验证步骤。",
+            disagreement="阅读点评或保存建议不等于已经掌握，需要亲自运行验证。",
+            validation="重新运行并达到全部练习要求后，才能提交完成学习。",
+            revision="保留点评、修改和运行记录，方便你回看学习过程。",
+            decisionSummary="应用建议、重新运行、比较结果，检查通过后再完成学习。",
             status="completed",
         ),
     )

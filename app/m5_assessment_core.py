@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -17,7 +18,7 @@ from app.database import (
     DBProfileSnapshot, DBQuizRecord, DBReviewPlan, DBUser,
 )
 from app.m2_contracts import StrictModel
-from app.learner_output import teacher_text
+from app.learner_output import LEARNER_FEEDBACK_INSTRUCTION, map_teaching_prose, teacher_text
 from app.m1_lifecycle import record_audit
 from app.m5_learning import LearningEventInput, process_path_event, record_learning_event
 
@@ -41,11 +42,11 @@ def _hash(value: Any) -> str:
 
 
 class QuestionVersionInput(StrictModel):
-    prompt: str = Field(min_length=1, max_length=20000)
+    prompt: str = Field(min_length=1)
     options: tuple[str, ...] = ()
     answer_key: dict[str, Any]
     scoring_rule: dict[str, Any]
-    explanation: str = Field(default="", max_length=20000)
+    explanation: str = ""
     misconception_tags: tuple[str, ...] = ()
     primary_knowledge_point_id: str | None = None
     secondary_knowledge_point_ids: tuple[str, ...] = ()
@@ -201,6 +202,9 @@ def validate_question_version(question_type: str, version: QuestionVersionInput)
     if question_type in {"single_choice", "multiple_choice"}:
         if len(version.options) < 2 or len(set(version.options)) != len(version.options):
             _fail("question_options_invalid", "choice questions require at least two unique options")
+        bodies = [_option_body(item, preserve_layout=True) for item in version.options]
+        if any(not body or _option_is_internal(body) for body in bodies):
+            _fail("question_options_invalid", "题目选项内容不完整，请补全实际选项后再保存。")
     if question_type == "single_choice" and not str(key.get("choice", "")).strip():
         _fail("answer_key_invalid", "single choice requires answer_key.choice")
     if question_type == "multiple_choice":
@@ -316,6 +320,7 @@ def learner_question_payload(
         "version_number": version.version_number,
         "prompt": learner_safe_prompt(version.prompt),
         "options": options,
+        "content_issue": learner_question_content_issue(version, question),
         "bloom_level": version.bloom_level,
         "expert_difficulty": version.expert_difficulty,
         "primary_knowledge_point_id": version.primary_knowledge_point_id,
@@ -341,28 +346,24 @@ def learner_question_payload(
     return payload
 
 
-_OPTION_PROVENANCE_MARKERS = (
-    "source_path", "source_ref", "source role", "来源角色", "来源路径", "来源引用",
-    "课程版本", "manifest", "commit", "parser_version", "parse_version", "content_hash",
-    "chapter_deep-learning", "computation/index", "profile", "画像偏好", "学习画像",
+_OPTION_PROVENANCE_FIELD = re.compile(
+    r"(?im)^\s*[\"']?(?:source_path|source_ref(?:_id)?|source[ _]role|"
+    r"来源角色|来源路径|来源引用|课程版本|parser_version|parse_version|content_hash)"
+    r"[\"']?\s*(?:[:：]\s*\S+|=\s*[\"']?(?:src-|ref-|[a-f0-9]{24,}|[A-Za-z]:[/\\])\S*)"
 )
 
 _EXPLANATION_PROVENANCE_MARKERS = (
     "先核对已冻结来源", "核对已冻结来源", "冻结课程来源", "绑定课程来源",
     "答案来自冻结", "依据冻结课程来源", "依据课程来源", "绑定来源",
-    "生成蓝图", "source_path", "source_ref", "content_hash", "parser_version",
-    "parse_version", "manifest", "版本哈希", "课程版本", "证据核验",
-    "确定性评分", "本地确定性", "上下文重点", "模型模式", "rubric", "内部 id",
+    "生成蓝图", "确定性评分", "本地确定性", "上下文重点", "模型模式", "内部 id",
+    "来源核验", "来源验证", "证据绑定", "哈希校验",
 )
 
-_PROMPT_PROVENANCE_MARKERS = (
-    "课程来源锚点", "来源锚点", "source_path", "source_ref", "content_hash",
-    "parser_version", "parse_version", "manifest", "版本哈希", "课程版本",
-    "证据核验", "冻结课程来源", "绑定课程来源",
+_LEARNER_EXPLANATION_MISSING_NOTICE = (
+    "这道题暂未保存详细解析，可以查看原文，或继续追问解题过程。"
 )
 
-
-def _option_body(value: Any) -> str:
+def _option_body(value: Any, *, preserve_layout: bool = False) -> str:
     """Return only the learner-facing body of an option."""
     if isinstance(value, dict):
         value = next(
@@ -370,49 +371,47 @@ def _option_body(value: Any) -> str:
              if value.get(key) not in (None, "")),
             "",
         )
-    text = " ".join(str(value or "").strip().split())
+    text = str(value or "").strip()
+    if not preserve_layout:
+        text = " ".join(text.split())
     text = re.sub(r"^[A-D](?:[.、:)]\s*|\s+)", "", text, flags=re.IGNORECASE)
     return text.strip()
 
 
 def _option_is_internal(text: str) -> bool:
-    normalized = text.casefold()
-    return any(marker.casefold() in normalized for marker in _OPTION_PROVENANCE_MARKERS)
+    prose = []
+    map_teaching_prose(text, lambda part: prose.append(part) or "")
+    normalized = "".join(prose).casefold()
+    # Detect an actual provenance field, not a word in the teaching content.
+    # Git commit, profiling and learner profiles can all be legitimate topics.
+    return bool(_OPTION_PROVENANCE_FIELD.search(normalized))
 
 
 def learner_option_texts(
     version: DBAssessmentQuestionVersion,
     question: DBAssessmentQuestion | None = None,
 ) -> list[str]:
-    """Project historical question options as readable learner choices.
+    """Read the saved choices without inventing a replacement question.
 
-    Older generated versions occasionally persisted provenance strings as an
-    option body.  Keep the stored answer labels and history intact, but replace
-    only that malformed public projection with four concise, same-level choices.
+    An incomplete set cannot be answered faithfully. Hide the whole set rather
+    than dropping individual choices and shifting the stored answer labels.
     """
-    raw = [_option_body(item) for item in list(version.options or [])]
+    raw = [_option_body(item, preserve_layout=True) for item in list(version.options or [])]
+    if question is not None and question.question_type not in {"single_choice", "multiple_choice"}:
+        return []
     valid = len(raw) >= 2 and all(raw) and not any(_option_is_internal(item) for item in raw)
-    if valid:
-        return [teacher_text(item) for item in raw]
-    prompt = _option_body(version.prompt)
-    topic = "当前知识点"
-    match = re.search(r"[“『\"]([^”』\"]{2,30})[”』\"]", prompt)
-    if match:
-        topic = match.group(1)
-    correct_label = _choice_label((version.answer_key or {}).get("choice")) or "A"
-    bodies = {
-        "A": f"先明确“{topic}”的适用条件，再用一个最小例子验证结论。",
-        "B": f"只记住“{topic}”的名称，不必确认输入、过程和输出。",
-        "C": f"忽略“{topic}”的边界，直接把任意情境都当成相同问题。",
-        "D": f"只查看章节标题，就据此判断已经理解“{topic}”。",
-    }
-    labels = ["A", "B", "C", "D"]
-    if correct_label not in labels:
-        correct_label = "A"
-    # The exact key remains canonical; place the valid learning statement at
-    # that label so old attempts continue to grade against the same choice.
-    bodies[correct_label] = f"根据题干给出的条件，先说明“{topic}”的机制，再用结果检查理解。"
-    return [bodies[label] for label in labels]
+    return raw if valid else []
+
+
+def learner_question_content_issue(
+    version: DBAssessmentQuestionVersion,
+    question: DBAssessmentQuestion | None = None,
+) -> str:
+    if question is not None and question.question_type not in {"single_choice", "multiple_choice"}:
+        return ""
+    if not learner_option_texts(version, question):
+        return "这道题的选项内容不完整，暂时无法作答。请重新准备题目，原有答案和成绩仍会保留。"
+    return ""
 
 
 def learner_safe_prompt(value: Any, *, knowledge_point: str = "") -> str:
@@ -422,8 +421,33 @@ def learner_safe_prompt(value: Any, *, knowledge_point: str = "") -> str:
     clause. That clause remains available through source references, but it is
     not part of the question a learner should read or answer.
     """
-    raw = " ".join(str(value or "").strip().split())
-    text = raw
+    # Formatting is part of the question: rows, paragraphs and indented code
+    # must survive this read projection without rewriting stored questions.
+    text = map_teaching_prose(str(value or ""), _learner_prompt_prose).strip()
+    if text:
+        return text
+    topic = _option_body(knowledge_point).strip()
+    return f"请围绕“{topic}”回答下面的问题。" if topic else "请根据题目条件作答。"
+
+
+def _learner_prompt_prose(text: str) -> str:
+    # Known boilerplate from earlier generators. Keep the dataset label and
+    # every task condition; do not delete arbitrary negations or qualifications.
+    # map_teaching_prose keeps code and quoted code literals untouched.
+    # Earlier resource prompts required these preparation labels. They carry
+    # neither mathematical assumptions nor answer rules. Strip only known
+    # leading labels; a task discussing the quoted wording remains verbatim.
+    text = re.sub(r"^\s*【画像适配题单·有效性判断（通用拓展）】", "", text)
+    text = re.sub(r"^\s*(?:共同核心题\d+|画像增补题\d+)(?:（通用拓展）)?[：:]\s*", "", text)
+    text = re.sub(r"^\s*通用拓展(?:（课程基础，不是题中分布表的推算）)?[：:]\s*", "", text)
+    text = re.sub(r"^\s*以下为加练题（通用拓展），固定练习题设[：:]\s*", "补充练习：", text)
+    for old in (
+        "（练习条件，不是你的实测记录，也不是行业标准）",
+        "（练习条件，合成教学数据；不是你的实测记录，也不是行业标准）",
+        "（合成教学数据，不是真实采集，也不是行业标准）",
+        "（练习条件，不是你的实测记录）",
+    ):
+        text = text.replace(old, "（练习数据）")
     for marker in ("课程来源锚点", "来源锚点"):
         while marker in text:
             start = text.find(marker)
@@ -437,25 +461,19 @@ def learner_safe_prompt(value: Any, *, knowledge_point: str = "") -> str:
                     end = text.find("”", quote_start + 1)
                 if end >= 0:
                     skip = 2 if text[end:end + 2] == "”。" else 1
-                    text = (text[:start] + " " + text[end + skip:]).strip()
+                    text = text[:start] + " " + text[end + skip:]
                     continue
             sentence_end = text.find("。", content_start)
             if sentence_end < 0:
-                text = text[:start].rstrip()
+                text = text[:start]
             else:
-                text = (text[:start] + " " + text[sentence_end + 1:]).strip()
-    text = re.sub(r"(^|\s)#{1,6}\s*", " ", text)
-    chunks = [chunk.strip() for chunk in re.split(r"(?<=[。！？])\s*", text) if chunk.strip()]
+                text = text[:start] + " " + text[sentence_end + 1:]
+    chunks = re.split(r"(?<=[。！？])", text)
     public = [
         chunk for chunk in chunks
-        if not any(marker.casefold() in chunk.casefold() for marker in _PROMPT_PROVENANCE_MARKERS)
+        if not _option_is_internal(chunk)
     ]
-    text = re.sub(r"\s+", " ", " ".join(public))
-    text = re.sub(r"(?<=[。！？；：])\s+", "", text).strip(" ，,。；;\n")
-    if text:
-        return teacher_text(text)
-    topic = _option_body(knowledge_point).strip()
-    return f"请围绕“{topic}”回答下面的问题。" if topic else "请根据题目条件作答。"
+    return re.sub(r"(?<=[。！？；：])[ \t]+", "", "".join(public))
 
 
 _EXPLANATION_TOPIC_WORDS = (
@@ -539,7 +557,7 @@ def _explanation_is_internal(text: str) -> bool:
     )
     # A provenance sentence can accompany a good explanation, but a short
     # provenance-only sentence is never a learner explanation.
-    return len(text) < 120 or not any(marker in text for marker in teaching_markers)
+    return not any(marker in text for marker in teaching_markers)
 
 
 def _explanation_option_pairs(options: Any) -> list[tuple[str, str]]:
@@ -590,9 +608,13 @@ def _explanation_answer_labels(question_type: str, answer_key: dict[str, Any] | 
 
 def _fallback_learner_explanation(
     *, prompt: Any, options: Any, answer_key: dict[str, Any] | None,
-    question_type: str, knowledge_point: str = "",
+    question_type: str, knowledge_point: str = "", legacy_topic: str = "",
 ) -> str:
-    topic = _explanation_topic(prompt, knowledge_point)
+    """Reconstruct only the old synthetic footer so reads can remove it exactly.
+
+    Never use this template to supply a new teaching explanation.
+    """
+    topic = legacy_topic or _explanation_topic(prompt, knowledge_point)
     key = dict(answer_key or {})
     if question_type in {"single_choice", "multiple_choice"}:
         pairs = _explanation_option_pairs(options)
@@ -651,34 +673,109 @@ def learner_safe_explanation(
     answer_key: dict[str, Any] | None = None, question_type: str = "single_choice",
     knowledge_point: str = "",
 ) -> str:
-    """Return a question-specific learner explanation without provenance prose."""
-    text = " ".join(str(value or "").strip().split())
-    if text:
-        # Match each sentence explicitly so adjacent Chinese sentences
-        # without whitespace are still treated as separate chunks.
-        chunks = [chunk.strip() for chunk in re.findall(r"[^。！？]+[。！？]?", text) if chunk.strip()]
-        public = [chunk for chunk in chunks if not _option_is_internal(chunk) and not _explanation_is_internal(chunk)]
-        text = " ".join(_dedupe_explanation_chunks(public)).strip()
-    fallback = teacher_text(_fallback_learner_explanation(
-        prompt=prompt, options=options, answer_key=answer_key,
+    text = _learner_explanation(
+        value, prompt=prompt, options=options, answer_key=answer_key,
         question_type=question_type, knowledge_point=knowledge_point,
-    ))
-    if text and not _explanation_is_internal(text):
-        public_text = teacher_text(text)
-        # Historical short explanations often equal the generated fallback.
-        # Return one copy instead of repeating the same paragraph twice.
-        if public_text.strip() == fallback.strip() or fallback.strip() in public_text:
-            return public_text
-        if public_text.strip() in fallback.strip():
-            return fallback
-        if question_type == "fill_blank" and ("参考答案" in public_text or "答案" in public_text):
-            # Fill-in explanations are often already complete; appending the
-            # generated fallback would repeat the answer and instructions.
-            return public_text
-        if len(public_text) >= 160:
-            return public_text
-        return teacher_text(f"{public_text} {fallback}")
-    return fallback
+    )
+    # One verified historical erratum. Keep the original explanation/answer and
+    # grade in storage; do not infer corrections to other questions or arithmetic.
+    compact_prompt = re.sub(r"\s+", "", prompt)
+    compact_original = re.sub(r"\s+", "", str(value or ""))
+    if (
+        "np.arange(0,5)" in compact_prompt
+        and "np.arange(6,11)" in compact_prompt
+        and "[6,8,10,12,14]" in compact_prompt
+        and "np.sum(arr1+arr2)" in compact_original
+        and "本例结果为40" in compact_original
+        and "勘误：" not in text
+    ):
+        return (
+            "勘误：原解析的整体求和示例写成了40，应为50：6 + 8 + 10 + 12 + 14 = 50。"
+            "逐元素相加的数组结果、判断题答案和原得分不受影响。\n\n原解析（保留供对照）：\n" + text
+        )
+    return text
+
+
+def learner_explanation_content(
+    value: Any, *, prompt: str = "", options: Any = (),
+    answer_key: dict[str, Any] | None = None, question_type: str = "single_choice",
+    knowledge_point: str = "",
+) -> str:
+    """Return existing teaching prose without filling in missing reasoning."""
+    text = str(value or "").strip()
+    legacy_topics = {""}
+    if question_type in {"single_choice", "multiple_choice"}:
+        legacy_topics.update(re.findall(r"这道题考查([^\n]+?)的关键条件和判断方法。正确答案是 ", text))
+    legacy_footers = [teacher_text(_fallback_learner_explanation(
+        prompt=prompt, options=options, answer_key=answer_key,
+        question_type=question_type, knowledge_point=knowledge_point, legacy_topic=topic,
+    )) for topic in legacy_topics]
+    # One older display cleaner replaced even "不确定性" inside its generated
+    # footer. Recognize that full historical template too; never apply the
+    # replacement to the actual reasoning or saved choices.
+    legacy_footers += [footer.replace("确定性", "可复现性") for footer in legacy_footers]
+    # Match only the exact old generated suffix (including historical spacing
+    # and terminal punctuation differences), never guess which reasoning is bad.
+    compact_footers = [re.sub(r"[\s。！？]", "", legacy) for legacy in legacy_footers]
+    while text:
+        positions = [i for i, char in enumerate(text) if not char.isspace() and char not in "。！？"]
+        compact = "".join(text[i] for i in positions)
+        matched = next((footer for footer in compact_footers if footer and compact.endswith(footer)), None)
+        if not matched:
+            break
+        text = text[:positions[-len(matched)]].rstrip()
+
+    def explanation_prose(part: str) -> str:
+        return "".join(chunk for chunk in re.split(r"(?<=[。！？])", part)
+                       if not _option_is_internal(chunk) and not _explanation_is_internal(chunk))
+
+    return map_teaching_prose(text, explanation_prose).strip()
+
+
+def _learner_explanation(
+    value: Any, *, prompt: str = "", options: Any = (),
+    answer_key: dict[str, Any] | None = None, question_type: str = "single_choice",
+    knowledge_point: str = "",
+) -> str:
+    """Read saved reasoning faithfully; an answer key is not a causal explanation."""
+    text = learner_explanation_content(
+        value, prompt=prompt, options=options, answer_key=answer_key,
+        question_type=question_type, knowledge_point=knowledge_point,
+    )
+    if text:
+        return text
+    answer = learner_correct_answer(question_type, dict(answer_key or {})) or {}
+    if "choice" in answer:
+        label = str(answer["choice"] or "")
+    elif "choices" in answer:
+        label = "、".join(answer["choices"])
+    elif "value" in answer:
+        label = "正确" if answer["value"] is True else "错误" if answer["value"] is False else ""
+    elif "blanks" in answer:
+        label = "、".join(" / ".join(map(str, item)) if isinstance(item, (list, tuple)) else str(item)
+                         for item in answer["blanks"])
+    else:
+        label = str(answer.get("reference_answer") or "")
+    return (f"参考答案：{label}。\n\n" if label else "") + _LEARNER_EXPLANATION_MISSING_NOTICE
+
+
+def learner_explanation_has_content(
+    value: Any, *, prompt: str = "", options: Any = (),
+    answer_key: dict[str, Any] | None = None, question_type: str = "single_choice",
+    knowledge_point: str = "",
+) -> bool:
+    """Check whether sanitization leaves teaching content beyond an answer label."""
+    text = learner_explanation_content(
+        value, prompt=prompt, options=options, answer_key=answer_key,
+        question_type=question_type, knowledge_point=knowledge_point,
+    )
+    # Reject answer labels alone, without a length threshold or rewriting the
+    # explanation. A concise derivation (including code/formulas) can suffice.
+    return bool(text) and not re.fullmatch(
+        r"\s*(?:(?:正确|参考)?答案\s*(?:是|为|[:：])\s*)?"
+        r"(?:[A-Z](?:\s*[、,，和与]\s*[A-Z])*|正确|错误|true|false)\s*[。.!！]?\s*",
+        text, re.IGNORECASE,
+    )
 
 
 def learner_correct_answer(question_type: str, answer_key: dict[str, Any]) -> dict[str, Any] | None:
@@ -719,6 +816,36 @@ def _normal_text(value: Any, *, case_sensitive: bool) -> str:
     return text if case_sensitive else text.casefold()
 
 
+def _numeric_array_answer(value: str) -> tuple | None:
+    """Ignore numeric sequence layout while preserving each container's type."""
+    text = value.strip()
+    wrapper = re.fullmatch(r"(?:np\.|numpy\.)?array\((.*)\)", text, re.S)
+    if wrapper:
+        text = wrapper.group(1).strip()
+    if not text.startswith(("[", "(")):
+        return None
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError, RecursionError):
+        return None
+
+    def numeric(item):
+        if isinstance(item, (list, tuple)):
+            return (type(item).__name__, tuple(numeric(child) for child in item))
+        if type(item) in (int, float):
+            return item
+        raise ValueError("not a numeric array")
+
+    try:
+        # Keep the existing array([...]) spelling equivalent to a numeric list;
+        # a bare tuple is distinct, including one-element shapes such as (3,).
+        if wrapper and not isinstance(parsed, list):
+            return None
+        return numeric(parsed) if isinstance(parsed, (list, tuple)) else None
+    except (ValueError, RecursionError):
+        return None
+
+
 def grade_objective_answer(
     question_type: str, answer: dict[str, Any], answer_key: dict[str, Any],
     scoring_rule: dict[str, Any],
@@ -754,7 +881,13 @@ def grade_objective_answer(
             alternatives = accepted if isinstance(accepted, (list, tuple)) else [accepted]
             actual = _normal_text(submitted[index] if index < len(submitted) else "", case_sensitive=case_sensitive)
             allowed = {_normal_text(item, case_sensitive=case_sensitive) for item in alternatives}
-            matches.append(bool(actual) and actual in allowed)
+            matched = bool(actual) and actual in allowed
+            if not matched:
+                numeric = _numeric_array_answer(actual)
+                matched = numeric is not None and any(
+                    numeric == _numeric_array_answer(item) for item in allowed
+                )
+            matches.append(matched)
         score = sum(matches) / max(1, len(matches)) if scoring_rule.get("partial_credit", True) else float(all(matches))
         evidence.update({"blank_count": len(matches), "matched_count": sum(matches), "case_sensitive": case_sensitive})
     else:
@@ -786,6 +919,16 @@ def create_grading_result(
     evidence: dict[str, Any], feedback: str, improvement_advice: list[str] | tuple[str, ...],
     trace_id: str = "", created_by_public_id: str | None = None,
 ) -> tuple[DBAssessmentGradingResult, bool]:
+    existing = session.query(DBAssessmentGradingResult).filter_by(
+        attempt_id=attempt.id, grader_type=grader_type, rubric_version=rubric_version,
+    ).first()
+    if attempt.mode == "practice" and status == "completed":
+        # Freeze what was known at submission, so later answers or a page
+        # refresh cannot turn the original independent attempt into a correction.
+        context = ((existing.evidence or {}).get("practice_context") if existing
+                   else practice_attempt_context(session, attempt=attempt))
+        if context:
+            evidence = {**evidence, "practice_context": context}
     payload = {
         "status": status,
         "score": score,
@@ -799,9 +942,6 @@ def create_grading_result(
         "trace_id": trace_id,
     }
     content_hash = _hash(payload)
-    existing = session.query(DBAssessmentGradingResult).filter_by(
-        attempt_id=attempt.id, grader_type=grader_type, rubric_version=rubric_version,
-    ).first()
     if existing is not None:
         if existing.content_hash != content_hash:
             _fail("grading_result_conflict", "grading result key is bound to different evidence")
@@ -847,6 +987,11 @@ def create_grading_result(
     return row, True
 
 
+def is_diagnostic_abstention(answer: dict[str, Any] | None) -> bool:
+    """An explicit diagnostic response, distinct from a blank or wrong answer."""
+    return answer == {"response_status": "not_yet"}
+
+
 def record_attempt(
     session: Any, *, owner_public_id: str, attempt: AttemptInput,
     trusted_final_grade: tuple[float, bool] | None = None,
@@ -855,12 +1000,29 @@ def record_attempt(
     if version is None:
         _fail("question_version_unknown", "assessment question version does not exist")
     question = session.query(DBAssessmentQuestion).filter_by(id=version.question_id).one()
+    if resource_version_id := (attempt.answer or {}).get("resource_version_id"):
+        from app.path_learning_context import quiz_resource_context
+        if (attempt.mode != "practice" or not isinstance(resource_version_id, str)
+                or quiz_resource_context(session, owner_public_id=owner_public_id, course_id=question.course_id,
+                    question_version_id=version.id, resource_version_id=resource_version_id) is None):
+            _fail("attempt_resource_mismatch", "这道题与当前学习资料不对应，请重新打开题目。")
     existing = session.query(DBAssessmentAttempt).filter_by(
         owner_public_id=owner_public_id, idempotency_key=attempt.idempotency_key,
     ).first()
     submitted = {**attempt.model_dump(mode="json"), "course_id": question.course_id}
+    if existing is not None:
+        # A retry restores the recorded outcome. Regrading here would make a
+        # normalization fix reject old retries. Subjective results stay separate.
+        comparable = {key: getattr(existing, key) for key in submitted}
+        if _canonical(comparable) != _canonical(submitted):
+            _fail("attempt_idempotency_conflict", "idempotency key is bound to another attempt")
+        return existing, False
     objective_result = None
-    if question.question_type in {"short_answer", "code", "open_task"}:
+    if attempt.mode == "diagnostic" and is_diagnostic_abstention(attempt.answer):
+        # A learner can identify a starting point without guessing. This is
+        # self-report, not scored evidence and must not update ability estimates.
+        score, correct, grading_status = None, None, "pending"
+    elif question.question_type in {"short_answer", "code", "open_task"}:
         if trusted_final_grade is None:
             # A subjective response has no score until the governed grader
             # finishes.  Keep it explicitly pending instead of writing a
@@ -886,17 +1048,9 @@ def record_attempt(
         **submitted, "score": score, "correct": correct,
         "grading_status": grading_status, "feedback_policy": feedback_policy,
     }
-    if existing is not None:
-        comparable = {
-            "question_version_id": existing.question_version_id, "idempotency_key": existing.idempotency_key,
-            "course_id": existing.course_id, "mode": existing.mode, "answer": existing.answer,
-            "score": existing.score, "correct": existing.correct, "confidence": existing.confidence,
-            "duration_seconds": existing.duration_seconds, "grading_status": existing.grading_status,
-            "feedback_policy": existing.feedback_policy,
-        }
-        if _canonical(comparable) != _canonical(payload):
-            _fail("attempt_idempotency_conflict", "idempotency key is bound to another attempt")
-        return existing, False
+    issue = learner_question_content_issue(version, question)
+    if issue:
+        _fail("question_content_incomplete", issue)
     row = DBAssessmentAttempt(owner_public_id=owner_public_id, **payload)
     session.add(row)
     session.flush()
@@ -963,10 +1117,51 @@ def ability_state_payload(row: DBAssessmentAbilityState) -> dict[str, Any]:
     }
 
 
+def practice_attempt_context(session: Any, *, attempt: DBAssessmentAttempt) -> dict[str, Any]:
+    """Keep correction feedback useful without counting a disclosed answer again."""
+    if attempt.mode != "practice":
+        return {}
+    saved = session.query(DBAssessmentGradingResult).filter_by(
+        attempt_id=attempt.id, status="completed",
+    ).order_by(DBAssessmentGradingResult.created_at).first()
+    if saved and (saved.evidence or {}).get("practice_context"):
+        return dict(saved.evidence["practice_context"])
+    version = session.get(DBAssessmentQuestionVersion, attempt.question_version_id)
+    if version:
+        # Reprinting the same question in another resource/version is still the
+        # same exercise. A genuinely changed problem remains a fresh attempt.
+        previous = session.query(DBAssessmentAttempt, DBAssessmentQuestionVersion).join(
+            DBAssessmentQuestionVersion,
+            DBAssessmentQuestionVersion.id == DBAssessmentAttempt.question_version_id,
+        ).filter(
+            DBAssessmentAttempt.owner_public_id == attempt.owner_public_id,
+            DBAssessmentAttempt.course_id == attempt.course_id,
+            DBAssessmentAttempt.id != attempt.id,
+            DBAssessmentAttempt.submitted_at < attempt.submitted_at,
+            DBAssessmentAttempt.feedback_policy != "after_close",
+            DBAssessmentQuestionVersion.prompt == version.prompt,
+        ).order_by(DBAssessmentAttempt.submitted_at.desc()).all()
+        for prior, prior_version in previous:
+            if (_canonical(prior_version.options) != _canonical(version.options)
+                    or _canonical(prior_version.answer_key) != _canonical(version.answer_key)):
+                continue
+            graded = prior.grading_status == "graded" or session.query(DBAssessmentGradingResult).filter(
+                DBAssessmentGradingResult.attempt_id == prior.id,
+                DBAssessmentGradingResult.status == "completed",
+                DBAssessmentGradingResult.created_at <= attempt.submitted_at,
+            ).first() is not None
+            if graded:
+                return {"kind": "correction", "feedback_attempt_id": prior.id}
+    return {"kind": "guided_practice" if (attempt.answer or {}).get("used_hints") else "independent"}
+
+
 def update_ability_state(
     session: Any, *, attempt: DBAssessmentAttempt,
     version: DBAssessmentQuestionVersion, correct: bool,
 ) -> dict[str, Any]:
+    context = practice_attempt_context(session, attempt=attempt)
+    if context.get("kind") in {"correction", "guided_practice"}:
+        return {"applied": False, "reason": context["kind"]}
     from mirt_engine import AdaptiveTestEstimator, IRTItemParams
 
     state = get_or_create_ability_state(
@@ -1005,12 +1200,20 @@ def ai_grading_prompt(
     rubric = {"version": rubric_version, "criteria": list(criteria)}
     system_prompt = (
         "你是 EduMatrix 的 AI 智能初评器。只依据冻结评分量规逐项判断。"
-        "必须先为每项给出可核查证据、理由和改进建议，再给 0 到 1 的分数。"
+        "每项先给出可核查证据与理由，再给 0 到 1 的分数；改进建议只针对实际未满足的要求。"
         "不要因答案更长或语气更自信而加分；证据不足时降低置信度。"
+        "按表达的实际含义评分，正确的日常语言或等价解法与术语表述同等对待；"
+        "若量规要求已经满足，不能仅因未复述术语、单位或参考答案句式扣分。"
+        "每项扣分必须说明尚未满足的实际要求，不能把可选的表达改进当成知识错误。"
+        "逐项独立判断：一处错误只影响它实际涉及的要求，不把整体结论错误重复扣到已满足的独立步骤。"
+        "同一句话若前后矛盾，需指出它如何影响当前评分项；其它环节的错误本身不是本项扣分理由。"
+        "量规中的“或”表示满足其中一种即可；已经表达的必要条件，不要求换成参考答案原句再写一次。"
+        "完整正确的评分项给满分，improvement可为空；不要要求改写正确的等价符号、重复已写出的结论，或为每个满分项硬加练习。"
         "返回严格 JSON，顶层字段必须为 criteria、confidence、summary、improvement_plan；"
         "criteria 中每项字段必须严格为 criterion_id（使用输入量规中的 id）、score（0 到 1）、"
         "evidence（字符串数组）、justification（字符串）和 improvement（字符串）；"
         "improvement_plan 必须是字符串数组。不要输出 id、label、reason、suggestion 等替代字段。"
+        + LEARNER_FEEDBACK_INSTRUCTION
     )
     user_prompt = _canonical({
         "question": version.prompt,
@@ -1194,7 +1397,7 @@ def grading_result_payload(row: DBAssessmentGradingResult | None) -> dict[str, A
     return {
         "id": row.id,
         "grader_type": row.grader_type,
-        "label": "AI 智能初评" if row.grader_type == "ai" else "代码隐藏测试" if row.grader_type == "code" else "服务端客观评分",
+        "label": {"ai": "智能点评", "code": "代码练习评分", "human": "教师复核"}.get(row.grader_type, "答题评分"),
         "status": row.status,
         "rubric_version": row.rubric_version,
         "criterion_results": row.criterion_results or [],
@@ -1218,7 +1421,8 @@ def select_cat_question(
     from mirt_engine import AdaptiveTestEstimator, IRTItemParams
 
     excluded = set(excluded_version_ids)
-    available = [(question, version) for question, version in candidates if version.id not in excluded]
+    available = [(question, version) for question, version in candidates
+                 if version.id not in excluded and not learner_question_content_issue(version, question)]
     if not available:
         _fail("cat_candidates_empty", "no eligible CAT question remains")
     ability = get_or_create_ability_state(
@@ -1503,7 +1707,7 @@ def learner_attempt_payload(
         "answer": attempt.answer, "score": attempt.score, "correct": attempt.correct,
         "confidence": attempt.confidence, "duration_seconds": attempt.duration_seconds,
         "grading_status": attempt.grading_status, "feedback_policy": attempt.feedback_policy,
-        "submitted_at": attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+        "submitted_at": attempt.submitted_at.replace(tzinfo=attempt.submitted_at.tzinfo or timezone.utc).isoformat() if attempt.submitted_at else None,
     }
     if attempt.feedback_policy == "after_close":
         payload["score"] = None
@@ -1515,6 +1719,8 @@ def learner_attempt_payload(
             "grading_status": "graded" if grading.status == "completed" else grading.status,
             "grading": grading_result_payload(grading),
         })
+        if context := (grading.evidence or {}).get("practice_context"):
+            payload["practice_kind"] = context["kind"]
     return payload
 
 
@@ -1899,9 +2105,9 @@ def review_queue(session: Any, *, owner_public_id: str) -> tuple[dict[str, Any],
         "course_id": attempt.course_id,
         "category": review.confirmed_category,
         "concept": review.confirmed_category,
-        "reason": "confirmed misconception requires review and delayed retest",
+        "reason": "先回顾这次出错的原因，再间隔一段时间重新练习。",
         "stable_mastery": False,
-        "due_at": f"{task.due_at.isoformat()}Z" if task and task.due_at else attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+        "due_at": f"{task.due_at.isoformat()}Z" if task and task.due_at else f"{attempt.submitted_at.isoformat()}Z" if attempt.submitted_at else None,
         "retest_task": retest_task_payload(task),
         "priority": 0.5,
         "status": retest_task_payload(task)["status"] if task else "needs_review",
@@ -1917,12 +2123,12 @@ def review_queue(session: Any, *, owner_public_id: str) -> tuple[dict[str, Any],
             "source_type": "sm2_review_plan",
             "source_id": str(plan.id),
             "attempt_id": None,
-            "course_id": None,
+            "course_id": plan.course_id,
             "category": "spaced_repetition",
             "concept": plan.concept,
-            "reason": "SM-2 due date and legacy review priority",
+            "reason": "根据上次学习情况安排，按计划巩固这个知识点。",
             "stable_mastery": False,
-            "due_at": plan.next_review_at.isoformat() if plan.next_review_at else None,
+            "due_at": f"{plan.next_review_at.isoformat()}Z" if plan.next_review_at else None,
             "priority": float(plan.priority or 1.0),
             "status": "due" if plan.next_review_at and plan.next_review_at <= now else "scheduled",
             "evidence_strength": "algorithmic_schedule",

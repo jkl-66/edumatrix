@@ -15,6 +15,20 @@ MANIFEST = Path("data/curated/ai_deep_learning_agents_v1/course_manifest.json")
 MASTER_ID = "course-ai-deep-learning-agents-v1"
 
 
+def test_computational_performance_source_has_matching_title_and_knowledge():
+    bundle = load_versioned_course_bundle(MANIFEST)
+    document = next(item for item in bundle["documents"] if item["chapter_order"] == 11)
+    assert document["title"] == "D2L 计算性能与并行训练"
+    assert document["knowledge_point_codes"] == ["AI-KP-21-01", "AI-KP-21-02", "AI-KP-21-03"]
+    assert "异步计算" in document["content"] and "多GPU" in document["content"]
+    assert "无监督学习与表示" in document["filename"]  # Stable identity, corrected display title.
+    # Same upstream files, now concatenated in the textbook's declared order.
+    assert document["source_sha256"] == "fc686447b859f4ac20c588d06c26372514b264256753ff14dc627f8718695cff"
+    assert document["content"].index("上游文件: chapter_computational-performance/index.md") < document["content"].index("上游文件: chapter_computational-performance/async-computation.md")
+    assert bundle["knowledge_point_version"] == "ai-deep-learning-agents-kp-1.0.0"
+    assert any(point["code"] == "AI-KP-12" and "无监督学习" in point["title"] for point in bundle["knowledge_points"])
+
+
 def _session():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
 
@@ -55,9 +69,9 @@ def test_master_bundle_projects_canonical_structure_and_lzz_cleanup():
         assert result["inserted"] == len(bundle["documents"])
         assert db.get(DBCourse, MASTER_ID).title == "人工智能与深度学习：从机器学习基础到大模型智能体"
         assert db.query(DBSourceDocument).filter_by(course_id=MASTER_ID).count() == len(bundle["documents"])
-        assert db.query(DBChapter).filter_by(course_id=MASTER_ID).count() == len(bundle["documents"])
-        assert db.query(DBSourceRef).join(DBSourceDocument, DBSourceRef.source_document_id == DBSourceDocument.id).filter(DBSourceDocument.course_id == MASTER_ID).count() == len(bundle["documents"])
-        assert db.query(DBKnowledgePoint).filter_by(domain_pack="domain-ai-deep-learning-agents-v1").count() == 20
+        assert db.query(DBChapter).filter(DBChapter.course_id == MASTER_ID, DBChapter.stable_key.startswith("structure:")).count() == len(bundle["course"]["manifest_data"]["teaching_structure"]["chapters"])
+        assert db.query(DBSourceRef).join(DBSourceDocument, DBSourceRef.source_document_id == DBSourceDocument.id).filter(DBSourceDocument.course_id == MASTER_ID).count() == len(bundle["documents"]) + len(bundle["course"]["manifest_data"]["teaching_structure"]["chapters"])
+        assert db.query(DBKnowledgePoint).filter_by(domain_pack="domain-ai-deep-learning-agents-v1").count() == len(bundle["knowledge_points"])
         primary_source = db.query(DBSourceDocument).filter_by(course_id=MASTER_ID, legacy_document_id=bundle["documents"][0]["id"]).one()
         assert primary_source.parser_metadata["source_role"] == bundle["documents"][0]["source_role"]
 
@@ -77,7 +91,7 @@ def test_master_bundle_projects_canonical_structure_and_lzz_cleanup():
         engine.dispose()
 
 
-def test_master_bundle_prunes_undeclared_legacy_canonical_source():
+def test_master_bundle_retires_undeclared_bundle_source_and_preserves_its_history():
     engine, db = _session()
     try:
         bundle = load_versioned_course_bundle(MANIFEST)
@@ -93,6 +107,7 @@ def test_master_bundle_prunes_undeclared_legacy_canonical_source():
             source_sha256="a" * 64,
             processed_sha256="a" * 64,
             source_path="legacy:old-master.md",
+            parser_metadata={"origin": "versioned_course_bundle"},
             source_url="https://example.invalid/old-master",
             license_text="test",
             parser_version="edumatrix-course-source-v1",
@@ -135,11 +150,11 @@ def test_master_bundle_prunes_undeclared_legacy_canonical_source():
 
         upsert_course_bundle(db, bundle)
 
-        assert db.get(DBSourceDocument, source.id) is None
-        assert db.get(DBChapter, chapter_id) is None
-        assert db.get(DBSourceRef, "ref-stale-master") is None
-        assert db.query(DBSourceDocument).filter_by(course_id=MASTER_ID).count() == len(bundle["documents"])
-        assert db.query(DBChapter).filter_by(course_id=MASTER_ID).count() == len(bundle["documents"])
+        assert db.get(DBSourceDocument, source.id).parser_metadata["retired_from_catalog"] is True
+        assert db.get(DBChapter, chapter_id).source_document_id == source.id
+        assert db.get(DBSourceRef, "ref-stale-master").quote == "旧版重复来源"
+        assert db.query(DBSourceDocument).filter_by(course_id=MASTER_ID).count() == len(bundle["documents"]) + 1
+        assert db.query(DBChapter).filter(DBChapter.course_id == MASTER_ID, DBChapter.stable_key.startswith("structure:")).count() == len(bundle["course"]["manifest_data"]["teaching_structure"]["chapters"])
     finally:
         db.close()
         engine.dispose()

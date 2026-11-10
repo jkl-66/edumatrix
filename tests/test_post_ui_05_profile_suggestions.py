@@ -55,8 +55,7 @@ def test_suggestions_summary_has_a_large_neutral_visual_contract() -> None:
     ):
         assert marker in source
 
-    # The digital-twin tab was removed by acceptance feedback FB-21; the other
-    # detail tabs remain part of the learning-profile surface.
-    assert "activeTab === 'digital-twin'" not in source
+    # Later A18 feedback restored the evidence-backed digital-twin tab.
+    assert 'data-testid="digital-twin-tab"' in source
     for tab in ("overview", "dimensions", "weakness", "causes"):
         assert f"activeTab === '{tab}'" in source

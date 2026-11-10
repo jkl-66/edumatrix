@@ -8,6 +8,7 @@ import html
 import io
 import json
 import re
+from datetime import timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -32,11 +33,14 @@ from app.database import (
     DBSourceRef,
     DBTaskStep,
     DBMisconceptionReview,
+    DBNote,
+    DBUser,
 )
 from app.m1_lifecycle import record_audit, set_artifact_archived
 from app.m1_repository import M1Repository, add_artifact_version, learner_safe_artifact_content
 from app.m2_contracts import StrictModel
 from app.m5_capabilities import M5CapabilityError
+from app.learner_output import completion_description, video_recommendation_reason
 from app.m5_assessment_core import (
     grading_result_payload,
     learner_attempt_payload,
@@ -67,46 +71,56 @@ class ResourceVersionRestoreRequest(StrictModel):
 
 class HandoutOutlineItem(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
+    title: str = Field(min_length=1)
 
 
 class HandoutConcept(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
-    explanation: str = Field(min_length=1, max_length=12_000)
+    title: str = Field(min_length=1)
+    explanation: str = Field(min_length=1)
     sourceRefIds: list[str] = Field(default_factory=list)
 
 
 class HandoutFigure(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
+    title: str = Field(min_length=1)
     kind: Literal["chart", "formula", "diagram"]
-    content: str = Field(min_length=1, max_length=20_000)
-    caption: str = Field(min_length=1, max_length=1_000)
+    content: str = Field(min_length=1)
+    caption: str = Field(min_length=1)
     sourceRefIds: list[str] = Field(default_factory=list)
 
 
 class HandoutExample(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
-    body: str = Field(min_length=1, max_length=12_000)
+    title: str = Field(min_length=1)
+    body: str = Field(min_length=1)
     sourceRefIds: list[str] = Field(default_factory=list)
 
 
 class HandoutCodeBlock(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
+    title: str = Field(min_length=1)
     language: str = Field(min_length=1, max_length=32)
-    code: str = Field(min_length=1, max_length=30_000)
-    explanation: str = Field(min_length=1, max_length=4_000)
+    code: str = Field(min_length=1)
+    explanation: str = Field(min_length=1)
+
+
+class HandoutTransferTask(StrictModel):
+    id: str = Field(min_length=1, max_length=96)
+    title: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    hint: str = ""
+    successCheck: str = ""
+    sourceRefIds: list[str] = Field(default_factory=list)
 
 
 class HandoutQuizItem(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    question: str = Field(min_length=1, max_length=2_000)
+    question: str = Field(min_length=1)
     options: list[str] = Field(min_length=2, max_length=8)
     correctIndex: int = Field(ge=0)
-    explanation: str = Field(min_length=1, max_length=4_000)
+    explanation: str = Field(min_length=1)
+    hints: list[str] = Field(default_factory=list)
     required: bool = True
 
     @model_validator(mode="after")
@@ -119,31 +133,32 @@ class HandoutQuizItem(StrictModel):
 class HandoutFootnote(StrictModel):
     id: str = Field(min_length=1, max_length=96)
     sourceRefId: str = Field(min_length=1, max_length=128)
-    label: str = Field(min_length=1, max_length=80)
-    title: str = Field(min_length=1, max_length=256)
+    label: str = Field(min_length=1)
+    title: str = Field(min_length=1)
     location: str = Field(min_length=1, max_length=512)
 
 
 class HandoutProfileAdaptation(StrictModel):
-    summary: str = Field(min_length=1, max_length=2_000)
+    summary: str = Field(min_length=1)
     difficulty: str = Field(min_length=1, max_length=64)
-    scaffolding: list[str] = Field(min_length=1, max_length=12)
+    scaffolding: list[str] = Field(min_length=1)
 
 
 class HandoutContent(StrictModel):
     schemaVersion: Literal["f5.handout.v1"] = "f5.handout.v1"
-    title: str = Field(min_length=1, max_length=256)
-    summary: str = Field(min_length=1, max_length=4_000)
-    learningGoal: str = Field(min_length=1, max_length=2_000)
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    learningGoal: str = Field(min_length=1)
     estimatedMinutes: int = Field(ge=1, le=480)
-    outline: list[HandoutOutlineItem] = Field(min_length=1, max_length=30)
-    concepts: list[HandoutConcept] = Field(min_length=1, max_length=40)
-    figures: list[HandoutFigure] = Field(min_length=1, max_length=20)
-    examples: list[HandoutExample] = Field(min_length=1, max_length=30)
-    counterExamples: list[HandoutExample] = Field(min_length=1, max_length=30)
-    codeBlocks: list[HandoutCodeBlock] = Field(min_length=1, max_length=20)
-    miniQuiz: list[HandoutQuizItem] = Field(min_length=1, max_length=20)
-    footnotes: list[HandoutFootnote] = Field(min_length=1, max_length=100)
+    outline: list[HandoutOutlineItem] = Field(min_length=1)
+    concepts: list[HandoutConcept] = Field(min_length=1)
+    figures: list[HandoutFigure] = Field(min_length=1)
+    examples: list[HandoutExample] = Field(min_length=1)
+    counterExamples: list[HandoutExample] = Field(min_length=1)
+    codeBlocks: list[HandoutCodeBlock] = Field(default_factory=list)
+    miniQuiz: list[HandoutQuizItem] = Field(min_length=1)
+    transferTasks: list[HandoutTransferTask] = Field(default_factory=list)
+    footnotes: list[HandoutFootnote] = Field(min_length=1)
     profileAdaptation: HandoutProfileAdaptation
 
     @model_validator(mode="after")
@@ -155,6 +170,7 @@ class HandoutContent(StrictModel):
             self.counterExamples,
             self.codeBlocks,
             self.miniQuiz,
+            self.transferTasks,
             self.footnotes,
         )
         content_ids = [item.id for section in sections for item in section]
@@ -171,22 +187,22 @@ class HandoutContent(StrictModel):
 class MindmapNode(StrictModel):
     nodeId: str = Field(min_length=1, max_length=96)
     parentNodeId: str | None = Field(default=None, max_length=96)
-    label: str = Field(min_length=1, max_length=160)
-    summary: str = Field(min_length=1, max_length=2_000)
-    relation: str = Field(min_length=1, max_length=64)
-    depth: int = Field(ge=0, le=20)
-    sourceRefs: list[str] = Field(default_factory=list, max_length=40)
+    label: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    relation: str = Field(min_length=1)
+    depth: int = Field(ge=0)
+    sourceRefs: list[str] = Field(default_factory=list)
     masteryBand: Literal["unknown", "needs_work", "developing", "secure"] = "unknown"
-    linkedResourceIds: list[str] = Field(default_factory=list, max_length=20)
+    linkedResourceIds: list[str] = Field(default_factory=list)
 
 
 class MindmapContent(StrictModel):
     schemaVersion: Literal["f5.mindmap.v1"] = "f5.mindmap.v1"
-    title: str = Field(min_length=1, max_length=256)
-    summary: str = Field(min_length=1, max_length=4_000)
-    learningGoal: str = Field(min_length=1, max_length=2_000)
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    learningGoal: str = Field(min_length=1)
     rootNodeId: str = Field(min_length=1, max_length=96)
-    nodes: list[MindmapNode] = Field(min_length=1, max_length=500)
+    nodes: list[MindmapNode] = Field(min_length=1)
 
     @model_validator(mode="after")
     def valid_connected_tree(self) -> "MindmapContent":
@@ -227,10 +243,10 @@ class MindmapContent(StrictModel):
 
 class VideoSegment(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
+    title: str = Field(min_length=1)
     startSeconds: int = Field(ge=0, le=86_400)
     endSeconds: int = Field(ge=1, le=86_400)
-    learningFocus: str = Field(min_length=1, max_length=1_000)
+    learningFocus: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def valid_time_range(self) -> "VideoSegment":
@@ -241,9 +257,9 @@ class VideoSegment(StrictModel):
 
 class VideoAlternative(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1)
     url: str = Field(min_length=8, max_length=2_048)
-    reason: str = Field(min_length=1, max_length=1_000)
+    reason: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def valid_https_url(self) -> "VideoAlternative":
@@ -254,7 +270,7 @@ class VideoAlternative(StrictModel):
 
 class VideoRecommendation(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1)
     sourceKind: Literal["external_url", "local_ref"]
     availability: Literal["playable", "external_only", "unavailable"]
     url: str | None = Field(default=None, max_length=2_048)
@@ -271,7 +287,7 @@ class VideoRecommendation(StrictModel):
     ]
     licenseLabel: str = Field(min_length=1, max_length=2_000)
     licenseUrl: str | None = Field(default=None, max_length=2_048)
-    reason: str = Field(min_length=1, max_length=2_000)
+    reason: str = ""
     segments: list[VideoSegment] = Field(default_factory=list, max_length=80)
     sourceRefIds: list[str] = Field(default_factory=list, max_length=100)
     alternatives: list[VideoAlternative] = Field(default_factory=list, max_length=12)
@@ -311,10 +327,10 @@ class VideoRecommendation(StrictModel):
 
 class VideoRecommendationContent(StrictModel):
     schemaVersion: Literal["f5.video-recommendation.v1"] = "f5.video-recommendation.v1"
-    title: str = Field(min_length=1, max_length=256)
-    summary: str = Field(min_length=1, max_length=4_000)
-    learningGoal: str = Field(min_length=1, max_length=2_000)
-    adaptationSummary: str = Field(min_length=1, max_length=2_000)
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    learningGoal: str = Field(min_length=1)
+    adaptationSummary: str = Field(min_length=1)
     recommendations: list[VideoRecommendation] = Field(default_factory=list, max_length=12)
 
     @model_validator(mode="after")
@@ -328,29 +344,29 @@ class VideoRecommendationContent(StrictModel):
 class DeckSlide(StrictModel):
     id: str = Field(min_length=1, max_length=96)
     layout: Literal["title", "content", "two_column", "closing"]
-    title: str = Field(min_length=1, max_length=256)
-    subtitle: str = Field(default="", max_length=512)
-    body: str = Field(default="", max_length=8_000)
-    bullets: list[str] = Field(default_factory=list, max_length=16)
-    speakerNotes: str = Field(default="", max_length=8_000)
-    sourceRefIds: list[str] = Field(default_factory=list, max_length=100)
+    title: str = Field(min_length=1)
+    subtitle: str = ""
+    body: str = ""
+    bullets: list[str] = Field(default_factory=list)
+    speakerNotes: str = ""
+    sourceRefIds: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def useful_slide_content(self) -> "DeckSlide":
         if self.layout != "title" and not self.body.strip() and not any(item.strip() for item in self.bullets):
             raise ValueError("content slides require body text or bullets")
-        if any(not item.strip() or len(item) > 1_000 for item in self.bullets):
-            raise ValueError("deck bullets must be non-empty and concise")
+        if any(not item.strip() for item in self.bullets):
+            raise ValueError("deck bullets must be non-empty")
         return self
 
 
 class DeckContent(StrictModel):
     schemaVersion: Literal["f5.deck.v1"] = "f5.deck.v1"
-    title: str = Field(min_length=1, max_length=256)
-    summary: str = Field(min_length=1, max_length=4_000)
-    learningGoal: str = Field(min_length=1, max_length=2_000)
-    adaptationSummary: str = Field(min_length=1, max_length=2_000)
-    slides: list[DeckSlide] = Field(min_length=1, max_length=30)
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    learningGoal: str = Field(min_length=1)
+    adaptationSummary: str = Field(min_length=1)
+    slides: list[DeckSlide] = Field(min_length=1)
 
     @model_validator(mode="after")
     def unique_slide_ids(self) -> "DeckContent":
@@ -362,28 +378,51 @@ class DeckContent(StrictModel):
 
 class QuizQuestionRef(StrictModel):
     questionVersionId: str = Field(min_length=1, max_length=64)
-    position: int = Field(ge=1, le=100)
+    position: int = Field(ge=1)
     required: bool = True
+    hints: list[str] = Field(default_factory=list)
 
 
 class QuizAdaptation(StrictModel):
-    learningGoal: str = Field(min_length=1, max_length=2_000)
-    profileSummary: str = Field(min_length=1, max_length=4_000)
-    masterySummary: str = Field(min_length=1, max_length=4_000)
-    recentLearningSummary: str = Field(min_length=1, max_length=4_000)
+    learningGoal: str = Field(min_length=1)
+    profileSummary: str = Field(min_length=1)
+    masterySummary: str = Field(min_length=1)
+    recentLearningSummary: str = Field(min_length=1)
+
+
+class QuizStudySession(StrictModel):
+    startQuestion: int = Field(ge=1)
+    endQuestion: int = Field(ge=1)
+    estimatedMinutes: int = Field(ge=1)
+
+
+def quiz_study_sessions(value: Any, question_count: int) -> list[QuizStudySession]:
+    if not isinstance(value, list):
+        raise ValueError("quiz sessions must be a list")
+    sessions = [QuizStudySession.model_validate(item) for item in value]
+    if sessions:
+        next_question = 1
+        for session in sessions:
+            if session.startQuestion != next_question or session.endQuestion < session.startQuestion:
+                raise ValueError("quiz sessions must follow question order without gaps or overlap")
+            next_question = session.endQuestion + 1
+        if next_question != question_count + 1:
+            raise ValueError("quiz sessions must include every question exactly once")
+    return sessions
 
 
 class QuizResourceContent(StrictModel):
     schemaVersion: Literal["f6.quiz-resource.v1"] = "f6.quiz-resource.v1"
-    title: str = Field(min_length=1, max_length=256)
-    summary: str = Field(min_length=1, max_length=4_000)
-    courseTitle: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    courseTitle: str = Field(min_length=1)
     knowledgePoint: dict[str, str]
     adaptation: QuizAdaptation
     semanticContext: dict[str, Any] = Field(default_factory=dict)
     sourceRefIds: list[str] = Field(min_length=1, max_length=50)
-    questions: list[QuizQuestionRef] = Field(min_length=1, max_length=100)
-    requiredQuestionCount: int = Field(ge=1, le=100)
+    questions: list[QuizQuestionRef] = Field(min_length=1)
+    requiredQuestionCount: int = Field(ge=1)
+    studySessions: list[QuizStudySession] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def valid_question_set(self) -> "QuizResourceContent":
@@ -393,21 +432,22 @@ class QuizResourceContent(StrictModel):
             raise ValueError("quiz question ids and positions must be unique")
         if self.requiredQuestionCount > len(self.questions):
             raise ValueError("required quiz question count exceeds the question set")
+        quiz_study_sessions(self.studySessions, len(self.questions))
         return self
 
 
 class CodeSandboxAdaptation(StrictModel):
-    learningGoal: str = Field(min_length=1, max_length=2_000)
-    profileSummary: str = Field(min_length=1, max_length=4_000)
-    masterySummary: str = Field(min_length=1, max_length=4_000)
-    recentLearningSummary: str = Field(min_length=1, max_length=4_000)
+    learningGoal: str = Field(min_length=1)
+    profileSummary: str = Field(min_length=1)
+    masterySummary: str = Field(min_length=1)
+    recentLearningSummary: str = Field(min_length=1)
 
 
 class CodeSandboxCheckpoint(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
-    instruction: str = Field(min_length=1, max_length=2_000)
-    completionHint: str = Field(min_length=1, max_length=1_000)
+    title: str = Field(min_length=1)
+    instruction: str = Field(min_length=1)
+    completionHint: str = Field(min_length=1)
 
 
 class CodeSandboxFile(StrictModel):
@@ -425,7 +465,7 @@ class CodeSandboxFile(StrictModel):
 
 class CodeSandboxRequiredCheck(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    label: str = Field(min_length=1, max_length=160)
+    label: str = Field(min_length=1)
     kind: Literal["exit_code_zero", "stdout_contains", "stderr_empty", "plot_count_at_least"]
     expectedText: str | None = Field(default=None, max_length=1_000)
     minimum: int | None = Field(default=None, ge=1, le=20)
@@ -443,14 +483,15 @@ class CodeSandboxRuntime(StrictModel):
     language: Literal["python"] = "python"
     mode: Literal["trusted_local"] = "trusted_local"
     timeoutSeconds: int = Field(default=10, ge=1, le=60)
-    boundary: str = Field(min_length=1, max_length=2_000)
+    boundary: str = Field(min_length=1)
 
 
 class CodeSandboxContent(StrictModel):
     schemaVersion: Literal["f6.code-sandbox.v1"] = "f6.code-sandbox.v1"
-    title: str = Field(min_length=1, max_length=256)
-    summary: str = Field(min_length=1, max_length=4_000)
-    courseTitle: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    instructions: str = ""
+    courseTitle: str = Field(min_length=1)
     knowledgePoint: dict[str, str]
     adaptation: CodeSandboxAdaptation
     checkpoints: list[CodeSandboxCheckpoint] = Field(min_length=1, max_length=12)
@@ -458,7 +499,7 @@ class CodeSandboxContent(StrictModel):
     entryFile: str = Field(min_length=1, max_length=160)
     standardInput: str = Field(default="", max_length=20_000)
     requiredChecks: list[CodeSandboxRequiredCheck] = Field(min_length=1, max_length=12)
-    completionRule: str = Field(min_length=1, max_length=2_000)
+    completionRule: str = Field(min_length=1)
     runtime: CodeSandboxRuntime
     sourceRefIds: list[str] = Field(min_length=1, max_length=100)
     linkedTrainingTaskId: str | None = Field(default=None, max_length=64)
@@ -485,14 +526,14 @@ class CodeSandboxContent(StrictModel):
 
 class InteractiveModelParameter(StrictModel):
     key: str = Field(min_length=1, max_length=80)
-    label: str = Field(min_length=1, max_length=160)
+    label: str = Field(min_length=1)
     kind: Literal["float", "integer"]
     minimum: float
     maximum: float
     step: float = Field(gt=0)
     default: float
     unit: str = Field(default="", max_length=32)
-    description: str = Field(min_length=1, max_length=1_000)
+    description: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def valid_range(self) -> "InteractiveModelParameter":
@@ -513,23 +554,23 @@ class InteractiveModelParameter(StrictModel):
 
 class InteractiveModelConstraint(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
-    description: str = Field(min_length=1, max_length=2_000)
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
 
 
 class InteractiveModelDataset(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=256)
-    summary: str = Field(min_length=1, max_length=4_000)
-    sampleCount: int = Field(ge=1, le=1_000_000)
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    sampleCount: int = Field(ge=0)
     sourceRefIds: list[str] = Field(min_length=1, max_length=100)
 
 
 class InteractiveModelSeriesDefinition(StrictModel):
     key: str = Field(min_length=1, max_length=80)
-    label: str = Field(min_length=1, max_length=160)
+    label: str = Field(min_length=1)
     unit: str = Field(default="", max_length=32)
-    higherIsBetter: bool
+    higherIsBetter: bool | None
 
 
 class InteractiveModelChart(StrictModel):
@@ -548,24 +589,25 @@ class InteractiveModelChart(StrictModel):
 
 class InteractiveModelObservationPrompt(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    prompt: str = Field(min_length=1, max_length=4_000)
+    prompt: str = Field(min_length=1)
     minimumCharacters: int = Field(default=20, ge=1, le=2_000)
-    completionRule: str = Field(min_length=1, max_length=2_000)
+    completionRule: str = Field(min_length=1)
 
 
 class InteractiveModelAdaptation(StrictModel):
-    learningGoal: str = Field(min_length=1, max_length=2_000)
-    profileSummary: str = Field(min_length=1, max_length=4_000)
-    masterySummary: str = Field(min_length=1, max_length=4_000)
-    recentLearningSummary: str = Field(min_length=1, max_length=4_000)
+    learningGoal: str = Field(min_length=1)
+    profileSummary: str = Field(min_length=1)
+    masterySummary: str = Field(min_length=1)
+    recentLearningSummary: str = Field(min_length=1)
 
 
 class InteractiveModelContent(StrictModel):
     schemaVersion: Literal["f6.interactive-model.v1"] = "f6.interactive-model.v1"
     templateId: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=256)
-    summary: str = Field(min_length=1, max_length=4_000)
-    courseTitle: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    explanation: str = Field(default="")
+    courseTitle: str = Field(min_length=1)
     knowledgePoint: dict[str, str]
     adaptation: InteractiveModelAdaptation
     parameters: list[InteractiveModelParameter] = Field(min_length=1, max_length=12)
@@ -573,7 +615,7 @@ class InteractiveModelContent(StrictModel):
     dataset: InteractiveModelDataset
     chart: InteractiveModelChart
     observationPrompt: InteractiveModelObservationPrompt
-    completionRule: str = Field(min_length=1, max_length=2_000)
+    completionRule: str = Field(min_length=1)
     sourceRefIds: list[str] = Field(min_length=1, max_length=100)
     semanticContext: dict[str, Any] = Field(default_factory=dict)
 
@@ -818,6 +860,14 @@ def parse_interactive_model_content(content: str) -> InteractiveModelContent:
             "interactive_model_content_invalid",
             "structured interactive model content must be a JSON object",
         )
+    # The original threshold template mislabeled both class counts as costs.
+    # Correct only their read projection; stored resources and observations stay
+    # unchanged. New generated payloads must match the neutral template directly.
+    if payload.get("templateId") == "prediction-score-to-class":
+        for series in (payload.get("chart") or {}).get("series", []):
+            if (isinstance(series, dict) and series.get("key") in {"predicted_positive", "predicted_negative"}
+                    and series.get("higherIsBetter") is False):
+                series["higherIsBetter"] = None
     try:
         structured = InteractiveModelContent.model_validate(payload)
     except ValueError as exc:
@@ -1210,7 +1260,8 @@ def _quiz_attempt_projection(
 def _quiz_projection(
     session: Any, artifact: DBArtifact, version: DBArtifactVersion,
 ) -> dict[str, Any]:
-    source_refs = _resource_protocol(session, artifact, version)["source_refs"]
+    protocol = _resource_protocol(session, artifact, version)
+    source_refs = protocol["source_refs"]
     if version.content_format != "json":
         return {
             "schema_version": "f6.quiz-projection.v1",
@@ -1265,11 +1316,13 @@ def _quiz_projection(
             attempted_question_ids.add(question_version.id)
         if any(item.get("correct") is True for item in attempt_payloads):
             correct_question_ids.add(question_version.id)
+        question_payload = learner_question_payload(question_version, question)
         questions.append({
-            **learner_question_payload(question_version, question),
+            **question_payload,
+            "hints": reference.hints,
             "position": reference.position,
             "required": reference.required,
-            "status": "available",
+            "status": "unavailable" if question_payload["content_issue"] else "available",
             "source_ref_ids": list(question_version.source_ref_ids or []),
             "explanation_available": bool(question_version.explanation),
             "attempts": attempt_payloads,
@@ -1285,6 +1338,7 @@ def _quiz_projection(
         "structured": structured.model_dump(mode="json"),
         "questions": questions,
         "source_refs": source_refs,
+        "learning_unavailable_reason": protocol["learning_unavailable_reason"],
         "progress": {
             "question_count": len(structured.questions),
             "attempted_count": len(attempted_question_ids),
@@ -1302,6 +1356,7 @@ def _training_task_link(
     artifact: DBArtifact,
     resource_id: str | None,
     expected_type: str,
+    version_id: str | None = None,
 ) -> dict[str, Any] | None:
     if not resource_id:
         return None
@@ -1312,7 +1367,10 @@ def _training_task_link(
         or linked.course_id not in {None, artifact.course_id}
     ):
         return {"id": resource_id, "type": expected_type, "available": False}
-    version = session.get(DBArtifactVersion, linked.current_version_id) if linked.current_version_id else None
+    selected_version_id = version_id or linked.current_version_id
+    version = session.get(DBArtifactVersion, selected_version_id) if selected_version_id else None
+    if version is not None and version.artifact_id != linked.id:
+        return {"id": resource_id, "type": expected_type, "available": False}
     metadata = dict(version.metadata_json or {}) if version else {}
     linked_type = canonical_resource_type(linked.artifact_type, metadata)
     if linked_type != expected_type:
@@ -1323,6 +1381,7 @@ def _training_task_link(
         "type": linked_type,
         "type_label": RESOURCE_TYPE_LABELS[linked_type],
         "route": resource_route(linked_type, linked.id),
+        "resource_version_id": version.id if version else None,
         "available": linked.archived_at is None and version is not None,
     }
 
@@ -1397,12 +1456,32 @@ def _training_task_projection(
     source_ids = {str(item.get("source_ref_id") or "") for item in source_refs}
     cited_ids = {*structured.sourceRefs, *(ref for step in structured.steps for ref in step.sourceRefIds)}
     unknown_citations = sorted(cited_ids - source_ids)
+    dependency_versions = {item["resource_id"]: item["version_id"]
+                           for item in (version.metadata_json or {}).get("training_dependencies", [])}
     linked_resources = [
         item for item in (
-            _training_task_link(session, artifact, structured.linkedSandboxId, "code_sandbox"),
-            _training_task_link(session, artifact, structured.linkedModelId, "interactive_model"),
+            _training_task_link(session, artifact, structured.linkedSandboxId, "code_sandbox", dependency_versions.get(structured.linkedSandboxId)),
+            _training_task_link(session, artifact, structured.linkedModelId, "interactive_model", dependency_versions.get(structured.linkedModelId)),
         ) if item is not None
     ]
+    for linked in linked_resources:
+        if not linked.get("available"):
+            continue
+        linked_artifact = session.get(DBArtifact, linked["id"])
+        events = session.query(DBLearningEvent).filter_by(owner_public_id=artifact.owner_public_id,
+            course_id=artifact.course_id, object_id=linked["id"]).order_by(DBLearningEvent.recorded_at.desc()).all()
+        linked["completed"] = bool(linked.get("available") and linked_artifact and any(
+            _completed_practice_event(event)
+            and ((event.payload or {}).get("resource_version_id") or (event.context_ref or {}).get("resource_version_id")) == linked["resource_version_id"]
+            for event in events))
+    completed_count = sum(linked.get("completed", False) for linked in linked_resources)
+    owner = session.query(DBUser).filter_by(public_id=artifact.owner_public_id).first()
+    report = next((note for note in session.query(DBNote).filter_by(student_id=owner.username, source="training_task").order_by(DBNote.updated_at.desc())
+                   if (note.source_metadata or {}).get("resource_version_id") == version.id), None) if owner else None
+    progress = {"status": "submission_pending" if report else "practice_completed" if linked_resources and completed_count == len(linked_resources)
+                else "in_progress" if completed_count else "not_recorded",
+                "completed_count": completed_count, "required_count": len(linked_resources),
+                "report_note_id": report.id if report else None}
     recorded = bool(source_refs)
     available = recorded and all(item.get("available") is True for item in source_refs)
     publishable = available and not unknown_citations
@@ -1414,12 +1493,14 @@ def _training_task_projection(
     )
     return {
         "schema_version": "f5.training-task-projection.v1",
+        "learning_unavailable_reason": protocol["learning_unavailable_reason"],
         "content_schema_version": structured.schemaVersion,
         "mode": "structured",
         "source_refs": source_refs,
         "structured": structured.model_dump(),
         "legacy": None,
         "linked_resources": linked_resources,
+        "progress": progress,
         "source_readiness": {
             "recorded": recorded,
             "available": available,
@@ -1561,6 +1642,7 @@ def _code_sandbox_projection(
         "structured": structured.model_dump(),
         "legacy": None,
         "linked_resources": _code_sandbox_links(session, artifact, structured),
+        "completion": _code_sandbox_completion(session, artifact, version),
         "source_readiness": readiness,
         "warnings": [] if readiness["publishable"] else [readiness["reason"]],
     }
@@ -1569,15 +1651,36 @@ def _code_sandbox_projection(
 def _code_sandbox_completion(
     session: Any, artifact: DBArtifact, current_version: DBArtifactVersion,
 ) -> dict[str, Any]:
+    return _practice_completion(session, artifact, current_version, "code_tests_passed", "artifact")
+
+
+def _completed_practice_event(event: DBLearningEvent) -> bool:
+    """Practice completion is distinct from accepted mastery evidence."""
+    return event.event_type in {"code_tests_passed", "interactive_model_observation_submitted"} and (
+        event.evidence_status == "accepted"
+        or (event.evidence_status == "none" and event.completion_effect == "progress"
+            and (event.payload or {}).get("evidence_kind") == "guided_practice")
+    )
+
+
+def _practice_completion(
+    session: Any, artifact: DBArtifact, current_version: DBArtifactVersion,
+    event_type: str, object_type: str,
+) -> dict[str, Any]:
     events = session.query(DBLearningEvent).filter_by(
         owner_public_id=artifact.owner_public_id,
-        event_type="code_tests_passed",
-        object_type="artifact",
+        course_id=artifact.course_id,
+        event_type=event_type,
+        object_type=object_type,
         object_id=artifact.id,
-    ).order_by(DBLearningEvent.recorded_at.desc()).limit(50).all()
+    ).order_by(DBLearningEvent.recorded_at.desc()).all()
     for event in events:
+        if not _completed_practice_event(event):
+            continue
         payload = dict(event.payload or {})
-        if payload.get("resource_version_id") != current_version.id:
+        source_version_id = (payload.get("resource_version_id") if event_type == "code_tests_passed"
+                             else (event.context_ref or {}).get("resource_version_id"))
+        if source_version_id != current_version.id:
             continue
         return {
             "status": "completed",
@@ -1600,6 +1703,7 @@ def _code_sandbox_completion(
 def _interactive_model_projection(
     session: Any, artifact: DBArtifact, version: DBArtifactVersion,
 ) -> dict[str, Any]:
+    from app.interactive_lab import experiment_execution_info
     protocol = _resource_protocol(session, artifact, version)
     source_refs = protocol["source_refs"]
     if version.content_format != "json":
@@ -1665,6 +1769,7 @@ def _interactive_model_projection(
         "mode": "structured",
         "source_refs": source_refs,
         "structured": structured.model_dump(),
+        "execution": experiment_execution_info(structured.templateId),
         "legacy": None,
         "source_readiness": readiness,
         "warnings": [] if readiness["publishable"] else [readiness["reason"]],
@@ -1721,6 +1826,7 @@ def _video_projection(
     )
     recommendations = structured.model_dump()["recommendations"]
     for recommendation in recommendations:
+        recommendation["reason"] = video_recommendation_reason(recommendation["reason"], title=recommendation.get("title", ""))
         recommendation["playback"] = {
             "mode": "local" if recommendation["sourceKind"] == "local_ref" else "external",
             "available": recommendation["availability"] == "playable",
@@ -1814,6 +1920,7 @@ def search_resources(
     query: str = "",
     artifact_type: str | None = None,
     course_id: str | None = None,
+    knowledge_point_id: str | None = None,
     status: str | None = None,
     source_status: str | None = None,
     include_archived: bool = False,
@@ -1837,6 +1944,8 @@ def search_resources(
     for item in candidates:
         version = session.get(DBArtifactVersion, item.current_version_id) if item.current_version_id else None
         metadata = dict(version.metadata_json or {}) if version else {}
+        if knowledge_point_id and metadata.get("knowledge_point_id") != knowledge_point_id:
+            continue
         canonical_type = canonical_resource_type(item.artifact_type, metadata)
         if canonical_type not in RESOURCE_CATALOG_TYPES:
             continue
@@ -1890,6 +1999,17 @@ def _catalog_item(
     knowledge_point = session.get(DBKnowledgePoint, knowledge_point_id) if knowledge_point_id else None
     source_refs = protocol["source_refs"]
     source_unavailable_count = sum(ref.get("available") is False for ref in source_refs)
+    completion = {
+        "status": str(metadata.get("completion_status") or "not_recorded"),
+        "progress": metadata.get("completion_progress"),
+        "rule": str(metadata.get("completion_rule") or ""),
+        "display_rule": completion_description(metadata.get("completion_rule")),
+    }
+    if version and canonical_type in {"code_sandbox", "interactive_model"}:
+        evidence = (_code_sandbox_completion(session, item, version) if canonical_type == "code_sandbox"
+                    else _practice_completion(session, item, version, "interactive_model_observation_submitted", "interactive_model"))
+        completion.update(evidence)
+        completion["progress"] = 1.0 if evidence["status"] == "completed" else None
     return {
             "id": item.id,
             "course_id": item.course_id,
@@ -1901,7 +2021,7 @@ def _catalog_item(
             "current_version_id": item.current_version_id,
             "lock_version": item.lock_version,
             "archived": item.archived_at is not None,
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            "updated_at": item.updated_at.replace(tzinfo=item.updated_at.tzinfo or timezone.utc).isoformat() if item.updated_at else None,
             "route": resource_route(canonical_type, item.id),
             "course": {"id": item.course_id, "title": course.title if course else "未绑定课程"},
             "knowledge_point": {
@@ -1914,11 +2034,7 @@ def _catalog_item(
             "source_count": len(source_refs),
             "source_unavailable_count": source_unavailable_count,
             "generation_state": protocol["generation_state"],
-            "completion": {
-                "status": str(metadata.get("completion_status") or "not_recorded"),
-                "progress": metadata.get("completion_progress"),
-                "rule": str(metadata.get("completion_rule") or ""),
-            },
+            "completion": completion,
             "preview": {
                 "text": _preview_text(
                     learner_safe_artifact_content(item.artifact_type, version.content)
@@ -1927,6 +2043,31 @@ def _catalog_item(
             },
             "resource": protocol,
     }
+
+
+def resource_generation_blocker(session: Any, artifact: DBArtifact, version_id: str | None = None) -> str:
+    """Generated candidates remain readable, but learning starts after review."""
+    if artifact.archived_at is not None:
+        return "这份资源已归档，原内容和学习记录仍会保留。如需继续学习，请先在资源中心恢复。"
+    task = session.get(DBGenerationTask, artifact.creating_task_id) if artifact.creating_task_id else None
+    if task is None or task.capability != "learning_resource_bundle.generate":
+        return ""
+    step = session.query(DBTaskStep).filter_by(output_artifact_version_id=version_id or artifact.current_version_id).first()
+    if step and step.status in {"failed", "cancelled"}:
+        return "这份内容还没有完成核对，请先查看生成结果并重试，之后再开始学习。"
+    # A later teaching revision must not withdraw an already reviewed version.
+    # New candidates remain blocked until their own version is published.
+    published_ref = f"{artifact.id}:{version_id or artifact.current_version_id}"
+    from app.database import DBTaskEvent
+    published = session.query(DBTaskEvent).filter(DBTaskEvent.task_id == task.id,
+        DBTaskEvent.event_type.in_(["publish.completed", "resource.publish.completed"])).all()
+    if any(published_ref in (event.payload or {}).get("output_refs", []) for event in published):
+        return ""
+    if task.status in {"failed", "cancelled"}:
+        return "这份内容还没有完成核对，请先查看生成结果并重试，之后再开始学习。"
+    if task.status == "completed":
+        return ""
+    return "这份内容仍在准备或核对中，完成后即可开始学习。"
 
 
 def _resource_protocol(session: Any, artifact: DBArtifact, version: DBArtifactVersion | None) -> dict[str, Any]:
@@ -1965,6 +2106,7 @@ def _resource_protocol(session: Any, artifact: DBArtifact, version: DBArtifactVe
         if version else None
     )
     sources_available = bool(source_refs) and all(item["available"] for item in source_refs)
+    generation_blocker = resource_generation_blocker(session, artifact, version.id if version else None)
     return {
         "schema_version": "f2.resource.v1",
         "resource_id": artifact.id,
@@ -1989,6 +2131,7 @@ def _resource_protocol(session: Any, artifact: DBArtifact, version: DBArtifactVe
         } if version else None,
         "status": (
             "archived" if artifact.archived_at is not None
+            else "generation_pending" if generation_blocker
             else "available" if sources_available
             else "source_unavailable"
         ),
@@ -1999,6 +2142,8 @@ def _resource_protocol(session: Any, artifact: DBArtifact, version: DBArtifactVe
             else "legacy"
         ),
         "content_ref": f"artifact-version:{version.id}" if version else None,
+        "generation_job_id": task.id if task and task.capability == "learning_resource_bundle.generate" else None,
+        "learning_unavailable_reason": generation_blocker,
     }
 
 
@@ -2019,7 +2164,7 @@ def _resource_history(session: Any, artifact: DBArtifact) -> dict[str, Any]:
             "is_current": version.id == artifact.current_version_id,
             "content_format": version.content_format,
             "content_hash": version.content_hash,
-            "created_at": version.created_at.isoformat() if version.created_at else None,
+            "created_at": version.created_at.replace(tzinfo=version.created_at.tzinfo or timezone.utc).isoformat() if version.created_at else None,
             "created_by_public_id": version.created_by_public_id,
             "created_task_id": version.created_task_id,
             "revision_origin": metadata.get("revision_origin") or "generated",
@@ -2215,8 +2360,6 @@ def create_resource_version(
     content = request.content.strip()
     if not content:
         raise M5CapabilityError("resource_content_required", "resource version content cannot be empty")
-    if len(content) > 200_000:
-        raise M5CapabilityError("resource_content_too_large", "resource version content exceeds the editing limit")
     source_version = session.query(DBArtifactVersion).filter_by(
         id=request.source_version_id,
         artifact_id=artifact.id,
@@ -2346,9 +2489,36 @@ def compare_resource_versions(
         "left": {"version": left_version, "content_hash": left.content_hash},
         "right": {"version": right_version, "content_hash": right.content_hash},
         "changed": left.content_hash != right.content_hash,
-        "diff": diff[:200000],
-        "diff_truncated": len(diff) > 200000,
+        "diff": diff,
+        "diff_truncated": False,
+        "change_summary": resource_change_summary(left.content, right.content),
     }
+
+
+def resource_change_summary(left: str, right: str) -> list[str]:
+    """Describe changed learning sections without exposing serialized records."""
+    if left == right:
+        return []
+    try:
+        before, after = json.loads(left), json.loads(right)
+    except (ValueError, TypeError):
+        return ["正文内容有调整，可分别打开两个版本查看。"]
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return ["学习内容有调整，可分别打开两个版本查看。"]
+    labels = {
+        "title": "标题", "summary": "内容概述", "description": "内容介绍",
+        "sections": "讲解章节", "content": "正文", "body": "正文", "markdown": "讲解正文",
+        "questions": "练习题", "nodes": "导图内容", "edges": "知识点关联",
+        "slides": "课件页面", "steps": "实践步骤", "objectives": "学习目标",
+        "learningObjectives": "学习目标", "starterCode": "练习代码", "code": "练习代码",
+        "completionRule": "完成要求", "videos": "推荐视频", "items": "学习内容",
+        "parameters": "实验参数", "rubric": "评分标准",
+    }
+    changed = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
+    result = [f"{label}有调整。" for key, label in labels.items() if key in changed]
+    if changed - labels.keys():
+        result.append("其他内容或安排有调整，可分别打开两个版本查看。")
+    return list(dict.fromkeys(result)) or ["内容的保存格式有调整。"]
 
 
 def restore_resource_version(
@@ -2422,6 +2592,9 @@ def validate_resource_completion(
         raise M5CapabilityError("resource_version_unknown", "resource completion version does not exist")
     if version.id != artifact.current_version_id:
         raise M5CapabilityError("resource_version_stale", "resource completion must reference the current version")
+    protocol = _resource_protocol(session, artifact, version)
+    if protocol["learning_unavailable_reason"]:
+        raise M5CapabilityError("resource_generation_incomplete", protocol["learning_unavailable_reason"])
     metadata = dict(version.metadata_json or {})
     expected_rule = " ".join(str(metadata.get("completion_rule") or "").split())
     submitted_rule = " ".join(str(completion_rule or "").split())
@@ -2435,7 +2608,6 @@ def validate_resource_completion(
             "resource_completion_rule_mismatch",
             "resource completion rule does not match the current version",
         )
-    protocol = _resource_protocol(session, artifact, version)
     if protocol["status"] != "available":
         raise M5CapabilityError(
             "resource_source_unavailable",
@@ -2512,6 +2684,23 @@ def _safe_export_name(value: str, fallback: str) -> str:
     return clean[:80] or fallback
 
 
+def _deck_source_labels(session: Any, source_ids: list[str]) -> list[str]:
+    labels = []
+    for source_id in source_ids:
+        ref = session.get(DBSourceRef, source_id)
+        source = session.get(DBSourceDocument, ref.source_document_id) if ref else None
+        label = ' · '.join(value for value in (
+            source.title if source else '', ref.location_label if ref else '',
+        ) if value) or '课程参考资料'
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _deck_inline_html(value: str) -> str:
+    return re.sub(r'`([^`\n]+)`', r'<code>\1</code>', html.escape(value))
+
+
 def render_deck_export(
     session: Any,
     *,
@@ -2524,12 +2713,12 @@ def render_deck_export(
     if format_name == "html":
         sections = []
         for index, slide in enumerate(deck.slides, start=1):
-            bullets = "".join(f"<li>{html.escape(item)}</li>" for item in slide.bullets)
-            sources = " ".join(f"<code>{html.escape(item)}</code>" for item in slide.sourceRefIds)
+            bullets = "".join(f"<li>{_deck_inline_html(item)}</li>" for item in slide.bullets)
+            sources = html.escape('；'.join(_deck_source_labels(session, slide.sourceRefIds)))
             sections.append(
                 f'<section class="slide slide--{html.escape(slide.layout)}" data-slide-id="{html.escape(slide.id)}">'
                 f'<p class="number">{index:02d}</p><div class="content"><h1>{html.escape(slide.title)}</h1>'
-                f'<h2>{html.escape(slide.subtitle)}</h2><p class="body">{html.escape(slide.body)}</p>'
+                f'<h2>{_deck_inline_html(slide.subtitle)}</h2><p class="body">{_deck_inline_html(slide.body)}</p>'
                 f'<ul>{bullets}</ul></div><footer><span>{sources}</span><span>EduMatrix · v{version.version_number}</span></footer>'
                 f'<aside class="speaker-notes">{html.escape(slide.speakerNotes)}</aside></section>'
             )
@@ -2565,7 +2754,7 @@ def render_deck_export(
         lines = ([item.body] if item.body else []) + [f"•  {bullet}" for bullet in item.bullets]
         for line_index, line in enumerate(lines or [""]):
             paragraph = frame.paragraphs[0] if line_index == 0 else frame.add_paragraph()
-            paragraph.text = line
+            paragraph.text = re.sub(r'`([^`\n]+)`', r'\1', line)
             paragraph.font.name = "Source Han Sans SC"
             paragraph.font.size = Pt(19)
             paragraph.font.color.rgb = RGBColor(17, 33, 45)
@@ -2578,7 +2767,7 @@ def render_deck_export(
         paragraph.font.size = Pt(10)
         paragraph.font.color.rgb = RGBColor(96, 114, 124)
         notes = slide.notes_slide.notes_text_frame
-        source_note = f"\n来源：{', '.join(item.sourceRefIds)}" if item.sourceRefIds else ""
+        source_note = f"\n来源：{'；'.join(_deck_source_labels(session, item.sourceRefIds))}" if item.sourceRefIds else ""
         notes.text = f"{item.speakerNotes}{source_note}".strip()
     buffer = io.BytesIO()
     presentation.save(buffer)

@@ -69,7 +69,7 @@ class TestSecurityContracts(unittest.TestCase):
     def test_remote_download_is_chunk_limited(self):
         knowledge = self.read("knowledge_api.py")
         self.assertIn('client.stream("GET"', knowledge)
-        self.assertIn("async for chunk in resp.aiter_bytes", knowledge)
+        self.assertIn("async for chunk in response.aiter_bytes", knowledge)
         self.assertIn("file_size > CONFIG.max_upload_bytes", knowledge)
         self.assertIn("except HTTPException", knowledge)
 

@@ -21,6 +21,15 @@ from swarm_factory import build_swarm_from_headers
 
 
 class TestHardening(unittest.TestCase):
+    def test_broken_document_hint_does_not_expose_parser_internals(self):
+        for filename in ("broken.pdf", "broken.docx"):
+            with self.subTest(filename=filename):
+                with self.assertRaises(DocumentLimitError) as raised:
+                    validate_document_limits(b"intentionally broken test document", filename)
+                self.assertIn("重新导出后再上传", str(raised.exception))
+                self.assertNotIn("stream", str(raised.exception))
+                self.assertIsNotNone(raised.exception.__cause__)
+
     def test_ttl_cache_expires_and_evicts_lru(self):
         now = [0.0]
         cache = TTLBoundedCache(maxsize=2, ttl_seconds=10, clock=lambda: now[0])
@@ -36,8 +45,10 @@ class TestHardening(unittest.TestCase):
         payload = BytesIO()
         with ZipFile(payload, "w") as archive:
             archive.writestr("ppt/slides/slide1.xml", "slide")
+            archive.writestr("ppt/slides/slide2.xml", "slide")
+        validate_document_limits(payload.getvalue(), "lesson.pptx", max_pages=0)
         with self.assertRaises(DocumentLimitError):
-            validate_document_limits(payload.getvalue(), "lesson.pptx", max_pages=0)
+            validate_document_limits(payload.getvalue(), "lesson.pptx", max_pages=1)
 
         payload = BytesIO()
         with ZipFile(payload, "w") as archive:

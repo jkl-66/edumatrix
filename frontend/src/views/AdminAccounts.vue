@@ -1,4 +1,5 @@
 <script setup>
+import { referenceTitle } from '../utils/learningCopy.js'
 import { computed, onMounted, ref } from 'vue'
 import { Check, Pencil, RefreshCw, X } from '@lucide/vue'
 import PageHeader from '../components/PageHeader.vue'
@@ -136,9 +137,8 @@ onMounted(() => loadAccounts())
 <template>
   <main class="admin-page" data-testid="admin-accounts-page">
     <PageHeader
-      eyebrow="管理工作区"
+
       title="账号权限"
-      description="查找账号并调整显示名、角色或启用状态。一次只编辑一个账号，保存后即完成本页任务。"
     >
       <template #actions>
         <button
@@ -215,7 +215,7 @@ onMounted(() => loadAccounts())
             <tr v-for="account in filteredAccounts" :key="account.public_id">
               <td>
                 <strong>{{ account.username }}</strong>
-                <span class="account-id">{{ account.public_id }}</span>
+                <span class="account-id">{{ referenceTitle(account) }}</span>
               </td>
               <td>
                 <input

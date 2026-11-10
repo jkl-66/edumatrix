@@ -1,22 +1,27 @@
 <script setup>
+import { userMessage } from '../services/errorTranslator.js'
 import { ref, computed, onMounted, watch, nextTick, createApp } from 'vue'
 import {
   getNotes, createNote, deleteNote, updateNote, aiPolishNote, exportNotePdf,
-  getNoteVersions, restoreNoteVersion
+  getNoteVersions, restoreNoteVersion, getRelatedNotes, setNoteRelation,
 } from '../api'
 import CollapsibleMindmap from '../components/CollapsibleMindmap.vue'
 import SearchField from '../components/ui/SearchField.vue'
+import SourceCitation from '../components/SourceCitation.vue'
+import { useCourseContextStore } from '../stores/courseContext'
+import { NOTE_TEMPLATES, noteDisplayTitle, noteTemplateContent, noteCourseId, arrangeNotes } from '../utils/noteOrganization'
 import { useRouter, useRoute } from 'vue-router'
 import {
   StickyNote, Plus, Trash2, Tag, Edit3, Eye, Sparkles,
   Download, FileText, Loader2, ChevronRight, ChevronDown,
   X, AlertCircle, Check, RotateCw, Save, History,
-  SlidersHorizontal, MoreHorizontal, ArchiveRestore, CircleAlert
+  SlidersHorizontal, MoreHorizontal, ArchiveRestore, CircleAlert, Pin, Link2,
 } from '@lucide/vue'
 
 const props = defineProps({ studentId: String })
 const router = useRouter()
 const route = useRoute()
+const courseContext = useCourseContextStore()
 
 const notes = ref([])
 const loading = ref(true)
@@ -41,6 +46,104 @@ const notesListRef = ref(null)
 const notesScrollTop = ref(0)
 const formHydrating = ref(false)
 const operationCache = new Map()
+const browserState = ref({ pinned: [], recent: [], scroll: {}, sort: 'updated' })
+const courseFilter = ref('')
+const documentBody = ref(null)
+const related = ref({ linked: [], suggestions: [] })
+const relatedLoading = ref(false)
+const relatedError = ref('')
+const relationSaving = ref(false)
+const previewRelatedId = ref('')
+const templateId = ref('')
+const newSourceNote = ref(null)
+const newCourseId = ref('')
+const editorInput = ref(null)
+const composing = ref(false)
+let lastTemplateContent = ''
+
+function saveBrowsing() {
+  try { localStorage.setItem(`edumatrix:notes-browser:${props.studentId}`, JSON.stringify(browserState.value)) } catch {}
+}
+
+function persistReading(event) {
+  if (!selectedNoteId.value) return
+  browserState.value.scroll[selectedNoteId.value] = event.target.scrollTop
+  saveBrowsing()
+}
+
+function togglePinned() {
+  const id = selectedNoteId.value
+  if (!id) return
+  const pins = browserState.value.pinned
+  browserState.value.pinned = pins.includes(id) ? pins.filter(value => value !== id) : [...pins, id]
+  saveBrowsing()
+}
+
+const courseOptions = computed(() => {
+  const found = new Map(notes.value.filter(note => note.course).map(note => [note.course.id, note.course]))
+  if (courseContext.course) found.set(courseContext.course.id, courseContext.course)
+  return [...found.values()]
+})
+
+function openNewNote(fromCurrent = false) {
+  newSourceNote.value = fromCurrent ? selectedNote.value : null
+  newCourseId.value = fromCurrent ? noteCourseId(selectedNote.value) : (courseContext.course?.id || '')
+  newForm.value = { content: '', tags: '', concepts: fromCurrent ? (selectedNote.value?.concepts || []).join('，') : (courseContext.knowledgePoint?.title || '') }
+  templateId.value = ''; lastTemplateContent = ''; newError.value = ''; showAddModal.value = true
+}
+
+function chooseTemplate(id) {
+  const content = noteTemplateContent(id, { concept: newForm.value.concepts,
+    course: courseOptions.value.find(course => course.id === newCourseId.value)?.title || '',
+    quote: newSourceNote.value?.source_metadata?.quote || '' })
+  const replaceTemplate = !newForm.value.content.trim() || newForm.value.content === lastTemplateContent
+  if (replaceTemplate) newForm.value.content = content
+  else {
+    const sections = NOTE_TEMPLATES.find(item => item.id === id)?.sections || []
+    newForm.value.content += sections.filter(title => !newForm.value.content.includes(`## ${title}`)).map(title => `\n\n## ${title}\n\n`).join('')
+  }
+  templateId.value = id; lastTemplateContent = replaceTemplate ? newForm.value.content : ''
+}
+
+async function loadRelated(noteId) {
+  related.value = { linked: [], suggestions: [] }; relatedError.value = ''; previewRelatedId.value = ''
+  if (!noteId) return
+  relatedLoading.value = true
+  try {
+    const result = await getRelatedNotes(noteId)
+    if (selectedNoteId.value === noteId) related.value = result
+  } catch (error) {
+    if (selectedNoteId.value === noteId) relatedError.value = apiMessage(error, '相关笔记暂时无法载入，请重试。')
+  } finally { if (selectedNoteId.value === noteId) relatedLoading.value = false }
+}
+
+function insertFormat(before, after = '', placeholder = '') {
+  const input = editorInput.value
+  if (!input || composing.value) return
+  const start = input.selectionStart, end = input.selectionEnd
+  const selected = editForm.value.content.slice(start, end) || placeholder
+  editForm.value.content = editForm.value.content.slice(0, start) + before + selected + after + editForm.value.content.slice(end)
+  nextTick(() => { input.focus(); input.setSelectionRange(start + before.length, start + before.length + selected.length) })
+}
+
+async function openRelated(noteId) {
+  searchQuery.value = ''; selectedTags.value.clear(); selectedConcepts.value.clear()
+  activeSourceFilter.value = 'all'; courseFilter.value = ''
+  await router.replace({ query: { ...route.query, category: 'all', note_id: noteId } })
+  selectNote(noteId, false)
+}
+
+async function changeRelation(targetId, action) {
+  const note = selectedNote.value
+  if (!note || relationSaving.value || isDirty.value) return
+  relationSaving.value = true; relatedError.value = ''
+  try {
+    const updated = await setNoteRelation(note.id, { target_id: targetId, action,
+      expected_version: note.lock_version, idempotency_key: operationKey('relation', JSON.stringify([note.id, note.lock_version, targetId, action])) })
+    replaceNote(updated); operationCache.delete('relation'); await loadRelated(note.id)
+  } catch (error) { relatedError.value = apiMessage(error, '关联没有保存，请重试。') }
+  finally { relationSaving.value = false }
+}
 
 const SOURCE_FILTER_IDS = new Set(['all', 'document', 'resource', 'review', 'wrong', 'personal'])
 
@@ -107,7 +210,7 @@ async function load() {
     const data = await getNotes(props.studentId)
     notes.value = Array.isArray(data) ? data : data.notes || []
     
-    const requestedId = String(route.query.note_id || '')
+    const requestedId = String(route.query.note_id || browserState.value.selected || '')
     const requestedExists = requestedId && notes.value.some(note => note.id === requestedId)
     const selectedExists = selectedNoteId.value && notes.value.some(note => note.id === selectedNoteId.value)
     if (requestedExists) selectedNoteId.value = requestedId
@@ -118,6 +221,7 @@ async function load() {
     loadError.value = apiMessage(e, '笔记暂时无法载入，请重试。')
   } finally {
     loading.value = false
+    nextTick(() => { if (documentBody.value) documentBody.value.scrollTop = browserState.value.scroll[selectedNoteId.value] || 0 })
   }
 }
 
@@ -132,6 +236,7 @@ const sourceLabels = {
   knowledge_selection: '知识库选区',
   handout: '个性化讲义',
   code_sandbox: '代码沙盒',
+  training_task: '实训报告',
   review_task: '复习任务',
   wrong_question_reflection: '错题本反思',
   '错题本反思': '错题本反思',
@@ -157,7 +262,7 @@ function noteTitle(note) {
   if (noteSourceType(note) === 'wrong_question_reflection' || note.source === '错题本反思') {
     return note.concepts?.[0] ? `${note.concepts[0]}错题集` : '错题集'
   }
-  return note.concepts?.[0] || note.source_context?.title || '学习笔记'
+  return noteDisplayTitle(note)
 }
 
 function currentHistoryVersion(note) {
@@ -167,7 +272,7 @@ function currentHistoryVersion(note) {
 function sourceGroup(note) {
   const type = noteSourceType(note)
   if (type === 'knowledge_selection') return 'document'
-  if (['handout', 'code_sandbox'].includes(type)) return 'resource'
+  if (['handout', 'code_sandbox', 'training_task'].includes(type)) return 'resource'
   if (type === 'review_task') return 'review'
   if (type === 'wrong_question_reflection' || note?.source === '错题本反思') return 'wrong'
   return 'personal'
@@ -187,7 +292,9 @@ function formatDateTime(value) {
 function noteExcerpt(note) {
   return String(note?.content || '')
     .replace(/```[\s\S]*?```/g, '[代码片段]')
-    .replace(/[#>*_`$]/g, '')
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?)/gm, '')
+    .replace(/\*\*([^\n]+?)\*\*/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1')
     .replace(/\s+/g, ' ')
     .trim() || '暂无正文'
 }
@@ -197,6 +304,7 @@ const hasActiveFilters = computed(() => (
   || selectedTags.value.size > 0
   || selectedConcepts.value.size > 0
   || activeSourceFilter.value !== 'all'
+  || Boolean(courseFilter.value)
 ))
 
 const versionChangeLabels = {
@@ -205,6 +313,7 @@ const versionChangeLabels = {
   saved: '内容修改',
   ai_suggestion_applied: '应用 AI 建议',
   restored: '历史恢复',
+  relations_updated: '笔记关联',
 }
 
 function versionChangeLabel(version) {
@@ -290,6 +399,14 @@ function hydrateForm(note) {
 }
 
 watch(selectedNote, hydrateForm, { immediate: true })
+watch(selectedNoteId, (id) => {
+  if (!id) return
+  browserState.value.selected = id
+  browserState.value.recent = [id, ...browserState.value.recent.filter(value => value !== id)]
+  saveBrowsing()
+  nextTick(() => { if (documentBody.value) documentBody.value.scrollTop = browserState.value.scroll[id] || 0 })
+})
+watch(() => [selectedNote.value?.id, selectedNote.value?.lock_version], ([id]) => { void loadRelated(id) })
 
 watch(editForm, () => {
   if (!formHydrating.value) {
@@ -389,7 +506,7 @@ const allConcepts = computed(() => {
 
 // 过滤后的笔记列表
 const filteredNotes = computed(() => {
-  return notes.value.filter(n => {
+  return arrangeNotes(notes.value.filter(n => {
     const q = searchQuery.value.trim().toLowerCase()
     const matchQuery = !searchQuery.value.trim() || 
       (n.content || '').toLowerCase().includes(q) ||
@@ -401,8 +518,15 @@ const filteredNotes = computed(() => {
     const matchConcepts = selectedConcepts.value.size === 0 || 
       (n.concepts || []).some(c => selectedConcepts.value.has(c))
     const matchSource = activeSourceFilter.value === 'all' || sourceGroup(n) === activeSourceFilter.value
-    return matchQuery && matchTags && matchConcepts && matchSource
-  })
+    const matchCourse = !courseFilter.value || (courseFilter.value === 'personal' ? !noteCourseId(n) : noteCourseId(n) === courseFilter.value)
+    return matchQuery && matchTags && matchConcepts && matchSource && matchCourse
+  }), browserState.value)
+})
+
+watch(filteredNotes, items => {
+  if (!loading.value && !items.some(item => item.id === selectedNoteId.value)) {
+    persistDraft(); selectedNoteId.value = items[0]?.id || null
+  }
 })
 
 // 标签与概念过滤点击切换
@@ -427,6 +551,7 @@ function clearFilters() {
   selectedConcepts.value.clear()
   searchQuery.value = ''
   activeSourceFilter.value = 'all'
+  courseFilter.value = ''
   void router.replace({
     query: {
       ...route.query,
@@ -486,11 +611,15 @@ async function submitAddNote() {
   newError.value = ''
   const tags = newForm.value.tags ? newForm.value.tags.split(/[,，]/).map(t => t.trim()).filter(Boolean) : []
   const concepts = newForm.value.concepts ? newForm.value.concepts.split(/[,，]/).map(c => c.trim()).filter(Boolean) : []
-  const signature = JSON.stringify([newForm.value.content, tags, concepts])
+  const seed = newSourceNote.value
+  const sourceType = seed ? noteSourceType(seed) : 'manual'
+  const metadata = { ...(seed?.source_metadata || {}), course_id: newCourseId.value || '', template_id: templateId.value }
+  const signature = JSON.stringify([newForm.value.content, tags, concepts, sourceType, metadata])
   try {
     const res = await createNote(props.studentId, {
       content: newForm.value.content,
-      source_type: 'manual',
+      source_type: sourceType,
+      source_metadata: metadata,
       tags,
       concepts,
       idempotency_key: operationKey('create', signature),
@@ -498,9 +627,11 @@ async function submitAddNote() {
     newForm.value = { content: '', tags: '', concepts: '' }
     operationCache.delete('create')
     showAddModal.value = false
+    searchQuery.value = ''; selectedTags.value.clear(); selectedConcepts.value.clear()
+    activeSourceFilter.value = 'all'; courseFilter.value = ''
     replaceNote(res)
     selectedNoteId.value = res.id
-    router.replace({ query: { ...route.query, note_id: res.id } })
+    router.replace({ query: { ...route.query, category: 'all', note_id: res.id } })
   } catch (e) {
     console.error('添加笔记失败:', e)
     newError.value = apiMessage(e, '新笔记没有保存，输入仍保留。')
@@ -654,7 +785,8 @@ function sourceLocation(source) {
   if (source.page_number) return `第 ${source.page_number} 页`
   if (source.chapter_title) return source.chapter_title
   if (source.concept) return source.concept
-  if (source.resource_version_id) return `资源版本 ${source.resource_version_id}`
+  if (source.resource_version_number) return `来源第 ${source.resource_version_number} 版`
+  if (source.resource_version_id) return '保存笔记时的来源版本'
   return ''
 }
 
@@ -797,6 +929,13 @@ function renderMarkdown(text) {
     return `@@SVGBLOCKTOKEN${idx}@@`
   })
   let html = cleaned.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  // Both Markdown fence styles are used by resource notes. Protect code before
+  // parsing formulas so dollar signs, indentation and variable names survive.
+  const fencedCode = []
+  html = html.replace(/^(`{3,}|~{3,})([^\r\n]*)\r?\n([\s\S]*?)^\1[ \t]*(?=\r?\n|$)/gm, (block) => {
+    const index = fencedCode.push(block) - 1
+    return `@@FENCEDNOTECODE${index}@@`
+  })
   const blockMath = []
   html = html.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
     const idx = blockMath.length
@@ -820,7 +959,8 @@ function renderMarkdown(text) {
     return `@@INLINEMATHTOKEN${idx}@@`
   })
   const codeBlocks = []
-  html = html.replace(/```([^\r\n]*)\r?\n([\s\S]*?)```/g, (_, lang, code) => {
+  html = html.replace(/@@FENCEDNOTECODE(\d+)@@/g, (_, index) => fencedCode[Number(index)])
+  html = html.replace(/^(`{3,}|~{3,})([^\r\n]*)\r?\n([\s\S]*?)^\1[ \t]*(?=\r?\n|$)/gm, (_, fence, lang, code) => {
     const isMermaid = lang.toLowerCase().includes('mermaid') || code.includes('mindmap') || code.includes('graph ') || code.includes('sequenceDiagram')
     let blockHtml = ''
     if (isMermaid) {
@@ -840,7 +980,7 @@ function renderMarkdown(text) {
       }
     } else {
       const cleanLang = (lang || 'python').trim().toLowerCase()
-      blockHtml = `<pre class="p-3 bg-gray-900 rounded-lg overflow-x-auto text-sm leading-relaxed my-2 language-${cleanLang}"><code class="language-${cleanLang}">${code.trim()}</code></pre>`
+      blockHtml = `<pre class="p-3 bg-gray-900 rounded-lg overflow-x-auto text-sm leading-relaxed my-2 language-${cleanLang}"><code class="language-${cleanLang}">${code.replace(/\r?\n$/, '')}</code></pre>`
     }
     const idx = codeBlocks.length
     codeBlocks.push(blockHtml)
@@ -920,8 +1060,6 @@ function renderMarkdown(text) {
   }
 
   html = html.replace(/\\in\b/g, ' ∈ ').replace(/\\sigma\b/g, 'σ').replace(/\\([{}])/g, '$1')
-    .replace(/([a-zA-Z0-9])_([a-zA-Z0-9_]+)/g, '$1<sub>$2</sub>')
-    .replace(/([a-zA-Z0-9])\^([a-zA-Z0-9+-\\*\\top]+)/g, (match, base, exp) => `${base}<sup>${exp === '\\top' ? 'T' : exp}</sup>`)
 
   blockMath.forEach((item, idx) => { html = html.split(`@@BLOCKMATHTOKEN${idx}@@`).join(renderMath(item.math, true)) })
   inlineMath.forEach((item, idx) => { html = html.split(`@@INLINEMATHTOKEN${idx}@@`).join(renderMath(item.math, false)) })
@@ -1016,6 +1154,10 @@ function forceRefreshDiagrams() {
 }
 
 onMounted(async () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(`edumatrix:notes-browser:${props.studentId}`) || '{}')
+    browserState.value = { ...browserState.value, ...saved }
+  } catch {}
   const category = normalizedSourceFilter(route.query.category)
   activeSourceFilter.value = category
   if (routeQueryValue(route.query.category) !== category) {
@@ -1039,9 +1181,8 @@ onMounted(async () => {
           <div class="sidebar-title-row">
             <div>
               <h1>学习笔记</h1>
-              <p>{{ notes.length }} 则笔记，按来源归档</p>
             </div>
-            <button type="button" class="icon-button" title="新建笔记" aria-label="新建笔记" @click="showAddModal = true">
+            <button type="button" class="icon-button" title="新建笔记" aria-label="新建笔记" @click="openNewNote()">
               <Plus :size="18" />
             </button>
           </div>
@@ -1051,6 +1192,16 @@ onMounted(async () => {
             aria-label="搜索笔记"
             placeholder="搜索正文、概念或标签"
           />
+          <div class="note-browser-controls">
+            <select v-model="courseFilter" aria-label="按课程筛选笔记">
+              <option value="">所有课程</option>
+              <option v-for="course in courseOptions" :key="course.id" :value="course.id">{{ course.title }}</option>
+              <option value="personal">个人记录</option>
+            </select>
+            <select v-model="browserState.sort" aria-label="笔记排序" @change="saveBrowsing">
+              <option value="updated">最近更新</option><option value="recent">最近阅读</option><option value="title">按标题</option>
+            </select>
+          </div>
         </header>
 
         <nav class="source-filter-list" aria-label="按来源筛选">
@@ -1064,7 +1215,6 @@ onMounted(async () => {
             @click="setSourceFilter(filter.id)"
           >
             <span>{{ filter.label }}</span>
-            <span class="filter-count">{{ filter.count }}</span>
           </button>
         </nav>
 
@@ -1117,13 +1267,13 @@ onMounted(async () => {
           </div>
           <div v-else-if="loadError" class="sidebar-state is-error">
             <AlertCircle :size="22" />
-            <p>{{ loadError }}</p>
+            <p>{{ userMessage(loadError) }}</p>
             <button type="button" class="text-button" @click="load">重新载入</button>
           </div>
           <div v-else-if="filteredNotes.length === 0" class="sidebar-state">
             <StickyNote :size="24" />
             <p>{{ notes.length ? '没有符合筛选条件的笔记' : '还没有学习笔记' }}</p>
-            <button v-if="!notes.length" type="button" class="text-button" @click="showAddModal = true">新建第一则</button>
+            <button v-if="!notes.length" type="button" class="text-button" @click="openNewNote()">新建第一则</button>
           </div>
           <template v-else>
             <button
@@ -1136,13 +1286,12 @@ onMounted(async () => {
               @click="selectNote(note.id)"
             >
               <span class="note-item-topline">
-                <strong>{{ noteTitle(note) }}</strong>
+                <strong><Pin v-if="browserState.pinned.includes(note.id)" :size="13" /> {{ noteTitle(note) }}</strong>
                 <time :datetime="note.updated_at || note.created_at">{{ ago(note.updated_at || note.created_at) }}</time>
               </span>
               <span class="note-item-excerpt">{{ noteExcerpt(note) }}</span>
               <span class="note-item-meta">
                 <span class="source-label">{{ noteSourceLabel(note) }}</span>
-                <span v-if="note.current_version_number || note.lock_version" class="version-label">v{{ currentHistoryVersion(note) }}</span>
               </span>
             </button>
           </template>
@@ -1153,19 +1302,18 @@ onMounted(async () => {
         <div v-if="loading" class="workspace-state">
           <Loader2 :size="28" class="spin" />
           <h2>正在准备笔记</h2>
-          <p>正文、来源与版本历史会在载入后显示。</p>
         </div>
         <div v-else-if="loadError" class="workspace-state is-error">
           <AlertCircle :size="28" />
           <h2>笔记暂时无法载入</h2>
-          <p>{{ loadError }}</p>
+          <p>{{ userMessage(loadError) }}</p>
           <button type="button" class="button secondary" @click="load">重新载入</button>
         </div>
         <div v-else-if="!selectedNote" class="workspace-state">
           <StickyNote :size="32" />
           <h2>{{ notes.length ? '选择一则笔记' : '从第一则笔记开始' }}</h2>
           <p>{{ notes.length ? '左侧选择后即可阅读、编辑和追溯来源。' : '新建笔记，或从知识库选区和学习资源中保存。' }}</p>
-          <button v-if="!notes.length" type="button" class="button primary" @click="showAddModal = true">
+          <button v-if="!notes.length" type="button" class="button primary" @click="openNewNote()">
             <Plus :size="17" /> 新建笔记
           </button>
         </div>
@@ -1174,13 +1322,18 @@ onMounted(async () => {
           <header class="document-header">
             <div class="document-title-block">
               <div class="document-context-line">
-                <span>{{ noteSourceLabel(selectedNote) }}</span>
-                <span aria-hidden="true">/</span>
-                <span>版本 {{ currentHistoryVersion(selectedNote) }}</span>
+                <span v-if="selectedNote.course">{{ selectedNote.course.title }}</span>
                 <span v-if="isDirty" class="draft-badge">本地草稿</span>
               </div>
               <h2>{{ noteTitle(selectedNote) }}</h2>
               <p>更新于 {{ formatDateTime(selectedNote.updated_at || selectedNote.created_at) }}</p>
+              <SourceCitation
+                v-if="selectedNote.source_context?.kind && selectedNote.source_context.kind !== 'personal_note'"
+                :key="`${selectedNote.id}:${currentHistoryVersion(selectedNote)}`"
+                :source="selectedNote.source_context"
+                :return-to="route.fullPath"
+                compact
+              />
             </div>
             <div class="document-actions">
               <button
@@ -1247,7 +1400,7 @@ onMounted(async () => {
             <AlertCircle :size="19" />
             <div>
               <strong>操作没有完成</strong>
-              <p>{{ saveError }}</p>
+              <p>{{ userMessage(saveError) }}</p>
             </div>
           </div>
           <div v-else-if="saveNotice" class="feedback-banner" role="status">
@@ -1255,18 +1408,28 @@ onMounted(async () => {
             <p>{{ saveNotice }}</p>
           </div>
 
+          <div class="note-organization-actions">
+            <button type="button" @click="openNewNote(true)"><Plus :size="16" /> 整理成新笔记</button>
+            <button type="button" :aria-pressed="browserState.pinned.includes(selectedNote.id)" @click="togglePinned"><Pin :size="16" /> {{ browserState.pinned.includes(selectedNote.id) ? '取消置顶' : '置顶' }}</button>
+          </div>
           <div class="document-body">
-            <div v-if="!isEditing" class="document-preview">
+            <div v-if="!isEditing" ref="documentBody" class="document-preview" @scroll.passive="persistReading">
               <div class="notes-rich-text" v-html="renderMarkdown(editForm.content)" />
             </div>
             <div v-else class="document-editor">
               <div class="editor-toolbar">
-                <span>Markdown 正文</span>
-                <span>支持公式、代码和 Mermaid 图表</span>
+                <button type="button" :disabled="composing" @click="insertFormat('## ', '', '标题')">标题</button>
+                <button type="button" :disabled="composing" @click="insertFormat('**', '**', '重点')">加粗</button>
+                <button type="button" :disabled="composing" @click="insertFormat('> ', '', '原文')">引用</button>
+                <button type="button" :disabled="composing" @click="insertFormat('\n$$\n', '\n$$\n', '公式')">公式</button>
+                <button type="button" :disabled="composing" @click="insertFormat('\n```python\n', '\n```\n', '')">代码</button>
               </div>
               <textarea
                 v-model="editForm.content"
+                ref="editorInput"
                 aria-label="笔记正文"
+                @compositionstart="composing = true"
+                @compositionend="composing = false"
                 placeholder="记录你的理解、推导和仍需解决的问题"
               />
               <div class="edit-meta-grid">
@@ -1294,14 +1457,35 @@ onMounted(async () => {
           <p>选择笔记后，这里会显示排版建议和版本历史。</p>
         </div>
         <template v-else>
+          <details class="context-section context-disclosure" data-testid="notes-relations" open>
+            <summary><span><Link2 :size="17" /> 相关笔记</span><ChevronDown :size="16" class="disclosure-chevron" /></summary>
+            <div class="context-content related-notes">
+              <p v-if="relatedLoading" class="inline-state">正在查找</p>
+              <div v-if="relatedError" class="inline-error">{{ relatedError }} <button type="button" @click="loadRelated(selectedNote.id)">重试</button></div>
+              <p v-if="isDirty" class="context-help">先保存正文，再整理笔记关联。</p>
+              <article v-for="item in related.linked" :key="item.id" class="related-note linked-note">
+                <button type="button" class="related-title" @click="openRelated(item.id)">{{ item.title }}</button>
+                <div class="related-actions"><span>{{ item.template }}</span><button v-if="item.direction === 'outgoing'" type="button" :disabled="relationSaving || isDirty" @click="changeRelation(item.id, 'remove')">取消关联</button></div>
+              </article>
+              <article v-for="item in related.suggestions" :key="item.id" class="related-note">
+                <button type="button" class="related-title" :aria-expanded="previewRelatedId === item.id" @click="previewRelatedId = previewRelatedId === item.id ? '' : item.id">{{ item.title }}</button>
+                <p>{{ item.reason }}</p>
+                <div v-if="previewRelatedId === item.id" class="related-preview">
+                  <div class="notes-rich-text compact" v-html="renderMarkdown(item.preview)" />
+                  <button type="button" class="text-button" @click="openRelated(item.id)">打开笔记</button>
+                </div>
+                <div class="related-actions"><button type="button" :disabled="relationSaving || isDirty" @click="changeRelation(item.id, 'accept')">关联</button><button type="button" :disabled="relationSaving || isDirty" @click="changeRelation(item.id, 'dismiss')">忽略</button></div>
+              </article>
+              <p v-if="!relatedLoading && !relatedError && !related.linked.length && !related.suggestions.length" class="inline-state">暂无相关笔记</p>
+            </div>
+          </details>
           <details class="context-section context-disclosure" data-testid="notes-ai-suggestion" open>
             <summary>
               <span><Sparkles :size="17" /> AI 排版建议</span>
               <ChevronDown :size="16" class="disclosure-chevron" />
             </summary>
             <div class="context-content">
-              <p class="context-help">建议始终独立预览，只有你确认应用后才会另存新版本。</p>
-              <p v-if="polishError" class="inline-error">{{ polishError }}</p>
+              <p v-if="polishError" class="inline-error">{{ userMessage(polishError) }}</p>
               <div v-if="selectedNote.ai_suggestion" class="suggestion-preview">
                 <div class="suggestion-meta">基于版本 {{ selectedNote.ai_suggestion.base_version }}</div>
                 <div class="notes-rich-text compact" v-html="renderMarkdown(selectedNote.ai_suggestion.content)" />
@@ -1324,7 +1508,7 @@ onMounted(async () => {
             </div>
           </details>
 
-          <details class="context-section context-disclosure" data-testid="notes-history" open>
+          <details class="context-section context-disclosure" data-testid="notes-history">
             <summary>
               <span><History :size="17" /> 版本历史</span>
               <span class="summary-count">{{ selectedNote.version_count || versions.length }}</span>
@@ -1333,7 +1517,7 @@ onMounted(async () => {
             <div class="context-content version-list">
               <div v-if="versionsLoading" class="inline-state"><Loader2 :size="17" class="spin" /> 正在载入历史</div>
               <div v-else-if="versionsError" class="inline-state is-error">
-                <span>{{ versionsError }}</span>
+                <span>{{ userMessage(versionsError) }}</span>
                 <button type="button" class="text-button" @click="loadVersions(selectedNote.id)">重试</button>
               </div>
               <div v-else-if="!versions.length" class="inline-state">还没有历史版本</div>
@@ -1371,14 +1555,18 @@ onMounted(async () => {
         <header class="modal-header">
           <div>
             <h2 id="add-note-title"><Plus :size="18" /> 新建学习笔记</h2>
-            <p>个人记录会保存为可继续编辑的版本。</p>
           </div>
           <button type="button" class="icon-button" title="关闭" aria-label="关闭新建笔记" @click="showAddModal = false">
             <X :size="18" />
           </button>
         </header>
         <div class="modal-body">
-          <p v-if="newError" class="inline-error" role="alert">{{ newError }}</p>
+          <p v-if="newError" class="inline-error" role="alert">{{ userMessage(newError) }}</p>
+          <div class="note-template-options" role="group" aria-label="笔记模板">
+            <button v-for="item in NOTE_TEMPLATES" :key="item.id" type="button" :aria-pressed="templateId === item.id" @click="chooseTemplate(item.id)">{{ item.label }}</button>
+          </div>
+          <label class="form-field"><span>所属课程</span><select v-model="newCourseId" :disabled="Boolean(newSourceNote)"><option value="">个人记录</option><option v-for="course in courseOptions" :key="course.id" :value="course.id">{{ course.title }}</option></select></label>
+          <SourceCitation v-if="newSourceNote?.source_context?.kind && newSourceNote.source_context.kind !== 'personal_note'" :source="newSourceNote.source_context" compact />
           <label class="form-field">
             <span>笔记正文</span>
             <textarea v-model="newForm.content" placeholder="记录你的理解、推导和问题，支持 Markdown 与 LaTeX" />
@@ -1411,6 +1599,7 @@ onMounted(async () => {
 <style scoped>
 .notes-page {
   width: 100%;
+  container-type: inline-size;
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 15px;
@@ -1422,11 +1611,11 @@ onMounted(async () => {
   width: 100%;
   height: calc(100vh - 112px);
   min-height: 600px;
-  grid-template-columns: 250px minmax(450px, 1fr) 294px;
+  grid-template-columns: 230px minmax(360px, 1fr) 260px;
   overflow: hidden;
-  border: 1px solid var(--color-border);
+  border: 0;
   border-radius: var(--radius-panel);
-  background: var(--color-surface);
+  background: var(--gradient-paper);
 }
 
 .notes-sidebar,
@@ -1893,7 +2082,7 @@ details[open] > summary .disclosure-chevron {
 }
 
 .button.primary:hover:not(:disabled) {
-  background: #06141b;
+  background: var(--color-text);
 }
 
 .button.secondary {
@@ -1996,7 +2185,7 @@ details[open] > summary .disclosure-chevron {
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  background: var(--color-page);
+  background: transparent;
 }
 
 .document-preview,
@@ -2007,7 +2196,9 @@ details[open] > summary .disclosure-chevron {
 .document-preview {
   padding: 28px clamp(24px, 4vw, 56px);
   overflow-y: auto;
-  background: var(--color-surface);
+  background: var(--gradient-paper);
+
+  border: 0;
 }
 
 .notes-rich-text {
@@ -2526,46 +2717,46 @@ details[open] > summary .disclosure-chevron {
   to { transform: rotate(360deg); }
 }
 
-@media (max-width: 1380px) {
-  .notes-shell {
-    grid-template-columns: 238px minmax(430px, 1fr) 282px;
-  }
-
-  .document-header {
-    padding-inline: 16px;
-  }
-
-  .document-preview {
-    padding-inline: 28px;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .spin {
     animation-duration: 1.6s;
   }
 }
 
-/* FB-FE-01: keep the note document dominant while retaining both supporting rails. */
-.notes-shell {
-  grid-template-columns: 190px minmax(420px, 1fr) 238px;
-  gap: 0;
+/* Reading owns the main column; supporting material moves below on narrow screens. */
+.editor-toolbar { justify-content: flex-start; gap: 16px; flex-wrap: wrap; }
+.editor-toolbar button { padding: 0; color: var(--color-text-secondary); background: none; border: 0; font: inherit; cursor: pointer; }
+.note-browser-controls { display: grid; gap: 8px; margin-top: 12px; }
+.note-browser-controls select, .form-field select { width: 100%; min-width: 0; padding: 7px; color: var(--color-text); border: 0; border-radius: var(--radius-control); background: var(--color-surface-subtle); font: inherit; }
+.sidebar-header, .source-filter-list { border-bottom: 0; }
+.note-list-item { border-bottom: 0; background: transparent; }
+.note-item-excerpt { -webkit-line-clamp: 2; }
+.note-organization-actions { display: flex; flex-wrap: wrap; gap: 20px; padding: 0 24px 12px; }
+.note-organization-actions button, .related-actions button, .related-title { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--color-accent); cursor: pointer; font: inherit; }
+.note-organization-actions button[aria-pressed="true"] { font-weight: 650; }
+.related-note { padding-left: 12px; margin: 16px 0; border-left: 1px solid var(--color-border-strong); }
+.related-title { position: relative; color: var(--color-text); text-align: left; font-weight: 600; }
+.related-title::before { content: ''; width: 8px; height: 1px; position: absolute; left: -13px; background: var(--color-border-strong); }
+.related-note p { margin: 5px 0 9px; color: var(--color-text-secondary); font-size: 14px; }
+.related-actions { display: flex; gap: 16px; align-items: center; font-size: 14px; }
+.related-preview { max-height: 350px; overflow: auto; margin: 12px 0; }
+.note-template-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.note-template-options button { border: 1px solid transparent; border-radius: var(--radius-control); background: var(--color-surface-subtle); color: var(--color-text); padding: 9px 14px; font: inherit; cursor: pointer; }
+.note-template-options button[aria-pressed="true"] { background: var(--color-accent-soft); border-color: var(--color-accent); }
+.document-preview { padding-inline: clamp(24px, 3vw, 52px); }
+.note-document { background: var(--color-surface); }
+.note-context { background: var(--color-surface-subtle); }
+@container (max-width: 1040px) {
+  .notes-shell { grid-template-columns: 220px minmax(0, 1fr); height: auto; overflow: visible; }
+  .notes-sidebar { grid-row: 1 / 3; max-height: calc(100vh - 130px); position: sticky; top: 0; }
+  .note-document { min-height: 680px; }
+  .document-body { max-height: 650px; }
+  .note-context { grid-column: 2; border-left: 0; }
+  .document-header { flex-wrap: wrap; gap: 12px; }
 }
-
-.sidebar-header,
-.context-section {
-  padding-right: 14px;
-  padding-left: 14px;
-}
-
-.document-preview {
-  padding-right: clamp(28px, 5vw, 72px);
-  padding-left: clamp(28px, 5vw, 72px);
-}
-
-@media (max-width: 1100px) {
-  .notes-shell {
-    grid-template-columns: 176px minmax(390px, 1fr) 210px;
-  }
+@container (max-width: 660px) {
+  .notes-shell { grid-template-columns: minmax(0, 1fr); }
+  .notes-sidebar { grid-row: auto; position: static; max-height: 340px; }
+  .note-context { grid-column: 1; }
 }
 </style>

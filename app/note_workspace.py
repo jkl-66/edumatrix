@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from app.database import (
     DBArtifact,
     DBArtifactVersion,
+    DBCourse,
     DBDocumentSelection,
     DBLearningEvent,
     DBNote,
@@ -28,14 +29,22 @@ SOURCE_LABELS = {
     "knowledge_selection": "知识库选区",
     "handout": "个性化讲义",
     "code_sandbox": "代码沙盒",
+    "training_task": "实训报告",
     "review_task": "复习任务",
     "wrong_question_reflection": "错题本反思",
 }
-RESOURCE_SOURCE_TYPES = {"handout", "code_sandbox"}
+RESOURCE_SOURCE_TYPES = {"handout", "code_sandbox", "training_task"}
+NOTE_TEMPLATES = {"knowledge": "知识点", "method": "方法", "reflection": "错题复盘", "comparison": "同类题"}
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=value.tzinfo or timezone.utc).isoformat()
 
 
 def _stable_id(prefix: str, *parts: str) -> str:
@@ -52,13 +61,9 @@ def _request_hash(value: Any) -> str:
 
 
 def normalize_concepts(concepts: list[str] | None) -> list[str]:
-    normalized: list[str] = []
-    for concept in concepts or []:
-        parts = [concept]
-        for separator in ("与", "和"):
-            parts = [item for part in parts for item in part.split(separator)]
-        normalized.extend(item.strip() for item in parts if item.strip())
-    return list(dict.fromkeys(normalized))
+    # Each entry is an explicitly selected knowledge point. Conjunctions are
+    # part of names such as “训练与推理接口”, not list separators.
+    return list(dict.fromkeys(item.strip() for item in concepts or [] if item.strip()))
 
 
 def _student_owner(db: Any, student_id: str) -> DBUser | None:
@@ -78,10 +83,42 @@ def prepare_source_metadata(
     source_type: str,
     metadata: dict[str, Any] | None,
 ) -> tuple[str, dict[str, Any]]:
+    kind, result = _prepare_source_metadata(db, actor=actor, source_type=source_type, metadata=metadata)
+    raw = dict(metadata or {})
+    template = str(raw.get("template_id") or "")
+    if template in NOTE_TEMPLATES:
+        result["template_id"] = template
+    if kind in {"manual", "conversation"} and raw.get("course_id"):
+        from app.authorization import require_course_access
+        course = db.get(DBCourse, str(raw["course_id"]))
+        if course is None:
+            raise HTTPException(status_code=404, detail="这门课程暂时无法找到")
+        require_course_access(db, actor, course_id=course.id, visibility=course.visibility)
+        result["course_id"] = course.id
+    if kind == "knowledge_selection":
+        selection = db.get(DBDocumentSelection, result["selection_id"])
+        result["course_id"] = project_selection(db, actor, selection).get("course_id") or ""
+    return kind, result
+
+
+def _prepare_source_metadata(
+    db: Any, *, actor: DBUser, source_type: str, metadata: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
     source_type = str(source_type or "manual").strip()
     raw = dict(metadata or {})
-    if source_type in {"manual", "conversation", "wrong_question_reflection"}:
+    if source_type in {"manual", "conversation"}:
         return source_type, {}
+    if source_type == "wrong_question_reflection":
+        version_id = str(raw.get("question_version_id") or "")
+        if not version_id:
+            return source_type, {}
+        from app.wrong_question_read_model import canonical_review_source
+        record = canonical_review_source(db, owner_public_id=actor.public_id, student_id=actor.username, version_id=version_id)
+        return source_type, {
+            "source_type": source_type, "question_version_id": version_id,
+            "course_id": record.course_id, "title": record.target_concept,
+            "route": f"/workspace/review/wrong-questions?{urlencode({'question_version_id': version_id, 'course_id': record.course_id or ''})}",
+        }
     if source_type == "knowledge_selection":
         selection_id = str(raw.get("selection_id") or "")
         selection = db.get(DBDocumentSelection, selection_id) if selection_id else None
@@ -122,7 +159,7 @@ def prepare_source_metadata(
             raise HTTPException(status_code=409, detail="来源资源类型不匹配")
         route = resource_route(actual_type, artifact.id) or ""
         if route:
-            route = f"{route}?{urlencode({'version_id': version.id})}"
+            route = f"{route}?{urlencode({'version_id': version.id, 'course_id': artifact.course_id or ''})}"
         return source_type, {
             "source_type": source_type,
             "resource_id": artifact.id,
@@ -180,7 +217,9 @@ def _operation_event(
         id=event_id,
         owner_public_id=owner.public_id if owner else None,
         legacy_student_id=note.student_id,
-        course_id=str((note.source_metadata or {}).get("course_id") or "") or None,
+        # Reader/resource notes can carry course ownership through their source
+        # instead of a duplicated metadata field, just as the note view does.
+        course_id=(_note_course(db, owner, note) if owner else str((note.source_metadata or {}).get("course_id") or "")) or None,
         event_type=f"note.{action}",
         schema_version="f8.note.v1",
         idempotency_key=f"note:{action}:{idempotency_key}"[:128],
@@ -336,6 +375,7 @@ def update_note_record(
     actor: DBUser | None,
     change_type: str = "saved",
     task_id: str | None = None,
+    relation_updates: dict[str, list[str]] | None = None,
 ) -> tuple[DBNote | None, bool]:
     query = db.query(DBNote).filter(DBNote.id == note_id)
     if student_id:
@@ -346,6 +386,9 @@ def update_note_record(
     _assert_actor_scope(actor, note.student_id)
     normalized_tags = list(note.tags or []) if tags is None else list(dict.fromkeys(item.strip() for item in tags if item.strip()))
     normalized_concepts = list(note.concepts or []) if concepts is None else normalize_concepts(concepts)
+    metadata = dict(note.source_metadata or {})
+    if relation_updates is not None:
+        metadata.update(relation_updates)
     operation_key = str(idempotency_key or new_public_id("note-op"))
     request_hash = _request_hash({
         "note_id": note.id,
@@ -354,6 +397,7 @@ def update_note_record(
         "concepts": normalized_concepts,
         "expected_version": expected_version,
         "change_type": change_type,
+        **({"relations": relation_updates} if relation_updates is not None else {}),
     })
     event_id = _stable_id(
         "le-note",
@@ -371,11 +415,13 @@ def update_note_record(
             status_code=409,
             detail={"code": "note_version_conflict", "message": "笔记已在别处更新，本地草稿未提交。", "current_version": note.lock_version},
         )
-    if note.content == content and list(note.tags or []) == normalized_tags and list(note.concepts or []) == normalized_concepts:
+    if (note.content == content and list(note.tags or []) == normalized_tags
+            and list(note.concepts or []) == normalized_concepts and metadata == (note.source_metadata or {})):
         return note, False
     note.content = content
     note.tags = normalized_tags
     note.concepts = normalized_concepts
+    note.source_metadata = metadata
     note.lock_version = int(note.lock_version or 1) + 1
     note.updated_at = _now()
     note.ai_suggestion = ""
@@ -440,7 +486,7 @@ def save_ai_suggestion(
         "base_version": note.lock_version,
         "tags": list(tags),
         "concepts": normalize_concepts(concepts),
-        "created_at": _now().isoformat(),
+        "created_at": _iso(_now()),
     }
     note.updated_at = _now()
     _operation_event(
@@ -547,9 +593,35 @@ def source_projection(db: Any, *, actor: DBUser, note: DBNote) -> dict[str, Any]
             "course_id": metadata.get("course_id") or (artifact.course_id if artifact else ""),
             "resource_id": metadata.get("resource_id"),
             "resource_version_id": metadata.get("resource_version_id"),
+            "resource_version_number": version.version_number if version and available else None,
             "route": metadata.get("route") or "",
             "available": available,
             "reason": "" if available else "来源资源已撤回、版本失效或当前账号无权查看",
+            "historical": True,
+        }
+    if source_type == "wrong_question_reflection" and metadata.get("question_version_id"):
+        from app.wrong_question_read_model import canonical_review_source
+
+        version_id = str(metadata["question_version_id"])
+        record = None
+        if actor.username == note.student_id:
+            try:
+                record = canonical_review_source(db, owner_public_id=actor.public_id,
+                    student_id=note.student_id, version_id=version_id)
+            except HTTPException as exc:
+                if exc.status_code not in {403, 404, 409}:
+                    raise
+        return {
+            "kind": "wrong_question", "source_type": source_type,
+            "title": metadata.get("title") or "错题复盘",
+            "course_id": record.course_id if record else metadata.get("course_id") or "",
+            "question_version_id": version_id, "location_label": "返回这道题",
+            "route": "/workspace/review/wrong-questions?" + urlencode({
+                "question_version_id": version_id,
+                "course_id": record.course_id if record else metadata.get("course_id") or "",
+            }),
+            "available": record is not None,
+            "reason": "" if record else "原题暂时无法查看，已保存的复盘仍可阅读。",
             "historical": True,
         }
     if source_type == "review_task":
@@ -581,6 +653,17 @@ def source_projection(db: Any, *, actor: DBUser, note: DBNote) -> dict[str, Any]
     }
 
 
+def visible_note_tags(tags, source_type, metadata, course_id):
+    values = list(tags or [])
+    selection_type = (metadata or {}).get("selection_type")
+    # Only the reader's old, known auto-tag tuple is presentation metadata.
+    # Preserve user tags and literal 'text'/'image' on other notes.
+    if source_type == "knowledge_selection" and course_id in values and "知识库" in values and selection_type in {"text", "image"}:
+        return list(dict.fromkeys("原文摘录" if tag == "知识库" else tag
+            for tag in values if tag not in {course_id, selection_type}))
+    return values
+
+
 def note_payload(db: Any, *, actor: DBUser, note: DBNote) -> dict[str, Any]:
     _assert_actor_scope(actor, note.student_id)
     version_count = db.query(DBNoteVersion).filter(DBNoteVersion.note_id == note.id).count()
@@ -594,39 +677,129 @@ def note_payload(db: Any, *, actor: DBUser, note: DBNote) -> dict[str, Any]:
             "concepts": list(suggestion_metadata.get("concepts") or []),
             "created_at": suggestion_metadata.get("created_at"),
         }
+    course_id = _note_course(db, actor, note)
+    course = db.get(DBCourse, course_id) if course_id else None
     return {
         "id": note.id,
         "student_id": note.student_id,
         "source": note.source,
         "content": note.content,
-        "tags": list(note.tags or []),
+        "tags": visible_note_tags(note.tags, note.source, note.source_metadata, course_id),
         "concepts": list(note.concepts or []),
         "source_metadata": dict(note.source_metadata or {}),
         "source_context": source_projection(db, actor=actor, note=note),
+        "course": {"id": course.id, "title": course.title} if course else None,
         "lock_version": int(note.lock_version or 1),
         "current_version_number": int(note.current_version_number or 1),
         "version_count": version_count,
         "ai_suggestion": suggestion,
-        "created_at": note.created_at.isoformat() if note.created_at else None,
-        "updated_at": note.updated_at.isoformat() if note.updated_at else None,
+        "created_at": _iso(note.created_at),
+        "updated_at": _iso(note.updated_at),
     }
 
 
 def note_versions_payload(db: Any, *, actor: DBUser, note: DBNote) -> list[dict[str, Any]]:
     _assert_actor_scope(actor, note.student_id)
     versions = db.query(DBNoteVersion).filter(DBNoteVersion.note_id == note.id).order_by(DBNoteVersion.version_number.desc()).all()
+    course_id = _note_course(db, actor, note)
     return [
         {
             "id": version.id,
             "version_number": version.version_number,
             "content": version.content,
-            "tags": list(version.tags or []),
+            "tags": visible_note_tags(version.tags, version.source, version.source_metadata, course_id),
             "concepts": list(version.concepts or []),
             "source": version.source,
             "source_metadata": dict(version.source_metadata or {}),
             "change_type": version.change_type,
             "restored_from_version": version.restored_from_version,
-            "created_at": version.created_at.isoformat() if version.created_at else None,
+            "created_at": _iso(version.created_at),
         }
         for version in versions
     ]
+
+
+def _note_course(db: Any, actor: DBUser, note: DBNote) -> str:
+    metadata = note.source_metadata or {}
+    return str(metadata.get("course_id") or source_projection(db, actor=actor, note=note).get("course_id") or "")
+
+
+def related_notes_payload(db: Any, *, actor: DBUser, note_id: str) -> dict[str, Any]:
+    """Suggest local reading links; a similarity is never a prerequisite or grade."""
+    from types import SimpleNamespace
+    from app.retrieval_ranking import rank_chunks
+    from embedding_models import EMBEDDINGS
+    import re
+
+    note = db.get(DBNote, note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="这则笔记暂时无法找到")
+    _assert_actor_scope(actor, note.student_id)
+    course_id = _note_course(db, actor, note)
+    candidates = [row for row in db.query(DBNote).filter(
+        DBNote.student_id == note.student_id, DBNote.id != note.id,
+    ).all() if _note_course(db, actor, row) == course_id]
+    metadata = note.source_metadata or {}
+    accepted = set(metadata.get("related_notes") or [])
+    ignored = set(metadata.get("dismissed_notes") or [])
+    reverse = {row.id for row in candidates if note.id in ((row.source_metadata or {}).get("related_notes") or [])}
+    def title(row):
+        heading = re.search(r"^#\s+(.+)$", row.content or "", re.M)
+        return heading.group(1) if heading else next(iter(row.concepts or []), "学习笔记")
+    chunks = [SimpleNamespace(id=row.id, content=row.content or "", metadata={"title_path": [title(row)]})
+              for row in candidates if row.id not in ignored | accepted | reverse]
+    diagnostics, ranking = {}, {}
+    if chunks:
+        _, diagnostics, ranking = rank_chunks(chunks, query=note.content or "",
+            expanded_query=" ".join([*(note.concepts or []), note.content or ""]), embeddings=EMBEDDINGS)
+    suggestions, linked = [], []
+    for row in candidates:
+        other = row.source_metadata or {}
+        shared_concepts = sorted(set(note.concepts or []) & set(row.concepts or []))
+        same_source = any(metadata.get(key) and metadata[key] == other.get(key)
+                          for key in ("source_document_id", "resource_id", "question_version_id"))
+        score = diagnostics.get(row.id, {})
+        lexical = float(score.get("lexical_score") or 0)
+        semantic = float(score.get("semantic_score") or 0)
+        reason = ("共同知识点：" + "、".join(shared_concepts)) if shared_concepts else "来自同一份学习材料" if same_source else "内容相近，供你比较"
+        item = {"id": row.id, "title": title(row), "preview": row.content or "",
+                "template": NOTE_TEMPLATES.get(other.get("template_id"), "学习笔记"),
+                "reason": reason, "route": "/workspace/notes?" + urlencode({"note_id": row.id, **({"course_id": course_id} if course_id else {})})}
+        if row.id in accepted | reverse:
+            item["direction"] = "outgoing" if row.id in accepted else "incoming"
+            linked.append(item)
+        elif row.id not in ignored and (shared_concepts or same_source or lexical > 2 or semantic >= .65):
+            item["_rank"] = (bool(shared_concepts), bool(same_source), float(score.get("fused_score") or 0), lexical)
+            suggestions.append(item)
+    suggestions.sort(key=lambda row: row["_rank"], reverse=True)
+    for row in suggestions:
+        row.pop("_rank")
+    return {"note_id": note.id, "linked": linked, "suggestions": suggestions,
+            "retrieval": {"method": ranking.get("method", "explicit-relations"),
+                          "semantic_executed": ranking.get("semantic_executed", False)}}
+
+
+def set_note_relation(db: Any, *, actor: DBUser, note_id: str, target_id: str,
+                      action: str, expected_version: int, idempotency_key: str) -> DBNote:
+    note, target = db.get(DBNote, note_id), db.get(DBNote, target_id)
+    if note is None or target is None:
+        raise HTTPException(status_code=404, detail="关联的笔记暂时无法找到")
+    _assert_actor_scope(actor, note.student_id)
+    if note.id == target.id or note.student_id != target.student_id:
+        raise HTTPException(status_code=422, detail="请选择自己的另一则笔记")
+    if _note_course(db, actor, note) != _note_course(db, actor, target):
+        raise HTTPException(status_code=422, detail="请选择同一门课程中的笔记")
+    if action not in {"accept", "dismiss", "remove"}:
+        raise HTTPException(status_code=422, detail="请选择关联、忽略或取消关联")
+    metadata = note.source_metadata or {}
+    accepted = set(metadata.get("related_notes") or [])
+    ignored = set(metadata.get("dismissed_notes") or [])
+    if action == "accept":
+        accepted.add(target_id); ignored.discard(target_id)
+    else:
+        accepted.discard(target_id); ignored.add(target_id)
+    updated, _ = update_note_record(db, note_id=note.id, student_id=note.student_id, content=note.content,
+        tags=None, concepts=None, expected_version=expected_version, idempotency_key=idempotency_key,
+        actor=actor, change_type="relations_updated",
+        relation_updates={"related_notes": sorted(accepted), "dismissed_notes": sorted(ignored)})
+    return updated

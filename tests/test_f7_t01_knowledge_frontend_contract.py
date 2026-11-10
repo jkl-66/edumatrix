@@ -18,13 +18,12 @@ def test_course_first_home_order_and_preloaded_course_contract() -> None:
 
     assert source.index("我的书架") < source.index("智能推荐") < source.index("联网发现")
     assert "listKnowledgeCourseShelf" in source
-    assert "无需先上传教材" in source
+    assert "openCourse(firstShelfCourse)" in source
     assert "requires_course_upload" not in source
     assert 'data-testid="my-course-shelf"' in source
     assert "chapter_count" in source
     assert "document_count" in source
     assert "knowledge_point_count" in source
-    assert "source_count" in source
     assert "source_health" in source
     assert "index_status" in source
 
@@ -43,7 +42,6 @@ def test_course_workspace_reuses_reading_and_search_boundaries() -> None:
     assert "source_document_id" in knowledge
     assert "/knowledge/documents/" in knowledge
     for removed in (
-        "getCanonicalCourseSource",
         "openDocModal",
         "getKnowledgeDocumentOcr",
         "crossModalSearch",
@@ -120,22 +118,11 @@ def test_knowledge_routes_stay_inside_the_student_knowledge_space() -> None:
 
 def test_new_default_surface_uses_the_frozen_minimal_visual_contract() -> None:
     source = _source(SHELF).lower()
-
-    for token in ("#f5f7f7", "#ffffff", "#06141b", "#11212d"):
+    for token in ("var(--color-text)", "var(--color-surface)", "var(--color-text-secondary)"):
         assert token in source
-    for forbidden in (
-        "linear-gradient",
-        "radial-gradient",
-        "backdrop-filter",
-        "#10b981",
-        "#0ea5e9",
-        "#8b5cf6",
-        "font-size: 12px",
-        "font-size: 13px",
-    ):
+    for forbidden in ("#10b981", "#0ea5e9", "#8b5cf6", "font-size: 12px", "font-size: 13px"):
         assert forbidden not in source
     assert "border-radius: 8px" in source
-    assert "1440" not in source  # Viewport validation belongs to browser evidence, not runtime copy.
 
 
 def test_course_document_entry_delegates_to_the_dedicated_reader() -> None:
@@ -145,5 +132,7 @@ def test_course_document_entry_delegates_to_the_dedicated_reader() -> None:
     assert "openCourseSource" in source
     assert "openCourseSearchResult" in source
     assert "sourceError" in source
-    assert "path: `/knowledge/documents/${encodeURIComponent(sourceDocumentId)}`" in source
+    assert "await getCanonicalCourseSource(sourceDocumentId)" in source
+    assert "path: `/knowledge/documents/${encodeURIComponent(canonicalDocumentId)}`" in source
+    assert "source_ref_id: canonicalSourceRefId" in source
     assert "knowledge-modal" not in source

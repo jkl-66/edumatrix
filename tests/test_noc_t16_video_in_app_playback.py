@@ -6,7 +6,7 @@ VIDEO_WORKSPACE = ROOT / "frontend/src/views/VideoRecommendationWorkspace.vue"
 RESOURCE_CENTER = ROOT / "frontend/src/views/ResourceCenter.vue"
 
 
-def test_video_workspace_keeps_playback_inside_edumatrix():
+def test_video_workspace_prefers_in_app_playback_and_offers_original_site_fallback():
     source = VIDEO_WORKSPACE.read_text(encoding="utf-8")
 
     assert '<video' in source
@@ -17,7 +17,8 @@ def test_video_workspace_keeps_playback_inside_edumatrix():
     assert 'sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"' in source
     assert 'openInAppSource' in source
     assert 'window.open' not in source
-    assert 'target="_blank"' not in source
+    assert ':href="originalSourceUrl" target="_blank"' in source
+    assert '在原网站观看' in source
     assert '站内嵌入' in source
     assert '该来源暂不允许站内嵌入' in source
 

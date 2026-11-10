@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.source_refs import current_chapter_clause
+
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
@@ -114,7 +116,7 @@ def _profile_alignment(
             "source": "DBStudentProfile",
             "observed_at": source_profile.get("last_updated"),
         })
-    snapshot_updated_at = snapshot.created_at.isoformat() if snapshot and snapshot.created_at else None
+    snapshot_updated_at = _display_datetime(snapshot.created_at).isoformat() if snapshot and snapshot.created_at else None
     source_updated_at = source_profile.get("last_updated")
     has_evidence = bool(snapshot or fields)
     return {
@@ -214,7 +216,7 @@ def _weak_summary(
         for item in raw_items
     ]
     point_ids = [item for item in point_ids if item]
-    chapters = session.query(DBChapter.id).filter_by(course_id=course_id).all()
+    chapters = session.query(DBChapter.id).filter_by(course_id=course_id).filter(current_chapter_clause()).all()
     course_chapter_ids = [row[0] for row in chapters]
     course_point_ids = {
         row[0] for row in session.query(DBChapterKnowledgePoint.knowledge_point_id).filter(
@@ -369,7 +371,7 @@ def _weak_summary(
                 "type": "learning_event",
                 "id": str(event.id),
                 "label": "支持该知识点的学习事件",
-                "occurred_at": event.occurred_at.isoformat() if event.occurred_at else None,
+                "occurred_at": _display_datetime(event.occurred_at).isoformat() if event.occurred_at else None,
             })
             if len(event_refs) >= 3:
                 break
@@ -495,7 +497,7 @@ def mastery_trend(
             "label": _display_datetime(event.occurred_at).strftime("%m-%d"),
             "value": round(float(value) * 100),
             "source_event_id": event.id,
-            "occurred_at": event.occurred_at.isoformat(),
+            "occurred_at": _display_datetime(event.occurred_at).isoformat(),
         })
         if len(points) >= limit:
             break
@@ -593,6 +595,7 @@ def _focus_copy(state: str, primary_task: dict[str, Any] | None) -> dict[str, An
         "diagnostic_required": ("完成入学诊断", "用真实作答建立初始掌握证据，再生成适合你的学习路径。"),
         "path_required": ("确认第一版学习路径", "检查知识顺序与预计投入，确认后才会生成今日任务。"),
         "today_complete": ("今天的必做任务已完成", "查看下一步安排，或按复习队列继续巩固。"),
+        "today_unscheduled": ("本课程今天暂无必做安排", "查看总路径中的其他课程和后续安排，或到复习中心巩固已有内容。"),
     }
     title, strategy = copies.get(state, ("继续当前学习安排", "已有内容仍可使用，完成当前学习动作后即可查看最新结果。"))
     return {
@@ -614,7 +617,8 @@ def build_dashboard_summary(
     course = overview.get("course")
     resolved_course_id = str(course.get("id")) if course else None
     path = overview.get("current_path")
-    tasks = list(overview.get("today_tasks") or [])
+    today_tasks = list(overview.get("today_tasks") or [])
+    tasks = [item for item in today_tasks if item.get("status") != "completed"]
     primary_task = tasks[0] if tasks else None
 
     onboarding_snapshot = session.query(DBProfileSnapshot).filter_by(
@@ -668,7 +672,7 @@ def build_dashboard_summary(
     elif primary_task:
         state = "ready"
     else:
-        state = "today_complete"
+        state = "today_complete" if today_tasks else "today_unscheduled"
 
     nodes = list((path or {}).get("nodes") or [])
     completed = sum(item.get("status") == "completed" for item in nodes)
@@ -688,7 +692,7 @@ def build_dashboard_summary(
     )
     review = overview.get("review") or {"due_count": 0, "items": []}
     source_event_ids = [event.id for _, event in aggregation_rows if event.id][:8]
-    latest_event_at = latest_event.occurred_at.isoformat() if latest_event and latest_event.occurred_at else None
+    latest_event_at = _display_datetime(latest_event.occurred_at).isoformat() if latest_event and latest_event.occurred_at else None
     metrics = [
         {
             "label": "路径进度",

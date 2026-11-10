@@ -36,9 +36,12 @@ async def generate_review_model_json(
 ) -> tuple[dict, str, str]:
     """Call the configured DeepSeek review model with no deterministic fallback."""
     from app.m5_legacy_calls import audited_legacy_text_call, model_identity
-    from llm_client import DEFAULT_ASYNC_LLM, parse_json_object
+    from llm_client import DEFAULT_ASYNC_LLM, AsyncOpenAIChatLLM, build_async_llm, parse_json_object
 
     backend = DEFAULT_ASYNC_LLM
+    if isinstance(backend, AsyncOpenAIChatLLM):
+        backend = build_async_llm(model="deepseek-v4-flash", thinking_mode="enabled",
+                                  reasoning_effort="max", allow_fallback=False)
     provider, model = model_identity(backend)
     thinking_mode = str(getattr(backend, "thinking_mode", "") or "").strip().lower()
     reasoning_effort = str(getattr(backend, "reasoning_effort", "") or "").strip().lower()
@@ -272,7 +275,7 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 mastery=v.get("mastery", 0.48),
                 attempts=v.get("attempts", 0),
                 correct_attempts=v.get("correct_attempts", 0),
-                last_updated=v.get("last_updated", "")
+                last_updated=v.get("last_updated", ""),
             )
             
     if db_profile.profile_evidence:
@@ -290,7 +293,10 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
 
     # 还原 dimension_states
     if db_profile.dimension_states:
-        for k, v in db_profile.dimension_states.items():
+        from app.profile_adaptation import interpreted_dimension_states
+        dimensions = interpreted_dimension_states(db, db_profile.dimension_states,
+            student_id=student_id, concept_mastery=db_profile.concept_mastery)
+        for k, v in dimensions.items():
             profile.dimension_states[k] = DimensionState(
                 key=v.get("key", k),
                 label=v.get("label", ""),
@@ -300,7 +306,10 @@ def load_student_profile(db: Session, student_id: str) -> StudentProfile:
                 evidence_count=v.get("evidence_count", 0),
                 evidence_fragments=list(v.get("evidence_fragments", [])),
                 recommended_interventions=list(v.get("recommended_interventions", [])),
-                last_updated=v.get("last_updated", "")
+                last_updated=v.get("last_updated", ""),
+                self_report=v.get("self_report", ""),
+                qualitative=bool(v.get("qualitative", False)),
+                confirmed_state_scores=dict(v.get("confirmed_state_scores") or {}),
             )
             
     # 还原 learning_state_causes
@@ -365,7 +374,13 @@ def save_student_profile(db: Session, profile: StudentProfile) -> None:
     db_profile.fsm_mode = profile.fsm_mode
     db_profile.fsm_accuracy_history = to_dict_safe(profile.fsm_accuracy_history)
     
-    db_profile.dimension_states = to_dict_safe(profile.dimension_states)
+    # The legacy runtime has a compact DimensionState dataclass. Its report
+    # save must not erase the confirmed context fields kept by onboarding.
+    existing_dimensions = db_profile.dimension_states or {}
+    db_profile.dimension_states = {
+        key: {**dict(existing_dimensions.get(key) or {}), **value}
+        for key, value in to_dict_safe(profile.dimension_states).items()
+    }
     db_profile.learning_state_causes = to_dict_safe(profile.learning_state_causes)
 
     sync_legacy_profile_evidence(db, db_profile)
@@ -624,8 +639,10 @@ def review_plan_to_dict(plan: DBReviewPlan) -> dict:
     return {
         "id": plan.id,
         "concept": plan.concept,
+        "course_id": plan.course_id,
+        "knowledge_point_id": plan.knowledge_point_id,
         "interval_days": plan.interval_days,
-        "next_review_at": next_review_at.isoformat() if next_review_at else None,
+        "next_review_at": next_review_at.isoformat() + "Z" if next_review_at else None,
         "mastery": plan.mastery,
         "review_count": plan.review_count or 0,
         "easiness_factor": round(plan.easiness_factor or 2.5, 2),
@@ -633,7 +650,7 @@ def review_plan_to_dict(plan: DBReviewPlan) -> dict:
         "is_due": is_due,
         "days_until_due": days_until_due,
         "priority": plan.priority if plan.priority is not None else 1.0,
-        "created_at": plan.created_at.isoformat() if plan.created_at else None,
+        "created_at": _as_utc_naive(plan.created_at).isoformat() + "Z" if plan.created_at else None,
     }
 
 
@@ -646,12 +663,12 @@ def get_review_plan(db: Session, student_id: str) -> list[DBReviewPlan]:
     )
 
 
-def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: float, interval_days: int) -> DBReviewPlan:
+def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: float, interval_days: int, *, course_id: str | None = None) -> DBReviewPlan:
     # 确保学生画像已创建并保存，以防外键约束失败 (FOREIGN KEY constraint failed)
     db_profile = load_student_profile(db, student_id)
     existing = (
         db.query(DBReviewPlan)
-        .filter(DBReviewPlan.student_id == student_id, DBReviewPlan.concept == concept)
+        .filter(DBReviewPlan.student_id == student_id, DBReviewPlan.concept == concept, DBReviewPlan.course_id == course_id)
         .first()
     )
     if existing:
@@ -673,6 +690,7 @@ def upsert_review_plan(db: Session, student_id: str, concept: str, mastery: floa
         existing = DBReviewPlan(
             student_id=student_id,
             concept=concept,
+            course_id=course_id,
             interval_days=interval_days,
             next_review_at=_utcnow_naive() + timedelta(days=interval_days),
             mastery=mastery,
@@ -700,7 +718,7 @@ def delete_review_plan(db: Session, plan_id: int, student_id: str | None = None)
 
 
 
-def apply_review_feedback(db: Session, student_id: str, concept: str, quality: float) -> DBReviewPlan:
+def apply_review_feedback(db: Session, student_id: str, concept: str, quality: float, *, plan_id: int | None = None) -> DBReviewPlan:
     if quality not in (2, 4, 5):
         raise ValueError("quality must be one of 2, 4, 5")
     if not concept:
@@ -715,11 +733,12 @@ def apply_review_feedback(db: Session, student_id: str, concept: str, quality: f
         cognitive_load = getattr(db_profile, "cognitive_load", 0.45) or 0.45
         frustration = getattr(db_profile, "frustration_index", 0.0) or 0.0
 
-    plan = (
-        db.query(DBReviewPlan)
-        .filter(DBReviewPlan.student_id == student_id, DBReviewPlan.concept == concept)
-        .first()
-    )
+    plans = db.query(DBReviewPlan).filter_by(student_id=student_id, concept=concept)
+    if plan_id is not None:
+        plans = plans.filter_by(id=plan_id)
+    plan = plans.first()
+    if plan_id is not None and plan is None:
+        raise ValueError("这张闪卡的复习安排已不可用，请重新打开复习页。")
     if plan is None:
         init_easiness = 2.5
         if db_profile and getattr(db_profile, "bkt_states", None) and concept in db_profile.bkt_states:
@@ -774,19 +793,8 @@ def apply_review_feedback(db: Session, student_id: str, concept: str, quality: f
     plan.next_review_at = _utcnow_naive() + timedelta(days=new_interval)
     plan.priority = 0.35 if q_clamped < 3.5 else (0.7 if new_interval <= 1 else 1.0)
 
-    if db_profile:
-        concept_mastery = dict(db_profile.concept_mastery or {})
-        concept_mastery[concept] = round(mastery, 2)
-        db_profile.concept_mastery = concept_mastery
-
-        weak_points = list(db_profile.weak_points or [])
-        if q_clamped < 3.5:
-            if concept not in weak_points:
-                weak_points.insert(0, concept)
-        else:
-            if mastery >= 0.7 and concept in weak_points:
-                weak_points = [item for item in weak_points if item != concept]
-        db_profile.weak_points = weak_points[:20]
+    # This is recall familiarity for scheduling, not a graded observation.
+    # Only accepted learning evidence may change profile mastery/weak points.
 
     db.commit()
     db.refresh(plan)
@@ -800,6 +808,7 @@ async def build_review_adaptation_payload(
     *,
     owner_public_id: str | None = None,
     model_call_context: dict | None = None,
+    card_context: dict | None = None,
 ) -> dict:
     """Generate the real difficult-review explanation and mindmap with DeepSeek."""
     mastery_score = max(0.0, min(1.0, float(mastery if mastery is not None else 0.3)))
@@ -810,8 +819,8 @@ async def build_review_adaptation_payload(
             "quality": quality,
             "mastery": round(mastery_score, 2),
             "agent_trace": [
-                "Director Agent: 复习反馈已记录，保持原卡片结构。",
-                "SM-2 Engine: 已根据评分更新下次复习间隔。",
+                "已经记下这次回忆的感受，保留原有解释。",
+                "下一次复习会参考这次反馈安排。",
             ],
             "stream_chunks": [],
         }
@@ -820,17 +829,23 @@ async def build_review_adaptation_payload(
         raise ReviewModelError("review_model_owner_required", "缺少复习模型调用的学习者身份。")
     context = model_call_context or {}
     system_prompt = (
-        "你是 EduMatrix 的复习 Visualizer Agent。困难反馈必须输出真实、可追溯的降维解释和思维导图。"
+        "你是 EduMatrix 的复习 Visualizer Agent。困难反馈必须用容易理解的类比或最小例子解释当前知识点，并给出对应思维导图。"
         "只输出 JSON，不要 Markdown 围栏；JSON 必须包含 explanation（中文直觉解释与最小行动建议）和 mermaid（合法 Mermaid mindmap 或 graph）。"
+        "学生明确觉得困难，请降低解释门槛；复习评分不是测评准确率，不得按数值推断已经掌握哪些内容或还缺多少百分比。"
+        "不要声称做一题就彻底掌握。对比实验的结果可能相同，不得保证某种数据或预处理一定带来可见分数差异。"
+        "提供原闪卡时，必须直接解释原题的结论和判断步骤，保留正确答案；不能用整个知识点的泛泛介绍替代原题解释。"
     )
     user_prompt = (
         f"概念: {concept}\n"
-        f"当前掌握度: {mastery_score:.2f}\n"
+        "学生反馈：这次回忆有困难。\n"
         "请先用生活化直觉解释，再指出一个最小练习；思维导图至少包含概念、关键关系和一个常见误区。"
     )
+    if card_context:
+        user_prompt += "\n原闪卡内容：\n" + json.dumps(card_context, ensure_ascii=False)
 
     def validate_adaptation(raw: str) -> dict:
-        parsed = json.loads(raw.strip())
+        from llm_client import parse_json_object
+        parsed = parse_json_object(raw)
         explanation = str(parsed.get("explanation") or "").strip()
         mermaid = str(parsed.get("mermaid") or "").strip()
         if len(explanation) < 12 or not mermaid or not any(
@@ -871,16 +886,15 @@ async def build_review_adaptation_payload(
         "reasoning_effort": "max",
         "thinking": "enabled",
         "allow_fallback": False,
-        "title": f"「{concept}」降维解释已生成",
+        "title": f"换个容易理解的说法：{concept}",
         "simplified_explanation": simplified,
         "mermaid": mermaid,
         "card_back": card_back,
         "stream_chunks": stream_chunks,
         "agent_trace": [
-            "Director Agent: 检测到困难反馈，切换为降维解释模式。",
-            f"Visualizer Agent: 使用 {model} 生成降维解释与 Mermaid 思维导图。",
-            "Profile Agent: 已下调该概念掌握度，并写入薄弱点列表。",
-            "Planner Agent: 下一次学习路径会重新考虑该薄弱点。",
+            "根据这次困难反馈，换用更直观的解释。",
+            "配合关系图和一个小练习帮助理解。",
+            "复习感受用于安排下次回顾，掌握程度仍需实际作答检验。",
         ],
     }
 

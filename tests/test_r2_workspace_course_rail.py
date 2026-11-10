@@ -29,7 +29,7 @@ def test_workspace_chapters_include_canonical_source_markers():
         seed_competition_demo(session)
         learner = session.query(DBUser).filter_by(username="lzz").one()
 
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
 
         assert len(payload["chapters"]) == 12
         assert all(item["source"] for item in payload["chapters"])
@@ -53,7 +53,7 @@ def test_completed_task_leaves_today_queue_but_remains_in_path_history():
         first.status = "completed"
         session.commit()
 
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
 
         assert first.id not in {item["node_id"] for item in payload["today_tasks"]}
         history = {item["id"]: item for item in payload["current_path"]["nodes"]}

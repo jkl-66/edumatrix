@@ -30,6 +30,8 @@ def fixture():
     other = DBUser(public_id="media-other", username="media-other", display_name="其他用户", hashed_password=get_password_hash("pw"), role="student")
     course = DBCourse(id="media-course", version="v1", title="媒体课程", status="published", manifest_version="m1")
     db.add_all([owner, other, course]); db.commit()
+    db.add(DBSourceDocument(id=course.id + "-source", course_id=course.id, title="合成课程资料", filename="lesson.md", file_format="md", content_hash="1" * 64, processing_status="ready"))
+    db.flush()
     return db, owner, other, course
 
 

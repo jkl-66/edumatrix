@@ -53,12 +53,17 @@ def test_unknown_model_field_is_still_rejected_instead_of_becoming_unverified_pr
         raise AssertionError("unknown model fields must not be accepted")
 
 
-def test_real_model_misconceptions_preserve_topic_scores_including_zero():
+def test_model_cannot_turn_qualitative_misconceptions_into_measured_scores():
     patterns = {"过拟合与欠拟合": 0.62, "训练集与测试集": 0.0}
-    result = onboarding._parse_model_candidates(
-        _raw_field("misconception_patterns", patterns), "difficulty", "容易混淆过拟合与欠拟合。",
-    )
-    assert result["fields"][0]["value"] == patterns
+    answer = "容易混淆过拟合与欠拟合。"
+    raw = json.loads(_raw_field("misconception_patterns", patterns))
+    raw["fields"][0]["evidence"] = answer
+    result = onboarding._parse_model_candidates(json.dumps(raw), "difficulty", answer)
+    assert result["fields"][0]["key"] == "difficulty_context"
+    assert result["fields"][0]["value"] == answer
+    # Actual measured scores retain their zero; only unsupported extraction
+    # from a conversation is converted to a qualitative statement.
+    assert onboarding._normalize_misconception_patterns(patterns) == patterns
 
 
 def test_real_model_extractor_keeps_deepseek_max_and_exposes_canonical_prompt(monkeypatch):

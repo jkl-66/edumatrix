@@ -13,7 +13,7 @@ from app.authorization import (
     can_access_object,
     require_course_access,
 )
-from app.database import DBCourseMembership, DBUser, SessionLocal
+from app.database import DBCourse, DBCourseMembership, DBUser, SessionLocal
 from app.identity import VALID_ROLES, new_public_id
 from app.main import app
 from config import CONFIG
@@ -83,8 +83,11 @@ def test_course_membership_is_persisted_and_not_caller_supplied():
 
     with SessionLocal() as session:
         user = session.query(DBUser).filter(DBUser.username == username).one()
+        course = DBCourse(id=new_public_id("m1-course"), version="v1", title="权限核验课程", visibility="private", manifest_version="v1")
+        session.add(course)
+        session.flush()
         membership = DBCourseMembership(
-            course_id="course-rag-engineering-m0",
+            course_id=course.id,
             user_public_id=user.public_id,
             role="student",
         )
@@ -104,3 +107,25 @@ def test_course_membership_is_persisted_and_not_caller_supplied():
                 session, other, course_id=membership.course_id, action="read"
             )
         assert raised.value.status_code == 403
+
+        course.owner_public_id = user.public_id
+        membership.status = "removed"
+        session.flush()
+        assert require_course_access(session, user, course_id=course.id) is None
+        with pytest.raises(HTTPException):
+            require_course_access(session, other, course_id=course.id)
+def test_disabled_account_cannot_obtain_a_new_login_token():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.database import DBUser, SessionLocal
+    from app.auth import get_password_hash
+    username = "disabled-login-regression"
+    with SessionLocal() as session:
+        session.add(DBUser(username=username, hashed_password=get_password_hash("Disabled-Login-Test!"),
+                           role="student", is_active=False))
+        session.commit()
+    with TestClient(app) as client:
+        response = client.post("/api/auth/login", data={"username":username,"password":"Disabled-Login-Test!"})
+        assert response.status_code == 403
+        assert "停用" in response.json()["detail"]
+

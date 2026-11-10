@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -15,6 +16,7 @@ from app.database import (
     DBLearningEvent,
     DBLearningEventConsumption,
     DBProfileSnapshot,
+    DBSourceDocument,
     DBUser,
 )
 from app.m5_workspace import M5WorkspaceError
@@ -58,7 +60,9 @@ def _course(db, suffix: str = "main"):
         version="kp-v1",
         title="梯度下降",
     )
-    db.add_all([user, course, point])
+    source = DBSourceDocument(id=f"source-{course.id}", course_id=course.id, title="课程资料",
+                              filename="source.md", file_format="md", content_hash="a" * 64)
+    db.add_all([user, course, point, source])
     db.commit()
     return user, course, point
 
@@ -149,6 +153,9 @@ def test_dashboard_weak_summary_projects_evidence_event_and_context_without_writ
         }
 
         summary = build_dashboard_summary(db, current_user=user, course_id=course.id)
+        displayed_time = datetime.fromisoformat(summary["aggregation"]["updated_at"])
+        assert displayed_time.tzinfo is not None
+        assert displayed_time.astimezone(timezone.utc).replace(tzinfo=None) == event.occurred_at
         card = summary["weak_summary"][0]
         assert card["knowledge_point_id"] == point.id
         assert card["title"] == point.title
@@ -237,3 +244,27 @@ def test_dashboard_frontend_renders_weak_evidence_and_keeps_side_inset():
         assert token in source
     assert ".dashboard-side-summary > section { padding: 24px 18px;" in source
     assert "recommendation_score" not in source
+
+
+@pytest.mark.parametrize("has_remaining", [None, False, True])
+def test_dashboard_does_not_send_student_back_to_a_completed_today_task(monkeypatch, has_remaining):
+    engine, db = _db()
+    try:
+        user, course, point = _course(db)
+        tasks = [] if has_remaining is None else [{"title": "已经完成", "status": "completed", "node_id": "done"}]
+        if has_remaining:
+            tasks.append({"title": "接着学习", "status": "pending", "node_id": "next"})
+        monkeypatch.setattr("app.dashboard_summary.workspace_overview", lambda *args, **kwargs: {
+            "course": {"id": course.id, "title": course.title},
+            "current_path": {"id": "synthetic-path", "nodes": [{"status": "completed"}]}, "today_tasks": tasks,
+        })
+        summary = build_dashboard_summary(db, current_user=user, course_id=course.id)
+        assert summary["state"] == ("today_unscheduled" if has_remaining is None else "ready" if has_remaining else "today_complete")
+        assert summary["focus"]["title"] == ("本课程今天暂无必做安排" if has_remaining is None else "接着学习" if has_remaining else "今天的必做任务已完成")
+        if has_remaining is None:
+            assert summary["primary_task"] is None
+            assert summary["primary_action"]["route"] == f"/workspace/path?course_id={course.id}"
+        assert all(item["title"] != "已经完成" for item in summary["knowledge_strategies"])
+    finally:
+        db.close()
+        engine.dispose()

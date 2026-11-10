@@ -38,11 +38,11 @@ def test_profile_uses_figure_29_reading_order_and_honest_fact_sections() -> None
         "近 7 天学习",
         "连续学习",
         "近 30 天学习热力图",
-        "仅使用已经处理完成的掌握聚合结果",
+        "掌握变化来自有效练习和测评",
         "所选范围内还没有学习记录",
         "当前课程还没有足够的画像证据",
         "查看统计口径与来源",
-        "本期来源事件",
+        "本期学习记录",
         "完整画像",
         "查看报告依据",
     ):
@@ -62,16 +62,20 @@ def test_history_is_a_read_only_three_column_personal_center_deep_link() -> None
         "grid-template-columns: 220px minmax(360px, 1fr) 300px",
         "筛选只改变当前视图",
         "查看、筛选和展开历史不会改变掌握度、路径或复习安排",
-        "来源与上下文",
-        "继续后才按真实动作记录新事件",
-        "原学习对象已撤回或不支持直接打开",
-        "来源事件",
+        "继续原来的学习",
+        "仅查看历史不会改变学习结果",
+        "原内容目前无法打开",
+        "学习依据",
+        "保存笔记不直接改变学习安排",
         "上一页",
         "下一页",
     ):
         assert marker in view
     for forbidden in ("Swarm", "认知流形", "FSM", "rollback", "画像回滚"):
         assert forbidden.lower() not in view.lower()
+    assert "{{ selectedItem.objectId" not in view
+    assert "{{ selectedItem.eventType" not in view
+    assert "{{ selectedItem.sourceEventIds" not in view
     for forbidden_write in ("createLearningEvent", "updateMastery", "completePathTask", "unlockExam"):
         assert forbidden_write not in view
 
@@ -159,7 +163,7 @@ def test_trend_has_real_empty_state_and_no_decorative_area_fill() -> None:
     chart = source(TREND)
 
     assert "v-if=\"points.length\"" in chart
-    assert "暂无可用于趋势计算的已处理学习证据" in chart
+    assert "暂无可用于趋势计算的已处理学习记录" in chart
     assert "#253745" in chart
     assert "fontSize: 14" in chart
     assert "areaStyle" not in chart

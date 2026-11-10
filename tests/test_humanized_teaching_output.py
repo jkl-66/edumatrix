@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.learner_output import teacher_text
+from app.learner_output import feynman_material_text, teacher_text
 from app.m5_assessment_core import learner_safe_explanation
 from app.resource_bundles import _llm_resource_content, _normalize_handout_title
 from llm_client import _deterministic_chat_answer
@@ -11,7 +11,7 @@ from llm_client import _deterministic_chat_answer
 
 ROOT = Path(__file__).resolve().parents[1]
 FORBIDDEN = (
-    "课文", "依据", "上下文重点", "确定性", "deterministic_local",
+    "依据课程来源", "上下文重点", "本地确定性", "deterministic_local",
     "context_fingerprint", "source_ref_id", "rubric_version", "运行模式",
     "模型模式", "生成模式", "内部编号", "[S1]", "[A1]", "[source_ref]",
 )
@@ -22,8 +22,28 @@ def _assert_teacher_voice(value: str) -> None:
     assert not any(marker.casefold() in value.casefold() for marker in FORBIDDEN)
 
 
+def test_feynman_revision_does_not_accumulate_document_wrappers():
+    body = '## 复述任务\n\n解释输入与标签。\n\n```python\nprint("X", [1, 2])\n```'
+    def assemble(narrative):
+        return _llm_resource_content(resource_type='feynman', item={'type':'feynman','title':'输入与标签'},
+            manifest={'context':{'knowledge_point_title':'监督学习','learning_goal':'区分训练和预测'}},
+            source_snapshots=[{'source_ref_id':'source-supervised','title':'监督学习','quote':'训练使用输入与标签配对。'}], linked_resource_ids=[],
+            llm_payload={'summary':'练习','narrative':narrative,'learningGoal':'区分训练和预测'})
+    original=assemble(body)
+    assert assemble(assemble(original)) == original
+    assert body in original
+    old='# 输入与标签\n\n## 复述任务\n\n'+original+'\n\n## 学习目标\n\n区分训练和预测\n'
+    assert feynman_material_text(old) == original
+
+
+def test_feynman_wrapper_cleanup_keeps_distinct_goals_and_markdown_code():
+    material='# 示例\n\n```markdown\n## 学习目标\n\n示例字符串\n## 学习目标\n\n示例字符串\n```\n\n## 学习目标\n\n解释标签\n\n## 学习目标\n\n区分预测输入'
+    assert feynman_material_text(material) == material
+
+
 def _resource_payload() -> dict:
     return {
+        "estimatedMinutes": 35,
         "summary": "依据课程来源解释梯度下降，不显示 deterministic_local。",
         "narrative": "课文的上下文重点是学习率约束；demo-kp-optim 只是内部编号。",
         "learningGoal": "能解释更新方向并比较不同学习率。",
@@ -50,7 +70,7 @@ def test_shared_projection_removes_implementation_narration_and_internal_ids() -
     )
     _assert_teacher_voice(text)
     assert "本轮重点" in text
-    assert "限制" in text
+    assert "受约束" in text
     assert all(marker not in text for marker in ("运行模式", "内部编号", "哈希"))
 
 
@@ -110,12 +130,11 @@ def test_assessment_explanation_teaches_the_question_instead_of_system_process()
         knowledge_point="过拟合与正则化",
     )
     _assert_teacher_voice(explanation)
-    assert "正确答案是 A" in explanation
-    assert "选项 A" in explanation and "选项 B" in explanation
-    assert "过拟合与正则化" in explanation
+    assert "参考答案：A" in explanation and "暂未保存详细解析" in explanation
+    assert "选项 B" not in explanation and "与题干条件一致" not in explanation
 
 
-def test_short_historic_explanation_is_expanded_into_a_teaching_walkthrough() -> None:
+def test_short_historic_explanation_is_preserved_without_unverified_reasoning() -> None:
     explanation = learner_safe_explanation(
         "负梯度方向对应目标函数在当前位置的局部最速下降方向。",
         prompt="梯度下降更新参数时，为什么要沿负梯度方向？",
@@ -126,10 +145,7 @@ def test_short_historic_explanation_is_expanded_into_a_teaching_walkthrough() ->
     )
 
     _assert_teacher_voice(explanation)
-    assert len(explanation) >= 240
-    assert "正确答案是 B" in explanation
-    assert "选项 A" in explanation and "选项 B" in explanation
-    assert "局部最速下降方向" in explanation
+    assert explanation == "负梯度方向对应目标函数在当前位置的局部最速下降方向。"
 
 
 def test_repeated_fill_blank_explanation_sentences_are_shown_once() -> None:
@@ -145,8 +161,25 @@ def test_repeated_fill_blank_explanation_sentences_are_shown_once() -> None:
         answer_key={"blanks": ["反方向"]},
         question_type="fill_blank",
     )
-    assert explanation.count("参考答案为：反方向") == 1
-    assert explanation.count("作答时要结合题目条件") == 1
+    assert explanation.count("参考答案：反方向") == 1
+    assert "作答时要结合题目条件" not in explanation
+    assert "暂未保存详细解析" in explanation
+
+
+def test_numeric_fill_and_judgment_keep_actual_short_reasoning_without_generic_suffix() -> None:
+    from app.m5_assessment_core import _fallback_learner_explanation
+    for kind, key, text in (
+        ("fill_blank", {"blanks": ["3", "8"]}, "结论：两空为3和8。arr[0,2]取第一行第三列，arr[2,1]取第三行第二列。"),
+        ("true_false", {"value": True}, "结论：正确。奇数且不小于5的元素为5、7、9，&要求两个条件同时成立。"),
+    ):
+        kwargs = dict(prompt="计算给定数组的结果", answer_key=key, question_type=kind, knowledge_point="NumPy")
+        clean = learner_safe_explanation(text, **kwargs)
+        assert "孤立的名词" not in clean and "最小自检" not in clean
+        assert len(clean) < 120
+        old_suffix = _fallback_learner_explanation(options=(), **kwargs)
+        assert learner_safe_explanation(text + " " + old_suffix, **kwargs) == clean
+        old_with_period = _fallback_learner_explanation(options=(), **{**kwargs, "prompt": kwargs["prompt"] + "。"})
+        assert learner_safe_explanation(text + " " + old_with_period, **kwargs) == clean
 
 
 def test_public_topic_uses_concrete_question_term_without_changing_binding() -> None:
@@ -235,6 +268,17 @@ def test_handout_projection_removes_generation_instructions_but_keeps_dense_less
     assert parsed["footnotes"][0]["sourceRefId"] == "source-optim"
 
 
+def test_handout_keeps_function_return_and_output_explanations() -> None:
+    from app.resource_bundles import _handout_text
+
+    lesson = (
+        "代码阅读时，`count_above`返回一个整数计数，`row_sums`返回数组；打印是另外的动作。\n"
+        "本例只输出一行，输出内容为行和。JSON对象的字段包括姓名和成绩。"
+    )
+    assert _handout_text(lesson) == lesson
+    assert _handout_text("请输出一个 JSON 对象，不要附加说明。\n" + lesson) == lesson
+
+
 def test_handout_learning_goal_names_bound_knowledge_point_only_for_placeholders() -> None:
     base_manifest = {
         "course_id": "course-ai",
@@ -293,7 +337,7 @@ def test_student_templates_do_not_render_internal_modes_hashes_or_rule_ids() -> 
     rendered = "\n".join((ROOT / path).read_text(encoding="utf-8") for path in paths)
     for marker in ("deterministic_local", "上下文短哈希", "评价规则", "f6.feynman-rubric.v1"):
         assert marker not in rendered
-    assert "老师的回答" in rendered
+    assert "<strong>回答</strong>" in rendered
     assert "详细解析" in rendered
     assert "回答绑定当前课程、资源和来源" not in rendered
     assert "source-details" in rendered
@@ -327,4 +371,6 @@ def test_resource_entry_pages_do_not_lead_with_internal_generation_language() ->
     assert "参考材料" in rendered
     assert "学习路径才会更新" in rendered
     assert "结合当前来源说明" not in rendered
-    assert "Footnote markers" in (ROOT / "frontend/src/views/HandoutWorkspace.vue").read_text(encoding="utf-8")
+    handout = (ROOT / "frontend/src/views/HandoutWorkspace.vue").read_text(encoding="utf-8")
+    assert '<SourceCitation :source="sourceForFootnote(item)"' in handout
+    assert ':return-to="route.fullPath"' in handout

@@ -1,16 +1,25 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
+import { learningText, teachingText, displayLabel } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import SourceCitation from './SourceCitation.vue'
+import PathGenerationStatus from './PathGenerationStatus.vue'
+import { usePathGeneration } from '../composables/usePathGeneration.js'
+import IncrementalMarkdownRenderer from './IncrementalMarkdownRenderer.vue'
 import {
   AlertCircle, ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown,
   ChevronUp, Circle, CloudAlert, CloudCheck, FileQuestion, Gauge, LoaderCircle,
-  Map, RefreshCw, RotateCcw, Send, ShieldCheck, Target,
+  Map, RefreshCw, RotateCcw, Send, Target,
 } from '@lucide/vue'
 import {
   confirmDiagnosticReportPath,
   createMulticourseDiagnosticPaths,
+  getMulticourseGenerationTask,
   createDiagnosticReport,
   generateDiagnosticReportPath,
+  getDiagnosticReport,
+  getDiagnosticReportTask,
   saveDiagnosticResponse,
   startDiagnosticSession,
   submitDiagnosticSession,
@@ -39,6 +48,7 @@ const blueprint = ref(null)
 const activeIndex = ref(0)
 const answer = ref({})
 const understandingLevel = ref(null)
+const notYet = computed(() => answer.value.response_status === 'not_yet')
 const saveStates = ref({})
 const saveTimer = ref(null)
 const activeStartedAt = ref(Date.now())
@@ -46,6 +56,37 @@ const restoredDuration = ref(0)
 const pendingSave = ref(null)
 const hydrating = ref(false)
 const report = ref(null)
+const reportHero = ref(null)
+const { task: reportTask, busy: reportTaskBusy, connectionError: reportConnectionError,
+  restore: restoreReportTask, reset: resetReportTask } = usePathGeneration({
+  getTask: () => recoverReportTask(),
+  findTask: () => recoverReportTask(),
+  onComplete: async (_task, stillCurrent) => {
+    const result = await getDiagnosticReport(session.value.id)
+    if (stillCurrent()) await acceptReport(result)
+  },
+  onError: message => { reportError.value = message },
+})
+
+async function recoverReportTask() {
+  const sessionId = session.value.id
+  const found = await getDiagnosticReportTask(sessionId)
+  if (found.task) return found
+  const result = await createDiagnosticReport(sessionId, {
+    idempotencyKey: `diagnostic-report-${sessionId}`, background: true,
+  })
+  if (result.report) return { task: { id: `report-${result.report.id}`, status: 'completed' } }
+  return result
+}
+
+async function acceptReport(result) {
+  report.value = result
+  rememberReport(result)
+  await restorePathTask({ course_id: result.course?.id || result.courseId, report_id: result.id })
+  if (multiRunId.value) await restoreAggregateTask({ kind: 'paths', idempotency_key: `multicourse-path-${multiRunId.value}` })
+  await nextTick()
+  reportHero.value?.scrollIntoView({ block: 'start' })
+}
 const expandedEvidenceId = ref('')
 const showKnowledgeDetails = ref(false)
 const showEvidence = ref(false)
@@ -53,6 +94,21 @@ const multiRun = ref(null)
 const aggregateResult = ref(null)
 const aggregateLoading = ref(false)
 const aggregateError = ref('')
+const { task: aggregateTask, busy: aggregateTaskBusy, connectionError: aggregateConnectionError,
+  accept: acceptAggregateTask, restore: restoreAggregateTask } = usePathGeneration({
+  getTask: () => getMulticourseGenerationTask({ kind: 'paths', idempotency_key: `multicourse-path-${multiRunId.value}` }),
+  findTask: getMulticourseGenerationTask,
+  onComplete: (task) => { aggregateResult.value = task.result },
+  onError: (message) => { aggregateError.value = message },
+})
+const { task: pathTask, busy: pathTaskBusy, connectionError: pathConnectionError,
+  accept: acceptPathTask, restore: restorePathTask, refresh: refreshPathTask } = usePathGeneration({
+  onComplete: async (_task, stillCurrent) => {
+    const result = await getDiagnosticReport(session.value.id)
+    if (stillCurrent()) report.value = result
+  },
+  onError: (message) => { pathError.value = message },
+})
 
 const typeLabels = {
   single_choice: '单选题',
@@ -154,6 +210,11 @@ function optionLabel(option, index) {
   return /^[A-Z][.)、:\s]/i.test(value) ? value.slice(0, 1).toUpperCase() : String.fromCharCode(65 + index)
 }
 
+function reviewOptionText(option, index) {
+  const text = String(option)
+  return /^[A-Z][.)、:\s]/i.test(text) ? text : `${optionLabel(option, index)}. ${text}`
+}
+
 function snapshot(answerValue, level) {
   return JSON.stringify({ answer: answerValue || {}, understandingLevel: level || null })
 }
@@ -203,11 +264,18 @@ function displayPercent(value) {
 
 function answerText(item) {
   const value = item?.answer || {}
+  if (value.response_status === 'not_yet') return '暂时不会'
   if (typeof value.value === 'boolean') return value.value ? '正确' : '错误'
   if (value.choice) return value.choice
   if (Array.isArray(value.choices)) return value.choices.join('、')
   if (Array.isArray(value.blanks)) return value.blanks.join(' / ')
   return value.text || value.code || '未记录'
+}
+
+function toggleNotYet() {
+  const resume = notYet.value
+  answer.value = resume ? emptyAnswer(activeQuestion.value) : { response_status: 'not_yet' }
+  understandingLevel.value = resume ? null : 'unfamiliar'
 }
 
 function toggleEvidence(id) {
@@ -225,28 +293,29 @@ async function loadReport() {
   reportLoading.value = true
   reportError.value = ''
   try {
-    const result = await createDiagnosticReport(session.value.id, {
-      idempotencyKey: `diagnostic-report-${session.value.id}`,
-    })
-    report.value = result.report
-    rememberReport(result.report)
+    await restoreReportTask({ sessionId: session.value.id })
   } catch (requestError) {
     reportError.value = messageOf(requestError)
   } finally {
     reportLoading.value = false
+    if (report.value) {
+      await nextTick()
+      reportHero.value?.scrollIntoView({ block: 'start' })
+    }
   }
 }
 
 async function buildInitialPath() {
-  if (!session.value?.id || pathLoading.value) return
+  if (!session.value?.id || pathLoading.value || pathTaskBusy.value) return
   pathLoading.value = true
   pathError.value = ''
   try {
     const result = await generateDiagnosticReportPath(session.value.id, {
       idempotencyKey: `diagnostic-path-${session.value.id}`,
-      timeBudgetMinutes: 90,
+      background: true,
     })
-    report.value = result.report
+    if (result.task) await acceptPathTask(result.task)
+    else report.value = result.report
   } catch (requestError) {
     pathError.value = pathMessageOf(requestError)
   } finally {
@@ -285,17 +354,21 @@ function continueMultiCourse() {
 }
 
 async function generateAggregatePath() {
-  if (!canAggregate.value || aggregateLoading.value) return
+  if (!canAggregate.value || aggregateLoading.value || aggregateTaskBusy.value) return
   aggregateLoading.value = true
   aggregateError.value = ''
   try {
-    aggregateResult.value = await createMulticourseDiagnosticPaths({
+    const result = await createMulticourseDiagnosticPaths({
       reportIds: (multiRun.value.reports || []).map((item) => typeof item === 'string' ? item : item.id),
       idempotencyKey: `multicourse-path-${multiRunId.value}`,
-      timeBudgetMinutes: 90,
+      background: true,
     })
+    if (result.task) await acceptAggregateTask(result.task)
+    else aggregateResult.value = result
   } catch (requestError) {
-    aggregateError.value = messageOf(requestError)
+    if (!requestError?.response) {
+      await restoreAggregateTask({ kind: 'paths', idempotency_key: `multicourse-path-${multiRunId.value}` })
+    } else aggregateError.value = messageOf(requestError)
   } finally {
     aggregateLoading.value = false
   }
@@ -315,6 +388,7 @@ function hydrateQuestion(index) {
 }
 
 async function loadSession() {
+  resetReportTask()
   loading.value = true
   error.value = ''
   try {
@@ -404,6 +478,8 @@ async function nextQuestion() {
 
 async function submitAnswers() {
   if (submitting.value || saving.value) return
+  const issue = questions.value.find(question => question.contentIssue)?.contentIssue
+  if (issue) { saveError.value = issue; return }
   const saved = await persistCurrent({ force: true })
   if (!saved) return
   if (!session.value.canSubmit) {
@@ -484,64 +560,50 @@ onBeforeUnmount(() => {
 
     <div v-else-if="error" class="session-failure" role="alert">
       <AlertCircle :size="22" />
-      <span><strong>无法打开诊断</strong><small>{{ error }}</small></span>
+      <span><strong>无法打开诊断</strong><small>{{ userMessage(error) }}</small></span>
       <button type="button" @click="loadSession"><RefreshCw :size="16" />重新加载</button>
     </div>
 
     <section v-else-if="isSubmitted" class="report-workspace" data-testid="diagnostic-submitted">
-      <div v-if="reportLoading" class="report-loading" data-testid="diagnostic-report-loading">
+      <div v-if="!report && (reportLoading || reportTaskBusy || reportConnectionError)" class="report-loading" data-testid="diagnostic-report-loading">
         <LoaderCircle class="spin" :size="24" />
-        <span><strong>正在准备逐题解析</strong><small>正在分析 {{ session?.blueprint?.questionVersionIds?.length || questions.length }} 道题的作答情况，请稍候。</small></span>
+        <span><strong>正在准备逐题解析</strong><small>{{ reportConnectionError || reportTask?.automation?.message || '正在分析你的作答。' }}</small></span>
       </div>
       <div v-else-if="reportError && !report" class="report-failure" role="alert" data-testid="diagnostic-report-error">
         <AlertCircle :size="24" />
-        <span><strong>报告生成失败，答案仍已保存</strong><small>{{ reportError }}</small></span>
+        <span><strong>报告生成失败，答案仍已保存</strong><small>{{ userMessage(reportError) }}</small></span>
         <button type="button" @click="loadReport"><RefreshCw :size="16" />重新生成报告</button>
       </div>
       <template v-else-if="report">
-        <header class="report-hero">
+        <header ref="reportHero" class="report-hero" style="scroll-margin-top: 20px">
           <div>
             <span class="report-status"><CheckCircle2 :size="16" />诊断结果已保存</span>
-            <span v-if="report.evaluation?.status === 'legacy_compatibility'" class="report-evaluation-status">历史诊断结果</span>
+            <span v-if="report.evaluation?.status === 'legacy_compatibility'" class="report-evaluation-status">历史报告 · 保留当时的学习点评</span>
             <span v-else-if="report.evaluation" class="report-evaluation-status">逐题解析 {{ report.evaluation.completedCount }}/{{ report.evaluation.totalCount }}</span>
-            <h1>你的入学诊断结果</h1>
+            <h1>{{ report.contextSnapshot?.assessmentScope?.selected?.title || '你的入学诊断结果' }}</h1>
             <p>{{ report.summary.coreAdvice }}</p>
           </div>
           <div class="score-panel">
             <strong>{{ displayPercent(report.summary.score) }}</strong>
             <span>{{ report.summary.scoreLabel }}</span>
             <small>{{ report.summary.scoredCount }}/{{ report.summary.questionCount }} 道题已完成评分</small>
+            <small v-if="report.summary.notYetCount">{{ report.summary.notYetCount }} 题标记暂时不会，分数仅反映已作答部分</small>
           </div>
         </header>
 
         <div class="report-columns">
           <main class="report-main">
             <section class="report-section conclusion-section">
-              <header><Target :size="19" /><div><h2>先看结论</h2><p>当前快照只反映这次诊断，不会被当作永久能力标签。</p></div></header>
+              <header><Target :size="19" /><div><h2>本次表现</h2></div></header>
               <div class="conclusion-grid">
                 <article><span>当前强项</span><strong>{{ report.summary.strongest }}</strong></article>
-                <article><span>优先补齐</span><strong>{{ report.summary.weakest }}</strong></article>
-                <article><span>高信心盲区</span><strong>{{ report.blindSpots.length ? `${report.blindSpots.length} 项` : '暂未发现' }}</strong></article>
-              </div>
-            </section>
-
-            <section class="report-section report-actions-section" data-testid="report-next-step">
-              <header><ArrowRight :size="19" /><div><h2>下一步先做什么</h2><p>先处理最需要补齐的内容，再按需查看每道题的讲解。</p></div></header>
-              <div class="report-action-grid">
-                <article class="report-action-card report-action-card--primary">
-                  <span>优先行动</span>
-                  <strong>{{ report.summary.coreAdvice }}</strong>
-                </article>
-                <article class="report-action-card">
-                  <span>薄弱环节</span>
-                  <strong>{{ report.weaknesses?.length ? report.weaknesses.slice(0, 3).map((item) => item.title).join('、') : '暂无明确薄弱点' }}</strong>
-                  <small>{{ report.weaknesses?.length ? '点击下方知识点可以查看相关题目。' : '继续完成练习，系统会逐步完善学习建议。' }}</small>
-                </article>
+                <article><span>需要补齐</span><strong>{{ report.weaknesses?.length ? report.weaknesses.map((item) => item.title).join('、') : report.summary.weakest }}</strong></article>
+                <article><span>容易高估的知识点</span><strong>{{ report.blindSpots.length ? `${report.blindSpots.length} 项` : '暂未发现' }}</strong></article>
               </div>
             </section>
 
             <section class="report-section" data-testid="report-knowledge-progress">
-              <header><Gauge :size="19" /><div><h2>知识点掌握情况</h2><p>尚未完成评分的知识点显示“未知”。</p></div></header>
+              <header><Gauge :size="19" /><div><h2>本次知识点掌握情况</h2><p v-if="report.coverageContract?.deferredKnowledgePoints?.length">其他阶段尚未在本次测量，后续学习会继续检查。</p><p v-else>尚无作答证据的知识点显示“未知”，后续学习会继续确认。</p></div></header>
               <div class="report-section-toggle-row">
                 <span>{{ report.mastery?.length || 0 }} 个知识点 · {{ report.summary.scoredCount }}/{{ report.summary.questionCount }} 道题已有评分</span>
                 <button type="button" class="text-button" data-testid="report-knowledge-toggle" @click="showKnowledgeDetails = !showKnowledgeDetails">
@@ -563,9 +625,9 @@ onBeforeUnmount(() => {
             </section>
 
             <section class="report-section" data-testid="report-evidence-drawer">
-              <header><BookOpen :size="19" /><div><h2>逐题回顾</h2><p>展开任一题查看你的作答、错误原因和详细讲解。</p></div></header>
+              <header><BookOpen :size="19" /><div><h2>逐题回顾</h2></div></header>
               <div class="report-section-toggle-row">
-                <span>{{ report.evidence?.length || 0 }} 道题 · 默认收起，按需展开</span>
+                <span>{{ report.evidence?.length || 0 }} 道题</span>
                 <button type="button" class="text-button" data-testid="report-evidence-toggle" @click="showEvidence = !showEvidence">
                   {{ showEvidence ? '收起逐题回顾' : '展开逐题回顾' }} <ChevronDown v-if="!showEvidence" :size="16" /><ChevronUp v-else :size="16" />
                 </button>
@@ -581,12 +643,25 @@ onBeforeUnmount(() => {
                   </button>
                   <div v-if="expandedEvidenceId === item.questionVersionId" class="evidence-detail">
                     <h3>{{ item.prompt }}</h3>
+                    <ul v-if="item.options?.length" class="review-options">
+                      <li v-for="(option, optionIndex) in item.options" :key="optionIndex">
+                        <IncrementalMarkdownRenderer :text="reviewOptionText(option, optionIndex)" preserve-content />
+                      </li>
+                    </ul>
                     <dl>
                       <div><dt>你的作答</dt><dd>{{ answerText(item) }}</dd></div>
-                      <div><dt>错误原因</dt><dd>{{ item.judgmentBasis || item.errorType.basis }}</dd></div>
-                      <div><dt>详细解析</dt><dd>{{ item.explanation || '这道题暂时没有详细解析。' }}</dd></div>
-                      <div v-if="item.evaluation"><dt>点评把握</dt><dd>{{ displayPercent(item.evaluation.confidence) }} · {{ item.evaluation.status === 'insufficient_evidence' ? '还需要更多作答信息' : item.evaluation.status === 'partially_supported' ? '仍有部分内容需要确认' : '点评已完成' }}</dd></div>
-                      <div v-if="item.evaluation?.claim"><dt>老师点评</dt><dd>{{ item.evaluation.claim }}</dd></div>
+                      <div><dt>本次作答</dt><dd>{{ learningText(item.grading?.graderType === 'ai' ? item.grading.feedback : (item.evaluation?.claim || item.judgmentBasis || item.errorType.basis)) }}</dd></div>
+                      <div><dt>详细解析</dt><dd><IncrementalMarkdownRenderer :text="teachingText(item.explanation, '这道题暂时没有详细解析。')" preserve-content /></dd></div>
+                      <div v-if="item.evaluation?.status === 'insufficient_evidence'"><dt>待确认</dt><dd>{{ learningText(item.evaluation.claim) }}</dd></div>
+                      <div v-if="item.sources?.length"><dt>课程来源</dt><dd>
+                        <SourceCitation
+                          v-for="source in item.sources"
+                          :key="source.sourceRefId || source.source_ref_id || source.id"
+                          :source="source"
+                          :return-to="route.fullPath"
+                          compact
+                        />
+                      </dd></div>
                     </dl>
                   </div>
                 </article>
@@ -596,23 +671,24 @@ onBeforeUnmount(() => {
 
           <aside class="report-side">
             <section class="difficulty-panel">
-              <header><Gauge :size="18" /><div><h2>难度匹配</h2><p>目标难度 {{ displayPercent(report.difficultyFit.target) }}</p></div></header>
+              <header><Gauge :size="18" /><div><h2>不同难度的答题表现</h2><p>已作答题目的达标比例</p></div></header>
               <div v-for="band in report.difficultyFit.bands" :key="band.key" class="difficulty-row">
                 <span>{{ band.label }}</span><i><b :style="{ width: band.score === null ? '0%' : `${band.score * 100}%` }" /></i><strong>{{ displayPercent(band.score) }}</strong>
               </div>
-              <small>{{ report.difficultyFit.basis }}</small>
             </section>
 
             <section class="path-panel">
-              <header><Map :size="18" /><div><h2>初始学习路径</h2><p>路径失败可单独重试，不影响上方报告。</p></div></header>
-              <div v-if="pathError" class="inline-error" role="alert"><AlertCircle :size="16" />{{ pathError }}</div>
-              <template v-if="pathReady">
+              <header><Map :size="18" /><div><h2>接下来学什么</h2></div></header>
+              <div v-if="pathError" class="inline-error" role="alert"><AlertCircle :size="16" />{{ userMessage(pathError) }}</div>
+              <PathGenerationStatus :task="pathTask" :connection-error="pathConnectionError" @refresh="refreshPathTask" />
+              <template v-if="pathReady && !pathTaskBusy">
                 <ol>
-                  <li v-for="node in report.path.nodes" :key="node.node_key">
-                    <span>{{ node.chapter?.position || '—' }}</span>
-                    <div><strong>{{ node.title }}</strong><small>{{ node.reason }} · 难度 {{ displayPercent(node.difficulty) }}</small></div>
+                  <li v-for="(node, index) in report.path.nodes.slice(0, 3)" :key="node.node_key">
+                    <span>{{ index + 1 }}</span>
+                    <div><strong>{{ node.title }}</strong><span class="path-duration">{{ node.estimate_min_minutes === node.estimate_max_minutes ? node.estimate_max_minutes : `${node.estimate_min_minutes}–${node.estimate_max_minutes}` }} 分钟</span></div>
                   </li>
                 </ol>
+                <button type="button" class="text-button path-preview-link" @click="router.push({ path: '/workspace/path', query: { course_id: report.course.id, draft_id: report.path.plan.id } })">查看完整学习安排 <ArrowRight :size="15" /></button>
                 <button class="primary-action path-action" type="button" :disabled="confirmingPath" @click="confirmInitialPath">
                   <LoaderCircle v-if="confirmingPath" class="spin" :size="17" />
                   <ArrowRight v-else :size="17" />
@@ -621,14 +697,15 @@ onBeforeUnmount(() => {
                 <button v-if="nextMultiCourse" class="secondary-action path-action" type="button" @click="continueMultiCourse">
                   <ArrowRight :size="17" />继续下一门课程
                 </button>
-                <button v-else-if="canAggregate && !aggregateResult" class="secondary-action path-action" type="button" :disabled="aggregateLoading" @click="generateAggregatePath">
-                  <LoaderCircle v-if="aggregateLoading" class="spin" :size="17" />
+                <button v-else-if="canAggregate && !aggregateResult" class="secondary-action path-action" type="button" :disabled="aggregateLoading || aggregateTaskBusy" @click="generateAggregatePath">
+                  <LoaderCircle v-if="aggregateLoading || aggregateTaskBusy" class="spin" :size="17" />
                   <Map v-else :size="17" />
-                  {{ aggregateLoading ? '正在统筹多科总路径' : '生成并验证多科总路径' }}
+                  {{ aggregateLoading || aggregateTaskBusy ? '正在统筹多科总路径' : '生成并验证多科总路径' }}
                 </button>
-                <div v-if="aggregateError" class="inline-error" role="alert"><AlertCircle :size="16" />{{ aggregateError }}</div>
+                <p v-if="aggregateTaskBusy || aggregateConnectionError" role="status">{{ aggregateConnectionError || aggregateTask?.automation?.message }}</p>
+                <div v-if="aggregateError" class="inline-error" role="alert"><AlertCircle :size="16" />{{ userMessage(aggregateError) }}</div>
                 <div v-if="aggregateResult" class="aggregate-result" data-testid="multicourse-total-path-result">
-                  <strong>总路径统筹：{{ aggregateResult.total_validation?.status || aggregateResult.status }}</strong>
+                  <strong>总路径统筹：{{ displayLabel(aggregateResult.total_validation?.status || aggregateResult.status) }}</strong>
                   <small>已合并 {{ aggregateResult.total_validation?.course_ids?.length || 0 }} 门课程，{{ aggregateResult.total_validation?.days?.length || 0 }} 天任务。</small>
                   <small v-if="aggregateResult.total_validation?.issues?.length">发现 {{ aggregateResult.total_validation.issues.length }} 项需要处理的问题：</small>
                   <ul v-if="aggregateResult.total_validation?.issues?.length">
@@ -637,14 +714,13 @@ onBeforeUnmount(() => {
                   <button v-if="aggregateResult.total_plan" type="button" class="text-button" @click="router.push({ path: '/workspace/path', query: { aggregate_plan_id: aggregateResult.total_plan.id, course_id: aggregateResult.subjects?.find(item => item.course_id)?.course_id || undefined } })">查看总路径草稿 <ArrowRight :size="15" /></button>
                 </div>
               </template>
-              <button v-else class="primary-action path-action" type="button" :disabled="pathLoading" @click="buildInitialPath">
+              <button v-else-if="!pathTaskBusy" class="primary-action path-action" type="button" :disabled="pathLoading || Boolean(pathConnectionError)" @click="buildInitialPath">
                 <LoaderCircle v-if="pathLoading" class="spin" :size="17" />
                 <Map v-else :size="17" />
                 {{ pathLoading ? '正在生成路径' : pathError ? '重试生成路径' : '生成初始学习路径' }}
               </button>
             </section>
 
-            <p class="report-boundary"><ShieldCheck :size="16" />{{ report.boundary }}</p>
           </aside>
         </div>
       </template>
@@ -684,7 +760,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="saveError" class="save-failure" role="alert" data-testid="diagnostic-save-error">
           <CloudAlert :size="18" />
-          <span><strong>当前修改尚未保存</strong><small>{{ saveError }} 本页答案仍保留，可以直接重试。</small></span>
+          <span><strong>当前修改尚未保存</strong><small>{{ userMessage(saveError) }} 本页答案仍保留，可以直接重试。</small></span>
           <button type="button" :disabled="saving" @click="retrySave"><RefreshCw :size="16" />重试保存</button>
         </div>
 
@@ -697,7 +773,9 @@ onBeforeUnmount(() => {
           <h1>{{ activeQuestion.prompt }}</h1>
         </section>
 
-        <div v-if="activeQuestion.questionType === 'single_choice'" class="option-list">
+        <p v-if="activeQuestion.contentIssue" role="alert">{{ activeQuestion.contentIssue }}</p>
+        <p v-else-if="notYet" class="not-yet-note" role="status">已记录为暂时不会，可在后续学习中逐步补齐。</p>
+        <div v-else-if="activeQuestion.questionType === 'single_choice'" class="option-list">
           <label v-for="(option, index) in activeQuestion.options" :key="option" :class="{ selected: answer.choice === optionLabel(option, index) }">
             <input v-model="answer.choice" type="radio" :value="optionLabel(option, index)" />
             <b>{{ optionLabel(option, index) }}</b><span>{{ option }}</span>
@@ -733,7 +811,11 @@ onBeforeUnmount(() => {
           placeholder="输入你的回答"
         />
 
-        <fieldset class="understanding-control">
+        <button v-if="!activeQuestion.contentIssue" type="button" class="text-button not-yet-action" data-testid="diagnostic-not-yet" :disabled="saving" :aria-pressed="notYet" @click="toggleNotYet">
+          {{ notYet ? '返回作答' : '暂时不会' }}
+        </button>
+
+        <fieldset v-if="!notYet" class="understanding-control">
           <legend>你对这道题的理解程度</legend>
           <div role="radiogroup" aria-label="理解程度">
             <label v-for="item in understandingOptions" :key="item.value" :class="{ selected: understandingLevel === item.value }">
@@ -741,7 +823,7 @@ onBeforeUnmount(() => {
               <span>{{ item.label }}</span>
             </label>
           </div>
-          <p>请按真实感受选择。这个信息会与答案一起用于后续诊断，不会单独决定分数。</p>
+          <p>选择最接近你现在理解程度的一项。</p>
         </fieldset>
 
         <footer class="question-actions">
@@ -782,13 +864,15 @@ onBeforeUnmount(() => {
             <li v-for="point in knowledgePoints" :key="point.id"><Check :size="14" />{{ point.title }}</li>
           </ul>
         </section>
-        <p class="evidence-boundary"><ShieldCheck :size="16" />普通浏览不会改变掌握度。提交后才进入诊断报告阶段。</p>
+        
       </aside>
     </div>
   </div>
 </template>
 
 <style scoped>
+.not-yet-action { margin-top: 16px; }
+.not-yet-note { padding: 20px 0; color: var(--color-text-secondary); line-height: 1.7; }
 .diagnostic-session { width: 100%; min-width: 0; min-height: calc(100vh - var(--topbar-height)); color: var(--color-text); background: var(--color-surface); }
 .session-header { display: grid; min-height: 66px; grid-template-columns: 40px minmax(240px, 1fr) minmax(220px, 360px) 132px; align-items: center; gap: 15px; padding: 0 22px; border-bottom: 1px solid var(--color-border); }
 .back-button { display: grid; width: 38px; height: 38px; place-items: center; color: var(--color-text-secondary); border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); cursor: pointer; }
@@ -906,7 +990,7 @@ onBeforeUnmount(() => {
 .submitted-state h2 { margin: 2px 0 0; font-family: var(--font-display); font-size: 26px; }
 .submitted-state p { max-width: 620px; margin: 0; color: var(--color-text-secondary); font-size: 15px; line-height: 1.7; }
 .submitted-state button { margin-top: 8px; }
-.report-workspace { min-height: calc(100vh - var(--topbar-height) - 66px); padding: 28px clamp(20px, 3vw, 44px) 42px; background: var(--color-page); }
+.report-workspace { min-height: calc(100vh - var(--topbar-height) - 66px); padding: 28px clamp(20px, 3vw, 44px) 42px; background: transparent; }
 .report-loading, .report-failure { display: flex; min-height: 340px; align-items: center; justify-content: center; gap: 12px; color: var(--color-text-secondary); text-align: left; }
 .report-loading span, .report-failure span { display: grid; gap: 4px; }
 .report-loading strong, .report-failure strong { color: var(--color-text); font-size: 18px; }
@@ -929,21 +1013,14 @@ onBeforeUnmount(() => {
 .report-section > header > svg, .difficulty-panel > header > svg, .path-panel > header > svg { flex: none; margin-top: 3px; color: var(--color-accent); }
 .report-section h2, .difficulty-panel h2, .path-panel h2 { margin: 0; font-size: 18px; }
 .report-section header p, .difficulty-panel header p, .path-panel header p { margin: 4px 0 0; color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
-.conclusion-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; border-block: 1px solid var(--color-border); }
-.conclusion-grid article { display: grid; min-height: 104px; align-content: center; gap: 7px; padding: 16px 18px; border-right: 1px solid var(--color-border); }
-.conclusion-grid article:last-child { border-right: 0; }
+.conclusion-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; margin-top: 18px; }
+.conclusion-grid article { display: grid; align-content: start; gap: 7px; padding: 12px 0; }
+.conclusion-grid article:nth-child(2) { grid-column: 1 / -1; grid-row: 2; border-top: 1px solid var(--color-border); }
 .conclusion-grid span { color: var(--color-text-muted); font-size: 14px; }
 .conclusion-grid strong { font-size: 17px; line-height: 1.45; }
 .decision-basis { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 15px 0 0; padding: 0; list-style: none; }
 .decision-basis li { display: flex; align-items: center; gap: 6px; color: var(--color-text-secondary); font-size: 14px; }
 .decision-basis svg { color: var(--color-accent); }
-.report-actions-section { padding-bottom: 24px; }
-.report-action-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; margin-top: 16px; }
-.report-action-card { display: grid; min-width: 0; gap: 7px; padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface-muted); }
-.report-action-card--primary { border-color: var(--color-border-strong); background: var(--color-surface-subtle); }
-.report-action-card span { color: var(--color-text-muted); font-size: 14px; }
-.report-action-card strong { color: var(--color-text); font-size: 15px; line-height: 1.55; }
-.report-action-card small { color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
 .report-section-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 15px; color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
 .text-button { display: inline-flex; min-height: 36px; align-items: center; gap: 5px; flex: 0 0 auto; padding: 0 10px; color: var(--color-accent); border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); font-size: 14px; font-weight: 650; cursor: pointer; }
 .text-button:hover { background: var(--color-surface-subtle); }
@@ -966,10 +1043,12 @@ onBeforeUnmount(() => {
 .evidence-list button > b { font-size: 15px; font-variant-numeric: tabular-nums; }
 .evidence-detail { padding: 4px 46px 20px; }
 .evidence-detail h3 { margin: 4px 0 14px; font-size: 15px; font-weight: 600; line-height: 1.6; }
+.review-options { display: grid; gap: 6px; margin: 0 0 18px; padding: 0; list-style: none; }
+.review-options li { padding-left: 12px; border-left: 2px solid var(--color-border); }
 .evidence-detail dl { display: grid; gap: 10px; margin: 0; }
-.evidence-detail dl div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px; }
+.evidence-detail dl > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px; }
 .evidence-detail dt { color: var(--color-text-muted); font-size: 14px; }
-.evidence-detail dd { margin: 0; font-size: 14px; line-height: 1.6; }
+.evidence-detail dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; }
 .source-list { display: grid; gap: 7px; margin-top: 14px; }
 .source-list :deep(.source-citation) { overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); }
 .source-list :deep(.source-citation__action) { padding-inline: 10px; }
@@ -982,11 +1061,13 @@ onBeforeUnmount(() => {
 .difficulty-row b { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); }
 .difficulty-panel > small { display: block; margin-top: 14px; color: var(--color-text-muted); font-size: 14px; line-height: 1.55; }
 .path-panel ol { display: grid; gap: 0; margin: 15px 0 0; padding: 0; list-style: none; }
-.path-panel li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 9px; padding: 11px 0; border-top: 1px solid var(--color-border); }
-.path-panel li > span { display: grid; width: 26px; height: 26px; place-items: center; color: #fff; border-radius: var(--radius-control); background: var(--color-accent); font-size: 14px; }
+.path-panel li { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 9px; padding: 11px 0; }
+.path-panel li:not(:last-child)::after { content: ''; position: absolute; left: 13px; top: 41px; bottom: -7px; width: 1px; background: var(--color-border-strong); }
+.path-panel li > span { display: grid; width: 26px; height: 26px; place-items: center; color: var(--color-accent); border-radius: var(--radius-control); background: var(--color-surface-subtle); font-size: 14px; }
 .path-panel li > div { display: grid; gap: 3px; }
-.path-panel li strong, .path-panel li small { font-size: 14px; line-height: 1.45; }
-.path-panel li small { color: var(--color-text-muted); }
+.path-panel li strong { font-size: 15px; line-height: 1.55; }
+.path-duration { color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
+.path-preview-link { margin: 14px 0 4px; }
 .path-action { width: 100%; margin-top: 15px; }
 .aggregate-result { display: grid; gap: 6px; margin-top: 15px; border-top: 1px solid var(--color-border); padding-top: 14px; }
 .aggregate-result strong { color: var(--color-text); font-size: 15px; }
@@ -1010,7 +1091,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 760px) {
-  .report-action-grid { grid-template-columns: 1fr; }
   .report-section-toggle-row { align-items: flex-start; flex-direction: column; }
   .text-button { width: 100%; justify-content: center; }
 }

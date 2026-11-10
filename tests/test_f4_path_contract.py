@@ -93,12 +93,12 @@ def test_f4_path_page_exposes_total_subject_today_and_advanced_contract():
         'data-testid="path-subject-view"',
         'data-testid="path-overview"',
         'data-testid="textbook-path-draft"',
-        '今天学什么',
+        'PathTaskList',
         '接下来',
-        '本阶段',
+        '学习日历',
         '科目进度',
-        '调整预算与重建',
-        '路径分析与历史',
+        '重新编排',
+        '全部课程路径',
         'getM5TodayWork',
         'listM5Paths',
         'getM5TextbookPathDraft',
@@ -107,13 +107,14 @@ def test_f4_path_page_exposes_total_subject_today_and_advanced_contract():
         assert marker in view
 
     for marker in (
-        '知识点',
-        '完成条件：',
+        'additionalPointTitle(task)',
+        'task.completion_criteria',
         '分钟',
         '进入',
-        '今日必做',
+        '本次安排',
         'path-task--locked',
     ):
         assert marker in task_list
 
     assert "cannot revise plan from replan_pending" not in view
+    assert '调整预算与重建' not in view

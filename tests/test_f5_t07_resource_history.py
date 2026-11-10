@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
@@ -108,7 +109,11 @@ def test_history_projection_is_descending_read_only_and_source_aware():
     )
     session.commit()
 
-    history = resource_detail(session, artifact)["history"]
+    detail = resource_detail(session, artifact)
+    history = detail["history"]
+    catalog = m5_resources._catalog_item(session, artifact, second, "mind_map", second.metadata_json or {})
+    assert datetime.fromisoformat(catalog["updated_at"]).utcoffset() == timedelta(0)
+    assert datetime.fromisoformat(history["items"][0]["created_at"]).utcoffset() == timedelta(0)
     assert history["current_version_id"] == second.id
     assert [item["number"] for item in history["items"]] == [2, 1]
     assert history["items"][0]["is_current"] is True

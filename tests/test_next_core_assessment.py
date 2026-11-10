@@ -14,7 +14,7 @@ from app.database import (
 from app.m5_assessment_core import (
     AIGradingOutput, AssessmentCoreError, AttemptInput, QuestionVersionInput,
     RubricCriterionResult, append_question_version, create_question_version,
-    grade_code_submission, learner_question_payload, persist_ai_grading,
+    grade_code_submission, learner_attempt_payload, learner_question_payload, persist_ai_grading,
     persist_code_grading, record_attempt, select_cat_question,
 )
 from app.migrations import apply_registered_migrations
@@ -113,6 +113,88 @@ def test_all_seven_types_validate_and_objective_graders_are_type_specific():
         assert "answer_key" not in payload and "scoring_rule" not in payload
 
 
+@pytest.mark.parametrize("actual,expected,correct", [
+    ("[2,4,6,8]", "[2, 4, 6, 8]", True),
+    ("array([[2,3],[5,6]])", "[[2, 3], [5, 6]]", True),
+    ("np.array([2.0,4.0])", "[2, 4]", True),
+    ("[[2,4,6,8]]", "[2, 4, 6, 8]", False),
+    ("[2,6,4,8]", "[2, 4, 6, 8]", False),
+    ("[2,4,6,-8]", "[2, 4, 6, 8]", False),
+    ("[True]", "[1]", False),
+    ("['a b']", "['ab']", False),
+    ("ab", "a b", False),
+])
+def test_numeric_array_fill_blank_ignores_layout_not_shape_order_or_values(actual, expected, correct):
+    from app.m5_assessment_core import grade_objective_answer
+    result = grade_objective_answer("fill_blank", {"blanks": [actual]}, {"blanks": [expected]}, {})
+    assert result["correct"] is correct
+
+
+@pytest.mark.parametrize("actual,expected,correct", [
+    ("(3,4)", "(3, 4)", True),
+    ("(3,\n 4)", "(3, 4)", True),
+    ("(3, 4,)", "(3, 4)", True),
+    ("(3,)", "(3, )", True),
+    ("((2,3), (4,5))", "((2, 3), (4, 5))", True),
+    ("[(2,3), (4,5)]", "[(2, 3), (4, 5)]", True),
+    ("(4,3)", "(3, 4)", False),
+    ("(3,5)", "(3, 4)", False),
+    ("((3,4),)", "(3, 4)", False),
+    ("[3,4]", "(3, 4)", False),
+    ("(3,4)", "[3, 4]", False),
+    ("[[2,3], [4,5]]", "[(2, 3), (4, 5)]", False),
+    ("(3)", "(3,)", False),
+    ("3", "(3,)", False),
+    ("(True,4)", "(1, 4)", False),
+    ("('3','4')", "(3, 4)", False),
+    ("(3, 2+2)", "(3, 4)", False),
+])
+def test_numeric_tuple_fill_blank_preserves_container_shape_order_and_values(actual, expected, correct):
+    from app.m5_assessment_core import grade_objective_answer
+    result = grade_objective_answer("fill_blank", {"blanks": [actual]}, {"blanks": [expected]}, {})
+    assert result["correct"] is correct
+
+
+def test_fill_blank_replay_preserves_historical_grade_after_normalization_fix(monkeypatch):
+    import app.m5_assessment_core as core
+    from app.database import DBAssessmentAbilityState
+    session = _session()
+    question, version = create_question_version(
+        session, owner_public_id="teacher", course_id=None, question_type="fill_blank", origin="manual",
+        version=QuestionVersionInput(prompt="填写数组形状。", answer_key={"blanks": ["(3, 4)"]}, scoring_rule={"type": "exact"}),
+    )
+    question.status = "approved"
+    session.flush()
+    payload = AttemptInput(question_version_id=version.id, idempotency_key="tuple-legacy-368", answer={"blanks": ["(3,4)"]})
+    grade = core.grade_objective_answer
+
+    def legacy_grade(*args, **kwargs):
+        # Explicitly simulate the pre-fix exact-text outcome in this isolated test.
+        return {**grade(*args, **kwargs), "score": 0.0, "correct": False}
+
+    with monkeypatch.context() as patch:
+        patch.setattr(core, "grade_objective_answer", legacy_grade)
+        old, _ = record_attempt(session, owner_public_id="learner", attempt=payload)
+    original_hash = version.content_hash
+    replay, created = record_attempt(session, owner_public_id="learner", attempt=payload)
+    assert not created and replay.id == old.id and replay.score == 0.0
+    assert session.query(DBAssessmentGradingResult).count() == 1
+    assert session.query(DBAssessmentAbilityState).one().response_count == 1
+    new, created = record_attempt(session, owner_public_id="learner", attempt=payload.model_copy(update={"idempotency_key": "tuple-new-368"}))
+    assert created and new.correct is True and new.answer == {"blanks": ["(3,4)"]}
+    again, created = record_attempt(session, owner_public_id="learner", attempt=payload.model_copy(update={"idempotency_key": "tuple-new-368"}))
+    assert not created and again.id == new.id
+    # The new normalization fixes the grade, while a disclosed repeat is a
+    # correction rather than a second independent ability observation.
+    assert session.query(DBAssessmentAbilityState).one().response_count == 1
+    grading = session.query(DBAssessmentGradingResult).filter_by(attempt_id=new.id).one()
+    assert grading.evidence["practice_context"]["kind"] == "correction"
+    assert session.query(DBAssessmentGradingResult).count() == 2
+    assert old.score == 0.0 and version.content_hash == original_hash
+    with pytest.raises(AssessmentCoreError, match="idempotency key"):
+        record_attempt(session, owner_public_id="learner", attempt=payload.model_copy(update={"answer": {"blanks": ["(4,3)"]}}))
+
+
 def test_append_version_is_compare_and_set_and_old_version_remains_immutable():
     session = _session(migrated=True)
     question, first = _create(session, "single_choice")
@@ -182,6 +264,28 @@ def test_ai_initial_grading_uses_frozen_rubric_and_updates_canonical_ability():
     assert result.rubric_version == "rubric-ml-v1"
     assert result.evidence["label"] == "AI 智能初评"
     assert ability["applied"] is True and ability["after"]["response_count"] == 1
+    replay, created = record_attempt(
+        session, owner_public_id="learner",
+        attempt=AttemptInput(question_version_id=version.id, idempotency_key="subjective-attempt-001",
+                             answer={"text": "Evidence supports the mechanism."}),
+    )
+    assert not created and replay.id == attempt.id and replay.grading_status == "pending"
+    assert replay.score is None and session.query(DBAssessmentGradingResult).count() == 1
+    core_payload = learner_attempt_payload(replay, result)
+    assert core_payload["score"] == result.score and core_payload["grading_status"] == "graded"
+
+    correction, _ = record_attempt(session, owner_public_id="learner", attempt=AttemptInput(
+        question_version_id=version.id, idempotency_key="subjective-correction-002",
+        answer={"text": "A revised answer after reading feedback."}))
+    corrected, correction_ability = persist_ai_grading(session, attempt_id=correction.id,
+        trace_id="trace-ai-002", output=AIGradingOutput(
+            criteria=tuple(RubricCriterionResult(criterion_id=name, score=1,
+                evidence=("Revised answer meets the criterion.",), justification="Correct after feedback.", improvement="")
+                for name in ("accuracy", "reasoning")), confidence=0.9, summary="订正正确。", improvement_plan=()))
+    assert corrected.score == 1 and corrected.correct
+    assert corrected.evidence["practice_context"]["kind"] == "correction"
+    assert not correction_ability["applied"]
+    assert learner_attempt_payload(correction, corrected)["practice_kind"] == "correction"
 
 
 class _FakeRunner:

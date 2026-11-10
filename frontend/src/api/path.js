@@ -27,10 +27,10 @@ export async function completeReviewScheduleTask(taskId, payload) {
   return r.data
 }
 
-export async function createReviewResourceJob(taskId, idempotencyKey) {
+export async function createReviewResourceJob(taskId, idempotencyKey, resourceTypes = null) {
   const r = await api.post(
     `/v1/review-schedule/tasks/${encodeURIComponent(taskId)}/resource-jobs`,
-    { idempotency_key: idempotencyKey },
+    { idempotency_key: idempotencyKey, resource_types: resourceTypes },
     { headers: buildHeaders() },
   )
   return r.data
@@ -66,12 +66,13 @@ export async function getCheckinHistory(studentId, concept = '') {
   return r.data
 }
 
-export async function reviewFlashcard(studentId, concept, quality, cardId = '') {
+export async function reviewFlashcard(studentId, concept, quality, cardId = '', planId = null) {
   const r = await api.post('/flashcard/review', {
     student_id: studentId,
     concept,
     quality,
     ...(cardId ? { card_id: cardId } : {}),
+    ...(planId ? { plan_id: planId } : {}),
   }, { headers: buildHeaders() })
   return r.data
 }
@@ -84,9 +85,9 @@ export async function getDueFlashcards(studentId, maxCount = 20) {
   return r.data
 }
 
-export async function getAllFlashcards(studentId) {
+export async function getAllFlashcards(studentId, courseId = '') {
   const r = await api.get('/flashcard/all', {
-    params: { student_id: studentId },
+    params: { student_id: studentId, course_id: courseId || undefined },
     headers: buildHeaders(),
   })
   return r.data

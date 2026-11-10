@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from pathlib import Path
+from types import SimpleNamespace
+import json
 
 import knowledge_api
 from app.database import (
@@ -32,6 +35,15 @@ def _protected_counts() -> dict[str, int]:
 
 def test_live_search_download_parse_and_course_import(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(knowledge_api, "UPLOAD_DIR", tmp_path / "uploads")
+    downloaded = {}
+    download_material = knowledge_api._download_remote_material
+
+    async def observe_download(**kwargs):
+        raw, filename, final_url = await download_material(**kwargs)
+        downloaded.update(raw=raw, filename=filename, final_url=final_url)
+        return raw, filename, final_url
+
+    monkeypatch.setattr(knowledge_api, "_download_remote_material", observe_download)
     monkeypatch.setattr(knowledge_api, "build_graph_after_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         knowledge_api.hybrid_rag,
@@ -43,6 +55,23 @@ def test_live_search_download_parse_and_course_import(monkeypatch, tmp_path) -> 
         return None
 
     monkeypatch.setattr(knowledge_api, "_generate_doc_guide_for_document", no_guide)
+
+    class StructureModel:
+        provider = "openai"
+        model = "deepseek-v4-flash"
+        thinking_mode = "enabled"
+        reasoning_effort = "max"
+
+        async def generate(self, system_prompt, user_prompt, *, role):
+            content = json.loads(user_prompt)
+            return json.dumps({"chapters": [{
+                "title": Path(content["filename"]).stem,
+                "start_block": content["blocks"][0]["id"], "end_block": content["blocks"][-1]["id"],
+                "knowledge_points": [],
+            }]})
+
+    monkeypatch.setattr(knowledge_api, "build_swarm_from_headers", lambda headers: SimpleNamespace(llm=StructureModel()))
+
 
     username = "post_data_live_network_owner"
     with TestClient(app) as client:
@@ -76,6 +105,11 @@ def test_live_search_download_parse_and_course_import(monkeypatch, tmp_path) -> 
         )
         assert course.status_code == 201, course.text
         course_id = course.json()["course"]["id"]
+        after_creation = _protected_counts()
+        assert after_creation["snapshots"] == before["snapshots"] + 1
+        assert after_creation["events"] == before["events"]
+        assert after_creation["path_nodes"] == before["path_nodes"]
+        before = after_creation
 
         candidate = client.post(
             "/api/knowledge/discovery/candidates",
@@ -109,7 +143,13 @@ def test_live_search_download_parse_and_course_import(monkeypatch, tmp_path) -> 
         assert payload["document"]["course_id"] == course_id
         assert payload["document"]["source_processing_status"] == "ready"
         assert payload["document"]["source_ref_count"] > 0
-        assert payload["document"]["file_size"] > 100_000
+        # Search ranking and page size vary. HTML imports store extracted text,
+        # so verify complete persistence against the real download result.
+        assert downloaded["raw"]
+        assert payload["document"]["file_size"] == len(downloaded["raw"])
+        stored_files = [path for path in (tmp_path / "uploads").rglob("*") if path.is_file()]
+        assert len(stored_files) == 1
+        assert stored_files[0].read_bytes() == downloaded["raw"]
         assert payload["document"]["content_preview"]
 
         source_id = payload["document"]["source_document_id"]
@@ -134,6 +174,7 @@ def test_live_search_download_parse_and_course_import(monkeypatch, tmp_path) -> 
             assert canonical.uploader_public_id == owner.public_id
             assert canonical.processing_status == "ready"
             assert canonical.source_url.startswith("https://ocw.mit.edu/")
+            assert canonical.source_url == downloaded["final_url"]
             assert session.query(DBSourceRef).filter_by(
                 source_document_id=source_id
             ).count() > 0

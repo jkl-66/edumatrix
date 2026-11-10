@@ -72,7 +72,7 @@ onUnmounted(() => {
     aria-label="有效学习事件形成的掌握变化折线图"
   />
   <div v-else class="learning-trend-chart learning-trend-chart--empty">
-    暂无可用于趋势计算的已处理学习证据。
+    暂无可用于趋势计算的已处理学习记录。
   </div>
 </template>
 

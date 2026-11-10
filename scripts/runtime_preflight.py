@@ -51,6 +51,10 @@ def main() -> int:
         "matplotlib": "matplotlib",
         "pandas": "pandas",
         "sklearn": "sklearn",
+        "sqlalchemy": "sqlalchemy",
+        "sentence_transformers": "sentence_transformers",
+        "HippoRAG": "hipporag",
+        "GEPA": "gepa",
     }
     for label, module_name in required.items():
         try:

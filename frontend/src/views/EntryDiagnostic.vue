@@ -1,4 +1,6 @@
 <script setup>
+import { referenceTitle, learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -22,13 +24,16 @@ import {
   errorMessageText,
   getDiagnosticCourses,
   getDiagnosticPreflight,
+  getDiagnosticGenerationTask,
+  findDiagnosticGenerationTask,
+  getMulticourseGenerationTask,
 } from '../api'
 import { useCourseContextStore } from '../stores/courseContext'
 
 const route = useRoute()
 const router = useRouter()
 const courseContext = useCourseContextStore()
-const questionCount = ref(15)
+const questionCount = ref([15, 20, 25].includes(Number(route.query.question_count)) ? Number(route.query.question_count) : 15)
 const loading = ref(true)
 const coursesLoading = ref(true)
 const generating = ref(false)
@@ -45,12 +50,17 @@ const queryCourseIds = (() => {
 })()
 const selectedCourseIds = ref(queryCourseIds)
 const selectedCourseId = ref(queryCourseIds[0] || '')
-const selfRating = ref('foundation')
+const selfRating = ref(['foundation', 'advanced', 'mastered'].includes(route.query.self_rating) ? route.query.self_rating : 'foundation')
+const selectedStageId = ref(String(route.query.stage_id || ''))
 const preflight = ref(null)
 const blueprint = ref(null)
 const multicourseResult = ref(null)
+const generationTask = ref(null)
+let pollTimer = null
+let pollVersion = 0
 let disposed = false
 let generationStarted = false
+let preflightRequestId = 0
 
 const courseId = computed(() => String(
   selectedCourseId.value
@@ -69,15 +79,16 @@ const courseVersionLabel = computed(() => {
   const semanticVersion = value.match(/(\d+(?:\.\d+)+)$/)?.[1]
   return semanticVersion ? `版本 ${semanticVersion}` : value ? `版本 ${value}` : '当前版本'
 })
+const assessmentScope = computed(() => blueprint.value?.assessmentScope || preflight.value?.assessmentScope || {})
 const coverage = computed(() => preflight.value?.coverage || {})
 const knowledgePoints = computed(() => blueprint.value?.knowledgePointCoverage || coverage.value.knowledgePoints || [])
 const questionTypes = computed(() => blueprint.value?.difficultyBands?.questionTypes || coverage.value.questionTypes || {})
 const estimatedMinutes = computed(() => blueprint.value?.estimatedMinutes || preflight.value?.estimatedMinutes || Math.max(6, questionCount.value * 2))
-const canGenerate = computed(() => Boolean(courseId.value) && !generating.value && (
+const canGenerate = computed(() => Boolean(courseId.value) && !generating.value && !loading.value && !coursesLoading.value && (
   multiCourse.value ? Boolean(preflight.value?.profileBasis) : Boolean(preflight.value?.canGenerate)
 ))
 const profileMissing = computed(() => !preflight.value?.profileBasis)
-const stageItems = computed(() => blueprint.value?.generationStages || [
+const stageItems = computed(() => blueprint.value?.generationStages || generationTask.value?.generationStages || [
   { key: 'analysis', label: '分析课程、知识库与画像', status: generationFailed.value ? 'failed' : generating.value ? 'processing' : 'pending' },
   { key: 'generation', label: 'AI 定制生成诊断题', status: generationFailed.value ? 'failed' : generating.value ? 'processing' : 'pending' },
   { key: 'validation', label: '校验题量、题型与来源', status: generationFailed.value ? 'failed' : generating.value ? 'processing' : 'pending' },
@@ -102,14 +113,86 @@ function messageOf(requestError) {
   return errorMessageText(detail, errorMessageText(fallback, '诊断服务暂不可用，请稍后重试。'))
 }
 
+function idempotencyStorageKey() {
+  return `edumatrix-diagnostic-key:${selectedCourseIds.value.join(',')}:${questionCount.value}:${selfRating.value}:${selectedStageId.value}:${preflight.value?.profileBasis?.id || ''}:${course.value.version || ''}`
+}
+
 function idempotencyKey() {
-  const storageKey = `edumatrix-diagnostic-key:${selectedCourseIds.value.join(',')}:${questionCount.value}:${selfRating.value}`
+  if (generationTask.value?.request?.idempotency_key) return generationTask.value.request.idempotency_key
+  const storageKey = idempotencyStorageKey()
   let key = sessionStorage.getItem(storageKey)
   if (!key) {
     key = globalThis.crypto?.randomUUID?.() || `diagnostic-${Date.now()}-${Math.random().toString(16).slice(2)}`
     sessionStorage.setItem(storageKey, key)
   }
   return key
+}
+
+function prepareAgain() {
+  if (generating.value) return
+  sessionStorage.removeItem(idempotencyStorageKey())
+  stopPolling()
+  generationTask.value = null
+  blueprint.value = null
+  multicourseResult.value = null
+  generationFailed.value = false
+  error.value = ''
+}
+
+function generationParams() {
+  return { course_id: courseId.value, question_count: questionCount.value, self_rating: selfRating.value, ...(selectedStageId.value ? { stage_id: selectedStageId.value } : {}) }
+}
+
+function stopPolling() {
+  pollVersion += 1
+  clearTimeout(pollTimer)
+  pollTimer = null
+}
+
+function applyGenerationTask(task) {
+  generationTask.value = task
+  generating.value = task.automation?.enabled
+    ? !['completed', 'cancelled'].includes(task.automation.state)
+    : ['queued', 'running'].includes(task.status)
+  generationStarted = generating.value
+  generationFailed.value = !task.automation?.enabled && task.status === 'failed'
+  blueprint.value = task.blueprint || null
+  if (multiCourse.value && task.result) applyMulticourseResult(task.result)
+  errorKind.value = 'generation'
+  error.value = generationFailed.value || ['waiting_configuration', 'needs_attention'].includes(task.automation?.state) ? (task.message || task.automation?.message) : ''
+  if (generating.value) schedulePoll()
+}
+
+function schedulePoll(delay = 2500) {
+  clearTimeout(pollTimer)
+  const version = pollVersion
+  pollTimer = setTimeout(() => pollGeneration(version), delay)
+}
+
+async function pollGeneration(version = pollVersion) {
+  if (disposed || version !== pollVersion) return
+  try {
+    const result = multiCourse.value
+      ? await getMulticourseGenerationTask({ kind: 'blueprints', idempotency_key: idempotencyKey() })
+      : generationTask.value?.id
+      ? await getDiagnosticGenerationTask(generationTask.value.id)
+      : await findDiagnosticGenerationTask(generationParams())
+    if (disposed || version !== pollVersion) return
+    if (result.task) applyGenerationTask(result.task)
+    else {
+      generationStarted = false
+      generating.value = false
+      generationFailed.value = true
+      errorKind.value = 'generation'
+      error.value = '这次准备尚未启动，可以重新开始。'
+    }
+  } catch {
+    if (disposed || version !== pollVersion) return
+    // A lost status request says nothing about whether generation failed.
+    errorKind.value = 'generation-status'
+    error.value = '连接暂时中断，正在重新获取诊断进度。'
+    schedulePoll(10000)
+  }
 }
 
 async function loadCourses() {
@@ -137,6 +220,9 @@ async function loadCourses() {
 
 async function loadPreflight() {
   if (disposed || generationStarted) return
+  stopPolling()
+  generationTask.value = null
+  const requestId = ++preflightRequestId
   loading.value = true
   error.value = ''
   errorKind.value = 'preflight'
@@ -153,19 +239,34 @@ async function loadPreflight() {
       course_id: courseId.value,
       question_count: questionCount.value,
       self_rating: selfRating.value,
+      ...(selectedStageId.value ? { stage_id: selectedStageId.value } : {}),
     })
-    if (disposed || generationStarted) return
+    if (disposed || generationStarted || requestId !== preflightRequestId) return
     preflight.value = nextPreflight
+    selectedStageId.value = nextPreflight.assessmentScope?.selected?.id || ''
+    if (!multiCourse.value && selectedStageId.value !== String(route.query.stage_id || '')) {
+      await router.replace({ query: { ...route.query, stage_id: selectedStageId.value || undefined } })
+    }
+    if (multiCourse.value) await router.replace({ query: { ...route.query,
+      course_ids: selectedCourseIds.value.join(','), question_count: questionCount.value, self_rating: selfRating.value } })
+    {
+      const result = multiCourse.value
+        ? await getMulticourseGenerationTask({ kind: 'blueprints', idempotency_key: idempotencyKey() })
+        : await findDiagnosticGenerationTask(generationParams())
+      if (disposed || generationStarted || requestId !== preflightRequestId) return
+      if (result.task) applyGenerationTask(result.task)
+    }
   } catch (requestError) {
-    error.value = messageOf(requestError)
+    if (requestId === preflightRequestId) error.value = messageOf(requestError)
   } finally {
-    loading.value = false
+    if (requestId === preflightRequestId) loading.value = false
   }
 }
 
 async function selectCourse() {
   if (disposed || generationStarted) return
   selectedCourseId.value = selectedCourseIds.value[0] || ''
+  selectedStageId.value = ''
   blueprint.value = null
   multicourseResult.value = null
   generationFailed.value = false
@@ -174,6 +275,7 @@ async function selectCourse() {
 }
 
 async function toggleCourse(courseIdToToggle) {
+  if (disposed || generationStarted) return
   const current = new Set(selectedCourseIds.value)
   if (current.has(courseIdToToggle)) {
     if (current.size === 1) return
@@ -188,6 +290,7 @@ async function toggleCourse(courseIdToToggle) {
 async function generate() {
   if (!canGenerate.value) return
   generationStarted = true
+  preflightRequestId += 1
   generating.value = true
   error.value = ''
   errorKind.value = 'generation'
@@ -199,37 +302,59 @@ async function generate() {
         questionCount: questionCount.value,
         selfRating: selfRating.value,
         idempotencyKey: idempotencyKey(),
+        background: true,
       })
-      multicourseResult.value = result
-      sessionStorage.setItem(
-        `edumatrix-multicourse-run:${result.run_key || idempotencyKey()}`,
-        JSON.stringify({
-          blueprints: (result.items || [])
-            .filter((item) => item.status === 'ready' && item.blueprint?.id)
-            .map((item) => ({ id: item.blueprint.id, courseId: item.course_id, title: item.course?.title || item.course_id })),
-          reports: [],
-        }),
-      )
-      const firstReady = (result.items || []).find((item) => item.status === 'ready' && item.blueprint)
-      blueprint.value = firstReady?.blueprint || null
+      if (disposed) return
+      if (result.task) applyGenerationTask(result.task)
+      else applyMulticourseResult(result)
       return
     }
     const result = await createDiagnosticBlueprint({
       course_id: courseId.value,
       question_count: questionCount.value,
       self_rating: selfRating.value,
+      ...(selectedStageId.value ? { stage_id: selectedStageId.value } : {}),
       idempotency_key: idempotencyKey(),
+      background: true,
     })
-    blueprint.value = result.blueprint
+    if (disposed) return
+    if (result.task) applyGenerationTask(result.task)
+    else blueprint.value = result.blueprint
   } catch (requestError) {
-    error.value = messageOf(requestError)
-    generationFailed.value = true
+    if (disposed) return
+    if (!requestError?.response) {
+      // The server may have accepted the request before the connection broke.
+      // Recover it through GET; never automatically submit another generation.
+      errorKind.value = 'generation-status'
+      error.value = '正在确认诊断准备进度。'
+      schedulePoll()
+    } else {
+      error.value = messageOf(requestError)
+      generationFailed.value = true
+      generating.value = false
+    }
   } finally {
-    generating.value = false
+    if (blueprint.value || generationFailed.value) generating.value = false
+    generationStarted = generating.value
   }
 }
 
+function applyMulticourseResult(result) {
+  multicourseResult.value = result
+  const runStorageKey = `edumatrix-multicourse-run:${result.run_key || idempotencyKey()}`
+  const blueprints = (result.items || [])
+    .filter((item) => item.status === 'ready' && item.blueprint?.id)
+    .map((item) => ({ id: item.blueprint.id, courseId: item.course_id, title: item.course?.title || item.course_id }))
+  let previousRun = null
+  try { previousRun = JSON.parse(sessionStorage.getItem(runStorageKey) || 'null') } catch { /* No saved reports. */ }
+  sessionStorage.setItem(runStorageKey, JSON.stringify({ blueprints,
+    reports: (previousRun?.reports || []).filter((report) => blueprints.some((item) => item.id === report.blueprintId)),
+  }))
+  blueprint.value = (result.items || []).find((item) => item.status === 'ready' && item.blueprint)?.blueprint || null
+}
+
 function retryError() {
+  if (errorKind.value === 'generation-status') return pollGeneration()
   if (errorKind.value === 'generation') return generate()
   if (courseListError.value) return loadCourses()
   return loadPreflight()
@@ -249,7 +374,7 @@ function enterFirstQuestion() {
   router.push({
     path: '/workspace/assessment',
     query: {
-      course_id: courseId.value,
+      course_id: blueprint.value.course?.id || courseId.value,
       blueprint_id: blueprint.value.id,
       question_version_id: firstQuestion.id,
       ...(multicourseResult.value?.run_key ? { multi_run_id: multicourseResult.value.run_key } : {}),
@@ -274,20 +399,20 @@ function enterCourseAssessment(item) {
 watch(questionCount, loadPreflight)
 watch(selfRating, loadPreflight)
 onMounted(loadCourses)
-onBeforeUnmount(() => { disposed = true })
+onBeforeUnmount(() => { disposed = true; stopPolling() })
 </script>
 
 <template>
   <div class="entry-diagnostic" data-testid="entry-diagnostic">
     <div v-if="courseListError" class="notice notice--error" role="alert" data-testid="diagnostic-courses-error">
       <AlertCircle :size="18" />
-      <span><strong>暂时无法读取可用课程</strong><small>{{ courseListError }}</small></span>
+      <span><strong>暂时无法读取可用课程</strong><small>{{ userMessage(courseListError) }}</small></span>
       <button type="button" title="重试课程列表" aria-label="重试课程列表" @click="loadCourses"><RefreshCw :size="17" /></button>
     </div>
 
     <div v-else-if="error" class="notice notice--error" role="alert" data-testid="diagnostic-error">
       <AlertCircle :size="18" />
-      <span><strong>暂时无法完成这一步</strong><small>{{ error }}</small></span>
+      <span><strong>暂时无法完成这一步</strong><small>{{ userMessage(error) }}</small></span>
       <button type="button" title="重试" aria-label="重试" data-testid="diagnostic-error-retry" @click="retryError"><RefreshCw :size="17" /></button>
     </div>
 
@@ -311,7 +436,7 @@ onBeforeUnmount(() => { disposed = true })
       <section class="diagnostic-selection" data-testid="diagnostic-selection">
         <div class="selection-field">
           <span>选择学习课程</span>
-          <small>课程来自你当前有权访问的知识库，可同时选择多门课程</small>
+
           <div class="course-choice-list" role="group" aria-label="选择入学评测课程">
             <label
               v-for="item in courses"
@@ -328,20 +453,20 @@ onBeforeUnmount(() => { disposed = true })
               />
               <span class="course-choice__copy">
                 <strong>{{ item.title }}</strong>
-                <small>{{ item.id }} · 版本 {{ item.version || '当前' }} · {{ item.sourceSummary?.readyDocuments || 0 }} 份可用资料</small>
+                <small>{{ item.sourceSummary?.readyDocuments || 0 }} 份可用资料</small>
               </span>
               <Check v-if="selectedCourseIds.includes(item.id)" :size="17" aria-hidden="true" />
             </label>
           </div>
-          <small class="selection-hint">已选择 {{ selectedCourseIds.length }} 门课程：{{ selectedCourses.map((item) => item.title).join('、') || '请选择至少一门' }}</small>
+
         </div>
         <fieldset class="rating-field">
           <legend>自评难度起点</legend>
-          <small>只用于调整出题先验，不会直接写入掌握度</small>
+
           <div class="rating-options">
             <label v-for="option in selfRatingOptions" :key="option.value" class="rating-option" :class="{ selected: selfRating === option.value }">
               <input v-model="selfRating" type="radio" name="diagnostic-self-rating" :value="option.value" :disabled="generating" />
-              <span><strong>{{ option.label }}</strong><small>{{ option.description }}</small></span>
+              <span><strong>{{ option.label }}</strong><small>{{ learningText(option.description) }}</small></span>
             </label>
           </div>
         </fieldset>
@@ -349,9 +474,9 @@ onBeforeUnmount(() => { disposed = true })
 
       <section class="diagnostic-intro" aria-labelledby="diagnostic-title">
         <div class="intro-copy">
-          <span class="eyebrow"><ClipboardCheck :size="15" /> 初始化评估</span>
+          <span class="eyebrow"><ClipboardCheck :size="15" /> 入学诊断</span>
           <h2 id="diagnostic-title">先确认你的真实学习起点</h2>
-          <p>AI 将结合当前课程知识库、已确认画像和题型要求定制诊断题。结果用于生成第一版学习路径，不会与学习中的测验题资源混用。</p>
+          <p>从当前要学的内容开始，看看哪些能独立完成、哪些需要先补。</p>
         </div>
         <div class="course-identity">
           <BookOpen :size="20" />
@@ -364,7 +489,7 @@ onBeforeUnmount(() => { disposed = true })
         <main class="diagnostic-main">
           <section v-if="!blueprint" class="overview-section" data-testid="diagnostic-overview">
             <header class="section-heading">
-              <span><strong>诊断范围</strong><small>开始前可以核对题量、覆盖和画像依据</small></span>
+              <span><strong>本次诊断</strong></span>
               <label class="count-control">
                 <span>题目数量</span>
                 <select v-model.number="questionCount" :disabled="generating" aria-label="诊断题目数量">
@@ -373,11 +498,18 @@ onBeforeUnmount(() => { disposed = true })
                   <option :value="25">25 题</option>
                 </select>
                 <small v-if="preflight.questionCountAdjusted" class="count-adjustment">
-                  当前课程知识点较多，将按完整覆盖生成 {{ preflight.expectedQuestionCount }} 题
+                  本阶段将生成 {{ preflight.expectedQuestionCount }} 题
                 </small>
               </label>
             </header>
 
+            <div v-if="!multiCourse && assessmentScope.stages?.length > 1" class="stage-selection">
+              <label for="diagnostic-stage">学习阶段</label>
+              <select id="diagnostic-stage" v-model="selectedStageId" :disabled="generating" @change="loadPreflight">
+                <option v-for="stage in assessmentScope.stages" :key="stage.id" :value="stage.id">{{ stage.title }}</option>
+              </select>
+              <p>{{ assessmentScope.selected?.goal }}</p>
+            </div>
             <div class="metric-row">
               <article>
                 <FileSearch :size="18" />
@@ -399,14 +531,14 @@ onBeforeUnmount(() => { disposed = true })
 
             <div class="coverage-block">
               <div class="coverage-copy">
-                <strong>知识覆盖</strong>
-                <small>优先覆盖不同知识点，并按画像调整难度</small>
+                <strong>本次内容</strong>
               </div>
               <div class="knowledge-list" data-testid="diagnostic-knowledge-coverage">
                 <span v-for="point in knowledgePoints" :key="point.id">{{ point.title }}</span>
               </div>
             </div>
 
+            <p v-if="assessmentScope.deferredKnowledgePoints?.length" class="stage-note">其余内容会随学习逐步检查，仍保留在完整课程路径中。</p>
             <div class="kind-grid" aria-label="诊断题型">
               <article v-for="(label, questionType) in typeLabels" :key="questionType">
                 <span class="kind-check"><Check :size="14" /></span>
@@ -446,7 +578,6 @@ onBeforeUnmount(() => { disposed = true })
           <span>
             <small>多课程诊断题组已返回</small>
             <h3>{{ multicourseResult.ready_count || 0 }} 门课程可以开始作答</h3>
-            <p>每门课程的题目、知识点和来源都独立冻结；失败课程可以单独重试。</p>
           </span>
         </div>
         <div class="multicourse-result-list" data-testid="multicourse-result-list">
@@ -457,7 +588,7 @@ onBeforeUnmount(() => { disposed = true })
             :class="`multicourse-result--${item.status}`"
           >
             <div class="multicourse-result__heading">
-              <span><strong>{{ item.course?.title || item.course_id }}</strong><small>{{ item.course_id }}</small></span>
+              <span><strong>{{ item.course?.title || '当前课程' }}</strong></span>
               <CheckCircle2 v-if="item.status === 'ready'" :size="18" />
               <AlertCircle v-else :size="18" />
             </div>
@@ -500,14 +631,10 @@ onBeforeUnmount(() => { disposed = true })
                 <strong>题型分布</strong>
                 <span>判断 {{ questionTypes.true_false || 0 }} · 选择 {{ questionTypes.single_choice || 0 }} · 简答 {{ questionTypes.short_answer || 0 }}</span>
               </div>
-              <div>
-                <strong>审核结论</strong>
-                <span>{{ blueprint.reviewDecision.decisionSummary }}</span>
-              </div>
             </div>
 
             <div class="ready-actions">
-              <button type="button" class="secondary-button" @click="loadPreflight"><RefreshCw :size="16" />重新核对</button>
+              <button type="button" class="secondary-button" data-testid="prepare-diagnostic-again" @click="prepareAgain"><RefreshCw :size="16" />重新准备题组</button>
               <button type="button" class="primary-action primary-action--inline" data-testid="enter-diagnostic" @click="enterFirstQuestion">
                 进入第 1 题 <ArrowRight :size="17" />
               </button>
@@ -525,10 +652,10 @@ onBeforeUnmount(() => { disposed = true })
             </ol>
           </section>
           <section>
-            <header><UserRoundCheck :size="18" /><span><strong>画像依据</strong><small>不会使用未确认的临时信息</small></span></header>
+            <header><UserRoundCheck :size="18" /><span><strong>画像依据</strong></span></header>
             <template v-if="preflight.profileBasis">
               <dl>
-                <div><dt>画像版本</dt><dd>{{ preflight.profileBasis.version }}</dd></div>
+                <div><dt>学习情况</dt><dd>采用最近确认的画像</dd></div>
                 <div><dt>来源</dt><dd>{{ preflight.profileBasis.source }}</dd></div>
                 <div v-if="preflight.profileBasis.goal"><dt>学习目标</dt><dd>{{ preflight.profileBasis.goal }}</dd></div>
                 <div v-if="preflight.profileBasis.foundation"><dt>基础情况</dt><dd>{{ preflight.profileBasis.foundation }}</dd></div>
@@ -547,7 +674,7 @@ onBeforeUnmount(() => { disposed = true })
             </ol>
           </section>
 
-          <p class="audit-boundary">普通浏览不会改变掌握度。只有后续真实作答证据才会进入学习画像和路径。</p>
+          
         </aside>
       </div>
     </template>
@@ -567,7 +694,7 @@ onBeforeUnmount(() => { disposed = true })
   justify-content: space-between;
   gap: 32px;
   padding: 8px 0 26px;
-  border-bottom: 1px solid var(--color-border);
+  
 }
 
 .diagnostic-selection { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(0, 1.2fr); gap: 24px; padding: 22px 0; border-bottom: 1px solid var(--color-border); }
@@ -628,7 +755,7 @@ onBeforeUnmount(() => { disposed = true })
 .audit-panel header small { color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
 .diagnostic-steps { display: grid; gap: 12px; margin: 17px 0 0; padding: 0; list-style: none; }
 .diagnostic-steps li { display: flex; align-items: flex-start; gap: 10px; }
-.diagnostic-steps li > span { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; color: #ffffff; border-radius: 50%; background: #253745; font-size: 14px; font-weight: 700; }
+.diagnostic-steps li > span { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; color: #ffffff; border-radius: 50%; background: var(--color-text); font-size: 14px; font-weight: 700; }
 .diagnostic-steps li > div { display: grid; gap: 2px; }
 .diagnostic-steps strong { font-size: 14px; }
 .diagnostic-steps small { color: var(--color-text-muted); font-size: 14px; line-height: 1.45; }
@@ -649,6 +776,9 @@ onBeforeUnmount(() => { disposed = true })
 .metric-row strong { font-size: 17px; font-variant-numeric: tabular-nums; }
 .metric-row small { color: var(--color-text-muted); font-size: 14px; white-space: nowrap; }
 
+.stage-selection { margin: 20px 0; display: grid; gap: 10px; }
+.stage-selection select { max-width: 100%; font: inherit; padding: 9px 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); color: var(--color-text); }
+.stage-selection p, .stage-note { font-size: 15px; line-height: 1.65; margin: 6px 0 16px; }
 .coverage-block { margin-top: 27px; }
 .coverage-copy { display: flex; align-items: baseline; gap: 10px; }
 .coverage-copy strong { font-size: 15px; }
@@ -661,10 +791,10 @@ onBeforeUnmount(() => { disposed = true })
 .kind-grid article > span:last-child { display: grid; }
 .kind-grid strong { font-size: 14px; }
 .kind-grid small { color: var(--color-text-muted); font-size: 14px; }
-.kind-check { display: grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; color: #ffffff; border-radius: 50%; background: #253745; }
+.kind-check { display: grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; color: #ffffff; border-radius: 50%; background: var(--color-text); }
 
 .primary-action, .secondary-button { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; gap: 8px; border-radius: var(--radius-control); padding: 0 17px; font-size: 15px; font-weight: 650; cursor: pointer; }
-.primary-action { width: 100%; margin-top: 26px; color: #ffffff; border: 1px solid #11212d; background: #11212d; }
+.primary-action { width: 100%; margin-top: 26px; color: #ffffff; border: 1px solid var(--color-text); background: var(--color-text); }
 .primary-action:hover { background: #000000; }
 .primary-action:disabled { opacity: .46; cursor: not-allowed; }
 .primary-action--inline { width: auto; margin: 0; }
@@ -698,14 +828,14 @@ onBeforeUnmount(() => { disposed = true })
 .stage-section ol { display: grid; gap: 0; margin: 18px 0 0; padding: 0; list-style: none; }
 .stage-section li { display: grid; min-height: 52px; grid-template-columns: 28px minmax(0, 1fr); gap: 9px; align-items: start; }
 .stage-section li > span { display: grid; width: 25px; height: 25px; place-items: center; color: var(--color-text-muted); border: 1px solid var(--color-border-strong); border-radius: 50%; background: var(--color-surface); }
-.stage-section li.completed > span { color: #ffffff; border-color: #253745; background: #253745; }
+.stage-section li.completed > span { color: #ffffff; border-color: var(--color-text); background: var(--color-text); }
 .stage-section li.processing > span { color: var(--color-accent); border-color: var(--color-accent); }
 .stage-section li div { display: grid; padding-bottom: 13px; }
 .stage-section li strong { font-size: 14px; }
 .stage-section li small { color: var(--color-text-muted); font-size: 14px; }
 
 .ready-heading { display: flex; align-items: flex-start; gap: 16px; padding-bottom: 25px; border-bottom: 1px solid var(--color-border); }
-.ready-icon { display: grid; width: 44px; height: 44px; flex: 0 0 44px; place-items: center; color: #ffffff; border-radius: 50%; background: #253745; }
+.ready-icon { display: grid; width: 44px; height: 44px; flex: 0 0 44px; place-items: center; color: #ffffff; border-radius: 50%; background: var(--color-text); }
 .ready-heading > span:last-child { display: grid; }
 .ready-heading small { color: var(--color-accent); font-size: 14px; font-weight: 650; }
 .ready-heading h3 { margin: 4px 0 5px; font-family: var(--font-display); font-size: 26px; font-weight: 650; }

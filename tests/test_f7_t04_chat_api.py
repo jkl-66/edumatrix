@@ -33,6 +33,28 @@ def _key(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex}"
 
 
+def test_default_conversation_titles_use_first_question_but_keep_explicit_titles():
+    with TestClient(app) as client:
+        headers = auth_headers(client, _key('chat-readable-title'))
+        for title in ['新对话', '我的反向传播复习']:
+            conversation = client.post('/api/v1/chat/conversations', headers=headers, json={'title': title}).json()
+            expected = '为什么共享参数的梯度需要相加？' if title == '新对话' else title
+            for question in ['为什么共享参数的梯度需要相加？', '请继续解释学习率。']:
+                payload = {'content': question, 'idempotency_key': _key('question')}
+                result = client.post(f"/api/v1/chat/conversations/{conversation['id']}/messages", headers=headers,
+                                     json=payload)
+                assert result.status_code == 201, result.text
+                assert result.json()['conversation']['title'] == expected
+                retried = client.post(f"/api/v1/chat/conversations/{conversation['id']}/messages", headers=headers, json=payload)
+                assert retried.json()['conversation']['title'] == expected
+                assert retried.json()['created'] is False
+            detail = client.get(f"/api/v1/chat/conversations/{conversation['id']}", headers=headers).json()
+            listing = client.get('/api/v1/chat/conversations', headers=headers).json()['items']
+            assert detail['title'] == expected
+            assert next(row for row in listing if row['id'] == conversation['id'])['title'] == expected
+            assert detail['messages'][0]['content'] == '为什么共享参数的梯度需要相加？'
+
+
 def _protected_counts() -> dict[str, int]:
     with SessionLocal() as session:
         return {
@@ -49,6 +71,57 @@ def _conversation(client: TestClient, headers: dict[str, str], *, course_id: str
     response = client.post("/api/v1/chat/conversations", headers=headers, json=payload)
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_continue_archives_each_complete_revision_once_and_preserves_it_after_new_metadata():
+    from app.chat_api import fail_stream_message, record_chat_orchestration_metadata
+
+    with TestClient(app) as client:
+        username = _key('revision-history')
+        headers = auth_headers(client, username)
+        other_headers = auth_headers(client, _key('revision-other'))
+        conversation = _conversation(client, headers)
+        response = client.post(f"/api/v1/chat/conversations/{conversation['id']}/messages", headers=headers,
+                               json={'content': '解释学习率', 'idempotency_key': _key('revision-question')})
+        assert response.status_code == 201, response.text
+        assistant_id = response.json()['assistantMessage']['id']
+        protected = _protected_counts()
+        revisions = []
+        for attempt, decision in enumerate(['unverified', 'rejected'], start=1):
+            revision = {'before': f'第{attempt}轮原稿', 'after': f'第{attempt}轮完整待核稿',
+                        'decision': decision, 'claimsBefore': [{'claim': f'问题{attempt}'}]}
+            reviews = [{'phase': 'initial', 'claims': [{'claim': f'依据{attempt}'}]}]
+            revisions.append({'attempt': attempt, 'revision': revision, 'reviewHistory': reviews})
+            with SessionLocal() as db:
+                actor = db.query(DBUser).filter_by(username=username).one()
+                record_chat_orchestration_metadata(db, actor, assistant_id, mode='course_professional',
+                    grounding_level='L2', answerability='answerable', course_grounding='grounded',
+                    answer_revision=revision, claim_review_history=reviews)
+                failed = fail_stream_message(db, actor, assistant_id, 'chat_stream_failed', '讲解尚未核对完成')
+                lock_version = failed.lock_version
+            url = f'/api/v1/chat/messages/{assistant_id}/continue'
+            payload = {'expected_lock_version': lock_version}
+            assert client.post(url, headers=other_headers, json=payload).status_code == 404
+            continued = client.post(url, headers=headers, json=payload)
+            assert continued.status_code == 200, continued.text
+            body = continued.json()
+            assert body['status'] == 'queued'
+            assert body['content'] == ''
+            assert body['streamCheckpoint']['answerRevisionHistory'] == revisions
+            assert 'answerRevision' not in body['streamCheckpoint']
+            assert 'claimReviewHistory' not in body['streamCheckpoint']
+            assert client.post(url, headers=headers, json=payload).status_code == 409
+            assert client.post(url, headers=headers, json={'expected_lock_version': body['lockVersion']}).status_code == 409
+            with SessionLocal() as db:
+                actor = db.query(DBUser).filter_by(username=username).one()
+                # The new attempt's metadata must not discard earlier complete drafts.
+                record_chat_orchestration_metadata(db, actor, assistant_id, mode='course_professional',
+                    grounding_level='L2', answerability='answerable', course_grounding='grounded')
+        detail = client.get(f"/api/v1/chat/conversations/{conversation['id']}", headers=headers).json()
+        restored = next(item for item in detail['messages'] if item['id'] == assistant_id)
+        assert restored['streamCheckpoint']['answerRevisionHistory'] == revisions
+        assert len([event for event in restored['runEvents'] if event['eventType'] == 'run.retry']) == 2
+        assert _protected_counts() == protected
 
 
 def _upload(
@@ -213,7 +286,7 @@ def test_attachment_parse_message_recovery_and_owner_scope(monkeypatch) -> None:
         image = _parse(client, headers, image)
         assert image["status"] == "ready"
         assert image["summary"] == {"width": 80, "height": 40, "ocr_region_count": 0}
-        assert any("OCR" in item for item in image["warnings"])
+        assert "图片文字尚未单独提取，可以尝试发送原图继续理解。" in image["warnings"]
 
         message_key = _key("message")
         message_payload = {

@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { learningText } from '../utils/learningCopy.js'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AlertTriangle,
@@ -57,8 +58,8 @@ function errorMessage(exception, fallback) {
 
 function routeActionNotice(value) {
   if (value === 'review-completed') return '复习已完成，新的复习安排已经更新。'
-  if (value === 'review-recorded') return '这次复习已记录，系统没有重复计入证据。'
-  if (value === 'retest-completed') return '复测通过，服务端证据已回流画像与学习路径。'
+  if (value === 'review-recorded') return '这次复习已经记录，无需重复提交。'
+  if (value === 'retest-completed') return '复测通过，学习画像与后续安排已更新。'
   return ''
 }
 
@@ -82,6 +83,8 @@ const retestFeedback = ref('')
 const reviewedResourceTasks = ref({})
 const assessmentEventByTask = ref({})
 const idempotencyKeys = new Map()
+const resourceChoices = ref({})
+const fullResourceTypes = ['handout', 'mind_map', 'quiz', 'training_task', 'code_sandbox', 'video', 'deck', 'interactive_model', 'feynman']
 let routeTaskOpened = false
 
 const recallOptions = [
@@ -196,7 +199,13 @@ function isReviewAssessmentTask(task) {
 }
 
 function hasReviewedResource(task) {
-  return Boolean(reviewedResourceTasks.value[task?.id])
+  if (reviewedResourceTasks.value[task?.id]) return true
+  try { return localStorage.getItem(reviewVisitKey(task)) === '1' } catch { return false }
+}
+
+function reviewVisitKey(task) {
+  const user = localStorage.getItem('edumatrix_username') || localStorage.getItem('edumatrix_student_id') || ''
+  return `edumatrix-review-visit:${user}:${task?.course_id || ''}:${task?.id || ''}:${task?.due_at || ''}`
 }
 
 async function loadSchedule({ keepNotice = false } = {}) {
@@ -293,8 +302,8 @@ async function startTask(task, { sync = true } = {}) {
   retestAnswer.value = ''
   retestFeedback.value = ''
   reviewDraft.value = { recall_score: 0.65, duration_minutes: 10 }
-  if (isReviewAssessmentTask(task) && route.query.review_task === task.id) {
-    const eventId = String(route.query.review_event || '')
+  if (isReviewAssessmentTask(task)) {
+    const eventId = String(task.assessment?.event_id || '')
     if (eventId) {
       assessmentEventByTask.value = { ...assessmentEventByTask.value, [task.id]: eventId }
       reviewedResourceTasks.value = { ...reviewedResourceTasks.value, [task.id]: true }
@@ -333,7 +342,7 @@ async function completeReview(task) {
     })
     const noticeCode = result.created === false ? 'review-recorded' : 'review-completed'
     actionNotice.value = result.created === false
-      ? '这次复习已记录，系统没有重复计入证据。'
+      ? '这次复习已经记录，无需重复提交。'
       : `复习已完成，下一次安排在 ${formatTime(result.next_review_at)}。`
     activeTaskId.value = ''
     await syncQuery({ review_task: null, retest_id: null, review_notice: noticeCode })
@@ -381,7 +390,7 @@ async function submitRetestAnswer(task) {
       answer: hasOptions ? { choice: retestAnswer.value } : { text: retestAnswer.value },
     })
     if (result.task.status === 'completed') {
-      actionNotice.value = '复测通过，服务端证据已回流画像与学习路径。'
+      actionNotice.value = '复测通过，学习画像与后续安排已更新。'
       activeTaskId.value = ''
       await syncQuery({ review_task: null, retest_id: null, review_notice: 'retest-completed' })
     } else {
@@ -403,7 +412,11 @@ async function generateResources(task) {
   actionError.value = ''
   failedAction.value = null
   try {
-    const created = await createReviewResourceJob(task.id, stableKey('resources', task.id))
+    const choice = resourceChoices.value[task.id] || 'recommended'
+    const types = choice === 'full' ? fullResourceTypes
+      : choice === 'coding' ? ['handout', 'quiz', 'code_sandbox']
+        : (task.resource_generation?.default_resource_types || ['handout', 'quiz'])
+    const created = await createReviewResourceJob(task.id, stableKey(`resources-${choice}`, task.id), types)
     let job = created
     try {
       job = await executeGenerationJob(created.job_id)
@@ -442,6 +455,7 @@ function openResources(task) {
   if (!task.course_id || !task.knowledge_point_id) return
   if (isReviewAssessmentTask(task)) {
     reviewedResourceTasks.value = { ...reviewedResourceTasks.value, [task.id]: true }
+    try { localStorage.setItem(reviewVisitKey(task), '1') } catch { /* Current page still keeps the visit. */ }
     actionNotice.value = '已打开当前知识点资源；请完成回顾后进入智能组卷。'
   }
   router.push({
@@ -466,6 +480,7 @@ function openExam(task) {
         course_id: task.course_id,
         knowledge_point_id: task.knowledge_point_id,
         review_task: task.id,
+        ...(task.assessment?.sitting_id ? { sitting_id: task.assessment.sitting_id } : {}),
       },
     })
     return
@@ -486,6 +501,17 @@ function setView(view) {
   activeView.value = view
   emit('view-change', view)
 }
+
+watch(() => [route.query.month, route.query.date], ([routeMonth, routeDate]) => {
+  const nextMonth = validMonth(routeMonth) ? String(routeMonth) : month.value
+  const nextDate = String(routeDate || selectedDate.value)
+  if (nextMonth === month.value && nextDate === selectedDate.value) return
+  month.value = nextMonth
+  selectedDate.value = nextDate
+  activeTaskId.value = ''
+  routeTaskOpened = false
+  void loadSchedule()
+})
 
 onMounted(() => loadSchedule({ keepNotice: Boolean(actionNotice.value) }))
 </script>
@@ -649,9 +675,9 @@ onMounted(() => loadSchedule({ keepNotice: Boolean(actionNotice.value) }))
                   <strong>{{ task.knowledge_point_title }}</strong>
                   <span :class="`review-status review-status--${task.status}`">{{ taskStatus(task) }}</span>
                 </div>
-                <p>{{ task.reason }}</p>
+                <p>{{ learningText(task.reason) }}</p>
                 <dl>
-                  <div><dt>到期</dt><dd>{{ formatTime(task.due_at) }}</dd></div>
+                  <div><dt>{{ task.status === 'completed' ? '完成时间' : '到期' }}</dt><dd>{{ formatTime(task.due_at) }}</dd></div>
                   <div><dt>安排</dt><dd>{{ humanTaskType(task) }}</dd></div>
                   <div><dt>方式</dt><dd>{{ task.method }}</dd></div>
                   <div><dt>完成</dt><dd>{{ task.completion_rule }}</dd></div>
@@ -690,7 +716,7 @@ onMounted(() => loadSchedule({ keepNotice: Boolean(actionNotice.value) }))
                   </article>
                   <article :class="{ 'is-complete': Boolean(assessmentEventByTask[task.id]) }">
                     <strong>2. 完成智能组卷作答</strong>
-                    <span>{{ assessmentEventByTask[task.id] ? '服务端已返回本知识点的判分事件。' : '题目会绑定当前知识点和课程上下文，提交后才产生复习证据。' }}</span>
+                    <span>{{ assessmentEventByTask[task.id] ? '本次作答已经完成评分。' : '练习围绕当前课程和知识点安排，提交后会记录复习结果。' }}</span>
                     <button type="button" class="ui-button ui-button--secondary" :disabled="!hasReviewedResource(task)" @click="openExam(task)">
                       <ListChecks :size="16" />{{ assessmentEventByTask[task.id] ? '重新查看组卷结果' : '进入智能组卷' }}
                     </button>
@@ -781,27 +807,39 @@ onMounted(() => loadSchedule({ keepNotice: Boolean(actionNotice.value) }))
                 <button type="button" :disabled="!task.course_id || !task.knowledge_point_id" @click="openResources(task)">
                   <BookOpen :size="17" />查看已有资源
                 </button>
-                <button
-                  type="button"
-                  :disabled="Boolean(taskBusy) || !task.resource_generation?.ready"
-                  :title="task.resource_generation?.block_reason || '生成九类复习资源包'"
-                  @click="generateResources(task)"
-                >
-                  <Loader2 v-if="taskBusy === `resources:${task.id}`" :size="17" class="review-spin" />
-                  <Boxes v-else :size="17" />生成复习资源包
-                </button>
+                <div class="review-resource-choice">
+                  <select
+                    :value="resourceChoices[task.id] || 'recommended'"
+                    aria-label="复习资源内容"
+                    :disabled="Boolean(taskBusy)"
+                    @change="resourceChoices[task.id] = $event.target.value"
+                  >
+                    <option value="recommended">{{ task.resource_generation?.default_resource_types?.includes('code_sandbox') ? '讲解、新题与代码练习' : '讲解与新题' }}</option>
+                    <option v-if="!task.resource_generation?.default_resource_types?.includes('code_sandbox')" value="coding">讲解、新题与代码练习</option>
+                    <option value="full">完整九类资源</option>
+                  </select>
+                  <button
+                    type="button"
+                    :disabled="Boolean(taskBusy) || !task.resource_generation?.ready"
+                    :title="task.resource_generation?.block_reason || undefined"
+                    @click="generateResources(task)"
+                  >
+                    <Loader2 v-if="taskBusy === `resources:${task.id}`" :size="17" class="review-spin" />
+                    <Boxes v-else :size="17" />生成复习资源
+                  </button>
+                </div>
                 <button type="button" @click="openChat(task)">
-                  <MessageSquareText :size="17" />带当前上下文提问
+                  <MessageSquareText :size="17" />围绕当前内容提问
                 </button>
                 <button type="button" @click="openExam(task)">
                   <ListChecks :size="17" />{{ task.exam_gate?.unlocked ? '进入智能组卷' : '查看组卷解锁条件' }}
                 </button>
               </div>
               <p v-if="!task.resource_generation?.ready" class="review-task__boundary">
-                资源包暂不可生成：{{ task.resource_generation?.block_reason || '当前上下文不完整。' }}
+                资源包暂不可生成：{{ learningText(task.resource_generation?.block_reason || '当前上下文不完整。') }}
               </p>
               <p class="review-task__boundary">
-                {{ task.exam_gate?.message }}{{ task.exam_gate?.unlocked ? '' : ' 复习页不会增加或绕过任何解锁条件。' }}
+                {{ task.exam_gate?.message }}
               </p>
             </section>
           </article>
@@ -815,14 +853,14 @@ onMounted(() => loadSchedule({ keepNotice: Boolean(actionNotice.value) }))
       data-testid="review-tools-surface"
       aria-label="复习工具与历史"
     >
-      <slot name="tools">
+      <slot name="tools" :refresh="loadSchedule" :course-id="courseId">
         <div class="review-tools-surface__empty">当前页面没有可用的复习工具。</div>
       </slot>
     </div>
 
     <footer v-if="activeView === 'calendar'" class="review-board__footer">
       <RotateCcw :size="17" />
-      <span>切换月份、课程或日期只改变当前视图，不会写入学习证据。</span>
+      
     </footer>
   </section>
 </template>
@@ -1437,6 +1475,25 @@ onMounted(() => loadSchedule({ keepNotice: Boolean(actionNotice.value) }))
   background: var(--color-surface);
   font-size: 14px;
   cursor: pointer;
+}
+
+.review-resource-choice {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-resource-choice select {
+  min-height: 38px;
+  max-width: 100%;
+  padding: 0 10px;
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
 }
 
 .review-task__links button:hover:not(:disabled) {

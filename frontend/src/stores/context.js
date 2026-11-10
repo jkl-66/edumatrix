@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { getCurrentIdentity, api, buildHeaders, normalizeApiError } from '../api'
+import { rememberAccountIdentity } from '../services/accountIdentity'
 
 export const useContextStore = defineStore('context', () => {
   const identity = ref(null)
@@ -25,7 +26,7 @@ export const useContextStore = defineStore('context', () => {
       loadedToken.value = token
       localStorage.setItem('edumatrix_role', identity.value.role || '')
       localStorage.setItem('edumatrix_username', identity.value.username || '')
-      localStorage.setItem('edumatrix_display_name', identity.value.display_name || identity.value.username || '')
+      rememberAccountIdentity(identity.value)
       return identity.value
     } catch (error) {
       identity.value = null

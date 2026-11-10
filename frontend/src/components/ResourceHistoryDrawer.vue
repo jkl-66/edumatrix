@@ -1,4 +1,6 @@
 <script setup>
+import { userMessage } from '../services/errorTranslator.js'
+import { displayLabel, learningText } from '../utils/learningCopy.js'
 import { computed, onBeforeUnmount, watch } from 'vue'
 import { AlertCircle, Check, Clock3, GitCompare, History, LoaderCircle, RotateCcw, X } from '@lucide/vue'
 
@@ -12,6 +14,7 @@ const props = defineProps({
   error: { type: String, default: '' },
   compareDisabled: { type: Boolean, default: false },
   restoreDisabled: { type: Boolean, default: false },
+  selectionDisabled: { type: Boolean, default: false },
   compareResult: { type: Object, default: null },
   comparingId: { type: String, default: '' },
 })
@@ -19,6 +22,8 @@ const props = defineProps({
 const emit = defineEmits(['close', 'select', 'restore', 'compare', 'compare-close'])
 
 const sortedItems = computed(() => [...props.items].sort((left, right) => Number(right.number || 0) - Number(left.number || 0)))
+const comparisonVersions = computed(() => [props.compareResult?.left, props.compareResult?.right]
+  .map(version => props.items.find(item => Number(item.number) === Number(version?.version))).filter(Boolean))
 
 function closeOnEscape(event) {
   if (event.key === 'Escape' && props.open) emit('close')
@@ -33,12 +38,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', closeOnEscape))
 
 function formatDate(value) {
   if (!value) return '时间未记录'
-  return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
+  const timestamp = /[zZ]|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`
+  return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(timestamp))
 }
 
 function originLabel(item) {
   if (item.revision_origin === 'history_restore') return `从 v${item.restored_from_version_number || '?'} 恢复另存`
-  if (item.revision_origin === 'user_edit') return '用户编辑另存'
+  if (['user_edit', 'learning_workspace'].includes(item.revision_origin)) return '编辑另存'
   return '生成版本'
 }
 </script>
@@ -53,16 +59,17 @@ function originLabel(item) {
           <button type="button" class="history-close" title="关闭版本历史" @click="emit('close')"><X :size="18" /></button>
         </header>
 
-        <p class="history-intro">历史版本只读。恢复会创建新的当前版本，不覆盖任何旧内容。</p>
-        <div v-if="error" class="history-error" role="alert"><AlertCircle :size="17" /><span>{{ error }}</span></div>
+        <p class="history-intro">{{ selectionDisabled ? '资源已归档，可核对版本或比较内容。恢复资源后可进入各版学习页面；下载入口仍会保留。' : '历史版本只读。恢复会创建新的当前版本，不覆盖任何旧内容。' }}</p>
+        <div v-if="error" class="history-error" role="alert"><AlertCircle :size="17" /><span>{{ userMessage(error) }}</span></div>
 
         <section v-if="compareResult" class="history-compare" aria-label="版本比较结果">
           <div class="history-compare-heading">
             <strong>版本比较</strong>
             <button type="button" class="history-compare-close" title="关闭比较结果" @click="emit('compare-close')"><X :size="15" /></button>
           </div>
-          <p>{{ compareResult.changed ? `v${compareResult.left?.version} 与 v${compareResult.right?.version} 存在差异。` : '两个版本内容一致。' }}</p>
-          <pre v-if="compareResult.diff">{{ compareResult.diff }}</pre>
+          <p>{{ compareResult.changed ? `第 ${compareResult.left?.version} 版与第 ${compareResult.right?.version} 版的内容有所调整。` : '两个版本内容一致。' }}</p>
+          <p v-for="(change, index) in compareResult.change_summary || []" :key="index">{{ learningText(change) }}</p>
+          <button v-for="version in comparisonVersions" :key="version.id" type="button" class="history-action" :disabled="selectionDisabled" @click="emit('select', version.id)">查看第 {{ version.number }} 版内容</button>
         </section>
 
         <div v-if="!sortedItems.length" class="history-empty">
@@ -70,11 +77,11 @@ function originLabel(item) {
         </div>
         <ol v-else class="history-list">
           <li v-for="item in sortedItems" :key="item.id" :class="{ selected: selectedVersionId === item.id, current: item.id === currentVersionId }">
-            <button type="button" class="history-select" @click="emit('select', item.id)">
+            <button type="button" class="history-select" :disabled="selectionDisabled" @click="emit('select', item.id)">
               <span class="history-version"><strong>v{{ item.number }}</strong><em v-if="item.id === currentVersionId">当前</em></span>
               <span class="history-origin">{{ originLabel(item) }}</span>
               <span class="history-time"><Clock3 :size="14" />{{ formatDate(item.created_at) }}</span>
-              <span class="history-source">来源 {{ item.source_status === 'available' ? '可用' : '需检查' }} · {{ item.content_format || '未记录格式' }}</span>
+              <span class="history-source">来源 {{ item.source_status === 'available' ? '可用' : '需检查' }} · {{ displayLabel(item.content_format, '学习内容') }}</span>
             </button>
             <div class="history-actions">
               <button v-if="item.id !== currentVersionId" type="button" class="history-action" :disabled="compareDisabled" @click="emit('compare', item.id)">
@@ -97,35 +104,35 @@ function originLabel(item) {
 <style scoped>
 .history-layer { position: fixed; z-index: 80; inset: 0; display: flex; justify-content: flex-end; }
 .history-backdrop { position: absolute; inset: 0; border: 0; background: rgba(6, 20, 27, .22); cursor: default; }
-.history-drawer { position: relative; display: flex; width: min(420px, 100vw); height: 100%; flex-direction: column; overflow: hidden; border-left: 1px solid #ccd0cf; background: #fff; color: #06141b; box-shadow: -10px 0 28px rgba(6, 20, 27, .12); }
-.history-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px; border-bottom: 1px solid #dfe4e5; }
-.history-heading span { display: flex; align-items: center; gap: 6px; color: #60727c; font-size: 14px; }
+.history-drawer { position: relative; display: flex; width: min(420px, 100vw); height: 100%; flex-direction: column; overflow: hidden; border-left: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); box-shadow: -10px 0 28px rgba(6, 20, 27, .12); }
+.history-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px; border-bottom: 1px solid var(--color-border); }
+.history-heading span { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 14px; }
 .history-heading h2 { margin: 5px 0 0; font-size: 20px; line-height: 1.35; }
-.history-close { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid #ccd0cf; border-radius: 8px; background: #fff; color: #11212d; cursor: pointer; }
-.history-intro { margin: 0; padding: 14px 20px; border-bottom: 1px solid #eef2f2; color: #4a5c6a; font-size: 14px; line-height: 1.6; }
-.history-error { display: flex; gap: 8px; margin: 14px 20px 0; padding: 10px; border: 1px solid #d8aaa5; border-radius: 8px; background: #fff5f3; color: #8b3d35; font-size: 14px; line-height: 1.5; }
-.history-compare { margin: 14px 20px 0; padding: 12px; border: 1px solid #ccd0cf; border-radius: 8px; background: #f7f9f9; }
+.history-close { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-surface); color: var(--color-text); cursor: pointer; }
+.history-intro { margin: 0; padding: 14px 20px; border-bottom: 1px solid var(--color-surface-subtle); color: var(--color-text-secondary); font-size: 14px; line-height: 1.6; }
+.history-error { display: flex; gap: 8px; margin: 14px 20px 0; padding: 10px; border: 1px solid #d8aaa5; border-radius: 8px; background: var(--color-danger-soft); color: var(--color-danger); font-size: 14px; line-height: 1.5; }
+.history-compare { margin: 14px 20px 0; padding: 12px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-surface-subtle); }
 .history-compare-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .history-compare-heading strong { font-size: 15px; }
-.history-compare-close { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid #ccd0cf; border-radius: 6px; background: #fff; color: #11212d; cursor: pointer; }
-.history-compare p { margin: 8px 0; color: #4a5c6a; font-size: 14px; line-height: 1.5; }
-.history-compare pre { max-height: 180px; margin: 0; overflow: auto; padding: 10px; border: 1px solid #dfe4e5; background: #fff; color: #253745; font: 14px/1.5 Consolas, monospace; white-space: pre-wrap; }
+.history-compare-close { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--color-border-strong); border-radius: 6px; background: var(--color-surface); color: var(--color-text); cursor: pointer; }
+.history-compare p { margin: 8px 0; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
+.history-compare pre { max-height: 180px; margin: 0; overflow: auto; padding: 10px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); font: 14px/1.5 Consolas, monospace; white-space: pre-wrap; }
 .history-list { min-height: 0; margin: 0; padding: 14px 20px 24px; overflow: auto; list-style: none; }
-.history-list li { margin-bottom: 9px; border: 1px solid #dfe4e5; border-radius: 8px; background: #fff; }
-.history-list li.selected { border-color: #11212d; box-shadow: inset 0 0 0 1px #11212d; }
-.history-select { display: grid; width: 100%; gap: 5px; padding: 13px; border: 0; background: transparent; color: #06141b; text-align: left; cursor: pointer; }
+.history-list li { margin-bottom: 9px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); }
+.history-list li.selected { border-color: var(--color-text); box-shadow: inset 0 0 0 1px var(--color-text); }
+.history-select { display: grid; width: 100%; gap: 5px; padding: 13px; border: 0; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; }
 .history-version { display: flex; align-items: center; gap: 7px; }
 .history-version strong { font-size: 16px; }
-.history-version em { padding: 2px 6px; border-radius: 5px; background: #11212d; color: #fff; font-size: 14px; font-style: normal; }
-.history-origin, .history-source, .history-time { display: flex; align-items: center; gap: 5px; color: #60727c; font-size: 14px; line-height: 1.45; }
+.history-version em { padding: 2px 6px; border-radius: 5px; background: var(--color-text); color: #fff; font-size: 14px; font-style: normal; }
+.history-origin, .history-source, .history-time { display: flex; align-items: center; gap: 5px; color: var(--color-text-muted); font-size: 14px; line-height: 1.45; }
 .history-actions { display: flex; min-height: 42px; align-items: center; gap: 7px; padding: 0 13px 12px; }
-.history-action, .history-current { display: inline-flex; min-height: 32px; align-items: center; gap: 5px; border: 1px solid #ccd0cf; border-radius: 7px; padding: 0 8px; background: #fff; color: #11212d; font-size: 14px; cursor: pointer; }
+.history-action, .history-current { display: inline-flex; min-height: 32px; align-items: center; gap: 5px; border: 1px solid var(--color-border-strong); border-radius: 7px; padding: 0 8px; background: var(--color-surface); color: var(--color-text); font-size: 14px; cursor: pointer; }
 .history-action:disabled { cursor: default; opacity: .48; }
-.history-current { border-color: transparent; color: #60727c; cursor: default; }
-.history-empty { display: grid; min-height: 260px; place-content: center; justify-items: center; gap: 9px; padding: 24px; color: #60727c; text-align: center; }
-.history-empty strong { color: #06141b; font-size: 16px; }
+.history-current { border-color: transparent; color: var(--color-text-muted); cursor: default; }
+.history-empty { display: grid; min-height: 260px; place-content: center; justify-items: center; gap: 9px; padding: 24px; color: var(--color-text-muted); text-align: center; }
+.history-empty strong { color: var(--color-text); font-size: 16px; }
 .history-empty span { max-width: 28ch; font-size: 14px; line-height: 1.6; }
 .history-spin { animation: history-spin .8s linear infinite; }
-.history-close:focus-visible, .history-select:focus-visible, .history-action:focus-visible { outline: 2px solid #11212d; outline-offset: 2px; }
+.history-close:focus-visible, .history-select:focus-visible, .history-action:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 @keyframes history-spin { to { transform: rotate(360deg); } }
 </style>

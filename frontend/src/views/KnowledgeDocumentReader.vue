@@ -1,6 +1,11 @@
 <script setup>
+import { displayLabel } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useLearningPreferences } from '../services/learningPreferences'
+
+const preferences = useLearningPreferences()
 import {
   ArrowLeft,
   BookOpen,
@@ -25,11 +30,14 @@ import {
 } from '@lucide/vue'
 import SelectionToolbar from '../components/SelectionToolbar.vue'
 import CourseDocumentPreview from '../components/CourseDocumentPreview.vue'
+import { sourceReferenceAtOffset, documentSearchMatches, renderCourseDocument } from '../utils/courseDocumentRenderer.js'
+import { sourceTextMap, sourceTextLength, trimSourceTextRange } from '../utils/sourceTextOffsets.js'
 import IncrementalMarkdownRenderer from '../components/IncrementalMarkdownRenderer.vue'
 import SearchField from '../components/ui/SearchField.vue'
 import TaskState from '../components/TaskState.vue'
 import AgentTimeline from '../components/AgentTimeline.vue'
 import SourceCitation from '../components/SourceCitation.vue'
+import { executeGenerationJob } from '../api/resourceBundles.js'
 import {
   askDocumentSelection,
   createDocumentSelection,
@@ -42,6 +50,7 @@ import {
   getDocumentReaderSlidePreview,
   getDocumentReaderState,
   retryDocumentSelectionOcr,
+  restoreDocumentReaderReferences,
   saveDocumentReadingPosition,
   saveDocumentSelectionNote,
 } from '../api/knowledge'
@@ -49,8 +58,17 @@ import {
 const props = defineProps({ studentId: { type: String, default: '' } })
 const route = useRoute()
 const router = useRouter()
+const returnPath = computed(() => {
+  const value = String(route.query.return_to || '')
+  return value.startsWith('/') && !value.startsWith('//') ? value : ''
+})
+const returnLabel = computed(() => returnPath.value ? '返回原学习位置' : '返回知识库')
 
 const readerDoc = ref(null)
+const sourceLicense = computed(() => {
+  const text = String(readerDoc.value?.source?.license || '').trim()
+  return text === 'user-provided' ? '用户提供的资料' : displayLabel(text, text)
+})
 const loading = ref(true)
 const loadError = ref('')
 const positionNotice = ref('')
@@ -75,9 +93,6 @@ const pageAssetError = ref('')
 const mediaAssetUrl = ref('')
 const mediaAssetLoading = ref(false)
 const mediaAssetError = ref('')
-const originalPdfUrl = ref('')
-const originalPdfLoading = ref(false)
-const originalPdfError = ref('')
 const exportBusy = ref(false)
 const exportError = ref('')
 const exportNotice = ref('')
@@ -139,7 +154,7 @@ const isCoursePreviewDocument = computed(() => {
   const type = String(readerDoc.value?.file_type || '').toLowerCase()
   const filename = String(readerDoc.value?.filename || '').toLowerCase()
   return !hasPages.value && !isVideo.value && (
-    ['md', 'markdown', 'txt', 'text', 'json', 'ipynb', 'notebook', 'py', 'python_code', 'docx', 'word', 'pptx', 'presentation', 'ppt', 'csv', 'tex', 'epub'].includes(type)
+    ['md', 'markdown', 'txt', 'text', 'json', 'ipynb', 'notebook', 'py', 'python_code', 'docx', 'word', 'pptx', 'presentation', 'ppt', 'csv', 'tex', 'epub', 'html', 'htm'].includes(type)
     || filename.endsWith('.md')
     || filename.endsWith('.markdown')
     || filename.endsWith('.txt')
@@ -173,13 +188,19 @@ const activeChapter = computed(() => (
   || null
 ))
 const activeSourceRef = computed(() => {
-  if (requestedSourceRef.value) return requestedSourceRef.value
+  if (hasSlides.value) {
+    const slideRefs = sourceRefs.value.filter(item => Number(item.location_index) === Number(activeSlideNumber.value))
+    return slideRefs.find(item => item.location_kind === 'slide') || slideRefs[0] || null
+  }
+  if (hasPages.value) {
+    return sourceRefs.value.find(item => Number(item.page_number) === Number(activePage.value)) || null
+  }
   if (selection.value?.source_ref_id) {
     return sourceRefs.value.find(item => item.id === selection.value.source_ref_id) || null
   }
-  if (hasPages.value) {
-    return sourceRefs.value.find(item => Number(item.page_number) === Number(activePage.value)) || sourceRefs.value[0] || null
-  }
+  const positioned = sourceReferenceAtOffset(sourceRefs.value, charOffset.value)
+  if (positioned) return positioned
+  if (requestedSourceRef.value) return requestedSourceRef.value
   if (activeChapter.value?.source_ref_id) {
     return sourceRefs.value.find(item => item.id === activeChapter.value.source_ref_id) || null
   }
@@ -188,12 +209,20 @@ const activeSourceRef = computed(() => {
   )) || sourceRefs.value[0] || null
 })
 const currentLocationLabel = computed(() => {
+  if (hasSlides.value) return `幻灯片 ${activeSlideNumber.value}`
   if (hasPages.value) return `第 ${activePage.value} 页`
   if (activeChapter.value) return activeChapter.value.title
   return '文档开头'
 })
+const originalSourceUrl = computed(() => {
+  const source = readerDoc.value?.source
+  const part = source?.parts?.find(item => item.char_start != null && item.char_end != null
+    && Number(item.char_start) <= charOffset.value && Number(item.char_end) > charOffset.value)
+  return part?.url || source?.url || ''
+})
 function buildReaderPresentation(value) {
   const source = String(value || '')
+  const sourceOffsets = sourceTextMap(source).displayToSource
   const displayToSource = [0]
   const literalBreak = / {2}\\n(?=\s*(?:>|#{1,6}\s|[-*+]\s|\d+\.\s|$))/g
   let text = ''
@@ -203,14 +232,14 @@ function buildReaderPresentation(value) {
   const appendSource = (start, end) => {
     for (let index = start; index < end; index += 1) {
       text += source[index]
-      displayToSource.push(index + 1)
+      displayToSource.push(sourceOffsets[index + 1])
     }
   }
 
   while (match) {
     appendSource(cursor, match.index)
     text += '\n'
-    displayToSource.push(match.index + match[0].length)
+    displayToSource.push(sourceOffsets[match.index + match[0].length])
     cursor = match.index + match[0].length
     match = literalBreak.exec(source)
   }
@@ -236,23 +265,14 @@ function displayOffsetForSource(offset) {
     if (map[middle] <= target) low = middle
     else high = middle - 1
   }
+  // An astral character has two UTF-16 positions for the same source boundary.
+  // Use its first unit, never split the surrogate pair while placing a caret.
+  while (low > 0 && map[low - 1] === map[low]) low -= 1
   return low
 }
 
 const searchMatches = computed(() => {
-  const content = readerPresentation.value.text
-  const query = searchQuery.value.trim().toLocaleLowerCase()
-  if (!query) return []
-  const haystack = content.toLocaleLowerCase()
-  const matches = []
-  let cursor = 0
-  while (cursor < haystack.length && matches.length < 500) {
-    const index = haystack.indexOf(query, cursor)
-    if (index < 0) break
-    matches.push(index)
-    cursor = index + Math.max(query.length, 1)
-  }
-  return matches
+  return documentSearchMatches(readerPresentation.value.text, searchQuery.value)
 })
 const searchParts = computed(() => {
   const content = readerPresentation.value.text
@@ -300,7 +320,9 @@ const selectionSummary = computed(() => {
     const text = selection.value.ocr_text?.trim()
     return text || `第 ${selection.value.page_number} 页图片区域`
   }
-  return buildReaderPresentation(selection.value.quote).text || '已选择文字'
+  return renderCourseDocument(buildReaderPresentation(selection.value.quote).text, {
+    referenceDocument: readerPresentation.value.text,
+  }).readingText || '已选择文字'
 })
 const canUseSelection = computed(() => Boolean(selection.value?.id && !selection.value?.stale))
 const sideTabs = [
@@ -381,30 +403,6 @@ function revokeMediaAsset() {
   mediaAssetUrl.value = ''
 }
 
-function revokeOriginalPdf() {
-  if (originalPdfUrl.value) URL.revokeObjectURL(originalPdfUrl.value)
-  originalPdfUrl.value = ''
-}
-
-async function loadOriginalPdf() {
-  if (!isPdfDocument.value || !readerDoc.value?.source_document_id) return
-  originalPdfLoading.value = true
-  originalPdfError.value = ''
-  revokeOriginalPdf()
-  try {
-    const result = await getDocumentReaderExport(readerDoc.value.source_document_id)
-    const contentType = String(result.headers?.['content-type'] || '').toLowerCase()
-    if (!contentType.includes('application/pdf')) {
-      throw new Error('当前来源没有可预览的原始 PDF 文件，解析文本仍可继续阅读。')
-    }
-    originalPdfUrl.value = URL.createObjectURL(result.blob)
-  } catch (error) {
-    originalPdfError.value = apiMessage(error, '原始 PDF 暂时无法预览，解析内容仍可继续阅读。')
-  } finally {
-    originalPdfLoading.value = false
-  }
-}
-
 async function loadPageAsset() {
   if (!hasPages.value || !readerDoc.value?.source_document_id) return
   const request = ++pageRequest
@@ -442,7 +440,7 @@ async function loadMediaAsset() {
 function currentPositionPayload() {
   return {
     document_version: readerDoc.value.document_version,
-    page_number: hasPages.value ? Number(activePage.value) : null,
+    page_number: hasPages.value ? Number(activePage.value) : hasSlides.value ? Number(activeSlideNumber.value) : null,
     section_id: activeChapter.value?.id || null,
     char_offset: Math.max(0, Math.round(charOffset.value)),
     scroll_ratio: Math.min(1, Math.max(0, Number(scrollRatio.value) || 0)),
@@ -473,8 +471,16 @@ function handleReaderScroll(event) {
   const element = event.currentTarget
   const max = Math.max(0, element.scrollHeight - element.clientHeight)
   scrollRatio.value = max ? element.scrollTop / max : 0
-  if (!hasPages.value && readerDoc.value?.content) {
-    charOffset.value = Math.round(readerDoc.value.content.length * scrollRatio.value)
+  if (!hasPages.value && readerDoc.value?.content && !searchQuery.value.trim()) {
+    const root = coursePreviewRef.value?.getSelectionRoot?.()
+    const top = element.getBoundingClientRect().top
+    const visibleBlock = root && Array.from(root.querySelectorAll('[data-source-start]')).find(item => (
+      item.getBoundingClientRect().bottom > top + 24
+    ))
+    // Formatted blocks have different heights. A scroll percentage is not a
+    // text offset and can put the source panel in an unrelated chapter.
+    if (visibleBlock) charOffset.value = Number(visibleBlock.dataset.sourceStart || 0)
+    else if (!root) charOffset.value = Math.round(sourceTextLength(readerDoc.value.content) * scrollRatio.value)
     const chapter = chapters.value.find(item => (
       Number(item.char_start) <= charOffset.value && Number(item.char_end) >= charOffset.value
     ))
@@ -504,8 +510,8 @@ async function loadReader() {
     if (expectedCourseId && expectedCourseId !== documentResult.course?.id) {
       throw new Error('当前文档不属于链接指定的课程')
     }
+    await restoreDocumentReaderReferences(documentResult, [route.query.source_ref_id, stateResult.selection?.source_ref_id])
     readerDoc.value = documentResult
-    if (isPdfDocument.value) void loadOriginalPdf()
     const position = stateResult.position && !stateResult.position.stale ? stateResult.position : null
     const deepLinkRef = documentResult.source_refs?.find(item => (
       String(item.id || item.source_ref_id || item.sourceRefId || '') === String(route.query.source_ref_id || '')
@@ -517,7 +523,7 @@ async function loadReader() {
     const hasRequestedChar = Number.isFinite(requestedChar) && requestedChar >= 0
     zoom.value = Number(position?.zoom || 1)
     activePage.value = Number(hasRequestedPage ? requestedPage : (position?.page_number || documentResult.pages?.[0]?.page_number || 1))
-    const requestedSlide = Number(route.query.slide || 1)
+    const requestedSlide = Number(route.query.slide || (hasSlides.value && deepLinkRef?.location_index) || position?.page_number || 1)
     activeSlideNumber.value = slides.value.some(item => Number(item.slide_num) === requestedSlide)
       ? requestedSlide
       : Number(slides.value[0]?.slide_num || 1)
@@ -532,17 +538,31 @@ async function loadReader() {
     )
     charOffset.value = Number(hasRequestedChar ? requestedChar : (position?.char_offset || 0))
     scrollRatio.value = hasRequestedPage || hasRequestedChar ? 0 : Number(position?.scroll_ratio || 0)
-    restoredAt.value = position?.updated_at || ''
+    restoredAt.value = hasRequestedPage || hasRequestedChar || route.query.chapter_id || route.query.slide
+      ? '' : (position?.updated_at || '')
     selection.value = stateResult.selection || null
     questionDraft.value = stateResult.selection?.question_draft || ''
+    noteResult.value = stateResult.selection?.note_id ? { note_id: stateResult.selection.note_id } : null
+    generationResult.value = stateResult.selection?.generation_task_id
+      ? { job: { job_id: stateResult.selection.generation_task_id } } : null
     if (stateResult.selection?.answer_text) activeSideTab.value = 'ask'
     if (hasPages.value) await loadPageAsset()
     if (isVideo.value) await loadMediaAsset()
     loading.value = false
-    if (hasRequestedChar && !hasPages.value) await scrollToOffset(charOffset.value)
+    searchQuery.value = String(route.query.search || '')
+    await nextTick()
+    if (searchQuery.value && searchMatches.value.length) {
+      const matchIndex = searchMatches.value.findIndex(offset => sourceOffsetForDisplay(offset) >= (hasRequestedChar ? requestedChar : 0))
+      searchIndex.value = Math.max(0, matchIndex)
+      await revealSearchMatch()
+    }
+    else if (hasRequestedChar) {
+      await selectPageForOffset(charOffset.value)
+      await scrollToOffset(charOffset.value)
+    }
     else if (route.query.chapter_id) await jumpToChapter(activeChapter.value, false)
     else await restoreScroll(scrollRatio.value)
-    if (route.query.source_ref_id && !deepLinkRef) positionNotice.value = '当前引用不属于这份文档，已保留文档可读内容。'
+    if (route.query.source_ref_id && !deepLinkRef) positionNotice.value = '这条引用暂时无法定位，可继续阅读原文。'
     initialized = true
   } catch (error) {
     loadError.value = apiMessage(error, '文档阅读器加载失败。')
@@ -625,8 +645,8 @@ function findTextNodeAtOffset(root, offset) {
 
 async function scrollToOffset(offset) {
   await nextTick()
-  if (isCoursePreviewDocument.value) {
-    coursePreviewRef.value?.scrollToSourceOffset?.(offset)
+  if (coursePreviewRef.value) {
+    coursePreviewRef.value.scrollToSourceOffset?.(offset)
     return
   }
   const root = contentRef.value
@@ -646,18 +666,34 @@ async function jumpToChapter(chapter, persist = true) {
   if (!chapter) return
   activeSectionId.value = chapter.id
   charOffset.value = Number(chapter.char_start || 0)
+  await selectPageForOffset(charOffset.value)
   await scrollToOffset(charOffset.value)
   if (persist) schedulePositionSave()
+}
+
+async function selectPageForOffset(offset) {
+  if (!hasPages.value && !hasSlides.value) return
+  const ref = sourceReferenceAtOffset(sourceRefs.value.filter(item => item.location_kind !== 'chapter'), offset)
+  if (hasPages.value && ref?.page_number && Number(ref.page_number) !== Number(activePage.value)) await selectPage(ref.page_number)
+  if (hasSlides.value && ref?.location_index) selectSlide(ref.location_index)
+}
+
+async function revealSearchMatch() {
+  if (!searchMatches.value.length) return
+  charOffset.value = sourceOffsetForDisplay(searchMatches.value[searchIndex.value])
+  const chapter = chapters.value.find(item => Number(item.char_start) <= charOffset.value && Number(item.char_end) > charOffset.value)
+  if (chapter) activeSectionId.value = chapter.id
+  await selectPageForOffset(charOffset.value)
+  await nextTick()
+  if (coursePreviewRef.value) coursePreviewRef.value.scrollToCurrentMatch?.()
+  else searchMarkRef.value?.scrollIntoView({ block: 'center' })
+  schedulePositionSave()
 }
 
 async function moveSearch(direction) {
   if (!searchMatches.value.length) return
   searchIndex.value = (searchIndex.value + direction + searchMatches.value.length) % searchMatches.value.length
-  charOffset.value = sourceOffsetForDisplay(searchMatches.value[searchIndex.value])
-  await nextTick()
-  if (isCoursePreviewDocument.value) coursePreviewRef.value?.scrollToCurrentMatch?.()
-  else searchMarkRef.value?.scrollIntoView({ block: 'center' })
-  schedulePositionSave()
+  await revealSearchMatch()
 }
 
 function sourceRefForText(start, end) {
@@ -677,14 +713,7 @@ function setToolbarPosition(left, top) {
 }
 
 function trimSourceSelection(start, end) {
-  const source = String(readerDoc.value?.content || '')
-  const rawQuote = String(readerDoc.value?.content || '').slice(start, end)
-  let nextStart = Math.max(0, Math.min(source.length, Number(start) || 0))
-  let nextEnd = Math.max(nextStart, Math.min(source.length, Number(end) || 0))
-  while (nextStart < nextEnd && /\s/.test(source[nextStart])) nextStart += 1
-  while (nextEnd > nextStart && /\s/.test(source[nextEnd - 1])) nextEnd -= 1
-  const quote = nextStart === start && nextEnd === end ? rawQuote : source.slice(nextStart, nextEnd)
-  return { start: nextStart, end: nextEnd, quote }
+  return trimSourceTextRange(readerDoc.value?.content, start, end)
 }
 
 function textLengthToBoundary(element, container, offset) {
@@ -692,7 +721,7 @@ function textLengthToBoundary(element, container, offset) {
   const measure = document.createRange()
   measure.selectNodeContents(element)
   measure.setEnd(container, offset)
-  return measure.toString().length
+  return sourceTextLength(measure.toString())
 }
 
 function pageSelectionBounds(range) {
@@ -711,7 +740,7 @@ function pageSelectionBounds(range) {
     : 0
   const endOffset = last.contains(range.endContainer)
     ? textLengthToBoundary(last, range.endContainer, range.endOffset)
-    : last.textContent.length
+    : sourceTextLength(last.textContent)
   return {
     start: Number(first.dataset.charStart) + startOffset,
     end: Number(last.dataset.charStart) + Math.max(endOffset, 1),
@@ -732,17 +761,20 @@ function markdownSelectionBounds(range) {
   const first = leaves[0]
   const last = leaves[leaves.length - 1]
   const startWithin = first.contains(range.startContainer) ? textLengthToBoundary(first, range.startContainer, range.startOffset) : 0
-  const endWithin = last.contains(range.endContainer) ? textLengthToBoundary(last, range.endContainer, range.endOffset) : last.textContent.length
+  const endWithin = last.contains(range.endContainer) ? textLengthToBoundary(last, range.endContainer, range.endOffset) : sourceTextLength(last.textContent)
   return {
-    start: Number(first.dataset.sourceStart) + startWithin,
-    end: Number(last.dataset.sourceStart) + Math.max(endWithin, 1),
+    start: Number(first.dataset.sourceStart) + (first.dataset.sourceAtomic === 'true' ? 0 : startWithin),
+    end: last.dataset.sourceAtomic === 'true'
+      ? Number(last.dataset.sourceEnd)
+      : Number(last.dataset.sourceStart) + Math.max(endWithin, 1),
     sourceRefId: '',
     pageNumber: null,
   }
 }
 
 function textSelectionBounds(range) {
-  if (isCoursePreviewDocument.value && !hasPages.value) return markdownSelectionBounds(range)
+  const markdownBounds = markdownSelectionBounds(range)
+  if (markdownBounds) return markdownBounds
   const root = hasPages.value ? pageFrameRef.value : contentRef.value
   if (!root) return null
   if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null
@@ -818,7 +850,7 @@ function normalizedPointer(event) {
 }
 
 function beginImageSelection(event) {
-  if (!pageAssetUrl.value || busyAction.value) return
+  if (!preferences.imageAnalysis || !pageAssetUrl.value || busyAction.value) return
   const point = normalizedPointer(event)
   imageDrag.active = true
   imageDrag.pointerId = event.pointerId
@@ -931,7 +963,7 @@ async function submitQuestion() {
 async function openNoteComposer() {
   if (!canUseSelection.value) return
   activeSideTab.value = 'actions'
-  if (!noteDraft.value) noteDraft.value = selection.value.quote || selection.value.ocr_text || ''
+  if (!noteDraft.value) noteDraft.value = selectionSummary.value
   await nextTick()
   noteInput.value?.focus()
 }
@@ -977,6 +1009,10 @@ async function generateResource(scope = generationScope.value) {
     }
     toolbarVisible.value = false
     activeSideTab.value = 'actions'
+    // Creating the record alone does not run the shared resource generator.
+    const jobId = generationResult.value.job.job_id
+    const job = await executeGenerationJob(jobId)
+    if (generationResult.value?.job?.job_id === jobId) generationResult.value.job = job
   } catch (error) {
     generationError.value = apiMessage(error, '生成任务没有创建，当前文档和选区仍可继续使用。')
   } finally {
@@ -1033,9 +1069,7 @@ async function exportKnowledgeDocument() {
     link.download = exportFilename(result.headers)
     link.click()
     setTimeout(() => URL.revokeObjectURL(url), 0)
-    const revision = result.headers?.['x-document-revision'] || readerDoc.value.document_version || '当前修订'
-    const sourceHash = result.headers?.['x-source-sha256'] || readerDoc.value.source?.source_sha256 || '未标注'
-    exportNotice.value = `知识文件已导出 · 修订 ${revision} · 源哈希 ${sourceHash}`
+    exportNotice.value = `“${readerDoc.value.title || '当前资料'}”已导出，与本次阅读的资料版本一致。`
   } catch (error) {
     exportError.value = apiMessage(error, '知识文件暂时无法导出，原文和阅读位置仍可继续使用。')
   } finally {
@@ -1044,13 +1078,16 @@ async function exportKnowledgeDocument() {
 }
 
 function openResourceCenter() {
-  router.push({ path: '/workspace/resources', query: { course_id: readerDoc.value?.course?.id || undefined } })
+  const jobId = generationResult.value?.job?.job_id
+  router.push({
+    path: jobId ? `/workspace/resources/bundles/${encodeURIComponent(jobId)}` : '/workspace/resources',
+    query: { course_id: readerDoc.value?.course?.id || undefined },
+  })
 }
 
 function backToKnowledge() {
-  const returnTo = String(route.query.return_to || '')
-  if (returnTo.startsWith('/') && !returnTo.startsWith('//')) {
-    router.push(returnTo)
+  if (returnPath.value) {
+    router.push(returnPath.value)
     return
   }
   const courseId = readerDoc.value?.course?.id || String(route.query.course_id || '')
@@ -1059,12 +1096,10 @@ function backToKnowledge() {
 
 watch(searchQuery, () => {
   searchIndex.value = 0
-  if (searchMatches.value.length) {
-    charOffset.value = sourceOffsetForDisplay(searchMatches.value[0])
-    nextTick(() => searchMarkRef.value?.scrollIntoView({ block: 'center' }))
-  }
+  void revealSearchMatch()
 })
 watch(zoom, schedulePositionSave)
+watch(activeSlideNumber, schedulePositionSave)
 watch(questionDraft, () => resetOperationKey('ask'))
 watch(noteDraft, () => resetOperationKey('note'))
 watch(resourceType, () => {
@@ -1084,7 +1119,6 @@ onBeforeUnmount(() => {
   revokePageAsset()
   revokeSlideAssets()
   revokeMediaAsset()
-  revokeOriginalPdf()
   document.removeEventListener('fullscreenchange', syncPptxFullscreen)
 })
 </script>
@@ -1092,12 +1126,12 @@ onBeforeUnmount(() => {
 <template>
   <section class="reader-page" aria-label="课程文档阅读器">
     <header class="reader-header">
-      <button type="button" class="icon-button" title="返回知识库" aria-label="返回知识库" @click="backToKnowledge">
+      <button type="button" class="icon-button" :title="returnLabel" :aria-label="returnLabel" @click="backToKnowledge">
         <ArrowLeft :size="19" />
       </button>
       <div class="reader-title">
         <span>{{ readerDoc?.course?.title || '课程知识库' }} · {{ currentLocationLabel }}</span>
-        <h1>{{ readerDoc?.title || '正在打开文档' }}</h1>
+        <h1>{{ readerDoc?.title || (loadError ? '文档暂时无法打开' : '正在打开文档') }}</h1>
       </div>
       <div class="reader-header__actions">
         <span v-if="restoredAt" class="save-state"><CheckCircle2 :size="15" />已恢复上次位置</span>
@@ -1111,7 +1145,7 @@ onBeforeUnmount(() => {
     <div v-if="exportNotice || exportError" class="reader-export-status" role="status">
       <p v-if="exportNotice" class="inline-notice">{{ exportNotice }}</p>
       <div v-if="exportError" class="inline-error reader-export-error">
-        <span>{{ exportError }}</span>
+        <span>{{ userMessage(exportError) }}</span>
         <button type="button" class="text-button" :disabled="exportBusy" @click="exportKnowledgeDocument">重试导出</button>
       </div>
     </div>
@@ -1122,7 +1156,6 @@ onBeforeUnmount(() => {
           <BookOpen :size="18" />
           <div>
             <strong>{{ readerDoc?.course?.title || '课程目录' }}</strong>
-            <span v-if="readerDoc?.course?.version">版本 {{ readerDoc.course.version }}</span>
           </div>
         </div>
         <div class="outline-document">
@@ -1151,6 +1184,10 @@ onBeforeUnmount(() => {
       </aside>
 
       <main class="reader-main">
+        <p v-if="['partial', 'unavailable'].includes(readerDoc?.source?.visual_reading?.status)" class="reader-notice" role="status">
+          部分图片尚未读完整，请结合原文件阅读。
+          <RouterLink :to="`/knowledge/courses/${readerDoc.course.id}`">回课程补读</RouterLink>
+        </p>
         <div class="reader-toolbar" aria-label="阅读工具栏">
           <div class="reader-search">
             <SearchField
@@ -1169,9 +1206,9 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div v-if="hasPages" class="page-control">
-            <button type="button" title="上一页" aria-label="上一页" @click="pageStep(-1)"><ChevronLeft :size="17" /></button>
+            <button type="button" title="上一页" aria-label="上一页" :disabled="pageAssetLoading || activePage === Number(readerDoc.pages[0]?.page_number)" @click="pageStep(-1)"><ChevronLeft :size="17" /></button>
             <span>第 {{ activePage }} / {{ readerDoc.pages.length }} 页</span>
-            <button type="button" title="下一页" aria-label="下一页" @click="pageStep(1)"><ChevronRight :size="17" /></button>
+            <button type="button" title="下一页" aria-label="下一页" :disabled="pageAssetLoading || activePage === Number(readerDoc.pages.at(-1)?.page_number)" @click="pageStep(1)"><ChevronRight :size="17" /></button>
           </div>
           <div class="zoom-control" aria-label="缩放">
             <button type="button" title="缩小" aria-label="缩小" @click="adjustZoom(-0.1)"><Minus :size="17" /></button>
@@ -1181,7 +1218,7 @@ onBeforeUnmount(() => {
         </div>
 
         <p v-if="positionNotice" class="inline-notice">{{ positionNotice }}</p>
-        <p v-if="selectionError" class="inline-error">{{ selectionError }}</p>
+        <p v-if="selectionError" class="inline-error">{{ userMessage(selectionError) }}</p>
 
         <div ref="readingViewport" class="reading-viewport" @scroll.passive="handleReaderScroll">
           <TaskState
@@ -1211,11 +1248,11 @@ onBeforeUnmount(() => {
                 v-if="!hasSlides"
                 state="info"
                 title="暂时没有可显示的幻灯片"
-                message="下面仍保留已解析的正文；原始文件无法读取时不会伪造幻灯片画面。"
+                message="原文件暂时无法打开，可继续阅读下方正文。"
               />
               <p v-if="slideAssetsLoading" class="pptx-preview-notice">正在准备原版幻灯片...</p>
               <p v-else-if="slideAssetsError || readerDoc?.pptx_preview?.message" class="pptx-preview-notice">
-                {{ slideAssetsError || readerDoc.pptx_preview.message }}
+                {{ userMessage(slideAssetsError || readerDoc.pptx_preview.message) }}
               </p>
               <div v-if="hasSlides" class="pptx-reader__layout">
                 <nav class="pptx-thumbnails" aria-label="幻灯片导航">
@@ -1294,16 +1331,15 @@ onBeforeUnmount(() => {
                 </section>
               </div>
               <section v-if="readerDoc?.content" class="pptx-parsed-fallback">
-                <div class="pptx-parsed-fallback__heading">
-                  <strong>解析正文</strong>
-                  <span>可搜索、可选择的文字版，不替代上方幻灯片布局。</span>
-                </div>
                 <CourseDocumentPreview
+                  ref="coursePreviewRef"
                   :text="readerDoc.content"
                   :document-id="readerDoc.source_document_id"
                   :document-version="readerDoc.document_version"
                   :search-query="searchQuery"
                   :search-index="searchIndex"
+                  :zoom="zoom"
+                  @mode-change="revealSearchMatch"
                   @mouseup="handleTextSelection"
                 />
               </section>
@@ -1313,62 +1349,24 @@ onBeforeUnmount(() => {
               <header class="original-pdf-preview__header">
                 <div>
                   <strong>原始 PDF</strong>
-                  <span>保留上传资料的原有格式；解析文本和知识点仅用于检索与定位。</span>
                 </div>
-                <button type="button" class="text-button" :disabled="originalPdfLoading" @click="loadOriginalPdf">
-                  <RefreshCw :size="15" :class="{ spin: originalPdfLoading }" />重试预览
-                </button>
               </header>
               <TaskState
-                v-if="originalPdfLoading"
-                state="loading"
-                title="正在加载原始 PDF"
-                message="不会影响下方解析内容、页码和来源定位。"
-              />
-              <TaskState
-              v-else-if="originalPdfError"
-                state="error"
-                title="原始 PDF 暂时无法预览"
-                :message="originalPdfError"
+                v-if="!hasPages"
+                state="info"
+                title="原始页面暂时无法预览"
+                :message="readerDoc.pdf_preview_message || '你仍可阅读下方正文，或下载原文件。'"
                 action-label="重试预览"
-                @action="loadOriginalPdf"
+                @action="loadReader"
               />
-              <section v-if="originalPdfUrl && pageAssetUrl" class="pdf-native-page" data-testid="pdf-native-page">
-                <div class="pdf-native-page__heading">
-                  <strong>原始页面预览</strong>
-                  <span>当前页的原始 PDF 渲染图；保持版式并支持页码切换。</span>
-                </div>
-                <img :src="pageAssetUrl" :alt="`${readerDoc.title} 原始 PDF 第 ${activePage} 页`" />
-              </section>
-              <iframe
-                v-if="originalPdfUrl"
-                class="original-pdf-preview__frame"
-                :src="originalPdfUrl"
-                :title="`${readerDoc.title} 原始 PDF`"
-              />
-              <section v-if="readerDoc?.content" class="pdf-content-fallback" data-testid="pdf-content-fallback">
-                <div class="pdf-content-fallback__heading">
-                  <strong>解析正文</strong>
-                  <span>原始 PDF 保留在上方；这里提供可搜索、可选择的课程阅读版。</span>
-                </div>
-                <CourseDocumentPreview
-                  :text="readerDoc.content"
-                  :document-id="readerDoc.source_document_id"
-                  :document-version="readerDoc.document_version"
-                  :search-query="searchQuery"
-                  :search-index="searchIndex"
-                  @mouseup="handleTextSelection"
-                />
-              </section>
             </section>
 
-            <section v-if="hasPages" class="parsed-page-preview">
-              <div class="parsed-page-preview__heading"><strong>解析页图与来源定位</strong><span>页码、文字层和选区仍按解析索引工作</span></div>
+            <section v-if="hasPages" class="parsed-page-preview" data-testid="pdf-native-page">
               <TaskState
                 v-if="pageAssetLoading"
                 state="loading"
-                title="正在加载解析页图"
-                message="已加载的来源和选区不会丢失。"
+                title="正在加载这一页"
+                message="请重试。"
               />
               <TaskState
                 v-else-if="pageAssetError"
@@ -1385,7 +1383,7 @@ onBeforeUnmount(() => {
                 :style="{ width: `${zoom * 100}%`, aspectRatio: `${activePageMeta?.width || 4} / ${activePageMeta?.height || 3}` }"
                 @mouseup="handleTextSelection"
               >
-                <img :src="pageAssetUrl" :alt="`${readerDoc.title} 第 ${activePage} 页解析页图`" draggable="false" />
+                <img :src="pageAssetUrl" :alt="`${readerDoc.title} 第 ${activePage} 页原文`" draggable="false" />
                 <div class="page-text-layer" aria-label="可选择的页面文字">
                   <span
                     v-for="region in activePageTextRegions"
@@ -1400,6 +1398,7 @@ onBeforeUnmount(() => {
                   >{{ region.text }}</span>
                 </div>
                 <div
+                  v-if="preferences.imageAnalysis && activePageMeta?.image_selection !== false"
                   class="image-selection-layer"
                   role="application"
                   aria-label="在页图上拖动以框选图片区域"
@@ -1435,24 +1434,42 @@ onBeforeUnmount(() => {
             <pre ref="contentRef" class="document-content media-transcript" :style="documentContentStyle" @mouseup="handleTextSelection"><span>{{ searchParts.before }}</span><mark v-if="searchParts.hit" ref="searchMarkRef">{{ searchParts.hit }}</mark><span>{{ searchParts.after }}</span></pre>
           </div>
           <CourseDocumentPreview
-            v-else-if="isCoursePreviewDocument && readerDoc?.content"
+            v-else-if="isCoursePreviewDocument && !isPptxDocument && readerDoc?.content"
             ref="coursePreviewRef"
             :text="readerDoc.content"
             :document-id="readerDoc.source_document_id"
             :document-version="readerDoc.document_version"
             :search-query="searchQuery"
             :search-index="searchIndex"
+            :zoom="zoom"
+            @mode-change="revealSearchMatch"
             @mouseup="handleTextSelection"
           />
-          <pre v-else-if="readerDoc?.content" ref="contentRef" class="document-content" :style="documentContentStyle" @mouseup="handleTextSelection"><span>{{ searchParts.before }}</span><mark v-if="searchParts.hit" ref="searchMarkRef">{{ searchParts.hit }}</mark><span>{{ searchParts.after }}</span></pre>
+          <pre v-else-if="readerDoc?.content && !isPdfDocument && !isPptxDocument" ref="contentRef" class="document-content" :style="documentContentStyle" @mouseup="handleTextSelection"><span>{{ searchParts.before }}</span><mark v-if="searchParts.hit" ref="searchMarkRef">{{ searchParts.hit }}</mark><span>{{ searchParts.after }}</span></pre>
           <TaskState
-            v-else
+            v-else-if="!readerDoc?.content && !hasSlides && !hasPages"
             state="info"
             title="当前文档没有可读正文"
-            message="返回知识库选择其他已完成解析的资料。"
-            action-label="返回知识库"
+            message="可以返回知识库，选择其他资料继续阅读。"
+            :action-label="returnLabel"
             @action="backToKnowledge"
           />
+          <section v-if="isPdfDocument && readerDoc?.content" class="pdf-content-fallback" data-testid="pdf-content-fallback">
+            <div class="pdf-content-fallback__heading">
+              <strong>正文阅读</strong>
+            </div>
+            <CourseDocumentPreview
+              ref="coursePreviewRef"
+              :text="readerDoc.content"
+              :document-id="readerDoc.source_document_id"
+              :document-version="readerDoc.document_version"
+              :search-query="searchQuery"
+              :search-index="searchIndex"
+              :zoom="zoom"
+              @mode-change="revealSearchMatch"
+              @mouseup="handleTextSelection"
+            />
+          </section>
           </template>
         </div>
       </main>
@@ -1475,16 +1492,18 @@ onBeforeUnmount(() => {
           <dl class="source-list">
             <div><dt>课程</dt><dd>{{ readerDoc?.course?.title || '未知课程' }}</dd></div>
             <div><dt>位置</dt><dd>{{ activeSourceRef?.location_label || currentLocationLabel }}</dd></div>
-            <div><dt>格式</dt><dd>{{ (readerDoc?.file_type || 'text').toUpperCase() }}</dd></div>
-            <div><dt>许可</dt><dd>{{ readerDoc?.source?.license || '未单独声明' }}</dd></div>
-            <div><dt>解析状态</dt><dd>{{ readerDoc?.source?.processing_status === 'ready' ? '已完成解析' : '状态待确认' }}</dd></div>
           </dl>
           <button v-if="selection" type="button" class="text-button" @click="locateSelection"><Focus :size="16" />定位当前选区</button>
-          <details class="source-details">
-            <summary>查看来源详情</summary>
-            <p>{{ readerDoc?.source?.url || readerDoc?.source?.path || '团队预置课程来源' }}</p>
-            <p>解析器 {{ readerDoc?.source?.parser_version || '未标注' }}</p>
-            <code>{{ readerDoc?.document_version || '' }}</code>
+          <a v-if="originalSourceUrl" class="source-original-link" :href="originalSourceUrl" target="_blank" rel="noopener noreferrer">打开原网页</a>
+          <details v-if="readerDoc?.source?.parts?.length > 1" class="source-details">
+            <summary>各篇原文</summary>
+            <ul class="original-source-parts">
+              <li v-for="part in readerDoc.source.parts" :key="part.url"><a :href="part.url" target="_blank" rel="noopener noreferrer">{{ part.title }}</a></li>
+            </ul>
+          </details>
+          <details v-if="sourceLicense" class="source-details">
+            <summary>资料使用说明</summary>
+            <p>{{ sourceLicense }}</p>
           </details>
         </div>
 
@@ -1497,7 +1516,7 @@ onBeforeUnmount(() => {
             <MessageSquareText v-else :size="17" />
             {{ busyAction === 'ask' ? '正在生成讲解' : '提交问题' }}
           </button>
-          <p v-if="answerError" class="inline-error">{{ answerError }}</p>
+          <p v-if="answerError" class="inline-error">{{ userMessage(answerError) }}</p>
           <div v-if="selection?.answer_text" class="answer-result">
             <strong>{{ selection.answer_status === 'ready' ? '基于选区的回答' : '暂时无法回答' }}</strong>
             <IncrementalMarkdownRenderer v-if="selection.answer_status === 'ready'" :text="selection.answer_text" />
@@ -1513,9 +1532,9 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="selection?.selection_type === 'image' && selection?.ocr_status === 'failed'" class="recovery-block">
             <strong>图片区域已保留</strong>
-            <p>本次没有识别到可验证文字。可只重试 OCR，也可调整框选范围。</p>
+            <p>本次没有识别出文字，可以重试或调整框选范围。</p>
             <button type="button" class="secondary-button" :disabled="Boolean(busyAction)" @click="retryOcr">
-              <RotateCcw :size="16" />重试 OCR
+              <RotateCcw :size="16" />重新识别文字
             </button>
           </div>
         </div>
@@ -1528,9 +1547,9 @@ onBeforeUnmount(() => {
             <LoaderCircle v-if="busyAction === 'note'" :size="17" class="spin" />
             <NotebookPen v-else :size="17" />保存到笔记本
           </button>
-          <p v-if="noteError" class="inline-error">{{ noteError }}</p>
+          <p v-if="noteError" class="inline-error">{{ userMessage(noteError) }}</p>
           <div v-if="noteResult" class="saved-note-result">
-            <p class="success-line"><CheckCircle2 :size="16" />已保存，文档位置与选区引用已归档。</p>
+            <p class="success-line"><CheckCircle2 :size="16" />已保存笔记和原文位置。</p>
             <button type="button" class="text-button" @click="openSavedNote">进入笔记本<ChevronRight :size="16" /></button>
           </div>
 
@@ -1547,13 +1566,13 @@ onBeforeUnmount(() => {
           <button type="button" class="primary-button" :disabled="Boolean(busyAction) || (generationScope === 'selection' && !canUseSelection)" @click="generateResource()">
             <LoaderCircle v-if="busyAction === 'generate'" :size="17" class="spin" />
             <WandSparkles v-else :size="17" />
-            {{ busyAction === 'generate' ? '正在创建任务' : '生成并归档' }}
+            {{ busyAction === 'generate' ? '正在生成学习资源' : '生成并归档' }}
           </button>
-          <p v-if="generationError" class="inline-error">{{ generationError }}</p>
+          <p v-if="generationError" class="inline-error">{{ userMessage(generationError) }}</p>
           <div v-if="generationResult?.job" class="generation-result">
-            <strong>任务已进入资源中心</strong>
+            <strong>{{ busyAction === 'generate' ? '正在准备学习资源' : '学习资源任务已保存' }}</strong>
             <span>{{ generationResult.job.items?.[0]?.title || '学习资源' }}</span>
-            <button type="button" class="text-button" @click="openResourceCenter">前往资源中心<ChevronRight :size="16" /></button>
+            <button type="button" class="text-button" @click="openResourceCenter">查看生成进度与结果<ChevronRight :size="16" /></button>
           </div>
         </div>
       </aside>
@@ -1580,11 +1599,11 @@ onBeforeUnmount(() => {
 .reader-page {
   display: grid;
   width: 100%;
-  height: calc(100vh - var(--topbar-height));
+  height: 100%;
   min-height: 640px;
   overflow: hidden;
   color: var(--color-text);
-  background: var(--color-page);
+  background: transparent;
   grid-template-rows: 72px minmax(0, 1fr);
 }
 
@@ -1594,7 +1613,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 14px;
   padding: 0 20px;
-  border-bottom: 1px solid var(--color-border);
+  
   background: var(--color-surface);
 }
 
@@ -1640,6 +1659,8 @@ onBeforeUnmount(() => {
 }
 
 .reader-header__actions { gap: 10px; }
+.reader-notice { margin: 0; padding: 12px 20px; color: var(--color-text-secondary); }
+.reader-notice a { margin-left: 8px; color: var(--color-accent); }
 .save-state { gap: 6px; color: var(--color-text-muted); font-size: 14px; white-space: nowrap; }
 .reader-export-status { display: grid; gap: 4px; padding: 8px 20px 0; background: var(--color-surface); }
 .reader-export-status p { margin: 0; }
@@ -1716,14 +1737,15 @@ onBeforeUnmount(() => {
 .chapter-list > button.active strong { font-weight: 650; }
 
 .reader-main {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  background: var(--color-page);
-  grid-template-rows: 52px auto auto minmax(0, 1fr);
+  background: transparent;
 }
 
 .reader-toolbar {
   min-width: 0;
+  flex-shrink: 0;
   justify-content: space-between;
   gap: 10px;
   padding: 7px 12px;
@@ -1777,6 +1799,7 @@ onBeforeUnmount(() => {
 .inline-error { color: var(--color-danger); background: var(--color-danger-soft); }
 
 .reading-viewport {
+  flex: 1;
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -1840,9 +1863,9 @@ onBeforeUnmount(() => {
 .pptx-thumbnail.active { border-color: var(--color-accent); background: var(--color-accent-soft); }
 .pptx-thumbnail__number { padding-top: 4px; color: var(--color-text-muted); font-size: 14px; text-align: center; }
 .pptx-thumbnail__body { display: grid; min-width: 0; gap: 4px; }
-.pptx-thumbnail__body img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; border: 1px solid var(--color-border); background: #fff; }
+.pptx-thumbnail__body img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; border: 1px solid var(--color-border); background: var(--color-surface); }
 .pptx-thumbnail__empty,
-.pptx-thumbnail__text-only { display: grid; height: 54px; place-items: center; border: 1px dashed var(--color-border-strong); background: #fff; font-size: 14px; }
+.pptx-thumbnail__text-only { display: grid; height: 54px; place-items: center; border: 1px dashed var(--color-border-strong); background: var(--color-surface); font-size: 14px; }
 .pptx-thumbnail__empty { color: var(--color-text-muted); }
 .pptx-thumbnail__text-only { color: var(--color-text-secondary); }
 .pptx-thumbnail__label { overflow: hidden; color: var(--color-text-secondary); font-size: 14px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
@@ -1859,19 +1882,19 @@ onBeforeUnmount(() => {
   padding: clamp(14px, 2vw, 24px);
   border: 1px solid var(--color-border-strong);
   border-radius: 6px;
-  background: #f7f9f9;
+  background: var(--color-surface-subtle);
 }
-.pptx-slide-canvas__page { display: block; max-width: none; height: auto; border: 1px solid var(--color-border-strong); background: #fff; box-shadow: 0 10px 24px rgb(6 20 27 / 12%); }
+.pptx-slide-canvas__page { display: block; max-width: none; height: auto; border: 1px solid var(--color-border-strong); background: var(--color-surface); box-shadow: 0 10px 24px rgb(6 20 27 / 12%); }
 .pptx-slide-canvas__images { display: grid; gap: 12px; justify-items: center; }
-.pptx-slide-canvas__images img { display: block; max-width: 100%; max-height: 440px; object-fit: contain; background: #fff; box-shadow: 0 8px 20px rgb(6 20 27 / 9%); }
-.pptx-slide-canvas__text { display: grid; gap: 6px; padding: 18px 20px; border: 1px solid var(--color-border); border-radius: 5px; background: #fff; }
+.pptx-slide-canvas__images img { display: block; max-width: 100%; max-height: 440px; object-fit: contain; background: var(--color-surface); box-shadow: 0 8px 20px rgb(6 20 27 / 9%); }
+.pptx-slide-canvas__text { display: grid; gap: 6px; padding: 18px 20px; border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-surface); }
 .pptx-slide-canvas__text p { margin: 0; color: var(--color-text); font-size: 16px; line-height: 1.65; white-space: pre-wrap; }
 .pptx-slide-canvas__empty { display: grid; min-height: 280px; align-content: center; justify-items: center; gap: 8px; color: var(--color-text-muted); text-align: center; }
 .pptx-slide-canvas__empty strong { color: var(--color-text-secondary); font-size: 16px; }
 .pptx-slide-canvas__empty span { font-size: 14px; }
 .pptx-slide-notes { padding: 10px 12px; color: var(--color-text-secondary); border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-surface-subtle); font-size: 14px; }
 .pptx-slide-notes p { margin: 8px 0 0; line-height: 1.6; white-space: pre-wrap; }
-.pptx-reader__stage:fullscreen { height: 100%; padding: 18px; background: #edf1f2; grid-template-rows: auto minmax(0, 1fr) auto; }
+.pptx-reader__stage:fullscreen { height: 100%; padding: 18px; background: var(--color-surface-subtle); grid-template-rows: auto minmax(0, 1fr) auto; }
 .pptx-reader__stage:fullscreen .pptx-slide-canvas { min-height: 0; }
 .pptx-reader__stage:fullscreen .pptx-slide-canvas__page {
   width: auto !important;
@@ -1880,44 +1903,22 @@ onBeforeUnmount(() => {
   object-fit: contain;
 }
 .pptx-parsed-fallback { display: grid; gap: 10px; }
-.pptx-parsed-fallback__heading { display: grid; gap: 3px; padding: 4px 2px 0; }
-.pptx-parsed-fallback__heading strong { font-size: 15px; }
-.pptx-parsed-fallback__heading span { color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
 .pptx-parsed-fallback .course-document-reader__toolbar { margin-bottom: 0; }
 .pptx-parsed-fallback .course-document-preview { width: 100%; max-width: none; box-shadow: none; }
 
-.original-pdf-preview__header,
-.parsed-page-preview__heading {
+.original-pdf-preview__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
 }
 
-.original-pdf-preview__header > div,
-.parsed-page-preview__heading {
+.original-pdf-preview__header > div {
   display: grid;
   gap: 4px;
 }
 
-.original-pdf-preview__header strong,
-.parsed-page-preview__heading strong { font-size: 15px; }
-.original-pdf-preview__header span,
-.parsed-page-preview__heading span { color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
-
-.original-pdf-preview__frame {
-  width: 100%;
-  min-height: 420px;
-  max-height: 620px;
-  border: 1px solid var(--color-border);
-  border-radius: 5px;
-  background: #f3f6f6;
-}
-.pdf-native-page { display: grid; gap: 8px; }
-.pdf-native-page__heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.pdf-native-page__heading strong { font-size: 15px; }
-.pdf-native-page__heading span { color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
-.pdf-native-page img { display: block; width: min(100%, 760px); max-height: 760px; margin: 0 auto; object-fit: contain; border: 1px solid var(--color-border-strong); background: #fff; box-shadow: 0 10px 24px rgb(6 20 27 / 8%); }
+.original-pdf-preview__header strong { font-size: 15px; }
 
 .pdf-content-fallback {
   display: grid;
@@ -1931,7 +1932,6 @@ onBeforeUnmount(() => {
 }
 
 .pdf-content-fallback__heading strong { font-size: 15px; }
-.pdf-content-fallback__heading span { color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
 .pdf-content-fallback .course-document-reader__toolbar { margin-bottom: 0; }
 .pdf-content-fallback .course-document-preview { width: 100%; max-width: none; box-shadow: none; }
 
@@ -1994,6 +1994,24 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   border-left: 1px solid var(--color-border);
 }
+
+@media (max-width: 1250px) {
+  .reader-layout {
+    grid-template-columns: minmax(0, 1fr) 250px;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .reader-outline {
+    grid-column: 1 / -1;
+    overflow-x: auto;
+    border: 0;
+  }
+  .outline-course, .outline-document { display: none; }
+  .chapter-list { display: flex; gap: 8px; padding: 10px 16px; }
+  .chapter-list > p { align-self: center; flex: 0 0 auto; margin: 0 8px 0 0; }
+  .chapter-list > button { flex: 0 0 190px; }
+  .reader-toolbar { flex-wrap: wrap; }
+  .reader-search { flex-basis: 100%; min-width: 0; }
+}
 .context-tabs {
   display: grid;
   position: sticky;
@@ -2021,13 +2039,15 @@ onBeforeUnmount(() => {
 .context-heading { gap: 8px; }
 .context-heading strong { font-size: 15px; }
 .source-list { display: grid; gap: 0; margin: 0; }
-.source-list div { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--color-border); grid-template-columns: 56px minmax(0, 1fr); }
+.source-list div { display: grid; gap: 6px; padding: 6px 0; grid-template-columns: 40px minmax(0, 1fr); }
 .source-list dt { color: var(--color-text-muted); font-size: 14px; }
 .source-list dd { margin: 0; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .source-details { padding-top: 4px; color: var(--color-text-secondary); font-size: 14px; }
 .source-details summary { color: var(--color-text); cursor: pointer; }
+.source-original-link { width: fit-content; color: var(--color-accent); font-size: 14px; text-underline-offset: 3px; }
 .source-details p { margin: 10px 0 0; line-height: 1.55; overflow-wrap: anywhere; }
-.source-details code { display: block; margin-top: 10px; overflow-wrap: anywhere; color: var(--color-text-muted); font-family: var(--font-mono); font-size: 14px; }
+.original-source-parts { margin: 10px 0 0; padding-left: 18px; line-height: 1.7; overflow-wrap: anywhere; }
+.original-source-parts a { color: var(--color-accent); text-underline-offset: 3px; }
 
 .selection-summary {
   display: -webkit-box;

@@ -48,7 +48,7 @@ def test_workspace_restores_latest_owned_object_position_and_code_content():
     engine, session = _session()
     try:
         learner = session.query(DBUser).filter_by(username="lzz").one()
-        workspace = workspace_overview(session, current_user=learner)
+        workspace = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         document = next(item for item in workspace["learning_objects"] if item["object_type"] == "document")
         code = next(item for item in workspace["learning_objects"] if item["object_type"] == "code")
 
@@ -76,7 +76,7 @@ def test_workspace_restores_latest_owned_object_position_and_code_content():
         second.last_used_at = datetime.utcnow()
         session.commit()
 
-        restored = workspace_overview(session, current_user=learner)
+        restored = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         restore = restored["restore"]["context"]
         restored_code = next(item for item in restored["learning_objects"] if item["id"] == restore["object_id"])
 
@@ -149,7 +149,7 @@ def test_workspace_projects_cancel_and_retry_capabilities_from_existing_task_sta
         ])
         session.commit()
 
-        overview = workspace_overview(session, current_user=learner)
+        overview = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         projected = overview["restore"]["task"]
         assert projected["id"] == task.id
         assert projected["can_cancel"] is True
@@ -161,12 +161,12 @@ def test_workspace_projects_cancel_and_retry_capabilities_from_existing_task_sta
             session, task_id=task.id, owner_public_id=learner.public_id, sequence=2,
         )
         session.commit()
-        retried = workspace_overview(session, current_user=learner)["restore"]["task"]
+        retried = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")["restore"]["task"]
         assert retried["retryable_step_sequences"] == []
 
         cancel_task(session, task_id=task.id, owner_public_id=learner.public_id)
         session.commit()
-        cancelled = workspace_overview(session, current_user=learner)["restore"]["task"]
+        cancelled = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")["restore"]["task"]
         assert cancelled["status"] == "cancelled"
         assert cancelled["can_cancel"] is False
     finally:

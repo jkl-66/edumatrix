@@ -1,4 +1,6 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -86,8 +88,8 @@ function heatLevel(item) {
 
 function heatTitle(item) {
   if (!item) return ''
-  if (!item.eventCount) return `${item.date}：没有有效学习事件`
-  return `${item.date}：${item.eventCount} 条有效事件，${item.activeMinutes || 0} 分钟`
+  if (!item.eventCount) return `${item.date}：暂无学习记录`
+  return `${item.date}：${item.eventCount} 次有效学习，${item.activeMinutes || 0} 分钟`
 }
 
 function routeFor(value, fallback = '') {
@@ -195,9 +197,9 @@ onUnmounted(() => {
 <template>
   <main class="profile-page" data-testid="profile-dashboard">
     <PageHeader
-      eyebrow="个人中心"
+
       title="我的学习概览"
-      description="查看真实学习投入、近期变化和下一步去向。所有统计均来自你的学习事件。"
+      description="查看学习投入、近期变化和下一步安排，回顾每一次学习与练习。"
     >
       <template #actions>
         <label class="course-picker">
@@ -216,7 +218,7 @@ onUnmounted(() => {
       <RefreshCw :size="20" class="spin" />
       <div>
         <strong>正在整理个人学习记录</strong>
-        <p>页面结构会保持不变，完成后显示真实统计。</p>
+        <p>正在汇总你的学习时间和练习结果，请稍候。</p>
       </div>
     </section>
 
@@ -224,7 +226,7 @@ onUnmounted(() => {
       <AlertCircle :size="22" />
       <div>
         <strong>个人中心加载失败</strong>
-        <p>{{ error }}</p>
+        <p>{{ userMessage(error) }}</p>
       </div>
       <button class="button button--primary" type="button" @click="loadActivity({ discoverCourses: true })">
         <RefreshCw :size="16" /> 重试
@@ -233,7 +235,7 @@ onUnmounted(() => {
 
     <template v-else-if="activity">
       <section class="identity-band" aria-labelledby="profile-identity-title">
-        <div class="avatar" aria-hidden="true">{{ initials }}</div>
+        <div class="avatar" aria-hidden="true"><img v-if="owner.avatarUrl" :src="owner.avatarUrl" alt="" /><template v-else>{{ initials }}</template></div>
         <div class="identity-copy">
           <h2 id="profile-identity-title">{{ owner.displayName || owner.username || '学习者' }}</h2>
           <p>{{ owner.major || '暂未填写专业' }} · {{ activity.course?.title || '全部课程' }}</p>
@@ -295,7 +297,7 @@ onUnmounted(() => {
         <div class="heatmap-panel" data-testid="profile-heatmap">
           <div class="heatmap-copy">
             <h3>近 30 天学习热力图</h3>
-            <p>有明确时长、完成效果或已接受掌握证据的日期才会着色。</p>
+            <p>已记录学习时长或取得学习结果的日期会着色。</p>
           </div>
           <div class="heatmap-grid" role="img" aria-label="近三十天有效学习活动">
             <span
@@ -310,8 +312,8 @@ onUnmounted(() => {
           <details class="calculation-details">
             <summary>查看统计口径与来源</summary>
             <p>{{ activity.calculation?.duration }}</p>
-            <p>统计区间：{{ activity.period?.startDate }} 至 {{ activity.period?.endDate }}（{{ activity.period?.timezone }}）</p>
-            <p>本期来源事件：{{ report?.sourceEventIds?.length || 0 }} 条</p>
+            <p>统计区间：{{ activity.period?.startDate }} 至 {{ activity.period?.endDate }}（北京时间）</p>
+            <p>本期学习记录：{{ report?.sourceEventIds?.length || 0 }} 条</p>
           </details>
         </div>
       </section>
@@ -326,7 +328,7 @@ onUnmounted(() => {
             <span>{{ periodLabel }}</span>
           </div>
           <LearningTrendChart :points="trend" />
-          <p class="panel-footnote">掌握变化只使用已处理的有效证据；近 30 天另有 {{ activityPoints.reduce((sum, item) => sum + Number(item.eventCount || 0), 0) }} 条有效学习活动。</p>
+          <p class="panel-footnote">掌握变化来自有效练习和测评；近 30 天共记录 {{ activityPoints.reduce((sum, item) => sum + Number(item.eventCount || 0), 0) }} 次有效学习。</p>
         </article>
 
         <article class="content-panel" data-testid="profile-activity">
@@ -408,7 +410,7 @@ onUnmounted(() => {
             </div>
             <FileText :size="20" />
           </div>
-          <p class="report-summary">{{ report?.summary || '当前没有可汇总的学习事实。' }}</p>
+          <p class="report-summary">{{ learningText(report?.summary || '当前没有可汇总的学习事实。') }}</p>
           <dl class="report-highlights">
             <div v-for="item in report?.highlights || []" :key="item.label">
               <dt>{{ item.label }}</dt>
@@ -435,6 +437,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .profile-page {
   display: grid;
   width: min(100%, 1180px);
@@ -611,9 +614,9 @@ onUnmounted(() => {
 .panel-footnote { margin: 5px 0 0; color: var(--color-text-muted); font-size: 14px; line-height: 1.6; }
 .heatmap-grid { display: grid; grid-template-columns: repeat(10, minmax(18px, 1fr)); gap: 6px; }
 .heatmap-cell { aspect-ratio: 1; min-width: 18px; background: var(--color-surface-subtle); border: 1px solid var(--color-border); border-radius: 3px; }
-.heatmap-cell.level-1 { background: #dce2e3; }
+.heatmap-cell.level-1 { background: var(--color-border); }
 .heatmap-cell.level-2 { background: #9ba8ab; border-color: #9ba8ab; }
-.heatmap-cell.level-3 { background: #253745; border-color: #253745; }
+.heatmap-cell.level-3 { background: var(--color-text); border-color: var(--color-text); }
 .calculation-details { grid-column: 1 / -1; color: var(--color-text-secondary); font-size: 14px; }
 .calculation-details summary { width: fit-content; cursor: pointer; font-weight: 600; }
 

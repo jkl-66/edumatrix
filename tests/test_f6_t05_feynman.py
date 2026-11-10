@@ -104,6 +104,61 @@ def test_profile_focus_must_match_the_current_knowledge_topic():
     assert _focus_relevant_to_knowledge("来源版本边界和失败恢复", "RAG 文档解析与混合检索")
 
 
+def test_selected_source_version_freezes_full_material_and_filters_its_sessions():
+    from app.feynman import _model_context, session_payload
+    from app.m1_repository import add_artifact_version
+
+    engine, db = _session()
+    try:
+        seed_competition_demo(db)
+        learner = db.query(DBUser).filter_by(username="lzz").one()
+        resource = _resource(db, learner, "feynman-version-resource")
+        original = db.get(DBArtifactVersion, resource.current_version_id)
+        long_material = "完整复述资料。\n" * 2600 + "末尾要点：两路召回后先去重再融合。"
+        old = add_artifact_version(db, artifact=resource, content=long_material,
+            content_format="markdown", created_by_public_id=learner.public_id,
+            metadata={**original.metadata_json, "semantic_context": {"profile_adaptation_plan": {"teaching_order": "先讲原理"}},
+                      "active_requirements": {"learning_goal": "解释混合检索", "shared": ["按概念准确性评价，不限句数"], "by_resource": {"feynman": ["独立举例"]}}})
+        newest = add_artifact_version(db, artifact=resource, content="新版以实践步骤开头。",
+            content_format="markdown", created_by_public_id=learner.public_id,
+            metadata={**original.metadata_json, "semantic_context": {"profile_adaptation_plan": {"teaching_order": "先做实践"}},
+                      "active_requirements": {"learning_goal": "解释重排", "shared": [], "by_resource": {"feynman": ["比较两次检索"]}}})
+        before = db.query(DBLearningEvent).count()
+        artifact, version, state, created = create_session(db, owner=learner.public_id,
+            source_resource_id=resource.id, source_resource_version_id=old.id,
+            idempotency_key="feynman-old-material-attempt")
+        assert created and state.source_resource_version_id == old.id
+        assert state.learning_material == long_material
+        assert _model_context(state)["active_requirements"] == old.metadata_json["active_requirements"]
+        assert _model_context(state)["learning_material"].endswith("先去重再融合。")
+        payload = session_payload(db, artifact, version, state)
+        assert payload["profile_adaptation_plan"]["teaching_order"] == "先讲原理"
+        assert payload["source_resource_version_number"] == old.version_number
+        current = create_session(db, owner=learner.public_id, source_resource_id=resource.id,
+            idempotency_key="feynman-new-material-attempt")[2]
+        assert current.source_resource_version_id == newest.id
+        assert current.active_requirements == newest.metadata_json["active_requirements"]
+        assert get_session(db, state.session_id, learner.public_id)["source_resource_version_id"] == old.id
+        assert [row["session_id"] for row in list_sessions(db, learner.public_id, resource.id, old.id)] == [state.session_id]
+        assert len(list_sessions(db, learner.public_id, resource.id)) == 2
+        assert get_session(db, state.session_id, learner.public_id)["learning_material"] == long_material
+        assert create_session(db, owner=learner.public_id, source_resource_id=resource.id,
+            source_resource_version_id=old.id, idempotency_key="feynman-old-material-attempt")[3] is False
+        with pytest.raises(FeynmanError, match="已绑定"):
+            create_session(db, owner=learner.public_id, source_resource_id=resource.id,
+                source_resource_version_id=newest.id, idempotency_key="feynman-old-material-attempt")
+        other_resource = _resource(db, learner, "feynman-version-other-resource")
+        for invalid in ("missing-version", other_resource.current_version_id):
+            with pytest.raises(FeynmanError) as exc:
+                create_session(db, owner=learner.public_id, source_resource_id=resource.id,
+                    source_resource_version_id=invalid, idempotency_key="feynman-invalid-material-attempt")
+            assert exc.value.code == "feynman_source_version_unknown"
+        assert db.query(DBLearningEvent).count() == before
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_dynamic_task_owner_binding_and_versioned_recovery():
     engine, session = _session()
     try:
@@ -124,6 +179,10 @@ def test_dynamic_task_owner_binding_and_versioned_recovery():
         assert state.knowledge_point_id == "demo-kp-07"
         assert state.knowledge_point_title in state.task_prompt
         assert state.profile_snapshot_id
+        source_version = session.get(DBArtifactVersion, resource.current_version_id)
+        assert state.learning_material == source_version.content
+        from app.feynman import _model_context
+        assert _model_context(state)["learning_material"] == source_version.content
         assert state.source_refs[0].source_ref_id == "demo-ref-07"
         assert "accuracy" not in state.task_prompt.lower()
         assert "recall" not in state.task_prompt.lower()
@@ -156,7 +215,16 @@ def test_dynamic_task_owner_binding_and_versioned_recovery():
         engine.dispose()
 
 
-def test_state_machine_requires_real_question_and_preserves_original_rounds():
+@pytest.mark.parametrize('long_input', [False, True])
+def test_state_machine_requires_real_question_and_preserves_original_rounds(long_input):
+    from app.feynman_api import ActionInput
+    round1 = ROUND1 * (200 if long_input else 1)
+    round2 = ROUND2 * (100 if long_input else 1)
+    question = '为什么混合权重需要保持平衡，不能只提高向量检索权重？' * (100 if long_input else 1)
+    if long_input:
+        assert len(round1) > 12000 and len(round2) > 12000 and len(question) > 2000
+    assert ActionInput(action='submit_round1', text=round1, expected_version=1,
+                      idempotency_key='full-round-request').text == round1
     engine, session = _session()
     try:
         seed_competition_demo(session)
@@ -176,9 +244,10 @@ def test_state_machine_requires_real_question_and_preserves_original_rounds():
             _action(session, learner, payload, "submit_round2", "f6-t05-invalid-round2-001", ROUND2)
         assert exc_info.value.code == "feynman_transition_invalid"
 
-        payload = _action(session, learner, payload, "submit_round1", "f6-t05-submit-r1-001", ROUND1)
+        payload = _action(session, learner, payload, "submit_round1", "f6-t05-submit-r1-001", round1)
         assert payload["status"] == "round1_submitted"
-        assert payload["round1_text"] == ROUND1
+        assert payload["round1_text"] == round1
+        assert get_session(session, state.session_id, learner.public_id)['round1_text'] == round1
         payload = _action(session, learner, payload, "evaluate_round1", "f6-t05-evaluate-r1-001")
         assert payload["status"] == "review1_ready"
         assert payload["round1_evaluation"]["rubric_version"] == "f6.feynman-rubric.v1"
@@ -200,9 +269,10 @@ def test_state_machine_requires_real_question_and_preserves_original_rounds():
             payload,
             "answer_question",
             "f6-t05-answer-question-001",
-            "为什么混合权重需要保持平衡，不能只提高向量检索权重？",
+            question,
         )
         assert payload["status"] == "question_answered"
+        assert payload['question_answer']['question'] == question
         assert payload["question_answer"]["source_ref_ids"] == ["demo-ref-07"]
         assert all(marker in payload["question_answer"]["answer"] for marker in (
             "重排只能", "完整链路", "关键信息缺失",
@@ -211,12 +281,13 @@ def test_state_machine_requires_real_question_and_preserves_original_rounds():
             "deterministic_local", "sha256", ".md", "kp-",
         ))
         assert payload["external_model_called"] is False
-        payload = _action(session, learner, payload, "submit_round2", "f6-t05-submit-r2-001", ROUND2)
+        payload = _action(session, learner, payload, "submit_round2", "f6-t05-submit-r2-001", round2)
         assert payload["status"] == "round2_submitted"
         payload = _action(session, learner, payload, "evaluate_round2", "f6-t05-evaluate-r2-001")
         assert payload["status"] == "comparison_ready"
-        assert payload["round1_text"] == ROUND1
-        assert payload["round2_text"] == ROUND2
+        assert payload["round1_text"] == round1
+        assert payload["round2_text"] == round2
+        assert get_session(session, state.session_id, learner.public_id)['round2_text'] == round2
         assert payload["comparison"]["first_score"] == payload["round1_evaluation"]["score"]
         assert payload["comparison"]["second_score"] == payload["round2_evaluation"]["score"]
         assert payload["comparison"]["score_delta"] > 0
@@ -307,9 +378,9 @@ def test_dedicated_frontend_contract_replaces_chat_route():
     assert api_path.is_file()
     view = view_path.read_text(encoding="utf-8")
     assert "component: FeynmanWorkspace" in router
-    assert "五阶段进度" in view
+    assert 'aria-label="复述进度"' in view
     assert "第一次复述" in view
-    assert "提出真实疑问" in view
+    assert "提出疑问" in view
     assert "第二次复述" in view
     assert "理解变化" in view
     assert "应用到后续学习" in view

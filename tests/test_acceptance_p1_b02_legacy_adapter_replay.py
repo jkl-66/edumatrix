@@ -14,6 +14,7 @@ from app.database import (
     DBConversationHistory,
     DBProfileEvidence,
     DBProfileSnapshot,
+    DBSourceDocument,
     DBStudentProfile,
     DBUser,
 )
@@ -120,7 +121,12 @@ def test_old_ml_bkt_and_history_adapters_replay_into_one_canonical_snapshot():
             target="正则化",
             profile_snapshot={"profile_version": "legacy-v0"},
         )
-        db.add_all([user, course, profile, membership, history])
+        source = DBSourceDocument(
+            id="source-p1-b02-legacy-replay", course_id=course.id,
+            title="正则化课程资料", filename="regularization.md",
+            file_format="md", content_hash="a" * 64,
+        )
+        db.add_all([user, course, source, profile, membership, history])
         db.commit()
 
         legacy_before = {

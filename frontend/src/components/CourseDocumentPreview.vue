@@ -1,5 +1,6 @@
 <script setup>
-import { nextTick, ref, watch } from 'vue'
+import { sourceTextLength } from '../utils/sourceTextOffsets.js'
+import { computed, nextTick, ref, watch } from 'vue'
 import {
   BookOpenText,
   Check,
@@ -9,8 +10,10 @@ import {
 } from '@lucide/vue'
 import {
   cacheKey,
+  documentSearchMatches,
   readCachedCourseDocument,
   renderCourseDocument,
+  renderCourseMath,
   writeCachedCourseDocument,
 } from '../utils/courseDocumentRenderer'
 
@@ -20,13 +23,23 @@ const props = defineProps({
   documentVersion: { type: String, default: '' },
   searchQuery: { type: String, default: '' },
   searchIndex: { type: Number, default: 0 },
+  zoom: { type: Number, default: 1 },
 })
 
 const emit = defineEmits(['mouseup', 'mode-change', 'rendered'])
 const mode = ref('preview')
 const rootRef = ref(null)
+const rawRef = ref(null)
+const rawMatches = computed(() => documentSearchMatches(props.text, props.searchQuery))
+const rawSearchParts = computed(() => {
+  const query = props.searchQuery.trim()
+  const text = props.text
+  if (!query) return { before: text, hit: '', after: '' }
+  const start = rawMatches.value[props.searchIndex]
+  if (start === undefined) return { before: text, hit: '', after: '' }
+  return { before: text.slice(0, start), hit: text.slice(start, start + query.length), after: text.slice(start + query.length) }
+})
 const presentation = ref({ html: '', blocks: [], matchCount: 0 })
-const cacheState = ref('generating')
 const copiedCode = ref('')
 let basePresentation = null
 let mermaidSequence = 0
@@ -34,28 +47,7 @@ let mermaidSequence = 0
 function renderMathAndMermaid() {
   const root = rootRef.value
   if (!root) return
-  root.querySelectorAll('.course-inline-math[data-math], .course-math[data-math-block]').forEach((element) => {
-    if (element.dataset.rendered === 'true') return
-    // Keep a formula in its source-text form while it contains a search hit.
-    // Replacing its innerHTML with KaTeX would otherwise remove the hit span
-    // and make the current result invisible after next/previous navigation.
-    if (element.querySelector('.course-search-hit')) {
-      element.dataset.rendered = 'true'
-      return
-    }
-    const math = element.dataset.math || element.dataset.mathBlock || element.textContent || ''
-    const sourceSpanElement = element.querySelector('[data-source-start][data-source-end]')
-    if (sourceSpanElement) {
-      element.dataset.sourceStart = sourceSpanElement.dataset.sourceStart
-      element.dataset.sourceEnd = sourceSpanElement.dataset.sourceEnd
-    }
-    if (window.katex) {
-      try {
-        element.innerHTML = window.katex.renderToString(math, { displayMode: element.classList.contains('course-math'), throwOnError: false, trust: false })
-      } catch {}
-    }
-    element.dataset.rendered = 'true'
-  })
+  renderCourseMath(root, window.katex)
   root.querySelectorAll('.course-mermaid[data-mermaid-source]').forEach((element) => {
     if (element.dataset.rendered === 'true' || typeof window.mermaid === 'undefined') return
     const code = decodeURIComponent(element.dataset.mermaidSource || '')
@@ -92,15 +84,13 @@ async function copyCode(event) {
   window.setTimeout(() => { copiedCode.value = '' }, 1600)
 }
 
-function buildBasePresentation() {
+function buildBasePresentation(refresh = false) {
   const key = cacheKey(props.documentId, props.documentVersion)
   const cached = readCachedCourseDocument(key)
-  if (cached?.html && cached?.rendererVersion) {
+  if (refresh !== true && cached?.html && cached?.rendererVersion) {
     basePresentation = cached
-    cacheState.value = 'hit'
   } else {
     basePresentation = renderCourseDocument(props.text)
-    cacheState.value = 'generated'
     writeCachedCourseDocument(key, basePresentation)
   }
   updatePresentation()
@@ -126,19 +116,42 @@ function setMode(next) {
   nextTick(() => renderMathAndMermaid())
 }
 
-function scrollToCurrentMatch() {
-  const root = rootRef.value
+async function scrollToCurrentMatch() {
+  let root = mode.value === 'raw' ? rawRef.value : rootRef.value
   if (!root) return
-  root.querySelector('.course-search-hit--current')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  let hit = root.querySelector('.course-search-hit--current')
+  // Search includes the complete source, including import notes and markup
+  // omitted from the reading layout. Reveal those matches in the original
+  // text instead of showing a count for an invisible destination.
+  if (!hit && mode.value === 'preview' && rawMatches.value[props.searchIndex] !== undefined) {
+    setMode('raw')
+    await nextTick()
+    root = rawRef.value
+    hit = root?.querySelector('.course-search-hit--current')
+  }
+  hit?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 }
 
 function scrollToSourceOffset(offset) {
-  const root = rootRef.value
+  const root = mode.value === 'raw' ? rawRef.value : rootRef.value
   if (!root) return
   const target = Number(offset) || 0
-  const candidates = Array.from(root.querySelectorAll('[data-source-start][data-source-end]'))
-    .filter((item) => Number(item.dataset.sourceStart) <= target && Number(item.dataset.sourceEnd) >= target)
-  ;(candidates[0] || root.querySelector('[data-source-start]'))?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  const ranges = Array.from(root.querySelectorAll('[data-source-start][data-source-end]'))
+  const containing = ranges.filter(item => Number(item.dataset.sourceStart) <= target && Number(item.dataset.sourceEnd) > target)
+    .sort((a, b) => (Number(a.dataset.sourceEnd) - Number(a.dataset.sourceStart)) - (Number(b.dataset.sourceEnd) - Number(b.dataset.sourceStart)))
+  // Chapter anchors may point to Markdown markers or whitespace that are not
+  // rendered. Continue at the next text block instead of jumping to page one.
+  const following = ranges.filter(item => Number(item.dataset.sourceStart) >= target)
+    .sort((a, b) => Number(a.dataset.sourceStart) - Number(b.dataset.sourceStart))
+  // A chapter starts at the top of the reading pane. Centering it leaves the
+  // preceding chapter above it and lets scroll tracking replace the selection.
+  const anchor = containing[0] || following[0] || ranges.at(-1)
+  const viewport = root.closest?.('.reading-viewport')
+  if (anchor && viewport) {
+    viewport.scrollTop += anchor.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+  } else {
+    anchor?.scrollIntoView({ block: 'start', behavior: 'instant' })
+  }
 }
 
 function handlePreviewClick(event) {
@@ -150,8 +163,16 @@ function handlePreviewClick(event) {
     if (target) {
       event.preventDefault()
       // Empty upstream anchors have no scroll box; align the following block.
-      const visibleTarget = target.getBoundingClientRect().height ? target : target.nextElementSibling || target
-      visibleTarget.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      let visibleTarget = target
+      while (!visibleTarget.getBoundingClientRect().height && visibleTarget.nextElementSibling) {
+        visibleTarget = visibleTarget.nextElementSibling
+      }
+      const viewport = root.closest?.('.reading-viewport')
+      if (viewport) {
+        viewport.scrollTop += visibleTarget.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+      } else {
+        visibleTarget.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      }
       return
     }
   }
@@ -162,7 +183,7 @@ watch(() => [props.text, props.documentId, props.documentVersion], buildBasePres
 watch(() => [props.searchQuery, props.searchIndex], updatePresentation)
 
 defineExpose({
-  getSelectionRoot: () => rootRef.value,
+  getSelectionRoot: () => mode.value === 'raw' ? rawRef.value : rootRef.value,
   scrollToCurrentMatch,
   scrollToSourceOffset,
 })
@@ -171,16 +192,10 @@ defineExpose({
 <template>
   <div class="course-document-reader" data-testid="course-document-preview">
     <div class="course-document-reader__toolbar" role="toolbar" aria-label="文档阅读视图">
-      <div class="course-document-reader__mode-title">
-        <BookOpenText :size="17" />
-        <strong>{{ mode === 'preview' ? '阅读版' : '原文 Markdown' }}</strong>
-        <span v-if="mode === 'preview' && cacheState === 'hit'">已使用本版缓存</span>
-        <span v-else-if="mode === 'preview' && cacheState === 'generated'">已生成本版预览</span>
-      </div>
       <div class="course-document-reader__mode-actions">
-        <button type="button" :class="{ active: mode === 'preview' }" @click="setMode('preview')"><BookOpenText :size="15" />阅读版</button>
-        <button type="button" :class="{ active: mode === 'raw' }" @click="setMode('raw')"><FileCode2 :size="15" />原文</button>
-        <button v-if="mode === 'preview'" type="button" class="icon-action" title="重新生成本版预览" aria-label="重新生成本版预览" @click="buildBasePresentation"><RefreshCw :size="15" /></button>
+        <button type="button" :class="{ active: mode === 'preview' }" :aria-pressed="mode === 'preview'" @click="setMode('preview')"><BookOpenText :size="15" />阅读版</button>
+        <button type="button" :class="{ active: mode === 'raw' }" :aria-pressed="mode === 'raw'" @click="setMode('raw')"><FileCode2 :size="15" />原文</button>
+        <button v-if="mode === 'preview'" type="button" class="icon-action" title="刷新排版" aria-label="刷新排版" @click="buildBasePresentation(true)"><RefreshCw :size="15" /></button>
       </div>
     </div>
 
@@ -188,13 +203,14 @@ defineExpose({
       v-if="mode === 'preview'"
       ref="rootRef"
       class="course-document-preview"
+      :style="{ zoom }"
       @click="handlePreviewClick"
       @mouseup="emit('mouseup', $event)"
     >
       <div v-if="!presentation.html" class="course-document-empty">当前文档没有可渲染的正文。</div>
       <div v-else v-html="presentation.html" />
     </article>
-    <pre v-else ref="rawRef" class="course-document-raw" @mouseup="emit('mouseup', $event)">{{ text }}</pre>
+    <pre v-else ref="rawRef" class="course-document-raw" :style="{ zoom }" @mouseup="emit('mouseup', $event)"><span data-source-start="0" :data-source-end="sourceTextLength(text)">{{ rawSearchParts.before }}<mark v-if="rawSearchParts.hit" class="course-search-hit course-search-hit--current">{{ rawSearchParts.hit }}</mark>{{ rawSearchParts.after }}</span></pre>
 
     <div v-if="mode === 'preview' && copiedCode" class="course-document-toast" role="status"><Check :size="15" />代码已复制</div>
   </div>
@@ -202,22 +218,19 @@ defineExpose({
 
 <style>
 .course-document-reader { position: relative; min-width: 0; }
-.course-document-reader__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 auto 18px; padding: 10px 14px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); }
-.course-document-reader__mode-title, .course-document-reader__mode-actions, .course-document-reader__mode-actions button, .course-document-toast { display: flex; align-items: center; }
-.course-document-reader__mode-title { min-width: 0; gap: 8px; color: var(--color-text-secondary); }
-.course-document-reader__mode-title strong { color: var(--color-text); font-size: 14px; }
-.course-document-reader__mode-title span { overflow: hidden; color: var(--color-text-muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.course-document-reader__toolbar { display: flex; align-items: center; justify-content: flex-end; margin: 0 auto 12px; }
+.course-document-reader__mode-actions, .course-document-reader__mode-actions button, .course-document-toast { display: flex; align-items: center; }
 .course-document-reader__mode-actions { gap: 5px; }
 .course-document-reader__mode-actions button { gap: 6px; min-height: 34px; padding: 0 10px; color: var(--color-text-muted); border: 1px solid transparent; border-radius: 6px; background: transparent; font-size: 14px; cursor: pointer; }
 .course-document-reader__mode-actions button:hover { color: var(--color-text); background: var(--color-surface-subtle); }
 .course-document-reader__mode-actions button.active { color: var(--color-accent); border-color: var(--color-border); background: var(--color-accent-soft); font-weight: 650; }
-.course-document-reader__mode-actions button.icon-action { width: 34px; justify-content: center; padding: 0; border-color: var(--color-border); }
+.course-document-reader__mode-actions button.icon-action { width: 34px; justify-content: center; padding: 0; }
 .course-document-preview { width: min(100%, 900px); margin: 0 auto; padding: 34px clamp(26px, 5vw, 64px) 72px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); box-shadow: 0 10px 28px rgb(6 20 27 / 7%); font-family: var(--font-sans); font-size: 16px; line-height: 1.85; overflow-wrap: anywhere; user-select: text; }
 .course-document-raw { width: min(100%, 900px); min-height: 100%; margin: 0 auto; padding: 34px clamp(26px, 5vw, 64px) 72px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); font-family: var(--font-mono); font-size: 14px; line-height: 1.8; overflow: auto; white-space: pre-wrap; user-select: text; }
 .lesson-block { margin: 0 0 18px; }
 .lesson-block--section { margin-top: 28px; margin-bottom: 12px; }
 .lesson-block--section:first-child { margin-top: 0; }
-.course-heading { margin: 0; color: var(--color-text); font-weight: 700; line-height: 1.35; letter-spacing: -0.01em; }
+.course-heading { margin: 0; color: var(--color-text); font-weight: 700; line-height: 1.35; letter-spacing: 0; }
 .course-heading--1 { font-size: 28px; padding-bottom: 12px; border-bottom: 1px solid var(--color-border); }
 .course-heading--2 { font-size: 22px; padding-left: 12px; border-left: 3px solid var(--color-accent); }
 .course-heading--3, .course-heading--4 { font-size: 18px; color: var(--color-text-secondary); }

@@ -9,6 +9,9 @@ from zoneinfo import ZoneInfo
 
 from app.authorization import ObjectAccess, active_course_role, can_access_object
 from app.database import (
+    DBAssessmentExamSitting,
+    DBAssessmentExamVersion,
+    DBAssessmentQuestion,
     DBAssessmentQuestionVersion,
     DBAssessmentRetestTask,
     DBChapter,
@@ -141,7 +144,9 @@ def _plan_context(
     plan: DBReviewPlan,
     by_alias: dict[str, list[dict[str, str]]],
 ) -> dict[str, str | None]:
-    candidates = by_alias.get(str(plan.concept or "").strip().casefold(), [])
+    candidates = by_alias.get(str(plan.knowledge_point_id or plan.concept or "").strip().casefold(), [])
+    if plan.course_id:
+        candidates = [item for item in candidates if item["course_id"] == plan.course_id]
     unique = {
         (item["course_id"], item["knowledge_point_id"]): item
         for item in candidates
@@ -149,11 +154,17 @@ def _plan_context(
     if len(unique) == 1:
         return dict(next(iter(unique.values())))
     return {
-        "course_id": None,
+        "course_id": plan.course_id or None,
         "knowledge_point_id": None,
         "knowledge_point_title": str(plan.concept or "未命名知识点"),
         "chapter_id": None,
     }
+
+
+def review_plan_contexts(db: Any, actor: DBUser, plans: list[DBReviewPlan]) -> dict[int, dict[str, Any]]:
+    """Resolve old title-based and current scoped plans with the calendar's rules."""
+    by_alias, _ = _knowledge_contexts(db, _readable_courses(db, actor))
+    return {plan.id: _plan_context(plan, by_alias) for plan in plans}
 
 
 def _retest_context(
@@ -312,9 +323,19 @@ def _task_payload(
     start_route: str,
 ) -> dict[str, Any]:
     resource = _resource_context(db, actor=actor, context=context)
+    resource["default_resource_types"] = _default_review_resource_types(db, task_id)
     exam = _exam_context(
         db, actor=actor, course_id=context.get("course_id"),
     )
+    if source_type == "sm2_review_plan":
+        exam = {
+            "unlocked": bool(resource["ready"]),
+            "reason": "review_task",
+            "message": (
+                "回顾本知识点的资料后，就可以完成本次复习测评。"
+                if resource["ready"] else "请先补齐本次复习需要的课程资料。"
+            ),
+        }
     title = context.get("knowledge_point_title") or "未命名复习任务"
     resource_review = {
         "required": source_type == "sm2_review_plan",
@@ -393,6 +414,44 @@ def _status_for_due(due_date: date, today: date) -> str:
     return "scheduled"
 
 
+def _pending_review_assessments(db: Any, actor: DBUser) -> dict[str, dict[str, Any]]:
+    """Recover scored review exams from their saved scope, not a return URL."""
+    completions = db.query(DBLearningEvent).filter_by(
+        owner_public_id=actor.public_id, event_type="review_completed",
+    ).all()
+    consumed = {(item.payload or {}).get("assessment_event_id") for item in completions}
+    completed_at: dict[str, datetime] = {}
+    for item in completions:
+        task_id = str((item.payload or {}).get("review_id") or "")
+        occurred_at = _utc_naive(item.occurred_at)
+        if task_id and occurred_at:
+            completed_at[task_id] = max(completed_at.get(task_id, datetime.min), occurred_at)
+    rows = db.query(DBLearningEvent, DBAssessmentExamSitting, DBAssessmentExamVersion).join(
+        DBAssessmentExamSitting, DBAssessmentExamSitting.id == DBLearningEvent.object_id,
+    ).join(
+        DBAssessmentExamVersion, DBAssessmentExamVersion.id == DBAssessmentExamSitting.exam_version_id,
+    ).filter(
+        DBLearningEvent.owner_public_id == actor.public_id,
+        DBLearningEvent.event_type == "formal_exam_submitted",
+        DBLearningEvent.evidence_status == "accepted",
+        DBAssessmentExamSitting.owner_public_id == actor.public_id,
+    ).order_by(DBLearningEvent.occurred_at.desc(), DBLearningEvent.id.desc()).all()
+    result: dict[str, dict[str, Any]] = {}
+    for event, sitting, version in rows:
+        task_id = str((version.configuration or {}).get("review_task_id") or "")
+        payload = event.payload or {}
+        if (not task_id or task_id in result or event.id in consumed or not payload.get("graded")
+                or (_utc_naive(event.occurred_at) or datetime.min) <= completed_at.get(task_id, datetime.min)):
+            continue
+        result[task_id] = {
+            "event_id": event.id, "exam_id": sitting.exam_id, "sitting_id": sitting.id,
+            "course_id": event.course_id,
+            "knowledge_point_ids": [item.get("knowledge_point_id") for item in payload.get("knowledge_point_scores", [])
+                                    if item.get("score") is not None],
+        }
+    return result
+
+
 def build_review_schedule(
     db: Any,
     *,
@@ -409,6 +468,7 @@ def build_review_schedule(
         _fail("review_schedule.course_forbidden", "当前课程不可用。")
     by_alias, by_id = _knowledge_contexts(db, courses)
     tasks: list[dict[str, Any]] = []
+    pending_assessments = _pending_review_assessments(db, actor)
 
     plans = (
         db.query(DBReviewPlan)
@@ -430,13 +490,17 @@ def build_review_schedule(
             due_at=due_at,
             status=_status_for_due(due_date, today),
             task_type="SM-2 间隔复习",
-            reason="根据上次掌握证据和间隔重复计划安排。",
+            reason="按已保存的复习计划安排，结合这次练习继续巩固。",
             method="先回顾当前知识点的授权资源，再完成一次智能组卷并提交作答。",
-            completion_rule="完成资源回顾并提交一次服务端判分的智能组卷作答。",
+            completion_rule="回顾本知识点的资料，再完成一次测评并查看评分。",
             priority=float(plan.priority or 1.0),
             start_kind="review_assessment",
             start_route=f"/workspace/review?review_task=review-plan:{plan.id}",
         ))
+        assessment = pending_assessments.get(f"review-plan:{plan.id}")
+        if (assessment and assessment["course_id"] == context.get("course_id")
+                and context.get("knowledge_point_id") in assessment["knowledge_point_ids"]):
+            tasks[-1]["assessment"] = assessment
 
     retests = (
         db.query(DBAssessmentRetestTask)
@@ -465,7 +529,7 @@ def build_review_schedule(
             task_type="延迟复测",
             reason="已确认的错误模式需要在间隔后重新作答验证。",
             method="进入真实题目并提交答案，判分通过后自动形成证据。",
-            completion_rule="延迟至少 24 小时后正确完成服务端判分。",
+            completion_rule="间隔至少 24 小时后，再次作答并答对。",
             priority=0.45,
             start_kind="delayed_retest",
             start_route=f"/workspace/review?retest_id={retest.id}",
@@ -497,7 +561,7 @@ def build_review_schedule(
             due_at=_utc_naive(event.occurred_at),
             status="completed",
             task_type="复习完成记录",
-            reason="已提交有效回忆结果并进入统一学习聚合。",
+            reason="这次复习已经完成，学习记录与后续安排已更新。",
             method="查看本次回忆结果和后续安排。",
             completion_rule="已完成。",
             priority=1.0,
@@ -608,6 +672,7 @@ def complete_review_task(
             .filter(
                 DBReviewPlan.student_id == actor.username,
                 DBReviewPlan.concept == canonical_concept,
+                DBReviewPlan.course_id == plan.course_id,
                 DBReviewPlan.id != plan.id,
             )
             .first()
@@ -618,6 +683,10 @@ def complete_review_task(
                 "同一知识点存在重复复习计划，请先保留一条计划再提交。",
             )
         plan.concept = canonical_concept
+        db.flush()
+    if context.get("course_id") and not plan.course_id:
+        plan.course_id = context["course_id"]
+        plan.knowledge_point_id = context.get("knowledge_point_id")
         db.flush()
     point_id = context.get("knowledge_point_id") or f"legacy-review-{plan.id}"
     assessment = None
@@ -681,6 +750,17 @@ def complete_review_task(
             "assessment_event_id": assessment_event.id,
             "assessment_score": round(float(recall_score), 4),
         })
+    if existing is None and (assessment is not None or assessment_event is not None):
+        reference_key = "assessment_attempt_id" if assessment is not None else "assessment_event_id"
+        reference_id = assessment.id if assessment is not None else assessment_event.id
+        previous = next((row for row in db.query(DBLearningEvent).filter_by(
+            owner_public_id=actor.public_id, event_type="review_completed", object_id=point_id,
+        ).all() if (row.payload or {}).get(reference_key) == reference_id), None)
+        if previous is not None:
+            # Reopening the exam return URL must not create another completion
+            # merely because the browser generated a new submission key.
+            existing = previous
+            expected_payload = dict(previous.payload or {})
     if existing is not None:
         if (
             existing.event_type != "review_completed"
@@ -751,12 +831,24 @@ def complete_review_task(
     }
 
 
+def _default_review_resource_types(db: Any, task_id: str) -> list[str]:
+    types = ["handout", "quiz"]
+    if task_id.startswith("retest:"):
+        retest = db.get(DBAssessmentRetestTask, task_id.split(":", 1)[1])
+        version = db.get(DBAssessmentQuestionVersion, retest.question_version_id) if retest else None
+        question = db.get(DBAssessmentQuestion, version.question_id) if version else None
+        if question is not None and question.question_type == "code":
+            types.append("code_sandbox")
+    return types
+
+
 def create_review_resource_job(
     db: Any,
     *,
     actor: DBUser,
     task_id: str,
     idempotency_key: str,
+    resource_types: list[str] | None = None,
 ) -> dict[str, Any]:
     courses = _readable_courses(db, actor)
     by_alias, by_id = _knowledge_contexts(db, courses)
@@ -773,6 +865,11 @@ def create_review_resource_job(
     resource = _resource_context(db, actor=actor, context=context)
     if not resource["ready"]:
         _fail("review_schedule.resource_context_incomplete", resource["block_reason"])
+    selected = _default_review_resource_types(db, task_id) if resource_types is None else resource_types
+    if not selected or any(item not in GENERATION_RESOURCE_TYPES for item in selected):
+        _fail("review_schedule.resource_types_invalid", "请选择有效的复习资源类型。")
+    # Stable order keeps identical selections idempotent, including explicit nine-type requests.
+    selected = [item for item in GENERATION_RESOURCE_TYPES if item in selected]
     title = str(resource["knowledge_point_title"])
     items = [
         {
@@ -781,11 +878,12 @@ def create_review_resource_job(
             "source_ref_ids": resource["source_ref_ids"],
             "completion_rule": RESOURCE_LABELS[resource_type][1],
         }
-        for resource_type in GENERATION_RESOURCE_TYPES
+        for resource_type in selected
     ]
     result = create_generation_job(
         db,
         actor,
+        auto_start=True,
         course_id=str(resource["course_id"]),
         knowledge_point_id=str(resource["knowledge_point_id"]),
         profile_snapshot_id=str(resource["profile_snapshot_id"]),

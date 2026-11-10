@@ -50,6 +50,7 @@ def _session():
             ),
         ]
     )
+    session.add(DBSourceDocument(id="src-private", course_id="private-ml", title="Private source", filename="private.md", file_format="md", content_hash="1" * 64, processing_status="ready"))
     documents = {
         "preparation": "Handle missing values, encode categorical features, and standardize numeric features before model training.",
         "tree": "A decision tree recursively splits samples to reduce impurity.",
@@ -129,14 +130,20 @@ def test_cross_language_api_uses_persisted_body_and_returns_locatable_evidence(m
         )
         assert response.status_code == 200, response.text
         payload = response.json()
-        assert payload["strategy"] == "hybrid-glossary-v1"
+        assert payload["strategy"] == "canonical-bm25-semantic-rrf-v2"
         assert payload["metadata_excluded"] is True
         assert payload["low_confidence"] is False
         assert payload["items"][0]["document_id"] == "doc-preparation"
         assert payload["items"][0]["locatable"] is True
         assert payload["items"][0]["source_ref_id"] == "ref-preparation"
         assert payload["items"][0]["evidence_id"]
-        assert payload["fusion"]["tfidf_weight"] == 2.0
+        assert payload['fusion']['bm25_weight'] == 1.0
+        assert payload['retrieval']['lexical_method'] == 'bm25'
+        assert 'tfidf_rank' not in payload['items'][0]
+        if not payload['retrieval']['semantic_executed']:
+            assert payload['fusion']['method'] == 'bm25'
+            assert payload['items'][0]['semantic_rank'] is None
+            assert payload['items'][0]['fused_score'] is None
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         session.close()

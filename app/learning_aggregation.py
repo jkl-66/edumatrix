@@ -9,6 +9,8 @@ import json
 from typing import Any, Callable
 
 from app.database import (
+    DBArtifact,
+    DBArtifactVersion,
     DBAssessmentQuestionVersion,
     DBChapterKnowledgePoint,
     DBKnowledgePoint,
@@ -24,6 +26,11 @@ from app.database import (
     DBWrongQuestionVideoLink,
 )
 from models import DIMENSION_LABELS
+
+
+def current_exam_feedback_payload(session, event):
+    from app.m5_exam_core import current_exam_feedback_payload as effective_payload
+    return effective_payload(session, event)
 
 
 AGGREGATION_PROCESSOR_VERSION = "f8.learning-feedback.v3"
@@ -61,9 +68,9 @@ AGGREGATION_VIEW_CONTRACT = {
 }
 
 _FEEDBACK_SOURCE_LABELS = {
-    "interactive_experiment_completed": "interactive experiment",
-    "delayed_retest_passed": "delayed retest",
-    "teacher_confirmed": "teacher confirmation",
+    "interactive_experiment_completed": "交互实验",
+    "delayed_retest_passed": "间隔复测",
+    "teacher_confirmed": "教师确认",
     "quiz_answered": "测验题",
     "code_tests_passed": "代码沙盒",
     "interactive_model_observation_submitted": "可交互模型",
@@ -143,15 +150,23 @@ def _profile_feedback_events(session: Any, event: DBLearningEvent) -> list[DBLea
 
 def _event_concept(session: Any, event: DBLearningEvent) -> tuple[str, str] | None:
     context = event.context_ref or {}
-    payload = event.payload or {}
+    payload = current_exam_feedback_payload(session, event)
     knowledge_point_id = (
         context.get("knowledgePointId")
         or context.get("knowledge_point_id")
         or payload.get("knowledge_point_id")
     )
+    if event.object_type == "artifact" and payload.get("resource_version_id"):
+        version = session.get(DBArtifactVersion, payload["resource_version_id"])
+        artifact = session.get(DBArtifact, event.object_id)
+        if version and artifact and version.artifact_id == artifact.id and artifact.course_id == event.course_id:
+            knowledge_point_id = (version.metadata_json or {}).get("knowledge_point_id") or knowledge_point_id
     if not knowledge_point_id and event.object_type == "knowledge_point":
         knowledge_point_id = event.object_id
-    if not knowledge_point_id and event.object_type == "assessment_question_version":
+    if not knowledge_point_id and (
+        event.object_type == "assessment_question_version"
+        or (event.object_type == "assessment" and event.event_type == "delayed_retest_passed")
+    ):
         version = session.query(DBAssessmentQuestionVersion).filter_by(id=event.object_id).first()
         knowledge_point_id = version.primary_knowledge_point_id if version else None
     if knowledge_point_id:
@@ -170,6 +185,8 @@ def _event_concept(session: Any, event: DBLearningEvent) -> tuple[str, str] | No
 
 def _observation(event: DBLearningEvent) -> float | None:
     payload = event.payload or {}
+    if payload.get("evidence_kind") == "guided_practice":
+        return None
     if event.event_type in {"quiz_answered", "formal_exam_submitted"}:
         if payload.get("score") is not None:
             return max(0.0, min(1.0, float(payload["score"])))
@@ -195,7 +212,7 @@ def _observation(event: DBLearningEvent) -> float | None:
 def _event_observations(
     session: Any, event: DBLearningEvent,
 ) -> list[tuple[str, str, float]]:
-    payload = event.payload or {}
+    payload = current_exam_feedback_payload(session, event)
     if event.event_type == "formal_exam_submitted":
         output: list[tuple[str, str, float]] = []
         for item in payload.get("knowledge_point_scores") or []:
@@ -209,7 +226,7 @@ def _event_observations(
         if output:
             return output
     concept = _event_concept(session, event)
-    observation = _observation(event)
+    observation = payload.get("score") if event.event_type == "formal_exam_submitted" else _observation(event)
     return [(concept[0], concept[1], observation)] if concept is not None and observation is not None else []
 
 
@@ -217,8 +234,22 @@ def _mastery_events(
     session: Any, event: DBLearningEvent,
 ) -> list[tuple[DBLearningEvent, str, str, float]]:
     output: list[tuple[DBLearningEvent, str, str, float]] = []
-    for item in _scope_events(session, event):
-        if item.evidence_status != "accepted" or not item.mastery_eligible:
+    accepted = [item for item in _scope_events(session, event)
+                if item.evidence_status == "accepted" and item.mastery_eligible]
+    exam_ids = {item.id for item in accepted if item.event_type == "formal_exam_submitted"}
+    assessment_attempt_ids = {
+        (item.payload or {})["attempt_id"] for item in accepted
+        if item.event_type in {"quiz_answered", "formal_exam_submitted"}
+        and (item.payload or {}).get("attempt_id")
+    }
+    for item in accepted:
+        # Completing the review records time and the next visit. Its linked
+        # assessment has already supplied the score, so do not count it twice.
+        payload = current_exam_feedback_payload(session, item)
+        if item.event_type == "review_completed" and (
+            payload.get("assessment_event_id") in exam_ids
+            or payload.get("assessment_attempt_id") in assessment_attempt_ids
+        ):
             continue
         for concept_id, concept_title, observation in _event_observations(session, item):
             output.append((item, concept_id, concept_title, observation))
@@ -238,7 +269,7 @@ def _next_day_schedule(session: Any, event: DBLearningEvent) -> list[dict[str, A
         candidates or [event],
         key=lambda item: (item.occurred_at or datetime.min, item.id),
     )
-    declared = list((schedule_event.payload or {}).get("next_day_schedule") or [])
+    declared = list(current_exam_feedback_payload(session, schedule_event).get("next_day_schedule") or [])
     if declared:
         return declared
 
@@ -373,6 +404,8 @@ def _event_score(session: Any, event: DBLearningEvent) -> float | None:
     observations = [item[2] for item in _event_observations(session, event)]
     if observations:
         return sum(observations) / len(observations)
+    if event.event_type == "formal_exam_submitted":
+        return current_exam_feedback_payload(session, event).get("score")
     return _observation(event)
 
 
@@ -441,7 +474,9 @@ def _dimension_evidence_fragments(
             for item, _ in relevant if item.event_type == "feynman_submitted"
         ]
         if feynman_deltas:
-            return [f"费曼两轮复述最高提升 {round(max(feynman_deltas))} 分，并结合测评结果校准了自我解释。"]
+            best_delta = round(max(feynman_deltas))
+            change = f'最高提升 {best_delta} 分' if best_delta > 0 else f'仍下降 {abs(best_delta)} 分' if best_delta < 0 else '得分持平'
+            return [f"费曼两轮复述{change}，可结合点评继续检查自己的解释。"]
         return ["测评结果为后续自我判断提供了校准依据。"] if relevant else []
     if key == "motivation_and_purpose":
         return [
@@ -477,7 +512,7 @@ def _project_behavior_profile(
     for item in events:
         score = _event_score(session, item)
         scored_events.append((item, score))
-        payload = item.payload or {}
+        payload = current_exam_feedback_payload(session, item)
         item_results = list(payload.get("item_results") or [])
         wrong_ratio = (
             sum(result.get("correct") is False for result in item_results) / len(item_results)
@@ -516,6 +551,7 @@ def _project_behavior_profile(
         })
 
     baseline_dimensions = deepcopy(baseline_data.get("dimension_states") or {})
+    current_dimensions = deepcopy(profile.dimension_states or {})
 
     def base_score(key: str, default: float) -> float:
         state = baseline_dimensions.get(key) or {}
@@ -609,6 +645,9 @@ def _project_behavior_profile(
         if not fragments:
             fragments = list(previous.get("evidence_fragments") or [])[-3:]
         dimensions[key] = {
+            # Learning updates the measured state, not the learner's confirmed
+            # language, tools, schedule, background or qualitative explanation.
+            **deepcopy(current_dimensions.get(key) or previous),
             "key": key,
             "label": str(previous.get("label") or label),
             "score": round(dimension_scores[key], 2),
@@ -622,6 +661,12 @@ def _project_behavior_profile(
             "recommended_interventions": list(previous.get("recommended_interventions") or []),
             "last_updated": _iso(relevant[-1][0].occurred_at) if relevant else str(previous.get("last_updated") or ""),
         }
+        if key == "learning_context" and current_dimensions.get(key):
+            dimensions[key] = deepcopy(current_dimensions[key])
+        elif relevant and key in {"knowledge_mastery", "misconception_profile", "understanding_fluency_transfer"}:
+            # Keep the learner's description, while displaying the score from
+            # actual subject evidence once that evidence becomes available.
+            dimensions[key]["qualitative"] = False
 
     causes = deepcopy(baseline_data.get("learning_state_causes") or {})
     recent_fragments = [_event_fragment(session, item, score) for item, score in scored_events[-3:]]
@@ -658,7 +703,78 @@ def _project_behavior_profile(
     }
 
 
-def _project_profile(session: Any, event: DBLearningEvent) -> dict[str, Any]:
+def repair_self_rated_mastery(session: Any) -> int:
+    """Restore identifiable legacy flashcard overwrites from frozen graded evidence."""
+    corrected = 0
+    for profile in session.query(DBStudentProfile).all():
+        owner = session.query(DBUser).filter_by(username=profile.student_id).first()
+        if owner is None:
+            continue
+        mastery = dict(profile.concept_mastery or {})
+        weak = list(profile.weak_points or [])
+        by_course: dict[str | None, dict[str, Any]] = {}
+        plans = session.query(DBReviewPlan).filter_by(student_id=profile.student_id).all()
+        for plan in plans:
+            concept = plan.concept
+            if not plan.review_count or plan.mastery is None or mastery.get(concept) != round(plan.mastery, 2):
+                continue
+            trace = (profile.knowledge_traces or {}).get(concept) or {}
+            event = session.get(DBLearningEvent, trace.get("source_event_id")) if trace.get("source_event_id") else None
+            if event is None and not trace.get("source_event_id") and trace.get("last_updated"):
+                # Older projections stored the exact observation time, not its ID.
+                candidates = [item for item in session.query(DBLearningEvent).filter_by(
+                    owner_public_id=owner.public_id, mastery_eligible=True, evidence_status="accepted",
+                ).all() if _iso(item.occurred_at) == trace["last_updated"]
+                    and any(title == concept for _, title, _ in _event_observations(session, item))]
+                if len(candidates) == 1:
+                    event = candidates[0]
+            if not event or event.owner_public_id != owner.public_id or not event.mastery_eligible or event.evidence_status != "accepted":
+                continue
+            if not any(title == concept for _, title, _ in _event_observations(session, event)):
+                continue
+            evidence = session.get(DBProfileSnapshot, _stable_id("psagg", event.id))
+            score = (evidence.snapshot.get("concept_mastery") or {}).get(concept) if evidence else None
+            if not isinstance(score, (int, float)) or isinstance(score, bool) or not 0 <= score <= 1 or score == mastery.get(concept):
+                continue
+            if not trace.get("source_event_id") and trace.get("mastery") != score:
+                continue
+            correction_id = _stable_id("psrecallfix", f"{owner.public_id}:{event.course_id}")
+            if session.get(DBProfileSnapshot, correction_id):
+                continue
+            group = by_course.setdefault(event.course_id, {"id": correction_id, "event": event, "changes": {}})
+            group["changes"][concept] = {"before": mastery[concept], "after": score, "evidence_snapshot_id": evidence.id}
+            mastery[concept] = score
+            if concept in (evidence.snapshot.get("weak_points") or []):
+                if concept not in weak:
+                    weak.append(concept)
+            elif concept in weak:
+                weak.remove(concept)
+        if not by_course:
+            continue
+        profile.concept_mastery = mastery
+        profile.weak_points = weak
+        profile.narrative_report = ""
+        profile.dashboard_report = ""
+        profile.last_updated = _now()
+        snapshots = session.query(DBProfileSnapshot).filter_by(owner_public_id=owner.public_id).order_by(DBProfileSnapshot.created_at.desc(), DBProfileSnapshot.id.desc()).all()
+        for course_id, group in by_course.items():
+            latest = next((row for row in snapshots if (row.snapshot or {}).get("course_id") in {None, course_id}), None)
+            body = deepcopy(latest.snapshot) if latest else {}
+            body.update({"kind": "flashcard_mastery_correction", "course_id": course_id,
+                         "concept_mastery": mastery, "weak_points": weak,
+                         "knowledge_traces": dict(profile.knowledge_traces or {}),
+                         "source_event_id": group["event"].id, "corrected_concepts": group["changes"]})
+            session.add(DBProfileSnapshot(id=group["id"], owner_public_id=owner.public_id,
+                legacy_student_id=profile.student_id, profile_version="flashcard-score-repair-v1",
+                snapshot=body, content_hash=_hash(body), trace_id=group["event"].trace_id))
+            corrected += len(group["changes"])
+    session.flush()
+    return corrected
+
+
+def _project_profile(
+    session: Any, event: DBLearningEvent, *, snapshot_id: str | None = None,
+) -> dict[str, Any]:
     _, profile = _owner_profile(session, event)
     baseline = _baseline_snapshot(session, event, profile)
     behavior_baseline = _behavior_baseline_snapshot(session, event, profile, baseline)
@@ -722,8 +838,10 @@ def _project_profile(session: Any, event: DBLearningEvent) -> dict[str, Any]:
     profile.dashboard_report = ""
     profile.last_updated = _now()
 
+    from app.profile_adaptation import confirmed_profile_fields
     snapshot_data = {
         "kind": "learning_aggregation_projection",
+        "profile_projection": confirmed_profile_fields(profile),
         "source_event_id": event.id,
         "owner_public_id": event.owner_public_id,
         "legacy_student_id": profile.student_id,
@@ -741,7 +859,9 @@ def _project_profile(session: Any, event: DBLearningEvent) -> dict[str, Any]:
         "accepted_behavior_event_ids": behavior_projection["accepted_event_ids"],
         "next_day_schedule": _next_day_schedule(session, event),
     }
-    snapshot_id = _stable_id("psagg", event.id)
+    payload = current_exam_feedback_payload(session, event)
+    reviewed_report = payload.get("report_id") if payload.get("report_id") != (event.payload or {}).get("report_id") else None
+    snapshot_id = snapshot_id or _stable_id("psagg", f"{event.id}:{reviewed_report}" if reviewed_report else event.id)
     snapshot = session.query(DBProfileSnapshot).filter_by(id=snapshot_id).first()
     if snapshot is None:
         snapshot = DBProfileSnapshot(
@@ -774,10 +894,61 @@ def _project_profile(session: Any, event: DBLearningEvent) -> dict[str, Any]:
     }
 
 
+def _node_predecessors(session: Any, node: DBPathNode) -> tuple[DBPathNode, ...]:
+    """Follow the same learning target through actual consecutive replans."""
+    if not node.target_object_id or node.node_key.startswith("teacher-intervention-"):
+        return ()
+    from app.path_scope import path_node_content, scope_identity
+    identity = scope_identity(node, path_node_content(session, node))
+    path = session.get(DBLearningPath, node.learning_path_id)
+    predecessors = []
+    seen = {node.learning_path_id}
+    while path is not None and path.supersedes_path_id and path.supersedes_path_id not in seen:
+        previous = session.get(DBLearningPath, path.supersedes_path_id)
+        if previous is None or (previous.owner_public_id, previous.course_id) != (path.owner_public_id, path.course_id):
+            break
+        seen.add(previous.id)
+        matches = session.query(DBPathNode).filter_by(
+            learning_path_id=previous.id, node_type=node.node_type, target_object_id=node.target_object_id,
+        ).all()
+        matches = [old for old in matches if scope_identity(old, path_node_content(session, old)) == identity]
+        if len(matches) != 1:
+            break
+        predecessors.append(matches[0])
+        path = previous
+    return tuple(predecessors)
+
+
 def _event_matches_node(session: Any, item: DBLearningEvent, node: DBPathNode) -> bool:
+    payload = item.payload or {}
+    if node.node_key.startswith("teacher-intervention-"):
+        path_id = payload.get("path_id")
+        if item.event_type == "teacher_confirmed" and not path_id and payload.get("learner_event_id"):
+            study = session.get(DBLearningEvent, payload["learner_event_id"])
+            path_id = (study.payload or {}).get("path_id") if study else None
+        return path_id == node.learning_path_id and (
+            item.event_type == "reading_threshold"
+            or (item.event_type == "teacher_confirmed" and payload.get("scope") == "intervention_completion")
+        )
+    if payload.get("path_id") and payload["path_id"] != node.learning_path_id:
+        previous = next((old for old in _node_predecessors(session, node) if old.learning_path_id == payload["path_id"]), None)
+        return previous is not None and _event_matches_node(session, item, previous)
     task_id = (item.context_ref or {}).get("taskId")
-    if task_id == node.id or (node.target_object_id and item.object_id == node.target_object_id):
+    from app.path_scope import is_staged_node, path_node_scope
+    scoped_ids = set(path_node_scope(session, node))
+    if task_id == node.id or (not scoped_ids and node.target_object_id and item.object_id == node.target_object_id):
         return True
+    if task_id and not payload.get("path_id") and any(old.id == task_id for old in _node_predecessors(session, node)):
+        return True
+    if not task_id:
+        from app.path_learning_context import learned_resource_node
+        origin = learned_resource_node(session, item)
+        if origin is not None:
+            return origin.id == node.id or any(old.id == origin.id for old in _node_predecessors(session, node))
+    # A concept result alone cannot prove a distinct practice stage completed.
+    # Its actual task event (including a matching prior plan) must identify it.
+    if (task_id and scoped_ids) or is_staged_node(node):
+        return False
     if node.node_type != "chapter" or not node.target_object_id:
         return False
     chapter_point_ids = {
@@ -785,6 +956,8 @@ def _event_matches_node(session: Any, item: DBLearningEvent, node: DBPathNode) -
             chapter_id=node.target_object_id,
         ).all()
     }
+    if scoped_ids:
+        chapter_point_ids.intersection_update(scoped_ids)
     if not chapter_point_ids:
         return False
     context = item.context_ref or {}
@@ -797,7 +970,31 @@ def _event_matches_node(session: Any, item: DBLearningEvent, node: DBPathNode) -
             payload.get("knowledge_point_id"),
         ) if value
     }
+    # Canonical quiz attempts identify the immutable question version; its
+    # knowledge point is also used by mastery projection and must reach paths.
+    concept = _event_concept(session, item)
+    if concept:
+        event_point_ids.add(concept[0])
     return bool(chapter_point_ids.intersection(event_point_ids))
+
+
+def _node_completion_supported(session, node, events):
+    """A single concept result must not complete a newly split multi-concept unit."""
+    from app.path_scope import path_node_scope
+    complete = [item for item in events if item.completion_effect == "complete"]
+    # A question is one piece of evidence. The learning step must also satisfy
+    # the actual quiz's required work, rather than finish on its first answer.
+    # Unbound historical evidence keeps its original semantics.
+    from app.path_learning_context import completed_quiz_versions, _resource_version_id
+    bound_quizzes = [item for item in complete if item.event_type == "quiz_answered" and _resource_version_id(item)]
+    if bound_quizzes:
+        finished = completed_quiz_versions(session, bound_quizzes)
+        complete = [item for item in complete if item not in bound_quizzes or _resource_version_id(item) in finished]
+    scoped = set(path_node_scope(session, node))
+    if not scoped:
+        return bool(complete)
+    concepts = {concept[0] for item in complete if (concept := _event_concept(session, item))}
+    return scoped.issubset(concepts)
 
 
 def _project_path(session: Any, event: DBLearningEvent) -> dict[str, Any]:
@@ -822,13 +1019,19 @@ def _project_path(session: Any, event: DBLearningEvent) -> dict[str, Any]:
         nodes = session.query(DBPathNode).filter_by(learning_path_id=path.id).order_by(
             DBPathNode.sequence, DBPathNode.id,
         ).all()
-        completed_keys = {node.node_key for node in nodes if node.status == "completed"}
+        # Use the schedule's evidence-backed exemptions without inventing
+        # completion events or changing the learner's assessment results.
+        from app.m5_learning import _schedule_course_projection
+        projected = _schedule_course_projection(session, owner_public_id=event.owner_public_id, path=path)
+        completed_keys = {node.node_key for node in nodes if node.status == "completed"} | {
+            item["node_key"] for item in projected["nodes"] if item["status"] == "skipped"
+        }
         for node in nodes:
             matching = [item for item in events if _event_matches_node(session, item, node)]
             old_status = node.status
-            complete_requested = any(item.completion_effect == "complete" for item in matching)
+            complete_requested = _node_completion_supported(session, node, matching)
             progress_requested = complete_requested or any(
-                item.completion_effect == "progress" for item in matching
+                item.completion_effect in {"progress", "complete"} for item in matching
             )
             blocked = complete_requested and not set(node.prerequisites or []).issubset(completed_keys)
             if complete_requested and not blocked:
@@ -870,7 +1073,7 @@ def _project_path(session: Any, event: DBLearningEvent) -> dict[str, Any]:
         "paths": summaries,
         "next_day_schedule": _next_day_schedule(session, event),
         "recommended_knowledge_point_ids": list(
-            (event.payload or {}).get("recommended_knowledge_point_ids") or []
+            current_exam_feedback_payload(session, event).get("recommended_knowledge_point_ids") or []
         ),
         "mastery_changed": False,
         "mastery_evidence": {
@@ -1020,7 +1223,7 @@ def _project_wrong_review(session: Any, event: DBLearningEvent) -> dict[str, Any
     _, profile = _owner_profile(session, event)
     wrong_ids: list[int] = []
     if event.event_type == "formal_exam_submitted":
-        for result in (event.payload or {}).get("item_results") or []:
+        for result in current_exam_feedback_payload(session, event).get("item_results") or []:
             score = result.get("score")
             if score is None or float(score) >= 0.6:
                 continue
@@ -1040,7 +1243,7 @@ def _project_wrong_review(session: Any, event: DBLearningEvent) -> dict[str, Any
                 wrong_ids.append(wrong.id)
     else:
         for item, _, concept_title, observation in mastery_events:
-            if item.event_type != "quiz_answered" or observation >= 0.5:
+            if item.id != event.id or item.event_type != "quiz_answered" or observation >= 0.5:
                 continue
             source_object_id = item.object_id or None
             if not source_object_id:
@@ -1058,25 +1261,50 @@ def _project_wrong_review(session: Any, event: DBLearningEvent) -> dict[str, Any
                 wrong_ids.append(wrong.id)
 
     review_plans: list[dict[str, Any]] = []
+    review_completions = [item for item in _scope_events(session, event)
+                          if item.evidence_status == "accepted" and item.mastery_eligible
+                          and item.event_type in {"review_completed", "delayed_retest_passed"}]
     grouped: dict[str, list[tuple[DBLearningEvent, str, str, float]]] = {}
     for item in mastery_events:
         grouped.setdefault(item[2], []).append(item)
     for concept_title, concept_events in grouped.items():
         latest_event, _, _, latest_observation = concept_events[-1]
+        completed_reviews = [item for item in review_completions
+                             if any(title == concept_title for _, title, _ in _event_observations(session, item))]
+        schedule_event = max([latest_event, *completed_reviews], key=lambda item: (item.occurred_at, item.id))
         mastery = float((profile.concept_mastery or {}).get(concept_title, 0.45))
-        interval = _review_interval(latest_event, mastery, latest_observation)
+        interval = _review_interval(schedule_event, mastery, latest_observation)
         plan = session.query(DBReviewPlan).filter_by(
-            student_id=profile.student_id, concept=concept_title,
+            student_id=profile.student_id, concept=concept_title, course_id=latest_event.course_id,
         ).order_by(DBReviewPlan.id).first()
         if plan is None:
-            plan = DBReviewPlan(student_id=profile.student_id, concept=concept_title)
+            # A manually created plan may predate explicit course binding.
+            # Reuse it only when the calendar can resolve its course uniquely.
+            from app.review_schedule import review_plan_contexts
+            actor = session.query(DBUser).filter_by(public_id=event.owner_public_id).first()
+            legacy_plans = session.query(DBReviewPlan).filter(
+                DBReviewPlan.student_id == profile.student_id,
+                DBReviewPlan.course_id.is_(None),
+                DBReviewPlan.concept.in_([concept_title, concept_events[-1][1]]),
+            ).order_by(DBReviewPlan.id).all()
+            contexts = review_plan_contexts(session, actor, legacy_plans) if actor and legacy_plans else {}
+            plan = next((row for row in legacy_plans
+                         if contexts.get(row.id, {}).get("course_id") == latest_event.course_id
+                         and contexts.get(row.id, {}).get("knowledge_point_id") == concept_events[-1][1]), None)
+            if plan is not None:
+                plan.concept = concept_title
+                plan.course_id = latest_event.course_id
+                plan.knowledge_point_id = concept_events[-1][1]
+        if plan is None:
+            plan = DBReviewPlan(student_id=profile.student_id, concept=concept_title,
+                                course_id=latest_event.course_id, knowledge_point_id=concept_events[-1][1])
             session.add(plan)
         plan.interval_days = interval
-        plan.next_review_at = latest_event.occurred_at + timedelta(days=interval)
+        plan.next_review_at = schedule_event.occurred_at + timedelta(days=interval)
         plan.mastery = round(mastery, 4)
         plan.review_count = max(
             int(plan.review_count or 0),
-            sum(item[0].event_type in {"review_completed", "delayed_retest_passed"} for item in concept_events),
+            len(completed_reviews),
         )
         plan.easiness_factor = round(max(1.3, min(2.7, 1.7 + mastery)), 2)
         plan.last_quality = max(0, min(5, int(round(latest_observation * 5))))
@@ -1296,6 +1524,17 @@ def aggregate_learning_event(
         consumer="learning_aggregation",
         processor_version=processor_version,
     ).first()
+    report_id = current_exam_feedback_payload(session, event).get("report_id") if event.event_type == "formal_exam_submitted" else None
+    if consumption is not None and report_id and (consumption.result or {}).get("report_id", (event.payload or {}).get("report_id")) != report_id:
+        # Recompute the current projection from the same ordered attempts. Original
+        # events, grades, reports and profile snapshots are not rewritten.
+        consumption.status = "pending"
+        consumption.error_code = ""
+        consumption.result = {"schema_version": "f2.learning-aggregation.result.v1",
+            "source_event_id": event_id, "step_order": list(AGGREGATION_STEPS),
+            "completed_steps": [], "steps": {}, "current_step": None,
+            "next_step": AGGREGATION_STEPS[0], "report_id": report_id}
+        session.flush()
     if consumption is not None and consumption.status == "processed":
         return consumption
     if consumption is None:
@@ -1307,6 +1546,7 @@ def aggregate_learning_event(
             result={
                 "schema_version": "f2.learning-aggregation.result.v1",
                 "source_event_id": event_id,
+                "report_id": report_id,
                 "step_order": list(AGGREGATION_STEPS),
                 "completed_steps": [],
                 "steps": {},
@@ -1418,3 +1658,59 @@ def get_learning_aggregation(
         consumer="learning_aggregation",
         processor_version=processor_version,
     ).first()
+
+
+def repair_delayed_retest_projection(session: Any) -> int:
+    """Include previously missed retests without changing attempts or old snapshots."""
+    affected: dict[tuple[str, str | None], list[DBLearningEvent]] = {}
+    for event in session.query(DBLearningEvent).filter_by(
+        event_type="delayed_retest_passed", object_type="assessment",
+        evidence_status="accepted", mastery_eligible=True,
+    ).order_by(DBLearningEvent.occurred_at, DBLearningEvent.id).all():
+        point = _event_concept(session, event)
+        consumption = get_learning_aggregation(session, event_id=event.id)
+        if not point or not consumption or consumption.status != "processed":
+            continue
+        previous = (consumption.result or {}).get("steps", {}).get("profile_snapshot", {})
+        snapshot = session.get(DBProfileSnapshot, previous.get("profile_snapshot_id")) if previous.get("profile_snapshot_id") else None
+        if not snapshot:
+            continue
+        trace = (snapshot.snapshot.get("knowledge_traces") or {}).get(point[1], {})
+        if trace.get("source_event_id") == event.id:
+            continue
+        affected.setdefault((event.owner_public_id, event.course_id), []).append(event)
+
+    corrected = 0
+    for (owner_id, course_id), missed in affected.items():
+        correction_id = _stable_id("psretestfix", f"{owner_id}:{course_id}")
+        if session.get(DBProfileSnapshot, correction_id):
+            continue
+        # Rebuild the current scope, including later valid learning. The old
+        # event times and original historical profile snapshots stay intact.
+        events = [item for item in _scope_events(session, missed[-1])
+                  if item.mastery_eligible and item.evidence_status == "accepted"
+                  and item.event_type in LEARNING_FEEDBACK_EVENT_TYPES]
+        latest = events[-1]
+        consumption = get_learning_aggregation(session, event_id=latest.id)
+        if consumption is None or consumption.status != "processed":
+            continue
+        result = deepcopy(consumption.result or {})
+        steps = dict(result.get("steps") or {})
+        steps["profile_snapshot"] = _project_profile(session, latest, snapshot_id=correction_id)
+        correction = session.get(DBProfileSnapshot, correction_id)
+        body = dict(correction.snapshot)
+        body.update(kind="delayed_retest_projection_correction",
+                    corrected_event_ids=[item.id for item in missed])
+        correction.snapshot = body
+        correction.content_hash = _hash(body)
+        correction.profile_version = "delayed-retest-repair-v1"
+        for step in AGGREGATION_STEPS[1:]:
+            steps[step] = _STEP_HANDLERS[step](session, latest)
+        result["steps"] = steps
+        result["projection_correction"] = {"snapshot_id": correction_id,
+                                           "event_ids": [item.id for item in missed]}
+        _sync_contract(session, event=latest, result=result)
+        consumption.result = result
+        corrected += len(missed)
+    session.flush()
+    return corrected

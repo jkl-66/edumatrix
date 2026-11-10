@@ -71,8 +71,9 @@ def test_task_actions_use_real_completion_retest_resource_and_exam_contracts() -
     assert "if (sync) {\n    await syncQuery(" in start_task
     assert start_task.index("await syncQuery(") < start_task.index("activeTaskId.value = task.id")
     assert "task.exam_gate?.unlocked" in board
-    assert "复习页不会增加或绕过任何解锁条件" in board
-    assert "切换月份、课程或日期只改变当前视图，不会写入学习证据" in board
+    assert "task.exam_gate?.message" in board
+    assert "复习页不会增加或绕过任何解锁条件" not in board
+    assert "切换月份、课程或日期只改变当前视图，不会写入学习记录" in board
     assert "/v1/review-schedule" in api
 
 
@@ -85,8 +86,10 @@ def test_both_routes_share_the_calendar_and_integrated_review_tools() -> None:
 
     for view in (review, calendar):
         assert "<ReviewScheduleBoard" in view
-        assert "<template #tools>" in view
+        assert '<template #tools="{ refresh, courseId }">' in view
+        assert '@changed="refresh()"' in view
         assert "<ReviewToolsPanel" in view
+        assert ':course-id="courseId"' in view
     assert "legacy-review-tools" not in review
     assert "calendar-legacy-tools" not in calendar
     for marker in ("reviewFlashcard", "getM5RetestTask", "submitM5Retest", "exportM5ReviewDiagnosis"):

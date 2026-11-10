@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 
 import pytest
@@ -488,8 +489,13 @@ def test_registered_schema_is_repeatable_and_contains_state_constraint(tmp_path)
 
 def test_legacy_route_contract_preserves_query_and_protected_destinations():
     source = (ROOT / "frontend" / "src" / "router" / "index.js").read_text(encoding="utf-8")
-    assert "query: { ...to.query, compat: notice }" in source
-    assert "legacy('/student-analysis', 'LegacyStudentAnalysis', '/profile/learning')" in source
-    assert "legacy('/learning-path', 'LegacyLearningPath', '/workspace/path')" in source
-    assert "legacy('/notes', 'LegacyNotes', '/workspace/notes')" in source
-    assert "legacy('/wrong-questions', 'LegacyWrongQuestions', '/workspace/review/wrong-questions')" in source
+    assert "...to.query," in source
+    assert "compat: contract.notice || 'legacy-route'" in source
+    contracts = json.loads((ROOT / "frontend/src/router/routeMigrationContract.json").read_text(encoding="utf-8"))
+    destinations = {item["sourcePath"]: item["destination"] for item in contracts}
+    assert destinations["/student-analysis"] == "/profile/learning"
+    assert destinations["/learning-path"] == "/workspace/path"
+    assert destinations["/notes"] == "/workspace/notes"
+    assert destinations["/wrong-questions"] == "/workspace/review/wrong-questions"
+    assert "beforeEnter: compatibilityRedirect(contract)" in source
+    assert "requiresAuth: true" in source

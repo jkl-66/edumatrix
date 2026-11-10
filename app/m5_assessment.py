@@ -14,7 +14,7 @@ from app.m5_learning import (
     process_path_event,
     record_learning_event,
 )
-from app.database import DBAssessmentAttempt, DBUser
+from app.database import DBAssessmentAttempt, DBLearningEvent, DBUser
 from app.schemas import ContextRef
 
 
@@ -174,10 +174,37 @@ def record_canonical_attempt_evidence(
         if attempt.course_id
         else None
     )
+    existing = session.query(DBLearningEvent).filter_by(owner_public_id=attempt.owner_public_id,
+        idempotency_key=f"assessment-attempt:{attempt.id}").first()
+    resource_payload = {}
+    practice_payload = {}
+    if existing is not None:
+        # Replaying a historical grade must retain its original context.
+        context = ContextRef.model_validate(existing.context_ref) if existing.context_ref else context
+        if (existing.payload or {}).get("resource_version_id"):
+            resource_payload["resource_version_id"] = existing.payload["resource_version_id"]
+        practice_payload = {key: existing.payload[key] for key in ("evidence_kind", "feedback_attempt_id")
+                            if key in (existing.payload or {})}
+    elif resource_version_id := (attempt.answer or {}).get("resource_version_id"):
+        from app.path_learning_context import quiz_resource_context
+        origin = quiz_resource_context(session, owner_public_id=attempt.owner_public_id, course_id=attempt.course_id,
+            question_version_id=attempt.question_version_id, resource_version_id=resource_version_id)
+        if origin is None:
+            raise M5AssessmentError("attempt_resource_mismatch", "这道题与当前学习资料不对应，请重新打开题目。")
+        context = ContextRef(courseId=attempt.course_id, attemptId=attempt.id, **origin)
+        resource_payload["resource_version_id"] = resource_version_id
+    if existing is None and attempt.mode == "practice":
+        from app.m5_assessment_core import practice_attempt_context
+        practice = practice_attempt_context(session, attempt=attempt)
+        if practice.get("kind") == "correction":
+            practice_payload = {"evidence_kind": "correction", "feedback_attempt_id": practice["feedback_attempt_id"]}
     event, created = record_learning_event(
         session,
         owner_public_id=attempt.owner_public_id,
-        user=user,
+        # This owner-scoped, previously recorded event already has a resolved
+        # context. A new resource/path version must not invalidate its replay;
+        # record_learning_event still compares every stored fact for idempotency.
+        user=None if existing is not None else user,
         trusted_source=True,
         event=LearningEventInput(
             idempotency_key=f"assessment-attempt:{attempt.id}",
@@ -195,6 +222,9 @@ def record_canonical_attempt_evidence(
                 "score": attempt.score,
                 "confidence": attempt.confidence,
                 "mode": attempt.mode,
+                "used_hints": bool(attempt.mode == "practice" and (attempt.answer or {}).get("used_hints")),
+                **resource_payload,
+                **practice_payload,
             },
         ),
     )

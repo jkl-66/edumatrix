@@ -79,7 +79,7 @@ def test_compatibility_results_are_explained_in_the_shell_or_recovery_surface():
     assert 'v-if="routeNotice"' in shell
     assert 'role="status"' in banner
     assert "route.query.reason" in recovery
-    assert "没有创建空对象，也没有修改现有学习记录" in recovery
+    assert "已保存的课程和学习记录保持不变" in recovery
 
 
 def test_teacher_intervention_navigation_uses_current_course_and_real_permissions():

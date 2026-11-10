@@ -19,7 +19,7 @@ def test_f4_profile_keeps_legacy_views_below_the_explainable_graph():
     assert '<section v-if="!isTeacher" class="profile-map-section"' in source
     assert "KnowledgeGraphExplorer" in source
     assert ":show-details=\"false\"" in source
-    assert "普通浏览不会被算作掌握" in source
+    assert "projectCourseMasteryNode" in source
     assert "activeKnowledgeNode.nextAction" in source
 
     for tab in ("overview", "digital-twin", "dimensions", "weakness", "causes", "suggestions"):
@@ -92,11 +92,11 @@ def test_f4_minimal_palette_uses_semantic_ink_tokens():
     profile = _source("frontend/src/views/StudentAnalysis.vue")
 
     for marker in (
-        "--color-page: #f5f7f7",
-        "--color-text: #06141b",
-        "--color-accent: #11212d",
-        "--color-text-secondary: #4a5c6a",
-        "--color-border-strong: #ccd0cf",
+        "--color-page: #f2f2ef",
+        "--color-text: #283642",
+        "--color-accent: #7d6465",
+        "--color-text-secondary: #4d5a65",
+        "--color-border-strong: #c6cdcd",
     ):
         assert marker in tokens
     assert not re.search(r"#(?:4b382d|5b4030|6f4e37|73533e|f3ece6)\b", summary, re.I)

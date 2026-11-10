@@ -25,11 +25,37 @@ from app.resource_bundles import (
 from tests.test_f6_t03_code_sandbox_resource import _session
 
 
+@pytest.mark.parametrize('explicit', [False, True])
+def test_current_planner_responsibilities_reach_review_without_reviving_retired_requirements(explicit):
+    import asyncio
+    import app.resource_bundles as bundles
+
+    current = {'learning_goal': '比较模型误差', 'shared': ['解释依据，不限句数'],
+               'by_resource': {'interactive_model': ['只做阈值对照']}}
+    class Planner:
+        async def generate(self, system, user, *, role):
+            return json.dumps({'plan': '讲义解释，实验做对照', 'resourceBriefs': [
+                {'type': 'handout', 'goal': '解释误差', 'qualityChecks': ['给出完整示例']},
+                {'type': 'interactive_model', 'goal': '观察阈值', 'qualityChecks': ['记录翻转行']}]})
+    manifest = {'selected_resource_types': ['handout', 'interactive_model'],
+                'context': {'learning_goal': '比较模型误差'},
+                **({'requirements_explicit': True, 'active_requirements': current} if explicit else {})}
+    plan = asyncio.run(bundles._shared_semantic_plan_async(Planner(), manifest=manifest, source_snapshots=[]))
+    requirements = plan['active_requirements']
+    if explicit:
+        assert requirements == current
+    else:
+        assert requirements['by_resource'] == {
+            'handout': ['解释误差', '给出完整示例'], 'interactive_model': ['观察阈值', '记录翻转行']}
+        assert bundles.requirements_for({'active_requirements': requirements}, ['interactive_model'])['by_resource'] == {
+            'interactive_model': ['观察阈值', '记录翻转行']}
+
+
 @pytest.fixture(autouse=True)
 def _fake_web_video_search(monkeypatch):
     async def fake_search(query, max_results=5):
         return [{
-            "title": "课程视频候选",
+            "title": f"{query} · 课程视频候选",
             "url": "https://www.bilibili.com/video/BV1test123",
             "source": "B站视频",
             "description": "测试用真实网页来源",
@@ -124,7 +150,10 @@ def test_same_knowledge_point_changes_content_for_profile_and_source_inputs():
     assert handout_base != handout_source
     assert "需要分步脚手架" in handout_base
     assert "可以直接比较边界条件" in handout_profile
-    assert "混合检索与证据质量评估" in handout_source
+    assert '模型评估的实践与结果解释' in json.loads(handout_base)['summary']
+    assert '模型评估的实践与结果解释' in json.loads(handout_source)['summary']
+    assert json.loads(handout_source)['footnotes'][0]['title'] == retrieval[0]['title']
+    assert 'src-retrieval' in handout_source and 'src-classifier' not in handout_source
     assert "deterministic_fallback" not in json.loads(handout_base)
 
 
@@ -269,11 +298,23 @@ class _FakeLiveBackend:
     provider = "openai"
 
     async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        if role == "resource_reviewer":
+            assert "JSON" in system_prompt and "approved" in system_prompt and "findings" in system_prompt
+            return json.dumps({"approved": True, "summary": "模拟结构核对通过", "findings": [], "rejectedTypes": [],
+                "conditionReview": [{"claimId":claim["id"],"status":"valid",
+                    "reason":"合成数据仅用于生成与审核编排回归。","fix":""}
+                    for claim in json.loads(user_prompt).get("condition_claims",[])]})
         assert "只输出一个 JSON 对象" in system_prompt
         return json.dumps({
             "summary": "模型生成的课程摘要",
+            "selectedVideoIds": [item['id'] for item in json.loads(user_prompt).get('video_candidates', [])],
             "learningGoal": "模型生成的学习目标",
             "narrative": "模型依据冻结来源生成的正文，包含条件、机制和验证边界。",
+            "rootNodeId": "topic",
+            "nodes": [
+                {"nodeId":"topic","parentNodeId":None,"label":"课程主题","summary":"模型依据课程说明知识联系。","relation":"主题","depth":0},
+                {"nodeId":"condition","parentNodeId":"topic","label":"适用条件","summary":"先核对方法适用的条件。","relation":"前提","depth":1},
+            ],
             "practiceSteps": [
                 {"title": "数据", "instruction": "模型生成的数据检查步骤", "expectedResult": "字段清单", "errorGuidance": "记录缺失"},
                 {"title": "模型", "instruction": "模型生成的模型选择步骤", "expectedResult": "基线方案", "errorGuidance": "回查来源"},
@@ -285,8 +326,9 @@ class _FakeLiveBackend:
                 {"id": "stdout", "label": "输出", "kind": "stdout_contains", "expectedText": "model-generated"},
             ],
             "environment": ["Python 3"],
+            "estimatedMinutes": 35,
             "data": ["冻结课程示例数据"],
-            "parameters": [{"key": "learning_rate", "label": "学习率", "kind": "float", "minimum": 0.0, "maximum": 1.0, "step": 0.1, "default": 0.1, "description": "控制每次参数更新幅度。"}],
+            "parameters": (json.loads(user_prompt).get("interactive_template") or {}).get("parameters", []),
             "constraints": [{"id": "range", "title": "范围约束", "description": "学习率必须大于 0 且不超过 1。"}],
             "dataset": {"id": "course-demo-dataset", "title": "课程示例数据", "summary": "用于观察参数变化的课程示例数据。", "sampleCount": 1},
             "chart": {"kind": "line", "xAxisLabel": "训练步", "yAxisLabel": "损失", "series": [{"key": "loss", "label": "损失", "unit": "", "higherIsBetter": False}]},
@@ -301,6 +343,67 @@ class _FakeLiveBackend:
                 {"layout": "content", "title": "机制", "body": "依据冻结来源解释机制。", "speakerNotes": "回查课程来源。"},
             ],
         }, ensure_ascii=False)
+
+
+def test_video_generation_requeries_rejected_candidates_and_keeps_real_selection(monkeypatch):
+    import app.resource_bundles as bundles
+    from app.database import DBTaskEvent
+    queries_seen, candidates_seen = [], []
+
+    async def search(*, manifest):
+        queries_seen.append(manifest.get('video_search_queries'))
+        suffix = 'advanced' if len(queries_seen) == 1 else 'intro'
+        return [{'id': suffix, 'title': suffix, 'url': f'https://example.org/{suffix}',
+                 'sourceKind': 'external_url',
+                 'availability': 'external_only', 'sourceRefIds': ['demo-ref-07'],
+                 'author': '合成检索测试', 'language': '中文', 'licenseStatus': 'platform_link_only',
+                 'licenseLabel': '平台链接', 'reason': '本节概念介绍', 'segments': [], 'alternatives': []}]
+
+    class Backend(_FakeLiveBackend):
+        async def generate(self, system_prompt, user_prompt, *, role):
+            payload = json.loads(await super().generate(system_prompt, user_prompt, role=role))
+            if role == 'resource_generator':
+                candidates = json.loads(user_prompt)['video_candidates']
+                candidates_seen.append(candidates)
+                if len(candidates_seen) == 1:
+                    payload.update(selectedVideoIds=[], searchQueries=['训练标签和预测输入 入门'])
+            return json.dumps(payload, ensure_ascii=False)
+
+    engine, session = _session()
+    try:
+        seed_competition_demo(session)
+        learner = session.query(DBUser).filter_by(username='lzz').one()
+        monkeypatch.setattr(bundles, '_real_model_backend', lambda: Backend())
+        monkeypatch.setattr(bundles, '_live_video_recommendations', search)
+        job = create_generation_job(session, learner, course_id='demo-course-rag-trust-v1',
+            knowledge_point_id='demo-kp-07', profile_snapshot_id='demo-profile-lzz-v1',
+            idempotency_key='video-requery-candidates', scope='single',
+            items=[{'type': 'video', 'title': '当前知识点视频', 'source_ref_ids': ['demo-ref-07']}])
+        result = execute_generation_job(session, learner, job['job_id'])
+        assert result['status'] == 'succeeded', {key: result.get(key) for key in ('failure_reason', 'items', 'review_gate')}
+        assert len(candidates_seen) == 2
+        assert queries_seen[1] == ['训练标签和预测输入 入门']
+        artifact = session.get(DBArtifact, result['items'][0]['resource']['resource_id'])
+        content = session.get(DBArtifactVersion, artifact.current_version_id).content
+        assert 'https://example.org/intro' in content
+        assert 'https://example.org/advanced' not in content
+        searches = session.query(DBTaskEvent).filter_by(task_id=job['job_id'],
+            event_type='resource_generation.video_search').all()
+        assert len(searches) == 2
+        assert {event.payload['candidates'][0]['id'] for event in searches} == {'advanced', 'intro'}
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize('code', ['video_selection_invalid', 'video_topic_mismatch', 'model_call_failed'])
+def test_video_content_failure_changes_retry_input_but_network_failure_preserves_it(code):
+    from app.database import DBTaskStep
+    from app.resource_bundles import _generation_retry_input
+    previous = DBTaskStep(input_summary=json.dumps({'type': 'video', 'revision_feedback': '旧意见'}),
+        error_code='resource_generation.' + code, error_message='候选不符合本节先修')
+    retried = _generation_retry_input(previous)
+    assert retried['revision_feedback'] == ('旧意见' if code == 'model_call_failed' else '候选不符合本节先修')
 
 
 def test_live_generation_uses_real_model_and_preserves_resource_protocol(monkeypatch):
@@ -326,6 +429,7 @@ def test_live_generation_uses_real_model_and_preserves_resource_protocol(monkeyp
         assert version.metadata_json["model"] == "deepseek-v4-flash"
         assert version.metadata_json["reasoning_effort"] == "max"
         assert "model-generated" in version.content
+        assert parse_code_sandbox_content(version.content).instructions == "模型依据冻结来源生成的正文，包含条件、机制和验证边界。"
         assert "deterministic_fallback" not in version.content
     finally:
         session.close()
@@ -360,6 +464,263 @@ def test_live_generation_failure_is_explicit_and_creates_no_success_version(monk
         engine.dispose()
 
 
+@pytest.mark.parametrize('explicit_at_revision', [False, True])
+def test_planning_failure_with_saved_content_is_terminal_and_explicit_review_reuses_it(monkeypatch, explicit_at_revision):
+    import app.resource_bundles as bundles
+    calls = []
+    fail_planner = False
+
+    class Backend(_FakeLiveBackend):
+        async def generate(self, system_prompt, user_prompt, *, role):
+            calls.append(role)
+            if role == 'resource_planner' and fail_planner:
+                raise RuntimeError('planner unavailable')
+            return await super().generate(system_prompt, user_prompt, role=role)
+
+    engine, session = _session()
+    try:
+        seed_competition_demo(session)
+        actor = session.query(DBUser).filter_by(username='lzz').one()
+        monkeypatch.setattr(bundles, '_real_model_backend', lambda: Backend())
+        job = create_generation_job(session, actor, course_id='demo-course-rag-trust-v1',
+            knowledge_point_id='demo-kp-07', profile_snapshot_id='demo-profile-lzz-v1',
+            idempotency_key='authored-correction-resume', scope='single',
+            items=[{'type':'handout','title':'学习讲义','source_ref_ids':['demo-ref-07']}])
+        original = execute_generation_job(session, actor, job['job_id'])
+        version = session.get(DBArtifactVersion, original['items'][0]['resource']['version']['id'])
+        requirements = bundles._generation_manifest(session, job['job_id'])['active_requirements']
+        bundles.revise_generation_job(session, actor, job['job_id'], feedback='局部解析已核对',
+            resource_types=['handout'], idempotency_key='local-explanation-correction',
+            active_requirements=requirements if explicit_at_revision else None)
+        bundles.complete_generation_item(session, actor, job['job_id'], 'handout',
+            content=version.content, content_format=version.content_format,
+            generation_mode='agent_revision', model='codex')
+        fail_planner = True
+        boundary = len(calls)
+        if explicit_at_revision:
+            final = execute_generation_job(session, actor, job['job_id'])
+            assert final['status'] == 'succeeded'
+            assert calls[boundary:] and all(role == 'resource_reviewer' for role in calls[boundary:])
+            return
+        failed = execute_generation_job(session, actor, job['job_id'])
+        assert failed['status'] == 'failed'
+        assert failed['items'][0]['state'] == 'succeeded'
+        retained = failed['items'][0]['resource']['version']['id']
+        bundles.revise_generation_job(session, actor, job['job_id'], feedback='正文已修改，按当前要求核对。',
+            resource_types=[], idempotency_key='explicit-current-requirements', active_requirements=requirements)
+        boundary = len(calls)
+        final = execute_generation_job(session, actor, job['job_id'])
+        assert final['status'] == 'succeeded'
+        assert final['items'][0]['resource']['version']['id'] == retained
+        assert calls[boundary:] and all(role == 'resource_reviewer' for role in calls[boundary:])
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_review_premise_correction_reuses_generation_and_unaffected_reviews(monkeypatch):
+    import app.resource_bundles as bundles
+    from app.database import DBTaskEvent, DBTaskStep
+    calls = []
+    current = {'learning_goal': '观察数据并解释', 'shared': [],
+               'by_resource': {'deck': ['必须恰好两句话']}}
+
+    class Backend(_FakeLiveBackend):
+        async def generate(self, system_prompt, user_prompt, *, role):
+            data = json.loads(user_prompt)
+            calls.append((role, data))
+            result = json.loads(await super().generate(system_prompt, user_prompt, role=role))
+            if role == 'resource_planner':
+                result['activeRequirements'] = current
+            if role == 'resource_reviewer' and len(data['candidates']) == 1 and data['candidates'][0]['type'] == 'deck':
+                rejected = data['active_requirements']['by_resource']['deck'] == ['必须恰好两句话']
+                result.update(approved=not rejected, rejectedTypes=['deck'] if rejected else [],
+                    findings=[{'resourceType': 'deck', 'issue': '不满足旧句数要求', 'fix': '调整句数'}] if rejected else [])
+            return json.dumps(result, ensure_ascii=False)
+
+    engine, session = _session()
+    try:
+        seed_competition_demo(session)
+        learner = session.query(DBUser).filter_by(username='lzz').one()
+        monkeypatch.setattr(bundles, '_real_model_backend', lambda: Backend())
+        job = create_generation_job(session, learner, course_id='demo-course-rag-trust-v1',
+            knowledge_point_id='demo-kp-07', profile_snapshot_id='demo-profile-lzz-v1',
+            idempotency_key='review-premise-original', scope='bundle',
+            items=[{'type': kind, 'title': kind, 'source_ref_ids': ['demo-ref-07']} for kind in ['handout', 'deck']])
+        first = execute_generation_job(session, learner, job['job_id'])
+        assert first['review_gate']['status'] == 'failed'
+        versions = {item['type']: item['resource']['version']['id'] for item in first['items']}
+        original_events = [(row.id, json.dumps(row.payload, sort_keys=True)) for row in
+            session.query(DBTaskEvent).filter_by(task_id=job['job_id']).all()]
+        attempts = session.query(DBTaskStep).filter_by(task_id=job['job_id']).count()
+        corrected = {**current, 'by_resource': {'deck': ['按内容完整性评价，不限句数']}}
+        args = dict(feedback='旧句数要求已取消，保留正文，仅修正审核前提。', resource_types=[],
+                    idempotency_key='review-premise-correction', active_requirements=corrected)
+        revised = bundles.revise_generation_job(session, learner, job['job_id'], **args)
+        assert revised['review_gate']['status'] == 'pending'
+        assert bundles._generation_plan(session, job['job_id'])['active_requirements'] == corrected
+        assert bundles._generation_manifest(session, job['job_id'])['active_requirements'] == corrected
+        bundles.revise_generation_job(session, learner, job['job_id'], **args)
+        assert session.query(DBTaskStep).filter_by(task_id=job['job_id']).count() == attempts
+        assert session.query(DBTaskEvent).filter_by(task_id=job['job_id'], event_type='resource_generation.review.amended').count() == 1
+        for row_id, payload in original_events:
+            assert json.dumps(session.get(DBTaskEvent, row_id).payload, sort_keys=True) == payload
+        boundary = len(calls)
+        final = execute_generation_job(session, learner, job['job_id'])
+        assert final['status'] == 'succeeded', final.get('failure_reason')
+        assert {i['type']: i['resource']['version']['id'] for i in final['items']} == versions
+        resumed = calls[boundary:]
+        assert all(role == 'resource_reviewer' for role, _ in resumed)
+        assert [[c['type'] for c in data['candidates']] for _, data in resumed] == [['deck'], ['handout', 'deck']]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_teaching_revision_replans_selected_resources_preserves_history_and_rechecks(monkeypatch):
+    import app.resource_bundles as bundles
+    from app.database import DBTaskEvent, DBTaskStep
+    plan_inputs, generated, model_inputs = [], [], []
+
+    class Backend(_FakeLiveBackend):
+        async def generate(self, system_prompt, user_prompt, *, role):
+            data = json.loads(user_prompt)
+            model_inputs.append((role, data))
+            result = json.loads(await super().generate(system_prompt, user_prompt, role=role))
+            if role == 'resource_planner':
+                plan_inputs.append(data)
+                result['sharedExample'] = {'rows': [[1, 0], [2, 1]], 'prediction_time': '结果公布前'}
+                result['activeRequirements'] = data.get('active_requirements') or {'learning_goal':'观察并解释数据','shared':[], 'by_resource':{}}
+                if (data.get('teaching_revision') or {}).get('feedback','').startswith('先观察数据'):
+                    result['activeRequirements']['shared'] = ['先观察数据再运行代码']
+                    result['sharedRequirementsChanged'] = True
+                    result['sharedChangeReason'] = '本次明确调整教学顺序'
+            elif role == 'resource_generator':
+                generated.append(data['resource_type'])
+                assert '结果公布前' in user_prompt
+            return json.dumps(result, ensure_ascii=False)
+
+    engine, session = _session()
+    try:
+        seed_competition_demo(session)
+        learner = session.query(DBUser).filter_by(username='lzz').one()
+        monkeypatch.setattr(bundles, '_real_model_backend', lambda: Backend())
+        authored_requirement = '逐项核对来源、例子、结论和适用条件。' * 40 + '保留最后一项独立解释。'
+        job = create_generation_job(session, learner, course_id='demo-course-rag-trust-v1',
+            knowledge_point_id='demo-kp-07', profile_snapshot_id='demo-profile-lzz-v1',
+            idempotency_key='teaching-revision-original', scope='bundle',
+            items=[{'type': kind, 'title': kind, 'source_ref_ids': ['demo-ref-07'],
+                    'completion_rule': '完成代码沙盒并做一次简短回顾。' if kind == 'code_sandbox' else authored_requirement}
+                   for kind in ['code_sandbox', 'deck']])
+        with pytest.raises(bundles.ResourceBundleError, match='处理中'):
+            bundles.revise_generation_job(session, learner, job['job_id'], feedback='先观察数据',
+                resource_types=['code_sandbox'], idempotency_key='revision-before-complete')
+        first = execute_generation_job(session, learner, job['job_id'])
+        assert first['status'] == 'succeeded', first.get('failure_reason')
+        assert next(item for item in first['items'] if item['type'] == 'deck')['completion_rule'] == authored_requirement
+        original_event = session.query(DBTaskEvent).filter_by(task_id=job['job_id'],
+            event_type='resource_generation.requested').one()
+        original_manifest = json.dumps(original_event.payload, sort_keys=True)
+        old_versions = {item['type']: item['resource']['version']['id'] for item in first['items']}
+        old_text = {kind: session.get(DBArtifactVersion, version).content for kind, version in old_versions.items()}
+        before_learning = session.query(DBLearningEvent).count()
+        revision_args = dict(feedback='先观察数据再运行代码，保留正确课件和共同案例。',
+            resource_types=['code_sandbox'], idempotency_key='teaching-revision-first')
+        revised = bundles.revise_generation_job(session, learner, job['job_id'], **revision_args)
+        assert revised['review_gate']['status'] == 'pending'
+        assert not bundles._publish_gate_done(session, job['job_id'])
+        assert bundles._generation_plan(session, job['job_id']) == {}
+        assert json.dumps(original_event.payload, sort_keys=True) == original_manifest
+        assert revised['profile_snapshot_id'] == first['profile_snapshot_id']
+        revised_code = next(item for item in revised['items'] if item['type'] == 'code_sandbox')
+        code_spec = next(item for item in bundles._generation_manifest(session, job['job_id'])['items']
+                         if item['type'] == 'code_sandbox')
+        assert revised_code['input']['completion_rule'] == code_spec['completion_rule']
+        assert '必需检查' in revised_code['completion_rule']
+        assert next(item for item in first['items'] if item['type'] == 'code_sandbox')['completion_rule'] == '完成代码沙盒并做一次简短回顾。'
+        assert next(item for item in revised['items'] if item['type'] == 'deck')['completion_rule'] == authored_requirement
+        from app.m5_resources import resource_generation_blocker
+        old_deck = session.get(DBArtifactVersion, old_versions['deck'])
+        assert not resource_generation_blocker(session, session.get(DBArtifact, old_deck.artifact_id), old_deck.id)
+        attempts = session.query(DBTaskStep).filter_by(task_id=job['job_id']).count()
+        bundles.revise_generation_job(session, learner, job['job_id'], **revision_args)
+        assert session.query(DBTaskStep).filter_by(task_id=job['job_id']).count() == attempts
+        second = execute_generation_job(session, learner, job['job_id'])
+        assert second['status'] == 'succeeded', second.get('failure_reason')
+        assert generated.count('code_sandbox') == 2 and generated.count('deck') == 1
+        assert len(plan_inputs) == 2
+        revision_context = plan_inputs[-1]['teaching_revision']
+        assert revision_context['feedback'] == revision_args['feedback']
+        assert 'previous_plan' not in revision_context
+        assert plan_inputs[-1]['retained_resources'][0]['version_id'] == old_versions['deck']
+        new_versions = {item['type']: item['resource']['version']['id'] for item in second['items']}
+        assert new_versions['deck'] == old_versions['deck']
+        assert new_versions['code_sandbox'] != old_versions['code_sandbox']
+        assert all(session.get(DBArtifactVersion, version).content == old_text[kind] for kind, version in old_versions.items())
+        assert session.query(DBLearningEvent).count() == before_learning
+        assert session.query(DBTaskEvent).filter_by(task_id=job['job_id'], event_type='publish.completed').count() == 2
+        first_revision_event = session.query(DBTaskEvent).filter_by(task_id=job['job_id'],
+            event_type='resource_generation.revision.requested').one()
+        # Simulate an already saved task from before the ordered history field.
+        legacy_payload = json.loads(json.dumps(first_revision_event.payload))
+        legacy_payload['manifest'].pop('teaching_revision_history', None)
+        first_revision_event.payload = legacy_payload
+        session.flush()
+        prior_payload = json.dumps(first_revision_event.payload, sort_keys=True)
+        followup_feedback = '课件只调整末页，不撤销先观察再运行的安排。'
+        bundles.revise_generation_job(session, learner, job['job_id'], feedback=followup_feedback,
+            resource_types=['deck'], idempotency_key='teaching-revision-second')
+        start = len(model_inputs)
+        third = execute_generation_job(session, learner, job['job_id'])
+        assert third['status'] == 'succeeded'
+        calls = model_inputs[start:]
+        assert {role for role, _ in calls} >= {'resource_planner','resource_generator','resource_reviewer'}
+        for _, data in calls:
+            assert 'teaching_revision_history' not in data
+            assert '先观察数据再运行代码' in data['active_requirements']['shared']
+        assert json.dumps(first_revision_event.payload, sort_keys=True) == prior_payload
+        assert json.dumps(original_event.payload, sort_keys=True) == original_manifest
+        assert session.query(DBLearningEvent).count() == before_learning
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_candidate_is_saved_before_slow_sibling_finishes(monkeypatch):
+    import asyncio
+    from app.database import DBTaskEvent
+    saved = None
+    class Backend(_FakeLiveBackend):
+        async def generate(self, system_prompt, user_prompt, *, role):
+            nonlocal saved
+            if role == 'resource_generator':
+                kind = json.loads(user_prompt)['resource_type']
+                if saved is None:
+                    saved = asyncio.Event()
+                if kind == 'deck':
+                    await asyncio.wait_for(saved.wait(), timeout=1)
+            return await super().generate(system_prompt, user_prompt, role=role)
+    engine, session = _session()
+    try:
+        seed_competition_demo(session)
+        learner = session.query(DBUser).filter_by(username='lzz').one()
+        monkeypatch.setattr('app.resource_bundles._real_model_backend', lambda: Backend())
+        job = create_generation_job(session, learner, course_id='demo-course-rag-trust-v1',
+            knowledge_point_id='demo-kp-07', profile_snapshot_id='demo-profile-lzz-v1',
+            idempotency_key='candidate-progress-before-sibling', scope='bundle', learning_goal='逐项保存',
+            items=[{'type': kind, 'title': kind, 'source_ref_ids': ['demo-ref-07']}
+                   for kind in ('deck', 'code_sandbox')])
+        def progress(event):
+            if event['event_type'] == 'resource.item.completed' and event['resource_type'] == 'code_sandbox':
+                assert session.query(DBTaskEvent).filter_by(task_id=job['job_id'],
+                    event_type='resource_generation.item.succeeded').count() == 1
+                saved.set()
+        result = execute_generation_job(session, learner, job['job_id'], event_callback=progress)
+        assert result['status'] == 'succeeded', result.get('failure_reason')
+    finally:
+        session.close(); engine.dispose()
+
+
 def test_live_bundle_keeps_one_model_loop_and_completes_all_nine_resources(monkeypatch):
     engine, session = _session()
     try:
@@ -377,9 +738,90 @@ def test_live_bundle_keeps_one_model_loop_and_completes_all_nine_resources(monke
             learning_goal="验证整包真实模型生成",
         )
         result = execute_generation_job(session, learner, job["job_id"])
-        assert result["status"] == "succeeded"
+        if result["status"] != "succeeded":
+            print(json.dumps([{"event": event.get("event_type"), "summary": event.get("summary")} for event in result["events"] if "review" in event.get("event_type", "")],ensure_ascii=False))
+        assert result["status"] == "succeeded", {"failure": result.get("failure_reason"), "items": [
+            {"type": item["type"], "state": item["state"], "failure": item.get("failure")} for item in result["items"]]}
         assert all(item["state"] == "succeeded" for item in result["items"])
         assert all(item["resource"]["generation"]["mode"] == "llm" for item in result["items"])
     finally:
         session.close()
         engine.dispose()
+
+
+@pytest.mark.parametrize("step_count", [1, 2])
+def test_short_handout_preserves_real_steps_through_generation_and_publication(step_count):
+    import asyncio
+    import app.resource_bundles as bundles
+    from app.m5_resources import parse_handout_content
+
+    class ShortBackend(_FakeLiveBackend):
+        calls = 0
+        async def generate(self, system_prompt, user_prompt, *, role):
+            self.calls += 1
+            payload = json.loads(await super().generate(system_prompt, user_prompt, role=role))
+            payload["practiceSteps"] = payload["practiceSteps"][:step_count]
+            return json.dumps(payload, ensure_ascii=False)
+
+    backend = ShortBackend()
+    manifest = _manifest(knowledge_point="模型选择", profile="已会比较，练习新条件", mastery="已掌握")
+    sources = [_source(source_ref_id="src-short", title="验证", quote="模型按验证误差选择。")]
+    payload = asyncio.run(bundles._real_model_payload_async(backend, resource_type="handout",
+        item={"title": "新条件下选择模型"}, manifest=manifest, source_snapshots=sources))
+    assert backend.calls == 1
+    content = bundles._llm_resource_content(resource_type="handout", item={"title": "新条件下选择模型"},
+        manifest=manifest, source_snapshots=sources, linked_resource_ids=[], llm_payload=payload)
+    published = parse_handout_content(content)
+    assert len(published.miniQuiz) == len(payload["quizQuestions"])
+    assert published.profileAdaptation.scaffolding[1:] == [step["instruction"] for step in payload["practiceSteps"]]
+
+    payload["practiceSteps"] = []
+    with pytest.raises(bundles.ResourceBundleError, match="完整学习步骤"):
+        bundles._llm_resource_content(resource_type="handout", item={"title": "未完成讲义"},
+            manifest=manifest, source_snapshots=sources, linked_resource_ids=[], llm_payload=payload)
+
+
+@pytest.mark.parametrize('task_first', [True, False])
+def test_independent_handout_task_keeps_authored_position_and_separate_answer(task_first):
+    import asyncio
+    import app.resource_bundles as bundles
+    from app.m5_resources import parse_handout_content
+
+    class TaskBackend(_FakeLiveBackend):
+        async def generate(self, system, user, *, role):
+            payload = json.loads(await super().generate(system, user, role=role))
+            task = {'id':'new-choice', 'title':'比较新候选', 'kind':'task',
+                'content':'甲乙验证误差为0.12和0.08，按相同规则选择并解释。',
+                'hint':'比较同一列误差。', 'successCheck':'选择乙；其验证误差0.08较低。',
+                'sourceRefIds':['src-selection']}
+            method = {'id':'method', 'title':'需要时回看方法', 'kind':'concept',
+                'content':'验证误差衡量留出数据上的损失，按预定规则比较候选。'}
+            payload['handoutSections'] = [task, method] if task_first else [method, task]
+            payload['transferQuestions'] = [{'title':'检查数据角色', 'prompt':'若同一验证分数又用来选模型，能当最终测试吗？',
+                                             'successCheck':'它已参与选择，需要另留测试。'}]
+            return json.dumps(payload,ensure_ascii=False)
+
+    manifest = _manifest(knowledge_point='验证选模', profile='已会比较', mastery='已掌握')
+    sources = [_source(source_ref_id='src-selection', title='验证选模', quote='用验证误差比较。')]
+    payload = asyncio.run(bundles._real_model_payload_async(TaskBackend(), resource_type='handout',
+        item={'title':'新条件下的比较'}, manifest=manifest, source_snapshots=sources))
+    content = bundles._llm_resource_content(resource_type='handout', item={'title':'新条件下的比较'},
+        manifest=manifest, source_snapshots=sources, linked_resource_ids=[], llm_payload=payload)
+    published = parse_handout_content(content)
+    expected = ['legacy-new-choice','legacy-method'] if task_first else ['legacy-method','legacy-new-choice']
+    assert [s.id for s in published.outline][:2] == expected
+    assert len(published.transferTasks) == 2
+    task = next(t for t in published.transferTasks if t.id == 'legacy-new-choice')
+    assert task.successCheck == '选择乙；其验证误差0.08较低。'
+    assert task.hint == '比较同一列误差。'
+    assert task.sourceRefIds == ['src-selection']
+    visible = [task.prompt, *[c.explanation for c in published.concepts],
+               *[e.body for e in published.examples]]
+    assert all(task.successCheck not in s for s in visible)
+    assert len(published.miniQuiz) == 3
+    assert sum(s.id == task.id for s in published.outline) == 1
+
+    next(s for s in payload['handoutSections'] if s['kind']=='task').pop('successCheck')
+    with pytest.raises(bundles.ResourceBundleError, match='核对内容'):
+        bundles._llm_resource_content(resource_type='handout', item={'title':'新条件下的比较'},
+            manifest=manifest, source_snapshots=sources, linked_resource_ids=[], llm_payload=payload)

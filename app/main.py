@@ -20,7 +20,8 @@ from config import CONFIG
 from concurrency import AsyncWorkerPool, TokenBucket
 from models import DIMENSION_LABELS, StudentProfile
 from app.database import init_db, DBCourseMembership, DBNote, DBStudentProfile, DBUser, run_db_op
-from app.identity import VALID_ROLES, normalize_role
+from app.identity import VALID_ROLES, normalize_role, new_public_id
+from app.account_profile import AccountProfileInput, save_account_profile
 from app.role_landing import resolve_login_landing
 from app.crud import (
     load_student_profile,
@@ -54,6 +55,7 @@ from app.m2_api import router as m2_router
 from app.m3_api import router as m3_router
 from app.m4_api import router as m4_router
 from app.m5_api import router as m5_router, runtime_availability
+from app.learning_inquiry import router as learning_inquiry_router
 from app.m6_api import router as m6_router
 from app.m7_api import router as m7_router
 from app.m8_api import router as m8_router
@@ -117,6 +119,8 @@ from app.note_workspace import (
     prepare_source_metadata,
     restore_note_version,
     save_ai_suggestion,
+    related_notes_payload,
+    set_note_relation,
 )
 from note_engine import LearningProgressAnalyzer, ReviewScheduler
 from export_pdf import generate_note_pdf
@@ -186,6 +190,9 @@ async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequ
             else:
                 return None
 
+        if not user.is_active:
+            raise HTTPException(status_code=403, detail="这个账号已停用，请联系老师或管理员。")
+
         # Legacy assistant/visitor records are not formal accounts and cannot
         # obtain a token through the normal login boundary.
         try:
@@ -211,7 +218,7 @@ async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequ
     if not auth_result:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
+            detail="账号或密码不正确，请检查后重新登录。",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -225,6 +232,7 @@ async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequ
         "token_type": "bearer",
         "username": user.username,
         "display_name": user.display_name or user.username,
+        "avatar_url": user.avatar_url or "",
         "role": user.role or "student",
         "student_id": user.username,
         "user_id": user.public_id,
@@ -323,9 +331,15 @@ async def read_current_identity(current_user: DBUser = Depends(get_current_user)
         "user_id": current_user.public_id,
         "username": current_user.username,
         "display_name": current_user.display_name or current_user.username,
+        "avatar_url": current_user.avatar_url or "",
         "role": normalize_role(current_user.role),
         "is_active": bool(current_user.is_active),
     }
+
+
+@app.patch("/api/auth/me")
+async def update_account_profile(payload: AccountProfileInput, current_user: DBUser = Depends(get_current_user)):
+    return await run_db_op(lambda db: save_account_profile(db, current_user.public_id, payload))
 
 
 @app.on_event("startup")
@@ -347,6 +361,10 @@ async def startup():
     recovered_speech = await run_db_op(recover_interrupted_speech_sessions)
     if recovered_speech:
         print(f"  [EduMatrix] Recovered {recovered_speech} interrupted speech session(s) to failed truth state")
+    from app.diagnostic_tasks import recover_interrupted_diagnostics
+    await run_db_op(recover_interrupted_diagnostics)
+    from app.path_tasks import recover_interrupted_paths
+    await run_db_op(recover_interrupted_paths)
     # 仅在演示模式预置固定账号；幂等执行且不覆盖已有账号密码。
     def seed_teacher(session):
         demo_accounts = (
@@ -386,6 +404,18 @@ async def startup():
         f"{course_seed['course_count']} courses / {course_seed['documents']} documents / "
         f"{course_seed['chunks']} chunks"
     )
+    async def prepare_course_search():
+        from app.canonical_retrieval import prepare_canonical_embeddings
+        try:
+            prepared = await run_db_op(prepare_canonical_embeddings)
+            if prepared['semantic']:
+                print(f"  [EduMatrix] Course semantic cache prepared: {prepared['prepared_chunks']} chunks")
+        except Exception as exc:
+            print(f"  [EduMatrix] Course semantic preparation deferred: {type(exc).__name__}")
+    asyncio.create_task(prepare_course_search(), name='prepare-course-search')
+    if os.getenv("EDUMATRIX_GENERATION_WORKER", "true").lower() == "true":
+        from app.generation_dispatch import GENERATION_DISPATCHER
+        await GENERATION_DISPATCHER.start()
     pending_course_updates = [
         item for item in course_seed["courses"] if item["status"] == "update_available"
     ]
@@ -401,6 +431,8 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     global _worker_pool
+    from app.generation_dispatch import GENERATION_DISPATCHER
+    await GENERATION_DISPATCHER.stop()
     from code_exec_api import SANDBOX_RUNNER
     from app.code_sandbox import CODE_SANDBOX_RUN_COORDINATOR
     if _worker_pool is not None:
@@ -539,7 +571,7 @@ async def read_index():
     """提供前端 SPA 入口"""
     index_path = os.path.join(FRONTEND_DIST, "index.html")
     if os.path.isfile(index_path):
-        return FileResponse(index_path)
+        return FileResponse(index_path, headers={"Cache-Control": "no-store"})
     from web_demo import INDEX_HTML
     return INDEX_HTML
 
@@ -816,6 +848,7 @@ app.include_router(m2_router)
 app.include_router(m3_router)
 app.include_router(m4_router)
 app.include_router(m5_router)
+app.include_router(learning_inquiry_router)
 app.include_router(m6_router)
 app.include_router(m7_router)
 app.include_router(code_sandbox_router)
@@ -921,7 +954,7 @@ async def test_llm_connection(
     if "Deterministic" in llm_type:
         return {
             "status": "warning",
-            "message": "当前使用模拟引擎（DeterministicEducationLLM），未接入真实大模型",
+            "message": "当前使用演示内容，学习助手尚未连接。",
             "hint": "请由管理员在后端环境中设置 EDUMATRIX_LLM_API_KEY",
             "llm_type": llm_type,
         }
@@ -939,7 +972,7 @@ async def test_llm_connection(
         )
         return {
             "status": "ok",
-            "message": "LLM 连通性测试成功",
+            "message": "学习助手已连接，可以继续提问和学习。",
             "llm_type": llm_type,
             "response": result[:200],
             "model": CONFIG.llm_model,
@@ -947,7 +980,7 @@ async def test_llm_connection(
     except Exception as e:
         return {
             "status": "error",
-            "message": "LLM 调用失败",
+            "message": "学习助手暂时无法回答，请稍后重试。",
             "llm_type": llm_type,
             "model": CONFIG.llm_model,
         }
@@ -970,8 +1003,8 @@ async def test_vision_connection(
     if vision_llm is None:
         return {
             "status": "warning",
-            "message": "当前没有可用的外部视觉模型配置",
-            "hint": "请同时配置主模型或在 Settings 页面填写视觉 API Key、Endpoint 和模型名称",
+            "message": "图片理解尚未连接，请联系管理员检查设置。",
+            "hint": "管理员可在服务配置中设置视觉模型的地址、名称和凭据。",
             "llm_type": llm_type,
         }
 
@@ -1021,7 +1054,7 @@ async def test_vision_connection(
         await lifecycle.complete(output)
         return {
             "status": "ok",
-            "message": "视觉模型请求已成功返回",
+            "message": "图片理解已连接，可以尝试上传学习图片。",
             "llm_type": llm_type,
             "response": output[:500],
         }
@@ -1032,7 +1065,7 @@ async def test_vision_connection(
         await lifecycle.fail("vision_connection_test_provider_failed", "".join(chunks))
         return {
             "status": "error",
-            "message": "视觉模型调用失败",
+            "message": "图片理解暂时不可用，请稍后重试或请管理员检查连接。",
             "llm_type": llm_type,
         }
 
@@ -1429,6 +1462,27 @@ async def list_note_versions(
     return await run_db_op(fetch)
 
 
+@app.get("/api/notes/{note_id}/related", dependencies=[Depends(get_current_user)])
+async def list_related_notes(note_id: str, current_user: DBUser = Depends(get_current_user)):
+    return await run_db_op(lambda session: related_notes_payload(session, actor=current_user, note_id=note_id))
+
+
+@app.post("/api/notes/{note_id}/relations", dependencies=[Depends(get_current_user)])
+async def change_note_relation(note_id: str, request: Request, current_user: DBUser = Depends(get_current_user)):
+    payload = await request.json()
+    try:
+        expected = int(payload.get("expected_version"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="请重新打开笔记后再保存关联")
+    def save(session):
+        note = set_note_relation(session, actor=current_user, note_id=note_id,
+            target_id=str(payload.get("target_id") or ""), action=str(payload.get("action") or ""),
+            expected_version=expected, idempotency_key=str(payload.get("idempotency_key") or new_public_id("note-relation")))
+        session.commit()
+        return note_payload(session, actor=current_user, note=note)
+    return await run_db_op(save)
+
+
 @app.post("/api/notes/{note_id}/versions/{version_number}/restore", dependencies=[Depends(get_current_user)])
 async def restore_existing_note_version(
     note_id: str,
@@ -1591,10 +1645,15 @@ async def get_review(
     current_user: DBUser = Depends(get_current_user),
 ):
     student_id = enforce_student_access(student_id, current_user)
-    plans = await run_db_op(get_review_plan, student_id)
+    def read_plans(db):
+        from app.review_schedule import review_plan_contexts
+        plans = get_review_plan(db, student_id)
+        contexts = review_plan_contexts(db, current_user, plans)
+        return [{**review_plan_to_dict(plan), **contexts.get(plan.id, {})} for plan in plans]
+    plans = await run_db_op(read_plans)
     return {
         "student_id": student_id,
-        "due_reviews": [review_plan_to_dict(p) for p in plans],
+        "due_reviews": plans,
     }
 
 
@@ -1607,11 +1666,24 @@ async def update_review(
     student_id = enforce_student_access(student_id, current_user)
     payload = await request.json()
     concept = str(payload.get("concept", "")).strip()
-    mastery = float(payload.get("mastery", 0.5))
-    interval_days = int(payload.get("interval_days", 1))
-    if not concept:
-        raise HTTPException(status_code=400, detail="concept is required")
-    plan = await run_db_op(upsert_review_plan, student_id, concept, mastery, interval_days)
+    try:
+        mastery = float(payload.get("mastery", 0.5))
+        interval = float(payload.get("interval_days", 1))
+        interval_days = int(interval)
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(status_code=422, detail="请填写有效的熟悉程度和复习间隔。")
+    if not concept or len(concept) > 128:
+        raise HTTPException(status_code=422, detail="请填写128字以内的知识点名称。")
+    if not 0 <= mastery <= 1 or interval != interval_days or not 1 <= interval_days <= 365:
+        raise HTTPException(status_code=422, detail="熟悉程度应在0到100%之间，复习间隔应为1到365个整天。")
+    course_id = str(payload.get("course_id") or "").strip() or None
+    def save_plan(db):
+        if course_id:
+            from app.review_schedule import _readable_courses
+            if course_id not in _readable_courses(db, current_user):
+                raise HTTPException(status_code=404, detail="这门课程当前不可用，请重新选择。")
+        return upsert_review_plan(db, student_id, concept, mastery, interval_days, course_id=course_id)
+    plan = await run_db_op(save_plan)
     return review_plan_to_dict(plan)
 
 

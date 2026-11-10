@@ -1,4 +1,5 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
 import { ArrowRight, CheckCircle2, Clock3, LockKeyhole, Circle } from '@lucide/vue'
 
 defineProps({
@@ -10,15 +11,17 @@ defineProps({
 const emit = defineEmits(['open'])
 
 function taskStatus(task) {
+  if (task.status === 'skipped') return 'completed'
   if (task.status === 'completed' || task.status === '已完成') return 'completed'
   if (task.status === 'in_progress' || task.status === '当前可学' || task.status === 'due') return 'active'
   return 'locked'
 }
 
 function statusLabel(task) {
+  if (task.status === 'skipped') return '测评已通过，可回顾'
   const status = taskStatus(task)
   if (status === 'completed') return '已完成'
-  if (status === 'active') return task.task_kind === 'review' ? '待复习' : '今日可学'
+  if (status === 'active') return task.task_kind === 'review' ? '待复习' : '可学习'
   return '待解锁'
 }
 
@@ -50,6 +53,16 @@ function openTask(task) {
 function resourceItems(task) {
   return Array.isArray(task.resources) ? task.resources : []
 }
+
+function taskLearningGoal(task) {
+  return task.teaching_goal || task.generation_context?.teaching_goal || ''
+}
+
+function additionalPointTitle(task) {
+  if (task.generation_context?.teaching_title) return ''
+  const title = task.knowledge_point_title || task.knowledge_point || ''
+  return title && title !== task.title ? title : ''
+}
 </script>
 
 <template>
@@ -71,20 +84,21 @@ function resourceItems(task) {
         <div class="path-task__body">
           <div class="path-task__title-row">
             <h3>{{ task.title }}</h3>
-            <span v-if="todayTaskIds.includes(task.id || task.node_id || task.node_key)" class="path-task__today">今日必做</span>
+            <span v-if="todayTaskIds.includes(task.id || task.node_id || task.node_key)" class="path-task__today">本次安排</span>
             <span v-else-if="task.required === false || task.is_extension" class="path-task__optional">可选</span>
           </div>
           <div class="path-task__meta">
-            <span>知识点：{{ task.knowledge_point_title || task.knowledge_point || task.title }}</span>
-            <span>{{ typeLabel(task) }}</span>
+            <span v-if="additionalPointTitle(task)">{{ additionalPointTitle(task) }}</span>
+            <span v-if="!['chapter', 'artifact'].includes(task.node_type)">{{ typeLabel(task) }}</span>
             <span><Clock3 :size="14" />{{ minutes(task) }}</span>
             <span>{{ statusLabel(task) }}</span>
           </div>
-          <p class="path-task__criteria">完成条件：{{ task.completion_criteria || '完成本项学习并留下可追溯证据。' }}</p>
-          <div v-if="resourceItems(task).length" class="path-task__resources" data-testid="path-task-resources">
+          <p v-if="taskLearningGoal(task)" class="path-task__goal">{{ taskLearningGoal(task) }}</p>
+          <p v-else class="path-task__criteria">{{ task.status === 'skipped' ? '测评已通过，本轮可先学习其他内容。' : task.completion_criteria || '完成本项学习检查。' }}</p>
+          <div v-if="!taskLearningGoal(task) && resourceItems(task).length" class="path-task__resources" data-testid="path-task-resources">
             <div v-for="resource in resourceItems(task)" :key="`${task.id}-${resource.type}`" class="path-task__resource">
               <strong>{{ resource.label }}</strong>
-              <span>{{ resource.explanation }} · {{ resource.estimate_minutes }} 分钟</span>
+              <span>{{ learningText(resource.explanation) }} · {{ resource.estimate_minutes }} 分钟</span>
               <span class="path-task__resource-criteria">完成标准：{{ resource.completion_criteria }}</span>
             </div>
           </div>
@@ -200,6 +214,13 @@ function resourceItems(task) {
   color: var(--color-text-muted);
   font-size: 14px;
   line-height: 1.55;
+}
+
+.path-task__goal {
+  margin: 12px 0 0;
+  color: var(--color-text);
+  font-size: 15px;
+  line-height: 1.65;
 }
 
 .path-task__resources {

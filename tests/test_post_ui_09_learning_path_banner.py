@@ -5,7 +5,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LEARNING_PATH = ROOT / "frontend/src/views/LearningPathGraph.vue"
-SHOWCASE = ROOT / "frontend/src/views/CompetitionShowcase.vue"
 REVIEW = ROOT / "frontend/src/views/Review.vue"
 REVIEW_TOOLS = ROOT / "frontend/src/components/ReviewToolsPanel.vue"
 CONTEXT_BAND = ROOT / "frontend/src/components/CompetitionDemoContextBand.vue"
@@ -15,12 +14,12 @@ def _source(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_learning_path_removes_competition_context_banner_only() -> None:
+def test_learning_path_uses_current_course_without_competition_context_request() -> None:
     source = _source(LEARNING_PATH)
 
     assert "CompetitionDemoContextBand" not in source
     assert 'page="path"' not in source
-    assert "getCompetitionDemoContext" in source
+    assert "getCompetitionDemoContext" not in source
     assert "const demoContext = ref(null)" in source
 
 
@@ -34,22 +33,19 @@ def test_learning_path_core_content_and_actions_remain() -> None:
         'data-testid="path-subject-view"',
         "<PathTaskList",
         "path-progress-summary",
-        "timeBudgetMinutes",
-        "调整预算与重建",
-        "createGenerationJob",
+        "学习日历",
+        "重新编排",
+        "prepareSubjectAdjustment",
         "openPathTask",
     ):
         assert marker in source
 
 
-def test_shared_banner_remains_for_showcase_but_not_review_tools() -> None:
+def test_review_tools_do_not_show_competition_banner() -> None:
     assert CONTEXT_BAND.exists()
 
-    showcase = _source(SHOWCASE)
     review = _source(REVIEW)
     review_tools = _source(REVIEW_TOOLS)
-    assert "CompetitionDemoContextBand" in showcase
-    assert 'page="showcase"' in showcase
     assert "CompetitionDemoContextBand" not in review
     assert "CompetitionDemoContextBand" not in review_tools
     assert 'page="review"' not in review_tools

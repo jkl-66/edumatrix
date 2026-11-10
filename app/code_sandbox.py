@@ -27,10 +27,12 @@ from app.schemas import ContextRef
 from app.m5_learning import LearningEventInput, process_path_event, record_learning_event
 from app.m5_resources import (
     CodeSandboxContent,
+    CodeSandboxFile,
     CodeSandboxRequiredCheck,
     canonical_resource_type,
     parse_code_sandbox_content,
     resource_detail,
+    resource_generation_blocker,
 )
 
 
@@ -38,6 +40,11 @@ RUN_ARTIFACT_TYPE = "code_sandbox_run"
 RUN_SCHEMA_VERSION = "f6.code-sandbox-run.v1"
 RUN_STATUSES = ("queued", "running", "stopped", "success", "runtime_error", "timeout")
 FINAL_RUN_STATUSES = frozenset({"stopped", "success", "runtime_error", "timeout"})
+SUPPORTED_MODULES = frozenset({
+    "math", "json", "random", "statistics", "collections", "itertools",
+    "datetime", "re", "time", "numpy", "pandas", "matplotlib", "sklearn",
+    "torch", "mpl_toolkits", "io",
+})
 _DATA_IMAGE = re.compile(r"data:image/png;base64,([A-Za-z0-9+/=]+)")
 _COMPLETE_OUTPUT_STORAGE_CAP = 1_000_000
 
@@ -110,10 +117,11 @@ class CodeSandboxRunState(StrictModel):
     language: Literal["python"] = "python"
     runtimeMode: Literal["trusted_local"] = "trusted_local"
     runtimeBoundary: str
-    timeoutSeconds: int = Field(ge=1, le=60)
-    code: str = Field(min_length=1, max_length=50_000)
+    timeoutSeconds: int = Field(ge=1)
+    code: str = Field(min_length=1)
+    files: tuple[CodeSandboxFile, ...] = ()
     codeSha256: str
-    standardInput: str = Field(default="", max_length=20_000)
+    standardInput: str = ""
     requiredChecks: tuple[CodeSandboxRequiredCheck, ...]
     status: Literal["queued", "running", "stopped", "success", "runtime_error", "timeout"]
     createdAt: str
@@ -160,6 +168,8 @@ import json
 import os
 import sys
 import traceback
+import types
+from importlib.util import resolve_name
 from contextlib import redirect_stderr, redirect_stdout
 
 payload_path, result_path = sys.argv[1], sys.argv[2]
@@ -241,22 +251,78 @@ class BoundedText(io.TextIOBase):
             "truncated": omitted > 0,
         }
 
-allowed_modules = {
-    "math", "json", "random", "statistics", "collections", "itertools",
-    "datetime", "re", "time", "numpy", "pandas", "matplotlib", "sklearn",
-    "torch", "mpl_toolkits",
-}
+allowed_modules = set(payload["supportedModules"])
+project_modules = {}
+project_cache = {}
+for item in payload.get("files", []):
+    path = item["path"].replace("\\", "/")
+    if not path.endswith(".py"):
+        continue
+    parts = path[:-3].split("/")
+    is_package = parts[-1] == "__init__"
+    if is_package:
+        parts.pop()
+    name = ".".join(parts)
+    project_modules[name] = (item["content"], path, is_package)
+    for index in range(1, len(parts)):
+        project_modules.setdefault(".".join(parts[:index]), ("", "", True))
+
+def project_import(name):
+    if name in project_cache:
+        return project_cache[name]
+    if name not in project_modules:
+        raise ImportError(f"这份练习中没有找到模块: {name}")
+    source, filename, is_package = project_modules[name]
+    parent, _, child = name.rpartition(".")
+    if parent:
+        project_import(parent)
+    # A package's __init__ may have imported this child while loading the parent.
+    if name in project_cache:
+        return project_cache[name]
+    module = types.ModuleType(name)
+    module.__package__ = name if is_package else parent
+    module.__file__ = filename
+    module.__dict__["__builtins__"] = safe_builtins
+    project_cache[name] = module
+    try:
+        exec(compile(source, filename or name, "exec"), module.__dict__)
+    except BaseException:
+        project_cache.pop(name, None)
+        raise
+    if parent:
+        setattr(project_cache[parent], child, module)
+    return module
+
+memory_io = types.ModuleType("io")
+memory_io.BytesIO = io.BytesIO
+memory_io.StringIO = io.StringIO
+
 
 def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if level:
+        name = resolve_name("." * level + name, (globals or {}).get("__package__") or "")
+    if name in project_modules:
+        module = project_import(name)
+        if fromlist:
+            for child in fromlist:
+                if child != "*" and f"{name}.{child}" in project_modules:
+                    project_import(f"{name}.{child}")
+            return module
+        return project_import(name.split(".")[0])
     root = name.split(".")[0]
     if root not in allowed_modules:
         raise ImportError(f"本地研究模式禁用了模块: {name}")
+    if root == "io":
+        # Support in-memory CSV/model roundtrips without adding filesystem I/O.
+        if name != "io":
+            raise ImportError(f"内存读写不提供子模块: {name}")
+        return memory_io
     return builtins.__import__(name, globals, locals, fromlist, level)
 
 safe_builtins = {
     "abs": abs, "all": all, "any": any, "bool": bool, "callable": callable,
     "classmethod": classmethod, "dict": dict, "dir": dir, "enumerate": enumerate,
-    "Exception": Exception, "float": float, "format": format, "frozenset": frozenset,
+    "Exception": Exception, "EOFError": EOFError, "float": float, "format": format, "frozenset": frozenset,
     "hasattr": hasattr, "hash": hash, "help": help, "hex": hex, "id": id,
     "ImportError": ImportError, "IndexError": IndexError, "input": input, "int": int,
     "isinstance": isinstance, "issubclass": issubclass, "iter": iter, "KeyError": KeyError,
@@ -331,32 +397,44 @@ with open(result_path, "w", encoding="utf-8") as handle:
 '''
 
 
-def validate_code(code: str) -> str | None:
+def local_module_roots(files: tuple[CodeSandboxFile, ...]) -> frozenset[str]:
+    return frozenset(item.path.replace("\\", "/").split("/")[0].removesuffix(".py") for item in files if item.path.endswith(".py"))
+
+
+def validate_code(code: str, *, local_modules: frozenset[str] = frozenset()) -> str | None:
     try:
         tree = ast.parse(code)
     except SyntaxError as exc:
         return f"语法错误: {exc}"
-    allowed_modules = {
-        "math", "json", "random", "statistics", "collections", "itertools",
-        "datetime", "re", "time", "numpy", "pandas", "matplotlib", "sklearn",
-        "torch", "mpl_toolkits",
-    }
     banned_names = {
         "eval", "exec", "compile", "open", "globals", "locals", "vars", "getattr",
         "setattr", "delattr", "breakpoint", "__import__", "os", "sys", "subprocess",
         "socket", "pathlib", "shutil", "multiprocessing", "requests", "httpx", "urllib",
     }
     banned_attributes = {"system", "popen", "spawn", "fork", "kill", "remove", "unlink", "rmdir"}
+    # Standard Python/PyTorch subclasses must initialize their base class.
+    # Permit the direct super(...).__init__(...) call, without exposing other
+    # dunder attributes or turning bound initializers into general values.
+    base_initializers = {
+        id(node.func) for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "__init__" and isinstance(node.func.value, ast.Call)
+        and isinstance(node.func.value.func, ast.Name) and node.func.value.func.id == "super"
+        and not node.func.value.keywords and len(node.func.value.args) in (0, 2)
+        and all(isinstance(arg, ast.Name) for arg in node.func.value.args)
+    }
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.ImportFrom) and node.level and local_modules:
+                continue  # Resolved against the declared project modules at execution.
             names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""]
             for name in names:
-                if name.split(".")[0] not in allowed_modules:
+                if name.split(".")[0] not in SUPPORTED_MODULES | local_modules:
                     return f"本地研究模式禁用了模块: {name}"
         elif isinstance(node, ast.Name) and node.id in banned_names:
             return f"本地研究模式禁用了高风险名称: {node.id}"
         elif isinstance(node, ast.Attribute):
-            if node.attr.startswith("__") or node.attr in banned_attributes:
+            if (node.attr.startswith("__") and id(node) not in base_initializers) or node.attr in banned_attributes:
                 return f"本地研究模式禁用了高风险属性: {node.attr}"
     return None
 
@@ -411,7 +489,10 @@ class LocalPythonExecutor:
 
     async def execute(self, state: CodeSandboxRunState) -> ExecutionResult:
         started = asyncio.get_running_loop().time()
-        validation_error = validate_code(state.code)
+        local_modules = local_module_roots(state.files)
+        validation_error = validate_code(state.code, local_modules=local_modules)
+        for item in state.files:
+            validation_error = validation_error or validate_code(item.content, local_modules=local_modules)
         if validation_error:
             capture = _empty_capture(int(CONFIG.sandbox_max_output_bytes))
             return ExecutionResult(
@@ -442,7 +523,9 @@ class LocalPythonExecutor:
         result_path = workdir / "result.json"
         wrapper_path = workdir / "runner.py"
         payload_path.write_text(_canonical({
+            "supportedModules": sorted(SUPPORTED_MODULES),
             "code": state.code,
+            "files": [item.model_dump(mode="json") for item in state.files],
             "entryFile": state.entryFile,
             "standardInput": state.standardInput,
             "maxOutputBytes": int(CONFIG.sandbox_max_output_bytes),
@@ -458,6 +541,10 @@ class LocalPythonExecutor:
         env.pop("PYTHONPATH", None)
         env["PYTHONIOENCODING"] = "utf-8"
         env["MPLBACKEND"] = "Agg"
+        # Each learner run already has its own process. Avoid every small NumPy
+        # example competing for all cores with generation and other runs.
+        for variable in ('OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'OMP_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+            env[variable] = '1'
         kwargs: dict[str, Any] = {}
         if os.name == "nt":
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -494,15 +581,15 @@ class LocalPythonExecutor:
                     status="timeout",
                     executionTimeMs=elapsed,
                     exitCode=None,
-                    stderr=f"代码运行超时：超过 {min(state.timeoutSeconds, int(CONFIG.sandbox_timeout))} 秒，进程树已清理。",
+                    stderr=f"代码运行超时：超过 {min(state.timeoutSeconds, int(CONFIG.sandbox_timeout))} 秒，已停止。请减少计算量后重试。",
                     stdoutCapture=capture,
                     stderrCapture=capture,
                     stdoutComplete=_complete_output("", capture),
                     stderrComplete=_complete_output(
-                        f"代码运行超时：超过 {min(state.timeoutSeconds, int(CONFIG.sandbox_timeout))} 秒，进程树已清理。",
+                        f"代码运行超时：超过 {min(state.timeoutSeconds, int(CONFIG.sandbox_timeout))} 秒，已停止。请减少计算量后重试。",
                         OutputCapture(
-                            totalBytes=len(f"代码运行超时：超过 {min(state.timeoutSeconds, int(CONFIG.sandbox_timeout))} 秒，进程树已清理。".encode("utf-8")),
-                            capturedBytes=len(f"代码运行超时：超过 {min(state.timeoutSeconds, int(CONFIG.sandbox_timeout))} 秒，进程树已清理。".encode("utf-8")),
+                            totalBytes=len(f"代码运行超时：超过 {min(state.timeoutSeconds, int(CONFIG.sandbox_timeout))} 秒，已停止。请减少计算量后重试。".encode("utf-8")),
+                            capturedBytes=len(f"代码运行超时：超过 {min(state.timeoutSeconds, int(CONFIG.sandbox_timeout))} 秒，已停止。请减少计算量后重试。".encode("utf-8")),
                             limitBytes=_complete_output_limit(int(CONFIG.sandbox_max_output_bytes)),
                             omittedBytes=0,
                             truncated=False,
@@ -520,15 +607,15 @@ class LocalPythonExecutor:
                     status="stopped",
                     executionTimeMs=elapsed,
                     exitCode=process.returncode,
-                    stderr="运行已由用户停止，主进程与子进程树已清理。",
+                    stderr="本次运行已停止，可以修改代码后重新运行。",
                     stdoutCapture=capture,
                     stderrCapture=capture,
                     stdoutComplete=_complete_output("", capture),
                     stderrComplete=_complete_output(
-                        "运行已由用户停止，主进程与子进程树已清理。",
+                        "本次运行已停止，可以修改代码后重新运行。",
                         OutputCapture(
-                            totalBytes=len("运行已由用户停止，主进程与子进程树已清理。".encode("utf-8")),
-                            capturedBytes=len("运行已由用户停止，主进程与子进程树已清理。".encode("utf-8")),
+                            totalBytes=len("本次运行已停止，可以修改代码后重新运行。".encode("utf-8")),
+                            capturedBytes=len("本次运行已停止，可以修改代码后重新运行。".encode("utf-8")),
                             limitBytes=_complete_output_limit(int(CONFIG.sandbox_max_output_bytes)),
                             omittedBytes=0,
                             truncated=False,
@@ -669,6 +756,8 @@ def _owned_resource(db: Any, resource_id: str, owner: str) -> tuple[DBArtifact, 
         _fail("code_sandbox_resource_unknown", "代码沙盒资源不存在或已经不可用。")
     if artifact.owner_public_id != owner:
         _fail("code_sandbox_resource_forbidden", "该代码沙盒资源属于其他用户。")
+    if reason := resource_generation_blocker(db, artifact):
+        _fail("resource_generation_incomplete", reason)
     version = db.get(DBArtifactVersion, artifact.current_version_id) if artifact.current_version_id else None
     metadata = dict(version.metadata_json or {}) if version else {}
     if version is None or canonical_resource_type(artifact.artifact_type, metadata) != "code_sandbox":
@@ -760,8 +849,9 @@ def prepare_run(
         knowledgePointId=(version.metadata_json or {}).get("knowledge_point_id"),
         entryFile=content.entryFile,
         runtimeBoundary=content.runtime.boundary,
-        timeoutSeconds=min(content.runtime.timeoutSeconds, max(1, int(CONFIG.sandbox_timeout))),
+        timeoutSeconds=max(1, int(CONFIG.sandbox_timeout)),
         code=code,
+        files=tuple(item.model_copy(update={"content": code}) if item.path == content.entryFile else item for item in content.files),
         codeSha256=hashlib.sha256(code.encode("utf-8")).hexdigest(),
         standardInput=standard_input,
         requiredChecks=tuple(content.requiredChecks),
@@ -920,9 +1010,11 @@ def complete_run_learning(
     if run.status != "success" or run.totalCount < 1 or run.passedCount != run.totalCount:
         _fail("code_sandbox_run_incomplete", "只有通过全部必需检查的真实运行才能完成学习。")
     payload = {
+        "knowledge_point_id": (resource_version.metadata_json or {}).get("knowledge_point_id"),
         "passed_count": run.passedCount,
         "total_count": run.totalCount,
         "test_scope": "required",
+        "evidence_kind": "guided_practice",
         "run_id": run.runAttemptId,
         "resource_version_id": resource_version.id,
         "completion_rule": content.completionRule,
@@ -994,6 +1086,62 @@ def complete_run_learning(
 
 
 CODE_SANDBOX_EXECUTOR = LocalPythonExecutor()
+
+
+async def validate_generated_code(content: str) -> dict:
+    """Run a candidate with the learner's executor without recording learning."""
+    from app.m5_resources import parse_code_sandbox_content
+    parsed = parse_code_sandbox_content(content)
+    code = next(item.content for item in parsed.files if item.path == parsed.entryFile)
+    executor = LocalPythonExecutor()
+    if not executor.enabled:
+        raise CodeSandboxError("code_sandbox_runtime_unavailable", "代码运行服务尚未启用。")
+    state = CodeSandboxRunState(runAttemptId="generation-check-" + _digest(content)[:24],
+        ownerPublicId="generation-check", sourceResourceId="candidate", sourceResourceVersionId="candidate",
+        entryFile=parsed.entryFile, runtimeBoundary=parsed.runtime.boundary,
+        timeoutSeconds=max(1, int(CONFIG.sandbox_timeout)),
+        code=code, files=tuple(parsed.files), codeSha256=_digest(code), standardInput=parsed.standardInput,
+        requiredChecks=tuple(parsed.requiredChecks), status="queued", createdAt=_now())
+    result = await executor.execute(state)
+    return {**result.model_dump(mode="json"), "checks": [_check_result(check, result).model_dump(mode="json")
+                                                         for check in parsed.requiredChecks]}
+
+
+async def verify_document_code(content: str, *, completed: dict, save) -> list[dict]:
+    """Give the content reviewer real output for Python teaching examples.
+
+    A fragment may intentionally need earlier definitions or student edits.
+    Record that outcome for review, rather than declaring every fragment a
+    failed runnable program. The existing executor enforces the same boundary
+    used by the learner; no learning event or score is recorded.
+    """
+    body = json.loads(content)
+    executor = LocalPythonExecutor()
+    if not executor.enabled:
+        raise CodeSandboxError('code_sandbox_runtime_unavailable', '代码运行服务尚未启用。')
+    results = []
+    for block in body.get('codeBlocks', []):
+        if str(block.get('language') or 'python').lower() not in {'python', 'py', 'python3'}:
+            continue
+        code = str(block.get('code') or '')
+        if not code.strip():
+            continue
+        key = 'document-code:' + _digest(code)
+        execution = completed.get(key)
+        if execution is None:
+            state = CodeSandboxRunState(runAttemptId='generation-check-' + _digest(code)[:24],
+                ownerPublicId='generation-check', sourceResourceId='candidate', sourceResourceVersionId='candidate',
+                entryFile='example.py', runtimeBoundary='trusted_local',
+                timeoutSeconds=max(1, int(CONFIG.sandbox_timeout)), code=code, codeSha256=_digest(code),
+                files=(CodeSandboxFile(path='example.py', content=code),), requiredChecks=(),
+                status='queued', createdAt=_now())
+            result = await executor.execute(state)
+            execution = {k:v for k,v in result.model_dump(mode='json').items()
+                         if k in {'status','exitCode','stdout','stderr','stdoutComplete','stderrComplete','executionTimeMs','errorCode'}}
+            completed[key] = execution
+            save(key, execution)
+        results.append({'block_id':block.get('id'), 'code_hash':_digest(code), **execution})
+    return results
 
 
 class CodeSandboxRunCoordinator:

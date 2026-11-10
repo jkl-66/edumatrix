@@ -12,6 +12,7 @@ from app.database import (
     DBLearningEvent,
     DBPathNode,
     DBProfileSnapshot,
+    DBSourceDocument,
     DBSourceRef,
     DBUser,
     DBWebSourceCandidate,
@@ -107,7 +108,43 @@ def test_missing_profile_is_explicit_and_preserves_user_query(monkeypatch):
     assert payload["queryPlan"]["source"] == "user_query_profile_missing"
     assert payload["generatedQuery"] == "机器学习公开讲义"
     assert payload["items"][0]["authoritative"] is False
-    assert payload["authorityBoundary"].endswith("推荐本身不会改变 mastery/path。")
+    assert payload["authorityBoundary"].endswith("查找资料不会改变知识掌握程度或学习路径。")
+
+
+def test_explicit_site_scope_survives_model_query_and_provider_drift(monkeypatch):
+    queries = []
+    async def fake_audited(_llm, **_kwargs):
+        return json.dumps({"query": "NumPy indexing site:wrong.test", "focus_terms": ["indexing"], "rationale": "练习索引"})
+    async def fake_search(query, *, max_results):
+        queries.append(query)
+        return WebSearchResults([
+            {"title": "NumPy indexing", "url": "https://other.test/doc/stable/a", "snippet": "indexing"},
+            {"title": "NumPy indexing", "url": "https://numpy.org/install/", "snippet": "indexing"},
+            {"title": "NumPy indexing", "url": "https://numpy.org.evil.test/doc/stable/a", "snippet": "indexing"},
+            {"title": "NumPy indexing", "url": "https://numpy.org/doc/stable-old/a", "snippet": "indexing"},
+            {"title": "NumPy indexing", "url": "https://numpy.org/doc/stable/reference/a", "snippet": "indexing"},
+            {"title": "NumPy indexing", "url": "https://numpy.org/doc/stable/user/indexing.html", "snippet": "indexing"},
+        ])
+    monkeypatch.setattr(admission, "audited_legacy_text_call", fake_audited)
+    monkeypatch.setattr(admission, "_perform_web_search", fake_search)
+    result = asyncio.run(admission.search_web_materials(
+        "数组索引 site:numpy.org/doc/stable -site:numpy.org/doc/stable/reference", 1,
+        profile_context=_profile("ps-site", learning_goal="索引", weak_direction="数组"),
+        course_context=_course(), llm=_DeepSeekQueryLLM(), owner_public_id="site-test",
+    ))
+    assert 'site:wrong.test' not in queries[0]
+    assert 'site:numpy.org/doc/stable' in queries[0]
+    assert [item['url'] for item in result['items']] == ['https://numpy.org/doc/stable/user/indexing.html']
+    assert result['filteredResultCount'] == 5
+
+
+def test_site_scope_with_no_matching_result_reports_no_results(monkeypatch):
+    async def fake_search(query, *, max_results):
+        return WebSearchResults([{"title": "其他网站", "url": "https://other.test/page", "snippet": "数组"}])
+    monkeypatch.setattr(admission, '_perform_web_search', fake_search)
+    result = asyncio.run(admission.search_web_materials('数组 site:numpy.org/doc/stable', 8))
+    assert result['items'] == [] and result['status'] == 'no_results'
+    assert '指定网站或目录' in result['message']
 
 
 def test_profile_query_model_policy_and_invalid_output_are_retryable(monkeypatch):
@@ -212,6 +249,11 @@ def test_discovery_api_projects_course_profile_context_and_keeps_read_only_bound
                 manifest_version="p1-b27-public-v1",
                 manifest_data={"course_goals": ["掌握公开课程目标"]},
             ))
+            for usable_course in (course_id, public_course_id):
+                session.add(DBSourceDocument(
+                    id=f"source-{usable_course}", course_id=usable_course,
+                    title="课程资料", filename="source.md", file_format="md", content_hash="a" * 64,
+                ))
             session.add(DBProfileSnapshot(
                 id=snapshot_id,
                 owner_public_id=user.public_id,
@@ -223,6 +265,14 @@ def test_discovery_api_projects_course_profile_context_and_keeps_read_only_bound
                     "weak_points": ["卷积"],
                     "interaction_preferences": ["先看案例"],
                     "weekly_time_budget": "每周 3 小时",
+                    "profile_projection": {
+                        "knowledge_base": "会基础运算，未学编程",
+                        "dimension_states": {"learning_context": {
+                            "summary": "英语讲解，手机和纸笔，每次30分钟",
+                            "confirmed_fields": {"language_preference": "英语讲解",
+                                "available_tools": "手机和纸笔", "study_schedule": "每次30分钟"},
+                        }},
+                    },
                 },
                 content_hash=f"hash-{suffix}",
                 trace_id=f"trace-{suffix}",
@@ -253,7 +303,19 @@ def test_discovery_api_projects_course_profile_context_and_keeps_read_only_bound
         assert payload["items"][0]["relevanceScore"] >= payload["items"][1]["relevanceScore"]
         assert captured[0]["course"]["course_goals"] == ["掌握卷积基础"]
         assert captured[0]["profile"]["weak_directions"] == ["卷积"]
-        assert payload["authorityBoundary"].endswith("推荐本身不会改变 mastery/path。")
+        assert captured[0]["profile"]["learning_requirements"]["language_preference"] == "英语讲解"
+        assert captured[0]["profile"]["learning_requirements"]["available_tools"] == "手机和纸笔"
+        assert captured[0]["profile"]["foundation"] == "会基础运算，未学编程"
+        assert captured[0]["profile"]["time_budget"] == "每次30分钟"
+        assert payload["authorityBoundary"].endswith("查找资料不会改变知识掌握程度或学习路径。")
+        model_calls = len(captured)
+        unscoped = client.get('/api/knowledge/discovery/search',
+            params={'q': '数组公开资料', 'use_profile': False}, headers=headers)
+        assert unscoped.status_code == 200
+        assert unscoped.json()['profileBasis']['status'] == 'missing'
+        assert not unscoped.json()['profileBasis']['courseId']
+        assert unscoped.json()['generatedQuery'] == '数组公开资料'
+        assert len(captured) == model_calls
 
         with SessionLocal() as session:
             protected_after = {
@@ -320,6 +382,11 @@ def test_discovery_api_rejects_cross_owner_and_mismatched_profile_context(monkey
                 visibility="private", status="published", owner_public_id=owner.public_id,
                 manifest_version="p1-b27-private-context-v1", manifest_data={"course_goals": ["私有目标"]},
             ))
+            for usable_course in (course_id, private_course_id):
+                session.add(DBSourceDocument(
+                    id=f"source-{usable_course}", course_id=usable_course,
+                    title="课程资料", filename="source.md", file_format="md", content_hash="b" * 64,
+                ))
             session.add(DBProfileSnapshot(
                 id=owner_snapshot_id, owner_public_id=owner.public_id, legacy_student_id=owner_name,
                 profile_version="profile.continuous.v1", snapshot={"course_id": course_id, "weak_points": ["卷积"]},

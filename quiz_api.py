@@ -1462,13 +1462,18 @@ async def generate_similar_quiz(
     payload = await request.json()
     student_id = enforce_student_access(payload.get("student_id"), current_user)
     source_quiz_id = str(payload.get("source_quiz_id", "")).strip()
+    question_version_id = str(payload.get("question_version_id", "")).strip()
 
-    if not source_quiz_id:
+    if not source_quiz_id and not question_version_id:
         raise HTTPException(status_code=400, detail="必须提供 source_quiz_id")
 
     # Step 1: 读取源错题
     repository = LegacyReadRepository(db)
-    source = repository.quiz_record(source_quiz_id, student_id)
+    if question_version_id:
+        from app.wrong_question_read_model import canonical_review_source
+        source = canonical_review_source(db, owner_public_id=current_user.public_id, student_id=student_id, version_id=question_version_id)
+    else:
+        source = repository.quiz_record(source_quiz_id, student_id)
     if not source:
         raise HTTPException(status_code=404, detail="源错题记录未找到")
 
@@ -1520,8 +1525,10 @@ async def generate_similar_quiz(
         )
     user_prompt = (
         f"源题知识点：{concept}\n"
-        f"源题：{source.question[:200]}\n"
-        f"源题正确答案：{source.correct_answer[:200]}\n"
+        f"源题：{source.question}\n"
+        f"源题选项：{_json_mod.dumps(source.options or [], ensure_ascii=False)}\n"
+        f"源题正确答案：{source.correct_answer}\n"
+        f"源题讲解：{source.feedback or ''}\n"
         f"源题正确率：{original_accuracy:.2f}\n"
         "请生成一道同难度、同考点的相似题，JSON 格式输出。"
         "确保 python_validator 是可运行的 assert 语句。"
@@ -1561,37 +1568,40 @@ async def generate_similar_quiz(
                         # 路由至进程隔离沙箱运行，限制 CPU 时间及最大内存，防止沙箱逃逸与死锁
                         output, error, exec_time = await SANDBOX_RUNNER.run(python_code)
                         if error:
-                            if "AssertionError" in error:
-                                # AssertionError 是校验器的预期行为（验证逻辑触发）
-                                sandbox_passed = True
-                            else:
-                                # 非断言错误说明代码本身有问题，需重试
-                                user_prompt += f"\n\n⚠️ 第 {attempts} 次沙箱校验失败：{error[:200]}。请修正 python_validator 逻辑。"
-                                continue
+                            user_prompt += f"\n\n第 {attempts} 次答案验证失败：{error[:200]}。请同时复核题目、选项和答案，再修正验证代码。"
+                            continue
                         else:
                             sandbox_passed = True
                     else:
-                        sandbox_passed = True  # 没有 assert 也通过
+                        user_prompt += "\n验证代码必须包含针对题目答案的有效 assert，请重新检查。"
                 except Exception as e:
                     # 沙箱启动失败，记录错误并重试
                     user_prompt += f"\n\n⚠️ 第 {attempts} 次沙箱校验失败：{e}。请修正 python_validator 逻辑。"
                     continue
             else:
-                sandbox_passed = True  # 无验证器也通过
+                user_prompt += "\n请补充针对题目答案的验证代码，不能省略。"
         except Exception:
             if attempts >= max_attempts:
-                # 兜底：用简单相似题
-                fb = _get_fallback_quiz(concept, "medium")
-                result = {
-                    "question": fb["question"],
-                    "options": [],
-                    "correct_answer": fb["correct_answer"],
-                    "explanation": f"本题考察{concept}的核心理解",
-                    "python_validator": "",
-                    "difficulty": "medium",
-                }
-                sandbox_passed = True
+                raise HTTPException(status_code=502, detail="相似练习暂时没有准备好，原题和学习记录已保留，请重试。")
             continue
+
+    if not sandbox_passed:
+        raise HTTPException(status_code=502, detail="这道相似题还未通过答案检查，请重新生成。")
+    if question_version_id:
+        from app.m5_assessment_core import QuestionVersionInput, create_question_version
+        options = result.get("options") or []
+        answer = str(result.get("correct_answer") or "")
+        question, version = create_question_version(db, owner_public_id=current_user.public_id,
+            course_id=source.course_id, question_type="single_choice" if options else "short_answer", origin="ai_generated",
+            version=QuestionVersionInput(prompt=result["question"], options=tuple(options),
+                answer_key={"choice": answer[:1].upper()} if options else {"reference_answer": answer},
+                scoring_rule={"type": "exact", "version": "similar-v1"} if options else {"type": "ai_rubric", "version": "similar-v1", "criteria": [{"id": "understanding", "label": "理解与推理", "description": "依据参考答案解释关键条件和推理过程", "weight": 1.0}]},
+                explanation=result.get("explanation") or "", source_ref_ids=tuple(source.question_version.source_ref_ids or []),
+                primary_knowledge_point_id=source.question_version.primary_knowledge_point_id))
+        question.status = "approved"
+        db.commit()
+        return {"question_version_id": version.id, "question": version.prompt, "options": list(version.options or []),
+                "concept": concept, "sandbox_validated": True, "sandbox_attempts": attempts}
 
     # Step 4: 保存新题
     new_quiz_id = _generate_quiz_id()
@@ -1640,6 +1650,7 @@ async def get_wrong_questions(
     student_id: str,
     concept: str = "",
     limit: int = 50,
+    course_id: str | None = None,
     current_user=Depends(get_current_user),
 ) -> list[dict]:
     """获取学生的错题列表，支持按概念筛选。"""
@@ -1655,6 +1666,7 @@ async def get_wrong_questions(
             owner_public_id=owner.public_id,
             concept=concept,
             limit=limit,
+            course_id=course_id,
         )
 
     return await run_db_op(fetch_wrong_questions)

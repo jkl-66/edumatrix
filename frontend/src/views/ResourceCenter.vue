@@ -1,4 +1,6 @@
 <script setup>
+import { displayLabel, learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -8,6 +10,7 @@ import {
   RefreshCw, SlidersHorizontal, Sparkles, Wrench, X,
 } from '@lucide/vue'
 import {
+  archiveM5Resource,
   compareM5ResourceVersions,
   completeM5Resource,
   createM5ResourceVersion,
@@ -27,6 +30,8 @@ import ResourcePreviewDrawer from '../components/ResourcePreviewDrawer.vue'
 import SearchField from '../components/ui/SearchField.vue'
 import ResourceHistoryDrawer from '../components/ResourceHistoryDrawer.vue'
 import ResourceEditorDialog from '../components/ResourceEditorDialog.vue'
+import ResourceEditConflicts from '../components/ResourceEditConflicts.vue'
+import { useResourceEditMerge } from '../services/useResourceEditMerge.js'
 import ResourceTypeStage from '../components/ResourceTypeStage.vue'
 import { useCourseContextStore } from '../stores/courseContext'
 
@@ -57,6 +62,7 @@ const downloading = ref(false)
 const error = ref('')
 const detailError = ref('')
 const query = ref(String(route.query.q || ''))
+const knowledgePointFilter = ref(String(route.query.knowledge_point_id || ''))
 const artifactType = ref(String(route.query.type || ''))
 const status = ref(String(route.query.status || ''))
 const sourceStatus = ref(String(route.query.source || ''))
@@ -68,6 +74,7 @@ const restoringId = ref('')
 const comparingId = ref('')
 const compareResult = ref(null)
 const completing = ref(false)
+const archiving = ref(false)
 const actionNotice = ref('')
 const generationOpen = ref(false)
 const generationType = ref('handout')
@@ -88,17 +95,26 @@ const editorFormat = ref('markdown')
 const editorSourceVersionId = ref('')
 const editorSaving = ref(false)
 const editorError = ref('')
+const editorRefreshing = ref(false)
+const editorConflict = ref(false)
+const editorContent = computed({
+  get: () => editorFormat.value === 'json' ? JSON.parse(editorDraft.value || '{}') : editorDraft.value,
+  set: value => { editorDraft.value = editorFormat.value === 'json' ? JSON.stringify(value, null, 2) : value },
+})
+const { conflicts: editorConflicts, refresh: mergeEditorContent, choose: chooseEditorContent, clear: clearEditorConflicts } = useResourceEditMerge(editorContent)
 let generationTimer
+let resourceSelectionRequest = 0
 
 const currentCourseId = computed(() => (
   courseContext.contextRef?.courseId || String(route.query.course_id || '')
 ))
 const currentCourseLabel = computed(() => courseContext.label || '当前课程')
 const hasFilters = computed(() => Boolean(
-  query.value || artifactType.value || status.value || sourceStatus.value || includeArchived.value
+  query.value || knowledgePointFilter.value || artifactType.value || status.value || sourceStatus.value || includeArchived.value
 ))
 const historyItems = computed(() => detail.value?.history?.items || [])
 const currentVersionId = computed(() => detail.value?.history?.current_version_id || detail.value?.current_version_id || '')
+const editorVersionNumber = computed(() => (detail.value?.versions || []).find(item => item.id === editorSourceVersionId.value)?.version_number)
 const generationItems = computed(() => generationJob.value?.items || [])
 const generationActive = computed(() => generationItems.value.some(item => ['requested', 'queued', 'running'].includes(item.state)))
 const generationDone = computed(() => generationItems.value.some(item => item.state === 'succeeded'))
@@ -197,7 +213,7 @@ async function completeSelectedResource() {
         taskId: selected.value.task_id || String(route.query.task_id || '') || null,
       },
     })
-    actionNotice.value = '学习完成事件已记录；掌握度和组卷门禁仍由有效学习证据聚合。'
+    actionNotice.value = '本次学习已记录。掌握情况和后续测评安排会结合你的作答与实践结果更新。'
     await selectResource(selected.value, { updateUrl: false })
     await loadResources()
   } catch (err) {
@@ -219,7 +235,51 @@ function openEditor() {
   editorFormat.value = source.content_format || 'markdown'
   editorDraft.value = source.content || ''
   editorError.value = ''
+  editorConflict.value = false
+  clearEditorConflicts()
   editorOpen.value = true
+}
+
+async function refreshEditorVersion() {
+  if (!selected.value || editorRefreshing.value || editorConflicts.value.length) return
+  editorRefreshing.value = true
+  try {
+    const base = detail.value.versions.find(item => item.id === editorSourceVersionId.value)
+    const updated = await getM5Resource(selected.value.id)
+    const latest = updated.versions.find(item => item.id === updated.current_version_id)
+    const read = version => editorFormat.value === 'json' ? JSON.parse(version.content) : version.content
+    mergeEditorContent(read(base), read(latest))
+    detail.value = updated
+    selected.value = decorate(updated.catalog)
+    editorSourceVersionId.value = latest.id
+    editorConflict.value = false
+    editorError.value = ''
+  } catch (err) {
+    editorError.value = userMessage(err, '暂时未能读取最新版本，你的草稿仍保留。')
+  } finally { editorRefreshing.value = false }
+}
+
+async function toggleResourceArchive() {
+  if (!selected.value || !detail.value || archiving.value) return
+  const resourceId = selected.value.id
+  const archived = !selected.value.archived
+  archiving.value = true
+  detailError.value = ''
+  try {
+    const updated = await archiveM5Resource(resourceId, archived, detail.value.lock_version)
+    if (selected.value?.id === resourceId) {
+      selected.value = decorate(updated.catalog)
+      detail.value = updated
+    }
+    actionNotice.value = archived
+      ? '资源已归档，原内容和学习记录仍保留。勾选“显示归档”可以找到并恢复。'
+      : '资源已恢复，可继续查看和学习。'
+    await loadResources()
+  } catch (err) {
+    detailError.value = userMessage(err, '暂时未能更改资源状态，请重新加载后再试。')
+  } finally {
+    archiving.value = false
+  }
 }
 
 function closeEditor() {
@@ -229,7 +289,7 @@ function closeEditor() {
 }
 
 async function saveEditorVersion() {
-  if (!selected.value || !editorSourceVersionId.value || editorSaving.value) return
+  if (!selected.value || !editorSourceVersionId.value || editorSaving.value || editorConflicts.value.length) return
   editorSaving.value = true
   editorError.value = ''
   try {
@@ -244,9 +304,10 @@ async function saveEditorVersion() {
     actionNotice.value = '新版本已保存；旧版本和来源记录仍可在历史中查看。'
     await loadResources()
   } catch (err) {
+    editorConflict.value = err?.status === 409
     editorError.value = err?.status === 409
       ? '资源已在其他页面更新。草稿仍保留，请重新加载版本状态后再保存。'
-      : message(err, '保存失败，当前版本未改变。')
+      : userMessage(err, '保存失败，当前版本未改变。')
   } finally {
     editorSaving.value = false
   }
@@ -277,14 +338,15 @@ function flattenOutlineKnowledgePoints(outline) {
 
 async function openGeneration({ type = '', knowledgePointId = '', prompt = '' } = {}) {
   const resource = detail.value?.resource || {}
-  const courseId = resource.course_id || selected.value?.course_id || currentCourseId.value
+  const customContext = generationOpen.value ? generationContext.value : null
+  const courseId = customContext?.course_id || resource.course_id || selected.value?.course_id || currentCourseId.value
   const pointId = knowledgePointId || resource.knowledge_point_id || selected.value?.knowledge_point?.id || ''
-  const chapterId = resource.chapter_id || selected.value?.knowledge_point?.chapter_id || ''
-  const sourceIds = [...new Set([
+  const chapterId = customContext ? '' : (resource.chapter_id || selected.value?.knowledge_point?.chapter_id || '')
+  const sourceIds = [...new Set((customContext ? customContext.source_ref_ids : [
     ...(resource.source_ref_ids || []),
     ...(selected.value?.source_ref_ids || []),
     ...(generationContext.value?.source_ref_ids || []),
-  ].map(item => String(item || '').trim()).filter(Boolean))]
+  ]).map(item => String(item || '').trim()).filter(Boolean))]
   const selectedTypes = type ? [type] : typeDefinitions.map(item => item.id)
   await router.push({
     path: '/chat',
@@ -306,7 +368,7 @@ function openTypeGeneration() {
   openGenerationDialog({
     type: artifactType.value || 'handout',
     lockType: true,
-    knowledgePointId: selected.value?.knowledge_point?.id || '',
+    knowledgePointId: knowledgePointFilter.value || selected.value?.knowledge_point?.id || '',
   })
 }
 
@@ -319,7 +381,7 @@ function openPreviewGeneration() {
 }
 
 function openGenericGeneration() {
-  openGenerationDialog({ type: artifactType.value || 'handout' })
+  openGenerationDialog({ type: artifactType.value || 'handout', knowledgePointId: knowledgePointFilter.value })
 }
 
 function openGenerationDialog({ type = 'handout', lockType = false, knowledgePointId = '' } = {}) {
@@ -420,6 +482,7 @@ async function loadGenerationJob({ quiet = false } = {}) {
 }
 
 async function startSingleGeneration() {
+  if (!generationCanStart.value || generationLoading.value) return
   await openGeneration({
     type: generationType.value,
     knowledgePointId: generationKnowledgePointId.value,
@@ -488,6 +551,7 @@ function completionText(item) {
 function decorate(item) {
   return {
     ...item,
+    title: learningText(item.title),
     display_status: displayStatus(item),
     completion_text: completionText(item),
     icon: typeDefinitions.find(type => type.id === item.type)?.icon || FileText,
@@ -508,6 +572,8 @@ function queryState(selectedId = selected.value?.id || '') {
     // events can be consumed by the path and intelligent-exam gate.
     path_id: String(route.query.path_id || '') || undefined,
     task_id: String(route.query.task_id || '') || undefined,
+    knowledge_point_id: knowledgePointFilter.value || undefined,
+    return_to: String(route.query.return_to || '') || undefined,
   }).filter(([, value]) => value !== undefined))
 }
 
@@ -525,6 +591,7 @@ async function loadResources({ preserveSelection = true } = {}) {
       artifact_type: artifactType.value || undefined,
       course_id: currentCourseId.value || undefined,
       status: status.value || undefined,
+      knowledge_point_id: knowledgePointFilter.value || undefined,
       source_status: sourceStatus.value || undefined,
       include_archived: includeArchived.value,
       limit: 100,
@@ -536,7 +603,7 @@ async function loadResources({ preserveSelection = true } = {}) {
     const preferredId = preserveSelection ? (selected.value?.id || requestedId) : requestedId
     const preferred = resources.value.find(item => item.id === preferredId)
     if (preferred) await selectResource(preferred, { updateUrl: false })
-    else if (requestedId) await loadDeepLinkedResource(requestedId)
+    else if (requestedId && !knowledgePointFilter.value) await loadDeepLinkedResource(requestedId)
     else if (resources.value.length) await selectResource(resources.value[0], { updateUrl: false })
     else {
       selected.value = null
@@ -551,22 +618,26 @@ async function loadResources({ preserveSelection = true } = {}) {
 }
 
 async function loadDeepLinkedResource(resourceId) {
+  const request = ++resourceSelectionRequest
   detailLoading.value = true
   detailError.value = ''
   try {
     const payload = await getM5Resource(resourceId)
+    if (request !== resourceSelectionRequest) return
     selected.value = decorate(payload.catalog)
     detail.value = payload
   } catch (err) {
+    if (request !== resourceSelectionRequest) return
     selected.value = null
     detail.value = null
     detailError.value = message(err)
   } finally {
-    detailLoading.value = false
+    if (request === resourceSelectionRequest) detailLoading.value = false
   }
 }
 
 async function selectResource(item, { updateUrl = true, loadDetail = true } = {}) {
+  const request = ++resourceSelectionRequest
   selected.value = item
   detail.value = null
   detailError.value = ''
@@ -575,21 +646,17 @@ async function selectResource(item, { updateUrl = true, loadDetail = true } = {}
   try {
     if (updateUrl) await syncQuery(item.id)
     const payload = await getM5Resource(item.id)
+    if (request !== resourceSelectionRequest) return
     // The list projection omits version-level completion metadata. Replace
     // the selected summary with the server detail projection so the learner
     // can see and submit the current completion rule.
     selected.value = decorate(payload.catalog || item)
     detail.value = payload
   } catch (err) {
-    detailError.value = message(err)
+    if (request === resourceSelectionRequest) detailError.value = message(err)
   } finally {
-    detailLoading.value = false
+    if (request === resourceSelectionRequest) detailLoading.value = false
   }
-}
-
-function previewResource(item) {
-  if (selected.value?.id === item.id) return
-  selectResource(item, { updateUrl: false, loadDetail: false })
 }
 
 async function retryPreview() {
@@ -600,7 +667,24 @@ async function openResource() {
   if (!selected.value?.route) return
   await router.push({
     path: selected.value.route,
-    query: currentCourseId.value ? { course_id: currentCourseId.value } : {},
+    query: {
+      course_id: selected.value.course_id || currentCourseId.value || undefined,
+      knowledge_point_id: selected.value.knowledge_point?.id || undefined,
+      return_to: String(route.query.return_to || '') || undefined,
+    },
+  })
+}
+
+async function openHistoryVersion(versionId) {
+  if (!selected.value?.route || selected.value.archived) return
+  await router.push({
+    path: selected.value.route,
+    query: {
+      course_id: selected.value.course_id || currentCourseId.value || undefined,
+      knowledge_point_id: selected.value.knowledge_point?.id || undefined,
+      version_id: versionId,
+      return_to: String(route.query.return_to || '') || undefined,
+    },
   })
 }
 
@@ -631,6 +715,7 @@ async function downloadResource() {
 
 function clearFilters() {
   query.value = ''
+  knowledgePointFilter.value = ''
   artifactType.value = ''
   status.value = ''
   sourceStatus.value = ''
@@ -650,11 +735,17 @@ watch(query, () => {
     await loadResources({ preserveSelection: false })
   }, 250)
 })
-watch([artifactType, status, sourceStatus, includeArchived], async () => {
+watch([artifactType, status, sourceStatus, includeArchived, knowledgePointFilter], async () => {
   await syncQuery('')
   await loadResources({ preserveSelection: false })
 })
-watch(currentCourseId, () => loadResources({ preserveSelection: false }))
+watch(currentCourseId, () => {
+  if (knowledgePointFilter.value) knowledgePointFilter.value = ''
+  else loadResources({ preserveSelection: false })
+})
+watch(() => route.query.knowledge_point_id, value => {
+  knowledgePointFilter.value = String(value || '')
+})
 
 onMounted(() => loadResources())
 onBeforeUnmount(stopGenerationPolling)
@@ -670,7 +761,7 @@ onBeforeUnmount(stopGenerationPolling)
       <div class="heading-actions">
         <div class="resource-summary" aria-label="资源统计">
           <strong>{{ total }}</strong>
-          <span>项已归档资源</span>
+          <span>项学习资源</span>
         </div>
         <button type="button" class="resource-create" @click="openGenericGeneration">
           <Sparkles :size="17" />新建资源
@@ -756,13 +847,14 @@ onBeforeUnmount(stopGenerationPolling)
         />
 
         <div v-if="error" class="catalog-error" role="alert">
-          <span>{{ error }}</span>
+          <span>{{ userMessage(error) }}</span>
           <button type="button" @click="loadResources()">重新加载</button>
         </div>
 
         <div class="result-heading">
           <strong>{{ artifactType ? typeDefinitions.find(item => item.id === artifactType)?.label : '全部资源' }}</strong>
           <span>{{ resources.length }} 项结果</span>
+          <button v-if="knowledgePointFilter" type="button" @click="knowledgePointFilter = ''">查看课程全部资源</button>
         </div>
 
         <div v-if="loading && !resources.length" class="resource-skeletons" aria-label="正在加载资源">
@@ -790,8 +882,6 @@ onBeforeUnmount(stopGenerationPolling)
             class="resource-item"
             :data-resource-id="item.id"
             :class="{ active: selected?.id === item.id }"
-            @mouseenter="previewResource(item)"
-            @focus="previewResource(item)"
             @click="selectResource(item)"
           >
             <span class="resource-icon"><component :is="item.icon" :size="20" /></span>
@@ -814,6 +904,7 @@ onBeforeUnmount(stopGenerationPolling)
         :loading="detailLoading"
         :error="detailError"
         :downloading="downloading"
+        :archiving="archiving"
         @open="openResource"
         @download="downloadResource"
         @retry="retryPreview"
@@ -821,6 +912,8 @@ onBeforeUnmount(stopGenerationPolling)
         @complete="completeSelectedResource"
         @generate="openPreviewGeneration"
         @edit="openEditor"
+        @archive="toggleResourceArchive"
+        @generation="jobId => router.push(`/workspace/resources/bundles/${jobId}`)"
       />
     </div>
 
@@ -841,7 +934,9 @@ onBeforeUnmount(stopGenerationPolling)
       :comparing-id="comparingId"
       :compare-disabled="Boolean(comparingId)"
       :restore-disabled="Boolean(selected?.archived)"
+      :selection-disabled="Boolean(selected?.archived)"
       @close="closeHistory"
+      @select="openHistoryVersion"
       @compare="compareHistory"
       @restore="restoreHistory"
       @compare-close="compareResult = null"
@@ -850,15 +945,21 @@ onBeforeUnmount(stopGenerationPolling)
     <ResourceEditorDialog
       :open="editorOpen"
       :title="selected?.title || '资源'"
-      :version-label="currentVersionId ? `版本 ${currentVersionId}` : ''"
+      :version-label="editorVersionNumber ? `v${editorVersionNumber}` : ''"
       :content="editorDraft"
       :content-format="editorFormat"
       :saving="editorSaving"
       :error="editorError"
+      :can-refresh="editorConflict"
+      :refreshing="editorRefreshing"
+      :save-disabled="editorConflicts.length > 0"
       @close="closeEditor"
       @update:content="editorDraft = $event"
       @save="saveEditorVersion"
-    />
+      @refresh="refreshEditorVersion"
+    >
+      <template #conflicts><ResourceEditConflicts :items="editorConflicts" @choose="chooseEditorContent" /></template>
+    </ResourceEditorDialog>
 
     <div v-if="generationOpen" class="generation-layer">
       <button type="button" class="generation-backdrop" aria-label="关闭资源生成" @click="generationOpen = false" />
@@ -869,7 +970,7 @@ onBeforeUnmount(stopGenerationPolling)
         </header>
         <p class="generation-context">先选择课程、知识点和辅助要求，再跳转智能对话完成生成</p>
         <div v-if="generationLoading && !generationJob" class="generation-state" role="status"><LoaderCircle :size="22" class="spin" />{{ generationContext ? '正在创建生成任务' : '正在读取课程、来源和画像上下文' }}</div>
-        <div v-else-if="generationError && !generationContext" class="generation-state generation-state--error" role="alert"><AlertCircle :size="22" /><span>{{ generationError }}</span></div>
+        <div v-else-if="generationError && !generationContext" class="generation-state generation-state--error" role="alert"><AlertCircle :size="22" /><span>{{ userMessage(generationError) }}</span></div>
         <template v-else>
           <div class="generation-form">
             <label class="generation-select">
@@ -889,7 +990,7 @@ onBeforeUnmount(stopGenerationPolling)
               <span>课程知识点</span>
               <select v-model="generationKnowledgePointId" :disabled="Boolean(generationJob)">
                 <option v-for="point in generationKnowledgePoints" :key="point.id" :value="point.id">
-                  {{ point.code ? `${point.code} · ` : '' }}{{ point.title }}{{ point.source_ref_ids.length ? '' : '（暂无来源）' }}
+                  {{ point.title }}{{ point.source_ref_ids.length ? '' : '（暂无来源）' }}
                 </option>
               </select>
             </label>
@@ -906,18 +1007,20 @@ onBeforeUnmount(stopGenerationPolling)
           </div>
           <div v-if="selectedGenerationPoint" class="generation-selection" aria-live="polite">
             <span>{{ selectedGenerationPoint.chapter_titles.join(' / ') || '未绑定章节' }}</span>
-            <strong>{{ selectedGenerationPoint.source_ref_ids.length }} 项可追溯来源</strong>
+            <strong>{{ selectedGenerationPoint.source_ref_ids.length }} 份参考资料</strong>
           </div>
-          <p v-if="selectedGenerationPoint && !selectedGenerationPoint.source_ref_ids.length" class="generation-help generation-help--blocked">
+          <p v-if="!generationCourseId" class="generation-help generation-help--blocked">请先选择一门课程。</p>
+          <p v-else-if="!generationKnowledgePoints.length" class="generation-help generation-help--blocked">当前课程还没有可用知识点，请先补充课程资料。</p>
+          <p v-else-if="selectedGenerationPoint && !selectedGenerationPoint.source_ref_ids.length" class="generation-help generation-help--blocked">
             该知识点尚未绑定可用章节来源。请先在知识库补充并解析课程资料，再返回生成。
           </p>
-          <p v-else class="generation-help">提交后会跳转智能对话并自动发送生成请求；协作轨迹、失败和资源子空间跳转都在统一对话中展示。</p>
-          <div v-if="generationError" class="generation-error" role="alert"><AlertCircle :size="17" />{{ generationError }}</div>
+          <p v-else class="generation-help">将在智能对话中准备所选资源。</p>
+          <div v-if="generationError" class="generation-error" role="alert"><AlertCircle :size="17" />{{ userMessage(generationError) }}</div>
           <div v-if="generationNotice" class="generation-notice" role="status"><CheckSquare :size="17" />{{ generationNotice }}</div>
           <div v-if="generationJob" class="generation-job" data-testid="single-generation-job">
-            <div class="generation-job-heading"><strong>{{ generationJob.scope === 'single' ? '单项资源任务' : '资源任务' }}</strong><span>{{ generationJob.status }}</span></div>
+            <div class="generation-job-heading"><strong>{{ generationJob.scope === 'single' ? '单项资源任务' : '资源任务' }}</strong><span>{{ displayLabel(generationJob.status) }}</span></div>
             <div v-for="item in generationItems" :key="item.type" class="generation-item">
-              <span>{{ item.title }}</span><strong>{{ item.state }}</strong>
+              <span>{{ item.title }}</span><strong>{{ displayLabel(item.state) }}</strong>
               <button v-if="item.state === 'failed'" type="button" @click="retryGenerationItem(item)">重试</button>
             </div>
             <button v-if="generationItems.some(item => item.state === 'running')" type="button" class="secondary-action" @click="recoverGeneration">恢复未完成项</button>
@@ -930,112 +1033,112 @@ onBeforeUnmount(stopGenerationPolling)
 </template>
 
 <style scoped>
-.resource-page { width: 100%; color: #06141b; letter-spacing: 0; }
+.resource-page { width: 100%; color: var(--color-text); letter-spacing: 0; }
 .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
 .page-heading h1 { margin: 0; font-size: 28px; line-height: 1.25; }
-.page-heading p { margin: 7px 0 0; color: #4a5c6a; font-size: 15px; line-height: 1.6; }
+.page-heading p { margin: 7px 0 0; color: var(--color-text-secondary); font-size: 15px; line-height: 1.6; }
 .heading-actions { display: flex; align-items: center; gap: 14px; }
-.resource-summary { display: flex; align-items: baseline; gap: 8px; color: #4a5c6a; white-space: nowrap; }
-.resource-summary strong { color: #11212d; font-size: 24px; }
+.resource-summary { display: flex; align-items: baseline; gap: 8px; color: var(--color-text-secondary); white-space: nowrap; }
+.resource-summary strong { color: var(--color-text); font-size: 24px; }
 .resource-summary span { font-size: 14px; }
-.resource-create { display: inline-flex; min-height: 40px; align-items: center; gap: 8px; border: 1px solid #11212d; border-radius: 8px; padding: 0 14px; background: #11212d; color: #fff; font-size: 14px; font-weight: 650; cursor: pointer; }
+.resource-create { display: inline-flex; min-height: 40px; align-items: center; gap: 8px; border: 1px solid var(--color-text); border-radius: 8px; padding: 0 14px; background: var(--color-text); color: #fff; font-size: 14px; font-weight: 650; cursor: pointer; }
 .resource-workspace { display: grid; height: calc(100vh - 178px); min-height: 540px; grid-template-columns: 216px minmax(360px, 1fr) 320px; gap: 14px; }
-.type-rail, .catalog-panel { min-width: 0; overflow: hidden; border: 1px solid #ccd0cf; border-radius: 8px; background: #fff; }
+.type-rail, .catalog-panel { min-width: 0; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-surface); }
 .type-rail { padding: 8px; overflow-y: auto; }
-.rail-heading { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 0 10px 7px; border-bottom: 1px solid #dfe4e5; }
+.rail-heading { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 0 10px 7px; border-bottom: 1px solid var(--color-border); }
 .rail-heading strong, .rail-heading span { font-size: 14px; }
-.rail-heading span { color: #60727c; }
-.type-option { display: grid; width: 100%; min-height: 44px; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 9px; margin-top: 4px; padding: 0 10px; border: 0; border-radius: 6px; background: #fff; color: #4a5c6a; text-align: left; cursor: pointer; }
+.rail-heading span { color: var(--color-text-muted); }
+.type-option { display: grid; width: 100%; min-height: 44px; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 9px; margin-top: 4px; padding: 0 10px; border: 0; border-radius: 6px; background: var(--color-surface); color: var(--color-text-secondary); text-align: left; cursor: pointer; }
 .type-option span, .type-option strong { min-width: 0; font-size: 14px; }
-.type-option strong { color: #60727c; font-variant-numeric: tabular-nums; }
-.type-option:hover { background: #f5f7f7; color: #11212d; }
-.type-option.active { background: #11212d; color: #fff; }
+.type-option strong { color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.type-option:hover { background: var(--color-surface-subtle); color: var(--color-text); }
+.type-option.active { background: var(--color-text); color: #fff; }
 .type-option.active strong { color: #fff; }
 .catalog-panel { display: flex; flex-direction: column; }
-.catalog-toolbar { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid #dfe4e5; }
-.search-field { display: flex; min-width: 44px; height: 40px; flex: 1 1 160px; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #ccd0cf; border-radius: 8px; color: #60727c; }
-.search-field:focus-within { border-color: #11212d; box-shadow: 0 0 0 2px rgba(17, 33, 45, .12); }
-.search-field input { min-width: 0; flex: 1; border: 0; outline: 0; color: #06141b; font: inherit; font-size: 14px; }
-.search-field button { display: grid; width: 28px; height: 28px; place-items: center; border: 0; background: transparent; color: #4a5c6a; cursor: pointer; }
-select { min-width: 0; height: 40px; border: 1px solid #ccd0cf; border-radius: 8px; padding: 0 9px; background: #fff; color: #253745; font: inherit; font-size: 14px; }
+.catalog-toolbar { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--color-border); }
+.search-field { display: flex; min-width: 44px; height: 40px; flex: 1 1 160px; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--color-border-strong); border-radius: 8px; color: var(--color-text-muted); }
+.search-field:focus-within { border-color: var(--color-text); box-shadow: 0 0 0 2px rgba(17, 33, 45, .12); }
+.search-field input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--color-text); font: inherit; font-size: 14px; }
+.search-field button { display: grid; width: 28px; height: 28px; place-items: center; border: 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; }
+select { min-width: 0; height: 40px; border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 0 9px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 14px; }
 .catalog-toolbar > select { width: 118px; flex: 0 1 118px; }
 .catalog-toolbar > select:nth-of-type(2) { width: 124px; flex-basis: 124px; }
-.archive-toggle { display: flex; height: 40px; flex: 0 0 auto; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid #ccd0cf; border-radius: 8px; color: #344957; white-space: nowrap; }
+.archive-toggle { display: flex; height: 40px; flex: 0 0 auto; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--color-border-strong); border-radius: 8px; color: var(--color-text-secondary); white-space: nowrap; }
 .archive-toggle span { font-size: 14px; }
-.view-switch { display: grid; width: 90px; flex: 0 0 90px; grid-template-columns: repeat(2, 44px); overflow: hidden; border: 1px solid #ccd0cf; border-radius: 8px; }
-.view-switch button, .refresh-button { display: grid; min-width: 0; height: 40px; place-items: center; border: 0; background: #fff; color: #4a5c6a; cursor: pointer; }
-.view-switch button + button { border-left: 1px solid #ccd0cf; }
-.view-switch button.active { background: #11212d; color: #fff; }
-.refresh-button { width: 42px; flex: 0 0 42px; border: 1px solid #ccd0cf; border-radius: 8px; }
-.result-heading { display: flex; min-height: 46px; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid #eef2f2; }
+.view-switch { display: grid; width: 90px; flex: 0 0 90px; grid-template-columns: repeat(2, 44px); overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 8px; }
+.view-switch button, .refresh-button { display: grid; min-width: 0; height: 40px; place-items: center; border: 0; background: var(--color-surface); color: var(--color-text-secondary); cursor: pointer; }
+.view-switch button + button { border-left: 1px solid var(--color-border-strong); }
+.view-switch button.active { background: var(--color-text); color: #fff; }
+.refresh-button { width: 42px; flex: 0 0 42px; border: 1px solid var(--color-border-strong); border-radius: 8px; }
+.result-heading { display: flex; min-height: 46px; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--color-surface-subtle); }
 .result-heading strong, .result-heading span { font-size: 14px; }
-.result-heading span { color: #60727c; }
+.result-heading span { color: var(--color-text-muted); }
 .resource-results { min-height: 0; flex: 1; overflow: auto; padding: 12px; }
 .resource-results.mode-grid { display: grid; align-content: start; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .resource-results.mode-list { display: grid; align-content: start; gap: 6px; }
-.resource-item { display: grid; min-width: 0; min-height: 96px; grid-template-columns: 40px minmax(0, 1fr); gap: 10px; padding: 13px; border: 1px solid #dfe4e5; border-radius: 8px; background: #fff; color: #253745; text-align: left; cursor: pointer; }
-.resource-item:hover { border-color: #9ba8ab; background: #f7f9f9; }
-.resource-item.active { border-color: #11212d; box-shadow: inset 0 0 0 1px #11212d; }
-.resource-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 7px; background: #eef2f2; color: #11212d; }
+.resource-item { display: grid; min-width: 0; min-height: 96px; grid-template-columns: 40px minmax(0, 1fr); gap: 10px; padding: 13px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); color: var(--color-text); text-align: left; cursor: pointer; }
+.resource-item:hover { border-color: #9ba8ab; background: var(--color-surface-subtle); }
+.resource-item.active { border-color: var(--color-text); box-shadow: inset 0 0 0 1px var(--color-text); }
+.resource-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 7px; background: var(--color-surface-subtle); color: var(--color-text); }
 .resource-main { min-width: 0; }
-.resource-main strong { display: -webkit-box; overflow: hidden; color: #06141b; font-size: 15px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.resource-main > span { display: block; margin-top: 5px; overflow: hidden; color: #60727c; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.resource-meta { display: flex; grid-column: 1 / -1; align-items: center; gap: 9px; color: #4a5c6a; }
+.resource-main strong { display: -webkit-box; overflow: hidden; color: var(--color-text); font-size: 15px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.resource-main > span { display: block; margin-top: 5px; overflow: hidden; color: var(--color-text-muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.resource-meta { display: flex; grid-column: 1 / -1; align-items: center; gap: 9px; color: var(--color-text-secondary); }
 .resource-meta span { font-size: 14px; white-space: nowrap; }
 .mode-grid .resource-main strong { display: block; text-overflow: ellipsis; white-space: nowrap; -webkit-line-clamp: unset; }
 .mode-list .resource-item { min-height: 72px; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; }
 .mode-list .resource-meta { grid-column: auto; justify-content: flex-end; }
-.catalog-empty, .catalog-error { margin: 12px; border: 1px solid #dfe4e5; border-radius: 8px; }
-.type-history-empty { display: flex; min-height: 72px; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 18px; border-top: 1px solid #eef2f2; color: #60727c; }
-.type-history-empty strong { color: #11212d; font-size: 15px; white-space: nowrap; }
+.catalog-empty, .catalog-error { margin: 12px; border: 1px solid var(--color-border); border-radius: 8px; }
+.type-history-empty { display: flex; min-height: 72px; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 18px; border-top: 1px solid var(--color-surface-subtle); color: var(--color-text-muted); }
+.type-history-empty strong { color: var(--color-text); font-size: 15px; white-space: nowrap; }
 .type-history-empty span { max-width: 48ch; font-size: 14px; line-height: 1.55; text-align: right; }
-.catalog-empty { display: grid; min-height: 240px; place-content: center; justify-items: center; gap: 10px; padding: 24px; color: #4a5c6a; text-align: center; }
-.catalog-empty strong { color: #06141b; font-size: 16px; }
+.catalog-empty { display: grid; min-height: 240px; place-content: center; justify-items: center; gap: 10px; padding: 24px; color: var(--color-text-secondary); text-align: center; }
+.catalog-empty strong { color: var(--color-text); font-size: 16px; }
 .catalog-empty span { max-width: 38ch; font-size: 14px; line-height: 1.6; }
-.catalog-empty button, .catalog-error button { min-height: 38px; border: 1px solid #11212d; border-radius: 8px; padding: 0 13px; background: #11212d; color: #fff; font-size: 14px; cursor: pointer; }
-.catalog-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border-color: #d8aaa5; background: #fff5f3; color: #8b3d35; }
+.catalog-empty button, .catalog-error button { min-height: 38px; border: 1px solid var(--color-text); border-radius: 8px; padding: 0 13px; background: var(--color-text); color: #fff; font-size: 14px; cursor: pointer; }
+.catalog-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border-color: #d8aaa5; background: var(--color-danger-soft); color: var(--color-danger); }
 .catalog-error span { font-size: 14px; }
-.resource-notice { position: fixed; z-index: 40; right: 24px; bottom: 24px; display: flex; max-width: min(520px, calc(100vw - 48px)); align-items: center; gap: 8px; margin: 0; padding: 12px 14px; border: 1px solid #ccd0cf; border-radius: 8px; background: #fff; box-shadow: 0 8px 22px rgba(6, 20, 27, .12); color: #253745; font-size: 14px; line-height: 1.5; }
-.resource-notice button { display: grid; width: 26px; height: 26px; place-items: center; margin-left: auto; border: 0; background: transparent; color: #60727c; cursor: pointer; }
+.resource-notice { position: fixed; z-index: 40; right: 24px; bottom: 24px; display: flex; max-width: min(520px, calc(100vw - 48px)); align-items: center; gap: 8px; margin: 0; padding: 12px 14px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-surface); box-shadow: 0 8px 22px rgba(6, 20, 27, .12); color: var(--color-text); font-size: 14px; line-height: 1.5; }
+.resource-notice button { display: grid; width: 26px; height: 26px; place-items: center; margin-left: auto; border: 0; background: transparent; color: var(--color-text-muted); cursor: pointer; }
 .generation-layer { position: fixed; z-index: 90; inset: 0; display: grid; place-items: center; padding: 24px; }
 .generation-backdrop { position: absolute; inset: 0; border: 0; background: rgba(6, 20, 27, .24); cursor: default; }
-.generation-dialog { position: relative; width: min(560px, 100%); max-height: min(720px, calc(100vh - 48px)); overflow: auto; border: 1px solid #ccd0cf; border-radius: 8px; background: #fff; color: #06141b; box-shadow: 0 16px 36px rgba(6, 20, 27, .16); }
-.generation-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px; border-bottom: 1px solid #dfe4e5; }
-.generation-dialog > header span { color: #60727c; font-size: 14px; }
+.generation-dialog { position: relative; width: min(560px, 100%); max-height: min(720px, calc(100vh - 48px)); overflow: auto; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-surface); color: var(--color-text); box-shadow: 0 16px 36px rgba(6, 20, 27, .16); }
+.generation-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px; border-bottom: 1px solid var(--color-border); }
+.generation-dialog > header span { color: var(--color-text-muted); font-size: 14px; }
 .generation-dialog h2 { margin: 5px 0 0; font-size: 20px; line-height: 1.35; }
-.dialog-close { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid #ccd0cf; border-radius: 8px; background: #fff; color: #11212d; cursor: pointer; }
-.generation-context, .generation-help { margin: 0; padding: 14px 20px; color: #4a5c6a; font-size: 14px; line-height: 1.6; }
+.dialog-close { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-surface); color: var(--color-text); cursor: pointer; }
+.generation-context, .generation-help { margin: 0; padding: 14px 20px; color: var(--color-text-secondary); font-size: 14px; line-height: 1.6; }
 .generation-form { display: grid; gap: 14px; padding: 0 20px; }
-.generation-select { display: grid; gap: 7px; color: #253745; font-size: 14px; font-weight: 650; }
+.generation-select { display: grid; gap: 7px; color: var(--color-text); font-size: 14px; font-weight: 650; }
 .generation-select select, .generation-select textarea { width: 100%; box-sizing: border-box; }
-.generation-select textarea { resize: vertical; min-height: 84px; border: 1px solid #ccd0cf; border-radius: 8px; padding: 10px 11px; background: #fff; color: #253745; font: inherit; font-size: 14px; line-height: 1.55; }
+.generation-select textarea { resize: vertical; min-height: 84px; border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 10px 11px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 14px; line-height: 1.55; }
 .generation-select textarea::placeholder { color: #7b888e; }
-.generation-selection { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 14px 20px 0; padding: 10px 12px; border: 1px solid #dfe4e5; border-radius: 8px; background: #f7f9f9; color: #4a5c6a; }
+.generation-selection { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 14px 20px 0; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface-subtle); color: var(--color-text-secondary); }
 .generation-selection span { min-width: 0; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.generation-selection strong { flex: 0 0 auto; color: #11212d; font-size: 14px; }
+.generation-selection strong { flex: 0 0 auto; color: var(--color-text); font-size: 14px; }
 .generation-help { padding-top: 10px; }
-.generation-help--blocked { color: #8b3d35; }
-.generation-primary { display: inline-flex; min-height: 42px; align-items: center; gap: 8px; margin: 0 20px 20px; padding: 0 15px; border: 1px solid #11212d; border-radius: 8px; background: #11212d; color: #fff; font-size: 14px; font-weight: 650; cursor: pointer; }
+.generation-help--blocked { color: var(--color-danger); }
+.generation-primary { display: inline-flex; min-height: 42px; align-items: center; gap: 8px; margin: 0 20px 20px; padding: 0 15px; border: 1px solid var(--color-text); border-radius: 8px; background: var(--color-text); color: #fff; font-size: 14px; font-weight: 650; cursor: pointer; }
 .generation-primary:disabled { cursor: default; opacity: .48; }
-.generation-error, .generation-notice { display: flex; gap: 8px; margin: 0 20px 12px; padding: 10px; border: 1px solid #d8aaa5; border-radius: 8px; background: #fff5f3; color: #8b3d35; font-size: 14px; line-height: 1.5; }
-.generation-notice { border-color: #ccd0cf; background: #f7f9f9; color: #253745; }
-.generation-state { display: flex; min-height: 150px; align-items: center; justify-content: center; gap: 9px; padding: 24px; color: #4a5c6a; font-size: 14px; text-align: center; }
-.generation-state--error { color: #8b3d35; }
-.generation-job { margin: 0 20px 20px; padding: 12px; border: 1px solid #dfe4e5; border-radius: 8px; }
-.generation-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid #eef2f2; }
-.generation-job-heading span { color: #60727c; font-size: 14px; }
-.generation-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid #eef2f2; color: #253745; font-size: 14px; }
-.generation-item strong { color: #60727c; font-size: 14px; }
-.generation-item button, .generation-job > .secondary-action { min-height: 32px; border: 1px solid #ccd0cf; border-radius: 7px; padding: 0 9px; background: #fff; color: #11212d; font-size: 14px; cursor: pointer; }
+.generation-error, .generation-notice { display: flex; gap: 8px; margin: 0 20px 12px; padding: 10px; border: 1px solid #d8aaa5; border-radius: 8px; background: var(--color-danger-soft); color: var(--color-danger); font-size: 14px; line-height: 1.5; }
+.generation-notice { border-color: var(--color-border-strong); background: var(--color-surface-subtle); color: var(--color-text); }
+.generation-state { display: flex; min-height: 150px; align-items: center; justify-content: center; gap: 9px; padding: 24px; color: var(--color-text-secondary); font-size: 14px; text-align: center; }
+.generation-state--error { color: var(--color-danger); }
+.generation-job { margin: 0 20px 20px; padding: 12px; border: 1px solid var(--color-border); border-radius: 8px; }
+.generation-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--color-surface-subtle); }
+.generation-job-heading span { color: var(--color-text-muted); font-size: 14px; }
+.generation-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--color-surface-subtle); color: var(--color-text); font-size: 14px; }
+.generation-item strong { color: var(--color-text-muted); font-size: 14px; }
+.generation-item button, .generation-job > .secondary-action { min-height: 32px; border: 1px solid var(--color-border-strong); border-radius: 7px; padding: 0 9px; background: var(--color-surface); color: var(--color-text); font-size: 14px; cursor: pointer; }
 .generation-job > .secondary-action { margin-top: 12px; }
-.dialog-close:focus-visible, .generation-primary:focus-visible, .generation-item button:focus-visible { outline: 2px solid #11212d; outline-offset: 2px; }
+.dialog-close:focus-visible, .generation-primary:focus-visible, .generation-item button:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 .resource-skeletons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px; }
-.resource-skeleton { height: 96px; border-radius: 8px; background: #eef2f2; animation: pulse 1.2s ease-in-out infinite alternate; }
-button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #11212d; outline-offset: 2px; }
+.resource-skeleton { height: 96px; border-radius: 8px; background: var(--color-surface-subtle); animation: pulse 1.2s ease-in-out infinite alternate; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 button:disabled { cursor: default; opacity: .48; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes pulse { to { background: #dfe4e5; } }
+@keyframes pulse { to { background: var(--color-border); } }
 @media (max-width: 1220px) {
   .resource-workspace { grid-template-columns: 196px minmax(340px, 1fr) 300px; gap: 10px; }
   .catalog-toolbar > select { width: auto; flex: 1 1 100px; }

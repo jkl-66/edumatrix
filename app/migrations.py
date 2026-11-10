@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from app.database import (
     DBAssessmentExam, DBAssessmentExamItem, DBAssessmentExamReport,
     DBAssessmentExamResponse, DBAssessmentExamResponseDraft, DBAssessmentExamSitting,
-    DBAssessmentExamVersion,
+    DBAssessmentExamVersion, DBAssessmentGenerationReview,
     DBAssessmentReviewCase,
     DBSpeechSession, DBSpeechSegment,
     DBMediaContextResource, DBMediaReadingPosition, DBMediaConversation, DBMediaMessage,
@@ -1893,6 +1893,179 @@ def _install_f9_marketplace_learning_objects(connection: Any) -> None:
         connection.execute(sa.text(statement))
 
 
+def _repair_generated_resource_completion_rules(connection: Any) -> None:
+    """Backfill the omitted rule on original generated versions, without changing content."""
+    from app.database import DBArtifactVersion
+    from app.m5_resources import parse_code_sandbox_content, parse_interactive_model_content
+
+    versions = DBArtifactVersion.__table__
+    rows = connection.execute(sa.select(versions).where(
+        versions.c.content_format == "json",
+        versions.c.created_task_id.is_not(None),
+    )).mappings()
+    parsers = {"code_sandbox": parse_code_sandbox_content, "interactive_model": parse_interactive_model_content}
+    for row in rows:
+        metadata = dict(row["metadata_json"] or {})
+        parser = parsers.get(metadata.get("resource_type"))
+        if (parser is None or str(metadata.get("completion_rule") or "").strip()
+                or metadata.get("revision_origin")
+                or metadata.get("generation_job_id") != row["created_task_id"]):
+            continue
+        try:
+            rule = " ".join(parser(row["content"]).completionRule.split())
+        except ValueError:
+            continue
+        connection.execute(versions.update().where(versions.c.id == row["id"]).values(
+            metadata_json={**metadata, "completion_rule": rule},
+        ))
+
+
+def _repair_marketplace_copy_source_links(connection: Any) -> None:
+    from sqlalchemy.orm import Session
+    from app.marketplace import repair_personal_copy_sources
+
+    with Session(bind=connection) as session:
+        repair_personal_copy_sources(session)
+        session.commit()
+
+
+def _repair_marketplace_path_source_links(connection: Any) -> None:
+    from sqlalchemy.orm import Session
+    from app.marketplace import repair_personal_path_sources
+
+    with Session(bind=connection) as session:
+        repair_personal_path_sources(session)
+        session.commit()
+
+
+def _repair_flashcard_mastery(connection: Any) -> None:
+    from sqlalchemy.orm import Session
+    from app.learning_aggregation import repair_self_rated_mastery
+
+    with Session(bind=connection) as session:
+        repair_self_rated_mastery(session)
+        session.commit()
+
+
+def _repair_delayed_retest_feedback(connection: Any) -> None:
+    from sqlalchemy.orm import Session
+    from app.learning_aggregation import repair_delayed_retest_projection
+
+    with Session(bind=connection) as session:
+        repair_delayed_retest_projection(session)
+        session.commit()
+
+
+def _install_review_course_context(connection: Any) -> None:
+    columns = {column["name"] for column in sa.inspect(connection).get_columns("review_plans")}
+    for name in ("course_id", "knowledge_point_id"):
+        if name not in columns:
+            connection.execute(sa.text(f"ALTER TABLE review_plans ADD COLUMN {name} VARCHAR(64)"))
+    # Recover only unambiguous recorded learning contexts; historical content stays intact.
+    from sqlalchemy.orm import Session
+    from app.database import DBReviewPlan, DBLearningEvent, DBUser
+    from app.learning_aggregation import _event_observations
+    with Session(bind=connection) as session:
+        for plan in session.query(DBReviewPlan).filter(DBReviewPlan.course_id.is_(None)).all():
+            owner = session.query(DBUser).filter_by(username=plan.student_id).first()
+            if owner is None:
+                continue
+            contexts = set()
+            for event in session.query(DBLearningEvent).filter_by(owner_public_id=owner.public_id,
+                    evidence_status="accepted", mastery_eligible=True).all():
+                for point_id, title, _ in _event_observations(session, event):
+                    if event.course_id and plan.concept in {point_id, title}:
+                        contexts.add((event.course_id, point_id))
+            if len(contexts) == 1:
+                plan.course_id, plan.knowledge_point_id = next(iter(contexts))
+        session.commit()
+
+
+def _repair_teacher_intervention_completion(connection: Any) -> None:
+    """Repair only supplementary tasks completed without teacher confirmation."""
+    nodes = connection.execute(sa.text(
+        "SELECT n.id, n.learning_path_id, p.owner_public_id FROM path_nodes n "
+        "JOIN learning_paths p ON p.id=n.learning_path_id "
+        "WHERE n.node_key LIKE 'teacher-intervention-%'"
+    )).mappings().all()
+    for node in nodes:
+        events = connection.execute(sa.text(
+            "SELECT id,event_type,payload FROM learning_events WHERE owner_public_id=:owner "
+            "AND event_type IN ('reading_threshold','teacher_confirmed')"
+        ), {"owner": node["owner_public_id"]}).mappings().all()
+        parsed = [(row, json.loads(row["payload"]) if isinstance(row["payload"], str) else (row["payload"] or {})) for row in events]
+        studies = {row["id"] for row, payload in parsed if row["event_type"] == "reading_threshold" and payload.get("path_id") == node["learning_path_id"]}
+        confirmed = any(row["event_type"] == "teacher_confirmed" and payload.get("scope") == "intervention_completion"
+                        and (payload.get("path_id") == node["learning_path_id"] or payload.get("learner_event_id") in studies)
+                        for row, payload in parsed)
+        if confirmed:
+            continue
+        connection.execute(sa.text("UPDATE path_nodes SET status=:status WHERE id=:id"),
+                           {"status": "in_progress" if studies else "pending", "id": node["id"]})
+        connection.execute(sa.text("UPDATE learning_paths SET status='active',completed_at=NULL,lock_version=lock_version+1 WHERE id=:id AND status='completed'"),
+                           {"id": node["learning_path_id"]})
+
+
+def _extend_bundle_item_types(connection: Any) -> None:
+    allowed = "'handout','mind_map','code','exercise','video','ppt','animation','lab','quiz','training_task','code_sandbox','deck','interactive_model','feynman'"
+    if connection.dialect.name == "postgresql":
+        connection.execute(sa.text("ALTER TABLE resource_bundle_items DROP CONSTRAINT IF EXISTS ck_resource_bundle_item_type"))
+        connection.execute(sa.text(f"ALTER TABLE resource_bundle_items ADD CONSTRAINT ck_resource_bundle_item_type CHECK (resource_type IN ({allowed}))"))
+    elif connection.dialect.name == "sqlite":
+        sql = connection.execute(sa.text("SELECT sql FROM sqlite_master WHERE type='table' AND name='resource_bundle_items'")).scalar()
+        if not sql or "'training_task'" in sql:
+            return
+        updated, count = re.subn(r"resource_type\s+IN\s*\([^)]*\)", f"resource_type IN ({allowed})", sql, count=1, flags=re.I)
+        if count != 1:
+            raise RuntimeError("Cannot locate resource bundle type constraint")
+        # Keep existing frozen rows, foreign keys and immutable triggers intact.
+        connection.exec_driver_sql("PRAGMA writable_schema=ON")
+        try:
+            connection.execute(sa.text("UPDATE sqlite_master SET sql=:sql WHERE type='table' AND name='resource_bundle_items'"), {"sql": updated})
+        finally:
+            connection.exec_driver_sql("PRAGMA writable_schema=OFF")
+        version = connection.exec_driver_sql("PRAGMA schema_version").scalar()
+        connection.exec_driver_sql(f"PRAGMA schema_version={int(version or 0) + 1}")
+
+
+def _repair_path_completion_projection(connection: Any) -> None:
+    """Rebuild task status from existing evidence; never replay grades/mastery."""
+    from sqlalchemy.orm import Session
+    from app.database import DBLearningEvent
+    from app.learning_aggregation import _project_path
+
+    with Session(bind=connection) as session:
+        latest_by_scope = {}
+        for event in session.query(DBLearningEvent).filter_by(
+            evidence_status="accepted", completion_effect="complete",
+        ).order_by(DBLearningEvent.occurred_at, DBLearningEvent.id):
+            latest_by_scope[(event.owner_public_id, event.course_id)] = event
+        for event in latest_by_scope.values():
+            _project_path(session, event)
+        session.commit()
+
+
+def _install_assessment_generation_reviews(connection: Any) -> None:
+    DBAssessmentGenerationReview.__table__.create(connection, checkfirst=True)
+
+
+def _install_generation_dispatch(connection: Any) -> None:
+    existing = {column["name"] for column in sa.inspect(connection).get_columns("generation_tasks")}
+    for name, definition in (
+        ("automation_state", "VARCHAR(32) NOT NULL DEFAULT ''"),
+        ("execution_token", "VARCHAR(64)"),
+        ("lease_expires_at", "DATETIME"),
+        ("next_attempt_at", "DATETIME"),
+        ("automation_context", "JSON NOT NULL DEFAULT '{}'"),
+    ):
+        if name not in existing:
+            connection.exec_driver_sql(f"ALTER TABLE generation_tasks ADD COLUMN {name} {definition}")
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_generation_dispatch_due "
+        "ON generation_tasks (automation_state, next_attempt_at)"
+    )
+
+
 MIGRATIONS = (
     Migration("20260723_001", "M1 unified identity and domain-object baseline", _record_m1_foundation),
     Migration("20260723_002", "M1 role and lifecycle database integrity triggers", _install_integrity_triggers),
@@ -1972,6 +2145,19 @@ MIGRATIONS = (
     Migration("20260817_076", "F9 typed marketplace learning objects and owner scoped personal copies", _install_f9_marketplace_learning_objects),
     Migration("20260825_077", "F8 note restore pointer separate from lock version", _install_f8_note_restore_pointer_schema),
     Migration("20260829_078", "NOC diagnostic and intelligent exam pending subjective score nullability", _allow_pending_assessment_scores),
+    Migration("20261025_079", "Restore omitted completion rules on generated code and experiment versions", _repair_generated_resource_completion_rules),
+    Migration("20261025_080", "Preserve frozen sources and restore personal resource citation links", _repair_marketplace_copy_source_links),
+    Migration("20261025_081", "Keep review plans associated with their course and knowledge point", _install_review_course_context),
+    Migration("20261025_082", "Restore supplementary tasks completed without teacher confirmation", _repair_teacher_intervention_completion),
+    Migration("20261025_083", "Allow current generated resource types in marketplace bundle copies", _extend_bundle_item_types),
+    Migration("20261025_084", "Reconcile task completion with diagnosed prerequisite exemptions", _repair_path_completion_projection),
+    Migration("20261025_085", "Project canonical question evidence onto its chapter learning task", _repair_path_completion_projection),
+    Migration("20261025_086", "Restore copied learning paths to their own course chapters", _repair_marketplace_path_source_links),
+    Migration("20261025_087", "Restore identifiable flashcard self-rating overwrites from graded evidence", _repair_flashcard_mastery),
+    Migration("20261025_088", "Restore older self-rating overwrites using exact frozen observation times", _repair_flashcard_mastery),
+    Migration("20261029_089", "Include missed delayed retests in current learning feedback", _repair_delayed_retest_feedback),
+    Migration("20261103_090", "Keep complete exam teaching reviews with their generated question versions", _install_assessment_generation_reviews),
+    Migration("20261109_091", "Persist opted in generation scheduling ownership and recovery", _install_generation_dispatch),
 )
 
 

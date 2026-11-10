@@ -4,13 +4,17 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.database import Base, DBAuditLog, DBCourse, DBKnowledgePoint
+from app.database import Base, DBAuditLog, DBCourse, DBKnowledgePoint, DBLearningEvent
 from app.m1_repository import add_artifact_version, create_artifact_with_version
 from app.m5_capabilities import M5CapabilityError
 from app.m5_resources import (
     RESOURCE_CATALOG_TYPES,
+    ResourceVersionCreateRequest,
+    create_resource_version,
     compare_resource_versions,
     export_resource_version,
+    resource_detail,
+    resource_generation_blocker,
     resource_route,
     search_resources,
     set_resource_archived,
@@ -47,6 +51,24 @@ def test_m5_resource_center_search_compare_and_hash_checked_export():
     assert len(exported["version"]["export_content_hash"]) == 64
 
 
+def test_long_resource_edit_compare_and_export_preserve_the_final_section():
+    session, artifact = _resource()
+    content = "# 完整学习材料\n" + "\n".join(f"第{i}条：核对来源与适用条件。" for i in range(14000)) + "\n末段：复习安排也须保留。"
+    assert len(content) > 200_000
+    old_id = artifact.current_version_id
+    detail = create_resource_version(session, artifact=artifact, actor_public_id="usr-resource",
+        request=ResourceVersionCreateRequest(expected_lock_version=artifact.lock_version,
+            source_version_id=old_id, content=content, content_format="markdown"))
+    assert detail["current_version_id"] != old_id
+    assert export_resource_version(session, artifact=artifact)["version"]["content"] == content
+    assert export_resource_version(session, artifact=artifact, version_number=2)["version"]["content"] == "line one\nnew line"
+    compared = compare_resource_versions(session, artifact=artifact, left_version=2, right_version=3)
+    assert len(compared["diff"]) > 200_000
+    assert compared["diff"].endswith("+末段：复习安排也须保留。")
+    assert compared["diff_truncated"] is False
+    assert session.query(DBLearningEvent).count() == 0
+
+
 def test_m5_resource_archive_is_audited_and_optimistically_locked():
     session, artifact = _resource()
     archived = set_resource_archived(
@@ -61,6 +83,74 @@ def test_m5_resource_archive_is_audited_and_optimistically_locked():
             session, artifact=artifact, actor_public_id="usr-resource",
             archived=False, expected_lock_version=1,
         )
+
+
+def test_resource_catalog_filters_review_topic_before_counting_and_paging():
+    session, old = _resource()
+    selected, _ = create_artifact_with_version(
+        session, owner_public_id="usr-resource", artifact_type="handout",
+        title="Selected review topic", content="Review content",
+        metadata={"knowledge_point_id": "review-topic"},
+    )
+    session.flush()
+    payload = search_resources(session, owner_public_id="usr-resource", knowledge_point_id="review-topic", limit=1)
+    assert [item["id"] for item in payload["items"]] == [selected.id]
+    assert payload["total"] == 1 and not payload["has_more"]
+    assert sum(payload["type_counts"].values()) == 1
+    assert search_resources(session, owner_public_id="usr-resource", knowledge_point_id="missing")["items"] == []
+
+
+@pytest.mark.parametrize("status", ["draft", "approved", "published", "withdrawn"])
+def test_archive_restore_preserves_status_content_and_learning_records(status):
+    session, artifact = _resource()
+    artifact.status = status
+    session.commit()
+    before = export_resource_version(session, artifact=artifact)
+    for _ in range(2):
+        set_resource_archived(session, artifact=artifact, actor_public_id="usr-resource",
+                              archived=True, expected_lock_version=artifact.lock_version)
+        assert search_resources(session, owner_public_id="usr-resource")["total"] == 0
+        assert search_resources(session, owner_public_id="usr-resource", include_archived=True)["total"] == 1
+        assert "已归档" in resource_detail(session, artifact)["resource"]["learning_unavailable_reason"]
+        assert resource_generation_blocker(session, artifact)
+        assert export_resource_version(session, artifact=artifact)["version"] == before["version"]
+        set_resource_archived(session, artifact=artifact, actor_public_id="usr-resource",
+                              archived=False, expected_lock_version=artifact.lock_version)
+        assert artifact.status == status
+        assert search_resources(session, owner_public_id="usr-resource")["total"] == 1
+        assert resource_generation_blocker(session, artifact) == ""
+    assert session.query(DBLearningEvent).count() == 0
+
+
+@pytest.mark.parametrize("kind,event_type,object_type", [
+    ("code_sandbox", "code_tests_passed", "artifact"),
+    ("interactive_model", "interactive_model_observation_submitted", "interactive_model"),
+])
+def test_catalog_completion_uses_the_same_owner_course_and_source_version(kind, event_type, object_type):
+    session, _ = _resource()
+    artifact, version = create_artifact_with_version(session, owner_public_id="usr-resource",
+        artifact_type=kind, title="完成记录核对", content="Test")
+    event = DBLearningEvent(id="catalog-completion", owner_public_id="usr-resource", course_id=None,
+        event_type=event_type, object_type=object_type, object_id=artifact.id, trace_id="catalog-completion",
+        evidence_status="accepted", evidence_strength=0.9, mastery_eligible=True,
+        context_ref={"resource_version_id": version.id},
+        payload={"resource_version_id": version.id} if kind == "code_sandbox" else {"result_version_id": "lab-result"})
+    session.add(event)
+    session.flush()
+    def completion():
+        return next(row for row in search_resources(session, owner_public_id="usr-resource")["items"]
+                    if row["id"] == artifact.id)["completion"]["status"]
+    assert completion() == "completed"
+    event.course_id = "other-course"
+    session.flush()
+    assert completion() == "not_recorded"
+    event.course_id = None
+    event.owner_public_id = "other-learner"
+    session.flush()
+    assert completion() == "not_recorded"
+    event.owner_public_id = "usr-resource"
+    add_artifact_version(session, artifact=artifact, content="New version", created_by_public_id="usr-resource")
+    assert completion() == "not_recorded"
 
 
 def test_m5_resource_export_does_not_expose_tiered_quiz_answer_keys():
@@ -181,6 +271,25 @@ def artifact_payload_versions(session, artifact_id):
     from app.database import DBArtifactVersion
 
     return session.query(DBArtifactVersion).filter_by(artifact_id=artifact_id).all()
+
+
+@pytest.mark.parametrize("serialize", [str, json.dumps])
+def test_resource_completion_projects_legacy_rules_without_rewriting_them(serialize):
+    session, artifact = _resource()
+    original = serialize({
+        "description": "完成三组参数对比。",
+        "criteria": [{"id": "complexity_sweep", "description": "比较复杂度1、5、10。"},
+                     {"id": "explain", "description": "解释验证表现的变化。"}],
+    })
+    version = artifact_payload_versions(session, artifact.id)[-1]
+    version.metadata_json = {"completion_rule": original}
+    session.commit()
+
+    item = search_resources(session, owner_public_id="usr-resource")["items"][0]
+    assert item["completion"]["rule"] == original
+    assert item["completion"]["display_rule"] == "完成三组参数对比。\n比较复杂度1、5、10。\n解释验证表现的变化。"
+    session.refresh(version)
+    assert version.metadata_json["completion_rule"] == original
 
 
 def test_resource_catalog_preview_uses_learner_safe_content():

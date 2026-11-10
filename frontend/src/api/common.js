@@ -1,4 +1,6 @@
 import axios from 'axios'
+import { translateError } from '../services/errorTranslator.js'
+import { readPreference } from '../utils/learningPreferenceStorage.js'
 
 export function buildHeaders() {
   const headers = {}
@@ -6,8 +8,10 @@ export function buildHeaders() {
   if (token) headers['Authorization'] = `Bearer ${token}`
   // 任务 9.2: 教学风格
   try {
-    const style = localStorage.getItem('edumatrix_teaching_style')
+    const style = readPreference('edumatrix_teaching_style')
     if (style) headers['X-EduMatrix-Teaching-Style'] = style
+    const depth = readPreference('edumatrix_response_depth')
+    if (['focused', 'detailed'].includes(depth)) headers['X-EduMatrix-Response-Depth'] = depth
   } catch {}
   return headers
 }
@@ -32,12 +36,12 @@ export function errorMessageText(value, fallback = '') {
     }
     return ''
   }
-  return visit(value) || fallback
+  return translateError({ detail: visit(value) }, fallback).message
 }
 
 export class EduMatrixApiError extends Error {
   constructor(status, detail, response = null) {
-    super(errorMessageText(detail, `请求失败 (${status || 'network'})`))
+    super(translateError({ status, detail }).message)
     this.name = 'EduMatrixApiError'
     this.status = status || 0
     this.detail = detail || ''
@@ -73,6 +77,7 @@ const AUTH_STORAGE_KEYS = [
   'edumatrix_role',
   'edumatrix_username',
   'edumatrix_display_name',
+  'edumatrix_avatar_url',
   'edumatrix_student_id',
   'edumatrix_viewing_student',
   'edumatrix_onboarded',
@@ -91,7 +96,8 @@ function clearExpiredAuth() {
   clearAuthSession()
   if (!authRedirecting && window.location.pathname !== '/login') {
     authRedirecting = true
-    window.location.assign('/login?reason=session-expired')
+    const returnTo = `${window.location.pathname}${window.location.search || ''}${window.location.hash || ''}`
+    window.location.assign(`/login?reason=session-expired&redirect=${encodeURIComponent(returnTo)}`)
   }
 }
 
@@ -100,7 +106,11 @@ function clearExpiredAuth() {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) clearExpiredAuth()
+    const token = localStorage.getItem('edumatrix_token')
+    const authorization = error.config?.headers?.Authorization || error.config?.headers?.get?.('Authorization')
+    // An old request can finish after logout or after another account signs in.
+    // Only expire the identity that actually made this authenticated request.
+    if (error.response?.status === 401 && token && authorization === `Bearer ${token}`) clearExpiredAuth()
     return Promise.reject(normalizeApiError(error))
   },
 )

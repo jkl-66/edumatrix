@@ -36,7 +36,8 @@ def test_letter_only_options_are_rejected_instead_of_persisted() -> None:
         _normalize_quiz_options(["A", "B", "C", "D"], position=1)
 
 
-def test_live_quiz_projection_keeps_prompt_and_option_bodies() -> None:
+@pytest.mark.parametrize('question_count', [1, 3])
+def test_live_quiz_projection_keeps_prompt_and_option_bodies(question_count) -> None:
     engine, session = _session()
     try:
         seed_competition_demo(session)
@@ -72,21 +73,24 @@ def test_live_quiz_projection_keeps_prompt_and_option_bodies() -> None:
             source_snapshots=snapshots,
             llm_payload={
                 "summary": "模型生成的测验",
+                "learningGoal": "辨认当前课程的关键概念、判断条件与应用方法。",
                 "quizQuestions": [
                     {"prompt": "题干一", "options": {"A": "选项一", "B": "选项二", "C": "选项三", "D": "选项四"}, "answer": "A", "explanation": "解析一", "bloom": "remember", "difficulty": 0.3},
                     {"prompt": "题干二", "options": {"A": "选项甲", "B": "选项乙", "C": "选项丙", "D": "选项丁"}, "answer": "B", "explanation": "解析二", "bloom": "understand", "difficulty": 0.5},
                     {"prompt": "题干三", "options": {"A": "选项甲一", "B": "选项乙二", "C": "选项丙三", "D": "选项丁四"}, "answer": "C", "explanation": "解析三", "bloom": "apply", "difficulty": 0.7},
-                ],
+                ][:question_count],
             },
         )
         content = json.loads(content_text)
         versions = [session.get(DBAssessmentQuestionVersion, ref["questionVersionId"]) for ref in content["questions"]]
-        assert [version.prompt.endswith(value) for version, value in zip(versions, ("题干一", "题干二", "题干三"))] == [True, True, True]
+        assert [version.prompt.endswith(value) for version, value in zip(versions, ("题干一", "题干二", "题干三"))] == [True] * question_count
+        assert len(versions) == question_count
+        assert content['requiredQuestionCount'] == question_count
         assert [list(version.options) for version in versions] == [
             ["选项一", "选项二", "选项三", "选项四"],
             ["选项甲", "选项乙", "选项丙", "选项丁"],
             ["选项甲一", "选项乙二", "选项丙三", "选项丁四"],
-        ]
+        ][:question_count]
         assert all(list(version.options) != ["A", "B", "C", "D"] for version in versions)
         artifact, artifact_version = create_artifact_with_version(
             session,
@@ -101,7 +105,7 @@ def test_live_quiz_projection_keeps_prompt_and_option_bodies() -> None:
         )
         projection = _quiz_projection(session, artifact, artifact_version)
         assert projection["mode"] == "structured"
-        assert [question["prompt"].endswith(value) for question, value in zip(projection["questions"], ("题干一", "题干二", "题干三"))] == [True, True, True]
+        assert [question["prompt"].endswith(value) for question, value in zip(projection["questions"], ("题干一", "题干二", "题干三"))] == [True] * question_count
         assert projection["questions"][0]["options"] == ["选项一", "选项二", "选项三", "选项四"]
     finally:
         session.close()
@@ -110,9 +114,34 @@ def test_live_quiz_projection_keeps_prompt_and_option_bodies() -> None:
 
 def test_inline_quiz_card_renders_bodies_and_rejects_letter_only_history() -> None:
     source = Path("frontend/src/components/InlineQuizCard.vue").read_text(encoding="utf-8")
-    assert "{{ question.prompt }}" in source
-    assert "{{ optionText(option, index) }}" in source
+    assert '<IncrementalMarkdownRenderer :text="question.prompt" preserve-content />' in source
+    assert '<IncrementalMarkdownRenderer :text="optionText(option, index)" preserve-content />' in source
     assert "option.text || option.content || option.option || option.value" in source
     assert "text.toUpperCase() === optionLabel(option, index)" in source
     assert "题目选项正文未保存，请重新生成这份测验资源。" in source
     assert "{{ unavailableReason }}" in source
+
+
+def test_explicit_single_question_passes_live_shape_check_without_correction():
+    import asyncio
+    from app.resource_bundles import _real_model_payload_async
+
+    class SingleQuestionBackend:
+        model = 'single-question-test'
+        provider = 'openai'
+        calls = 0
+
+        async def generate(self, system, user, *, role):
+            self.calls += 1
+            assert self.calls == 1, 'A complete single question must not trigger structural repair.'
+            return json.dumps({'learningGoal': '只计算一次相对频率', 'summary': '一题练习',
+                'narrative': '用事件发生次数除以总试验次数，并区分样本频率和真实概率。',
+                'quizQuestions': [{'prompt': '投掷100次出现18次，相对频率是多少？',
+                    'options': ['0.18', '0.82', '18', '100'], 'answer': 'A',
+                    'explanation': '18/100=0.18。', 'hints': [], 'bloom': 'apply', 'difficulty': 0.3}]})
+
+    backend = SingleQuestionBackend()
+    result = asyncio.run(_real_model_payload_async(backend, resource_type='quiz',
+        item={'title': '一题练习'}, manifest={'context': {'knowledge_point_title': '频率'},
+            'user_instruction': '只需要一道单选题。'}, source_snapshots=[]))
+    assert len(result['quizQuestions']) == 1 and backend.calls == 1

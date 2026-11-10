@@ -74,7 +74,8 @@ def test_canonical_attachment_states_and_recovery_actions_are_visible() -> None:
         "retryPendingMessage",
     ):
         assert action in chat
-    assert 'accept=".ppt,.pdf,.pptx,.docx,.md,.txt,.png,.jpg,.jpeg,.webp"' in chat
+    assert ':accept="preferences.imageAnalysis ?' in chat
+    assert "'.ppt,.pdf,.pptx,.docx,.md,.txt,.png,.jpg,.jpeg,.webp' : '.ppt,.pdf,.pptx,.docx,.md,.txt'" in chat
 
 
 def test_answer_first_stream_and_explicit_resource_contract() -> None:
@@ -108,7 +109,7 @@ def test_quiz_context_delegates_answering_to_the_f6_resource_workspace() -> None
         "openQuizSource",
         "openQuizResource",
         "进入测验题资源作答",
-        "作答、判分、解析和历史记录使用正式题目版本",
+        "作答、判分、解析和历史记录会保留在这道题的学习记录中",
         "quiz_follow_up",
         "question_version_id",
         "attempt_id",
@@ -161,8 +162,9 @@ def test_context_source_and_return_evidence_are_present_without_private_process(
 def test_frozen_desktop_visual_contract_and_minimum_text_size() -> None:
     chat = source(CHAT).lower()
 
-    for token in ("#f5f7f7", "#ffffff", "#06141b", "#11212d"):
-        assert token in chat
+    for name, color in (("page", "#f1f4f3"), ("surface", "#ffffff"), ("text", "#17242b"), ("primary", "#24485a")):
+        assert f"--chat-{name}: {color}" in chat
+        assert f"var(--chat-{name})" in chat
     for forbidden in (
         "linear-gradient",
         "radial-gradient",
@@ -176,7 +178,7 @@ def test_frozen_desktop_visual_contract_and_minimum_text_size() -> None:
         "font-size: 13px",
     ):
         assert forbidden not in chat
-    assert "grid-template-columns: 228px minmax(520px, 1fr) 292px" in chat
+    assert "grid-template-columns: clamp(236px, 15vw, 300px) minmax(0, 1fr) clamp(304px, 20vw, 392px)" in chat
     assert "var(--font-sans)" in chat
     assert "var(--font-heading)" in chat
 

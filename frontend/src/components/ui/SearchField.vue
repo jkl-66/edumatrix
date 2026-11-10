@@ -40,7 +40,7 @@ function clearValue() {
 </script>
 
 <template>
-  <label class="ui-search-field" :class="{ 'ui-search-field--plain': !bordered }" v-bind="$attrs">
+  <label class="ui-search-field" :class="{ 'ui-search-field--plain': !bordered, 'ui-search-field--clearable': clearable }" v-bind="$attrs">
     <Search class="ui-search-field__icon" :size="iconSize" aria-hidden="true" />
     <input
       ref="inputRef"
@@ -79,14 +79,14 @@ function clearValue() {
   align-items: center;
   gap: 8px;
   padding: 0 11px;
-  color: var(--color-text-muted, #60727c);
+  color: var(--color-text-muted, var(--color-text-muted));
   border: 1px solid var(--color-border-strong, #9ba8ab);
   border-radius: var(--radius-control, 6px);
   background: var(--color-surface, #fff);
 }
 
 .ui-search-field:focus-within {
-  border-color: var(--color-accent, #11212d);
+  border-color: var(--color-accent, var(--color-text));
   outline: 3px solid rgb(17 33 45 / 14%);
   outline-offset: 1px;
 }
@@ -112,21 +112,29 @@ function clearValue() {
   pointer-events: none;
 }
 
-.ui-search-field input {
+.ui-search-field input[type="search"],
+.ui-search-field input[type="search"]:focus {
   width: 100%;
   min-width: 0;
   height: 38px;
   padding: 0;
-  color: var(--color-text, #06141b);
+  color: var(--color-text, var(--color-text));
   border: 0;
+  border-radius: 0;
+  box-shadow: none;
   outline: 0;
   background: transparent;
   font: inherit;
   font-size: 14px;
 }
 
+.ui-search-field--clearable input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .ui-search-field input::placeholder {
-  color: var(--color-text-muted, #60727c);
+  color: var(--color-text-muted, var(--color-text-muted));
   opacity: 1;
 }
 
@@ -137,7 +145,7 @@ function clearValue() {
   flex: 0 0 28px;
   place-items: center;
   padding: 0;
-  color: var(--color-text-secondary, #4a5c6a);
+  color: var(--color-text-secondary, var(--color-text-secondary));
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -146,9 +154,9 @@ function clearValue() {
 
 .ui-search-field__clear:hover,
 .ui-search-field__clear:focus-visible {
-  color: var(--color-text, #06141b);
-  background: var(--color-surface-subtle, #f5f7f7);
-  outline: 2px solid var(--color-accent, #11212d);
+  color: var(--color-text, var(--color-text));
+  background: var(--color-surface-subtle, var(--color-surface-subtle));
+  outline: 2px solid var(--color-accent, var(--color-text));
   outline-offset: 1px;
 }
 </style>

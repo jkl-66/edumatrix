@@ -1011,34 +1011,38 @@ async def search_videos(query: str, max_results: int = 5) -> list[dict]:
             "Cookie": f"buvid3={buvid3}"
         }
         
-        bili_results = []
-        try:
-            async with httpx.AsyncClient(timeout=8.0, trust_env=False) as client:
-                resp = await client.get(bili_api_url, headers=bili_headers)
+        # English course topics should not be trapped behind unrelated
+        # Bilibili results (for example a vocabulary or game "inventory").
+        english_query = bool(re.search(r"[A-Za-z]", query)) and not re.search(r"[\u4e00-\u9fff]", query)
+        bili_results = await _search_youtube_videos(query, max_results=max_results) if english_query else []
+        if not bili_results:
+            try:
+                async with httpx.AsyncClient(timeout=8.0, trust_env=False) as client:
+                    resp = await client.get(bili_api_url, headers=bili_headers)
+                    network_online = True
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("code") == 0:
+                            for item in data.get("data", {}).get("result", []):
+                                bvid = item.get("bvid", "")
+                                aid = item.get("aid")
+                                title = item.get("title", "").replace('<em class="keyword">', "").replace("</em>", "")
+                                desc = item.get("description", "")[:200]
+                                url = f"https://www.bilibili.com/video/{bvid}" if bvid else f"https://www.bilibili.com/video/av{aid}"
+                                bili_results.append({
+                                    "title": title,
+                                    "url": url,
+                                    "snippet": desc
+                                })
+            except httpx.HTTPStatusError:
                 network_online = True
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("code") == 0:
-                        for item in data.get("data", {}).get("result", []):
-                            bvid = item.get("bvid", "")
-                            aid = item.get("aid")
-                            title = item.get("title", "").replace('<em class="keyword">', "").replace("</em>", "")
-                            desc = item.get("description", "")[:200]
-                            url = f"https://www.bilibili.com/video/{bvid}" if bvid else f"https://www.bilibili.com/video/av{aid}"
-                            bili_results.append({
-                                "title": title,
-                                "url": url,
-                                "snippet": desc
-                            })
-        except httpx.HTTPStatusError:
-            network_online = True
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError):
-            pass
-        except Exception as e:
-            if not isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError)):
-                network_online = True
-            print(f"  [search_videos] Direct Bilibili API failed: {e}")
-            
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError):
+                pass
+            except Exception as e:
+                if not isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError)):
+                    network_online = True
+                print(f"  [search_videos] Direct Bilibili API failed: {e}")
+
         search_results = bili_results
         
         # 2. 如果官方 API 检索失败或无结果，则优雅降级为搜索引擎备用检索

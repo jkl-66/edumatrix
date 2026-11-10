@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -142,7 +143,7 @@ def test_legacy_canvas_is_visible_and_keyboard_operable_at_two_desktop_sizes():
     with _server() as base_url, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 900), (1366, 768)):
+            for width, height in ((1707, 876), (1440, 900), (1366, 768)):
                 context = browser.new_context(viewport={"width": width, "height": height}, locale="zh-CN")
                 context.add_init_script(
                     "localStorage.setItem('edumatrix_token','b34-browser-token');"
@@ -170,7 +171,7 @@ def test_legacy_canvas_is_visible_and_keyboard_operable_at_two_desktop_sizes():
                 page.route("**/api/**", handle)
                 page.goto(f"{base_url}/workspace/resources/mindmaps/b34-legacy?course_id=course-b34", wait_until="networkidle")
                 page.get_by_test_id("mindmap-workspace").wait_for(state="visible")
-                page.get_by_text("旧版兼容画布：仅复用旧导图的布局与缩进解析", exact=False).wait_for(state="visible")
+                page.get_by_text("这份导图使用兼容阅读方式呈现，节点关系和层级仍然完整保留。", exact=False).wait_for(state="visible")
                 page.get_by_test_id("mindmap-hierarchy-fallback").wait_for(state="visible")
                 assert page.locator(".mindmap-node").count() >= 2
 
@@ -180,7 +181,27 @@ def test_legacy_canvas_is_visible_and_keyboard_operable_at_two_desktop_sizes():
                 node.press("Enter")
                 page.get_by_role("heading", name="梯度下降", exact=True).wait_for(state="visible")
                 page.get_by_role("button", name="折叠全部分支").click()
+                assert page.locator(".mindmap-node").count() == 1
+                page.reload(wait_until="networkidle")
+                page.get_by_role("heading", name="梯度下降", exact=True).wait_for(state="visible")
+                assert page.locator(".mindmap-node").count() == 1
+                before_zoom = page.locator(".mindmap-container-g").get_attribute("transform")
+                initial_scale = float(before_zoom.split("scale(")[1].split(")")[0])
+                page.get_by_role("button", name="放大导图", exact=True).click()
+                page.wait_for_function("expected => Math.abs(Number(document.querySelector('.mindmap-container-g').getAttribute('transform').split('scale(')[1].split(')')[0]) - expected) < 0.0001", arg=initial_scale * 1.2)
+                saved_view = page.locator(".mindmap-container-g").get_attribute("transform")
+                page.reload(wait_until="networkidle")
+                restored_view = page.locator(".mindmap-container-g").get_attribute("transform")
+                saved_numbers = [float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", saved_view)]
+                restored_numbers = [float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", restored_view)]
+                assert len(saved_numbers) == len(restored_numbers) == 3
+                assert restored_numbers[:2] == pytest.approx(saved_numbers[:2], abs=0.01)
+                assert restored_numbers[2] == pytest.approx(saved_numbers[2], abs=0.0001)
+                page.get_by_role("searchbox", name="搜索思维导图节点").fill("梯度下降")
+                page.locator(".search-results button").filter(has_text="梯度下降").click()
+                assert page.locator(".mindmap-node").count() >= 2
                 page.get_by_role("button", name="展开全部分支").click()
+                assert page.locator(".mindmap-node").count() >= 2
                 page.screenshot(path=str(EVIDENCE / f"legacy-{width}x{height}.png"), full_page=True, animations="disabled")
 
                 geometry = page.evaluate("""() => ({

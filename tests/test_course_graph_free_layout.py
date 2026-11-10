@@ -142,7 +142,7 @@ def test_dense_graph_uses_stable_free_layout_with_readable_straight_edges() -> N
     with _frontend_server() as base_url, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 900), (1366, 768)):
+            for width, height in ((1707, 876), (1440, 900), (1366, 768)):
                 context = browser.new_context(
                     viewport={"width": width, "height": height},
                     reduced_motion="reduce",
@@ -182,7 +182,7 @@ def test_dense_graph_uses_stable_free_layout_with_readable_straight_edges() -> N
                 page.route("**/api/**", handle)
                 page.goto(f"{base_url}/knowledge/graph/{course_id}", wait_until="networkidle")
                 page.get_by_test_id("knowledge-graph-explorer").wait_for()
-                page.get_by_text("自由关系布局", exact=False).wait_for()
+                page.get_by_role("searchbox", name="检索知识点").wait_for()
                 page.locator(".chart").scroll_into_view_if_needed()
                 page.screenshot(path=str(evidence / f"free-collapsed-{width}x{height}.png"), full_page=True)
 

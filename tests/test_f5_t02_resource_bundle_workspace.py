@@ -48,18 +48,30 @@ def test_generation_job_freezes_student_safe_context_and_hides_event_ids():
 
         payload = _payload(seed, "f5-t02-context-0001")
         payload["learning_goal"] = "理解梯度下降，并能解释学习率对收敛的影响。"
+        full_rule = '核对每个例子的计算、图表和适用条件。' * 40 + '最后独立解释一次参数变化。'
+        payload['items'][0]['completion_rule'] = full_rule
         response = client.post("/api/v1/resource-bundles/generation-jobs", headers=headers, json=payload)
         assert response.status_code == 201, response.text
         result = response.json()
-        assert result["context"] == {
+        assert result['items'][0]['completion_rule'] == full_rule
+        from app.m5_api import ResourceCompletionRequest
+        assert ResourceCompletionRequest(idempotency_key='full-completion-rule',
+            resource_version_id='example-version', completion_rule=full_rule).completion_rule == full_rule
+        context = result["context"]
+        assert {key: context[key] for key in (
+            "course_title", "knowledge_point_title", "learning_goal", "recent_learning_summary", "source_count",
+        )} == {
             "course_title": "机器学习资源协议课程",
             "knowledge_point_title": "梯度下降",
             "learning_goal": payload["learning_goal"],
-            "profile_adaptation": "偏好图文与实操；重点巩固梯度下降",
-            "mastery_summary": "画像记录的当前掌握度约为 42%，当前仍需重点巩固。",
             "recent_learning_summary": "近期有 1 条与此知识点相关的有效学习记录。",
             "source_count": 1,
         }
+        assert "42%" in context["mastery_summary"]
+        assert "梯度下降" in context["profile_adaptation"]
+        assert context["profile_adaptation_plan"]["point_mastery"] == 0.42
+        assert context["profile_adaptation_plan"]["difficulty_band"] == "foundation"
+        assert context["profile_context"] == context["profile_adaptation_plan"]
         assert "recent_event_ids" not in result["context"]
         assert len(result["items"]) == 9
         assert all(item["title"] and item["completion_rule"] for item in result["items"])
@@ -124,11 +136,43 @@ def test_student_workspace_contract_uses_nine_items_and_no_engineering_metadata(
         "视频推荐", "PPT / 网页课件", "可交互模型", "费曼复述任务",
     ):
         assert label in workspace
+    template = workspace.split("<template>", 1)[1].rsplit("</template>", 1)[0]
     for forbidden in ("锁版本", "内容哈希", "冻结合成画像", "原工作台", "resource_version_id"):
-        assert forbidden not in workspace
+        assert forbidden not in template
     assert "retryGenerationItem" in workspace
     assert "recoverGenerationJob" in workspace
-    assert "离开页面不会丢失进度" in workspace
-    assert "name: 'ResourceBundle'" in path
+    assert "离开页面不会丢失进度" not in template
+    assert "重新核对" in template
+    assert "openResourceGenerationChat(task)" in path
+    assert "path: '/chat'" in path
+    assert "intent: 'path_bundle'" in path
+    assert "source_ref_ids: sourceRefIds.length" in path
     assert "learning_goal:" in path
     assert "router.push" in path
+
+
+def test_teaching_revision_route_keeps_owner_and_request_identity():
+    from app.resource_bundles import execute_generation_job_demo
+    with TestClient(app) as client:
+        owner_headers = auth_headers(client, 'teaching_revision_owner')
+        other_headers = auth_headers(client, 'teaching_revision_other')
+        seed = _seed('teaching_revision_owner', 'revision-route')
+        created = client.post('/api/v1/resource-bundles/generation-jobs', headers=owner_headers,
+            json=_payload(seed, 'teaching-revision-route-original'))
+        assert created.status_code == 201
+        task_id = created.json()['job_id']
+        with SessionLocal() as db:
+            execute_generation_job_demo(db, _user(db, 'teaching_revision_owner'), task_id)
+            db.commit()
+        request = {'feedback': '先看数据表，再比较结果。', 'resource_types': ['handout'],
+                   'idempotency_key': 'teaching-revision-route-one'}
+        url = f'/api/v1/resource-bundles/generation-jobs/{task_id}/revise'
+        assert client.post(url, headers=other_headers, json=request).status_code == 403
+        response = client.post(url, headers=owner_headers, json=request)
+        assert response.status_code == 200, response.text
+        assert response.json()['job_id'] == task_id
+        assert response.json()['planner']['status'] == 'pending'
+        again = client.post(url, headers=owner_headers, json=request)
+        assert again.status_code == 200
+        assert [item['attempt'] for item in again.json()['items']] == [item['attempt'] for item in response.json()['items']]
+        assert client.post(url, headers=owner_headers, json={**request, 'feedback': '不同内容'}).status_code == 409

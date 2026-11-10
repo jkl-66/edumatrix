@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from types import SimpleNamespace
+from fastapi import HTTPException
 from urllib.parse import quote
 
 from app.database import (
@@ -9,10 +11,12 @@ from app.database import (
     DBArtifactVersion,
     DBCourseMembership,
     DBAssessmentAttempt,
+    DBAssessmentExam,
     DBAssessmentExamItem,
     DBAssessmentExamReport,
     DBAssessmentExamResponse,
     DBAssessmentExamSitting,
+    DBAssessmentExamVersion,
     DBAssessmentGradingResult,
     DBAssessmentQuestion,
     DBAssessmentQuestionVersion,
@@ -42,6 +46,24 @@ from app.m5_assessment_core import (
 from app.learning_aggregation import bind_legacy_wrong_question_version
 
 
+def canonical_review_source(session: Any, *, owner_public_id: str, student_id: str, version_id: str) -> Any:
+    """Read the learner's released question evidence for existing review tools."""
+    rows = build_wrong_question_read_model(session, student_id=student_id, owner_public_id=owner_public_id, limit=10000)
+    item = next((row for row in rows if row.get("question_version_id") == version_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="这道题不在你的错题本中。")
+    detail = item.get("quiz_detail") or {}
+    if not detail.get("correct_answer"):
+        raise HTTPException(status_code=409, detail="老师公布本次测评结果后，可以继续巩固这道题。")
+    version = session.get(DBAssessmentQuestionVersion, version_id)
+    question = session.get(DBAssessmentQuestion, version.question_id)
+    return SimpleNamespace(id=version.id, question=version.prompt, options=learner_option_texts(version, question),
+        correct_answer=detail["correct_answer"], student_answer=detail.get("student_answer") or "",
+        accuracy_score=detail.get("accuracy_score") or 0, target_concept=item["concept_name"],
+        feedback=detail.get("feedback") or "", course_id=question.course_id,
+        question_version=version, question_type=question.question_type)
+
+
 RESOURCE_ROUTES = {
     "handout": "/workspace/resources/handouts/{resource_id}",
     "mind_map": "/workspace/resources/mindmaps/{resource_id}",
@@ -53,6 +75,12 @@ RESOURCE_ROUTES = {
     "interactive_model": "/workspace/resources/models/{resource_id}",
     "feynman": "/workspace/feynman/{resource_id}",
 }
+
+
+def _attempt_feedback_released(attempt: Any, formal: dict[str, Any] | None) -> bool:
+    if formal is not None:
+        return bool(formal["feedback_released"])
+    return attempt.feedback_policy not in {"after_close", "teacher_only"}
 
 LEGACY_RESOURCE_TYPES = {
     "exercise": "quiz",
@@ -88,7 +116,7 @@ class WrongQuestionRedoError(ValueError):
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    return value.replace(tzinfo=value.tzinfo or timezone.utc).isoformat() if value else None
 
 
 def _answer_text(value: Any) -> str:
@@ -356,10 +384,16 @@ def build_wrong_question_read_model(
     owner_public_id: str,
     concept: str = "",
     limit: int = 50,
+    course_id: str | None = None,
 ) -> list[dict[str, Any]]:
     query = session.query(DBWrongQuestion).filter_by(student_id=student_id)
     if concept:
         query = query.filter_by(concept_name=concept)
+    if course_id:
+        course_versions = session.query(DBAssessmentQuestionVersion.id).join(
+            DBAssessmentQuestion, DBAssessmentQuestion.id == DBAssessmentQuestionVersion.question_id,
+        ).filter(DBAssessmentQuestion.course_id == course_id)
+        query = query.filter(DBWrongQuestion.source_object_id.in_(course_versions))
     wrong_rows = query.order_by(
         DBWrongQuestion.pinned.desc(),
         DBWrongQuestion.created_at.desc(),
@@ -393,7 +427,9 @@ def build_wrong_question_read_model(
     ).order_by(DBAssessmentGradingResult.created_at.desc()).all() if attempt_ids else []
     grading_by_attempt: dict[str, DBAssessmentGradingResult] = {}
     for row in grading_rows:
-        grading_by_attempt.setdefault(row.attempt_id, row)
+        current = grading_by_attempt.get(row.attempt_id)
+        if row.status == "completed" and (current is None or (row.grader_type == "human" and current.grader_type != "human")):
+            grading_by_attempt[row.attempt_id] = row
     reviews = session.query(DBMisconceptionReview).filter(
         DBMisconceptionReview.owner_public_id == owner_public_id,
         DBMisconceptionReview.attempt_id.in_(attempt_ids),
@@ -418,6 +454,14 @@ def build_wrong_question_read_model(
             DBAssessmentExamSitting.owner_public_id == owner_public_id,
         ).all()
     } if sitting_ids else {}
+    exam_ids = {row.exam_id for row in sittings.values()}
+    exams = {row.id: row for row in session.query(DBAssessmentExam).filter(
+        DBAssessmentExam.id.in_(exam_ids)
+    ).all()} if exam_ids else {}
+    exam_version_ids = {row.exam_version_id for row in sittings.values()}
+    exam_versions = {row.id: row for row in session.query(DBAssessmentExamVersion).filter(
+        DBAssessmentExamVersion.id.in_(exam_version_ids)
+    ).all()} if exam_version_ids else {}
     reports_by_sitting: dict[str, DBAssessmentExamReport] = {}
     if sitting_ids:
         report_rows = session.query(DBAssessmentExamReport).filter(
@@ -435,11 +479,19 @@ def build_wrong_question_read_model(
         sitting = sittings.get(response.sitting_id)
         if sitting is None:
             continue
+        exam = exams.get(sitting.exam_id)
+        exam_version = exam_versions.get(sitting.exam_version_id)
+        feedback_released = bool(
+            exam and exam_version and sitting.status in {"submitted", "released"}
+            and exam_version.feedback_policy != "teacher_only"
+            and (exam_version.feedback_policy == "after_submission" or exam.status in {"closed", "archived"})
+        )
         report = reports_by_sitting.get(sitting.id)
         formal_by_attempt[response.attempt_id] = {
             "exam_id": sitting.exam_id,
             "sitting_id": sitting.id,
             "sitting_status": sitting.status,
+            "feedback_released": feedback_released,
             "report_id": report.id if report else None,
             "exam_item_id": response.exam_item_id,
             "position": exam_items.get(response.exam_item_id).position if exam_items.get(response.exam_item_id) else None,
@@ -474,9 +526,7 @@ def build_wrong_question_read_model(
             review = reviews_by_attempt.get(attempt.id)
             retest = retest_by_review.get(review.id) if review else retest_by_completion.get(attempt.id)
             formal = formal_by_attempt.get(attempt.id)
-            feedback_released = attempt.feedback_policy != "after_close" or bool(
-                formal and formal.get("sitting_status") == "released"
-            )
+            feedback_released = _attempt_feedback_released(attempt, formal)
             grading = grading_by_attempt.get(attempt.id)
             payload = {
                 "id": attempt.id,
@@ -485,8 +535,8 @@ def build_wrong_question_read_model(
                 "mode": attempt.mode,
                 "mode_label": MODE_LABELS.get(attempt.mode, attempt.mode),
                 "answer": attempt.answer,
-                "score": attempt.score if feedback_released else None,
-                "correct": attempt.correct if feedback_released else None,
+                "score": (grading.score if grading else attempt.score) if feedback_released else None,
+                "correct": (grading.correct if grading else attempt.correct) if feedback_released else None,
                 "confidence": attempt.confidence,
                 "duration_seconds": attempt.duration_seconds,
                 "grading_status": attempt.grading_status,
@@ -512,9 +562,7 @@ def build_wrong_question_read_model(
             next((row for row in retest_rows if version and row.question_version_id == version.id), None),
         )
         formal_only_unreleased = bool(canonical_attempts) and all(
-            row.feedback_policy == "after_close" and not (
-                formal_by_attempt.get(row.id, {}).get("sitting_status") == "released"
-            )
+            not _attempt_feedback_released(row, formal_by_attempt.get(row.id))
             for row in canonical_attempts
         )
         answer = None
@@ -569,7 +617,7 @@ def build_wrong_question_read_model(
         status = "needs_review"
         if active_retest and retest_task_payload(active_retest)["status"] == "due":
             status = "retest_due"
-        elif latest_attempt and latest_attempt.correct is True:
+        elif attempt_payloads and attempt_payloads[0]["correct"] is True:
             status = "mastered"
         current_diagnosis = misconception_review_payload(latest_review)
         current_retest = retest_task_payload(active_retest)

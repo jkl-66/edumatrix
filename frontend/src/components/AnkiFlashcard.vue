@@ -2,6 +2,8 @@
 import { ref, watch } from 'vue'
 import { RotateCw, CheckCircle2, AlertTriangle, HelpCircle, Loader2 } from '@lucide/vue'
 import { reviewFlashcard } from '../api'
+import CollapsibleMindmap from './CollapsibleMindmap.vue'
+import IncrementalMarkdownRenderer from './IncrementalMarkdownRenderer.vue'
 
 const props = defineProps({
   card: {
@@ -20,6 +22,7 @@ const isFlipped = ref(false)
 const submitting = ref(false)
 const reviewMessage = ref('')
 const nextReviewInterval = ref(0)
+const adaptiveReview = ref(props.card.adaptive_review || null)
 
 // 切换翻转状态
 function flipCard() {
@@ -35,6 +38,7 @@ async function submitQuality(quality) {
   reviewMessage.value = ''
   try {
     const res = await reviewFlashcard(props.studentId, props.card.concept, quality, props.card.id || '')
+    adaptiveReview.value = res.flashcard?.adaptive_review || null
     nextReviewInterval.value = res.interval_new
     reviewMessage.value = res.message || `复习成功！下次复习间隔 ${res.interval_new} 天`
     emit('reviewed', res)
@@ -47,11 +51,14 @@ async function submitQuality(quality) {
 }
 
 // 当卡片对象改变时重置翻转状态
-watch(() => props.card, () => {
-  isFlipped.value = false
-  reviewMessage.value = ''
-  nextReviewInterval.value = 0
-}, { deep: true })
+watch(() => [props.card.id, props.card.version_id], ([id], [previousId]) => {
+  if (id !== previousId) {
+    isFlipped.value = false
+    reviewMessage.value = ''
+    nextReviewInterval.value = 0
+  }
+  adaptiveReview.value = props.card.adaptive_review || null
+})
 </script>
 
 <template>
@@ -75,7 +82,7 @@ watch(() => props.card, () => {
 
           <div class="my-auto text-center px-4 space-y-3">
             <h3 class="text-xs text-slate-500 font-medium">需要召回的概念问题</h3>
-            <p class="text-lg font-semibold leading-relaxed tracking-wide text-indigo-900">{{ card.front || '加载中...' }}</p>
+            <IncrementalMarkdownRenderer :text="card.front || '加载中...'" />
           </div>
 
           <div class="flex items-center justify-center gap-1.5 text-xs text-slate-500 font-medium">
@@ -99,8 +106,8 @@ watch(() => props.card, () => {
           </div>
 
           <div class="my-auto overflow-y-auto max-h-[160px] pr-1 scrollbar-thin text-slate-700 text-sm leading-relaxed space-y-2 whitespace-pre-line py-3">
-            <div class="text-xs font-bold text-slate-400">💡 记忆要点与微断点诊断：</div>
-            {{ card.back }}
+            <div class="text-xs font-bold text-slate-400">💡 记忆要点：</div>
+            <IncrementalMarkdownRenderer :text="card.back" />
           </div>
 
           <div class="pt-3 border-t border-slate-200 flex flex-col gap-2">
@@ -111,8 +118,8 @@ watch(() => props.card, () => {
 
             <!-- 复习参数展示 -->
             <div class="flex items-center justify-between text-[11px] text-slate-500 px-1">
-              <span>掌握度: {{ (card.mastery != null ? card.mastery * 100 : 30).toFixed(0) }}%</span>
-              <span>易记因子: {{ (card.easiness || 2.5).toFixed(2) }}</span>
+              <span>复习熟悉度: {{ (card.mastery != null ? card.mastery * 100 : 30).toFixed(0) }}%</span>
+              <span>下次复习: {{ card.interval_days || 1 }} 天后</span>
               <span>复习次数: {{ card.review_count || 0 }} 次</span>
             </div>
 
@@ -147,10 +154,18 @@ watch(() => props.card, () => {
         </div>
       </div>
     </div>
+    <section v-if="adaptiveReview" class="flashcard-explanation" data-testid="flashcard-simplified-explanation">
+      <h3>{{ adaptiveReview.title || '换个容易理解的说法' }}</h3>
+      <IncrementalMarkdownRenderer :text="adaptiveReview.simplified_explanation" />
+      <CollapsibleMindmap v-if="adaptiveReview.mermaid" :code="adaptiveReview.mermaid" />
+    </section>
   </div>
 </template>
 
 <style scoped>
+.flashcard-explanation { margin-top: 16px; padding: 16px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); }
+.flashcard-explanation h3 { margin: 0 0 8px; font-size: 16px; }
+.flashcard-explanation p { margin: 0 0 12px; white-space: pre-wrap; line-height: 1.7; font-size: 15px; }
 .anki-perspective {
   perspective: 1000px;
 }

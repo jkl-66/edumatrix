@@ -78,6 +78,27 @@ def _session():
     return engine, sessionmaker(bind=engine)()
 
 
+def test_model_repairs_suggestion_that_uses_an_unsupported_runtime_import():
+    from app.code_review import StructuredCodeReviewModelAdapter
+
+    sample = _TestModelAdapter().review({"run": {"status": "success", "stderr": ""}}).model_dump(mode="json")
+    invalid = {**sample, "improvedCode": "from typing import Sequence\nprint('ok')"}
+    valid = {**sample, "improvedCode": "values: list[float] = []\nprint(values)"}
+
+    class Backend:
+        prompts = []
+
+        def generate(self, system, user, **kwargs):
+            self.prompts.append((system, user))
+            return json.dumps(invalid if len(self.prompts) == 1 else valid)
+
+    backend = Backend()
+    result = StructuredCodeReviewModelAdapter(backend, label="test").review({})
+    assert result.improvedCode == valid["improvedCode"]
+    assert len(backend.prompts) == 2
+    assert 'typing' in backend.prompts[1][1]
+
+
 def _resource(session, learner: DBUser, key: str) -> DBArtifact:
     source = session.get(DBSourceRef, "demo-ref-07")
     profile = session.query(DBProfileSnapshot).filter_by(owner_public_id=learner.public_id).first()

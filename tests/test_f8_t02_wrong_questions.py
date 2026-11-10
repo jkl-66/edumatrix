@@ -540,9 +540,11 @@ def test_wrong_question_read_model_projects_attempts_sources_and_deep_links_with
     assert row["notes"] == "保留这条反思"
     assert row["question"]["correct_answer"] == {"choice": "B"}
     assert "负梯度给出局部最速下降方向。" in row["question"]["explanation"]
-    assert "正确答案是 B" in row["question"]["explanation"]
-    assert "选项 A" in row["question"]["explanation"]
+    assert "选项 A" not in row["question"]["explanation"]
+    assert "没有同时满足题干" not in row["question"]["explanation"]
     assert row["attempt_count"] == 2
+    assert all(datetime.fromisoformat(item["submitted_at"]).utcoffset() == timedelta(0)
+               for item in row["attempts"])
     assert {item["mode"] for item in row["attempts"]} == {"practice", "formal"}
     assert row["formal_exam_links"][0]["report_id"] == report.id
     assert row["formal_exam_links"][0]["route"].startswith("/workspace/assessment/exams/exam-read?")
@@ -606,3 +608,62 @@ def test_formal_only_wrong_question_hides_answer_until_feedback_is_released():
     assert row["question"]["explanation"] == ""
     assert row["attempts"][0]["score"] is None
     assert row["attempts"][0]["correct"] is None
+    from app.wrong_question_read_model import canonical_review_source
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as hidden:
+        canonical_review_source(session, owner_public_id=user.public_id, student_id=user.username, version_id=version.id)
+    assert hidden.value.status_code == 409
+
+
+@pytest.mark.parametrize("policy,exam_status,sitting_status,available", [
+    ("after_submission", "open", "submitted", True),
+    ("after_close", "open", "submitted", False),
+    ("after_close", "closed", "submitted", True),
+    ("after_close", "closed", "released", True),
+    ("teacher_only", "closed", "released", False),
+])
+def test_wrong_question_feedback_follows_frozen_exam_policy(policy, exam_status, sitting_status, available):
+    session, user, version, wrong_id = _canonical_session()
+    session.get(DBWrongQuestion, wrong_id).source_object_id = version.id
+    exam = DBAssessmentExam(id="feedback-exam", course_id="course-f8", owner_public_id=user.public_id,
+        generation_key="feedback-exam-key", title="合成测试试卷", status=exam_status)
+    exam_version = DBAssessmentExamVersion(id="feedback-exam-version", exam_id=exam.id,
+        version_number=1, feedback_policy=policy, total_points=100, manifest_hash="1" * 64)
+    item = DBAssessmentExamItem(id="feedback-item", exam_version_id=exam_version.id,
+        question_version_id=version.id, position=1, points=100)
+    sitting = DBAssessmentExamSitting(id="feedback-sitting", exam_id=exam.id,
+        exam_version_id=exam_version.id, owner_public_id=user.public_id, status=sitting_status)
+    attempt = DBAssessmentAttempt(id="feedback-attempt", owner_public_id=user.public_id,
+        question_version_id=version.id, idempotency_key="feedback-attempt-key", mode="formal",
+        answer={"choice": "A"}, score=0.0, correct=False, grading_status="graded", feedback_policy="after_close")
+    response = DBAssessmentExamResponse(id="feedback-response", sitting_id=sitting.id,
+        exam_item_id=item.id, attempt_id=attempt.id)
+    session.add_all([exam, exam_version, item, sitting, attempt, response])
+    session.commit()
+    row = build_wrong_question_read_model(session, student_id=user.username, owner_public_id=user.public_id)[0]
+    assert row["question"]["answer_available"] is available
+    assert row["attempts"][0]["feedback_released"] is available
+    assert row["attempts"][0]["score"] == (0.0 if available else None)
+    if available:
+        assert row["question"]["correct_answer"] == {"choice": "B"}
+        from app.wrong_question_read_model import canonical_review_source
+        assert canonical_review_source(session, owner_public_id=user.public_id,
+            student_id=user.username, version_id=version.id).correct_answer == "B"
+    else:
+        assert row["question"]["correct_answer"] is None
+
+
+def test_canonical_review_tools_reuse_owned_released_question_evidence():
+    from app.wrong_question_read_model import canonical_review_source
+    from fastapi import HTTPException
+    session, user, version, wrong_id = _canonical_session()
+    wrong = session.get(DBWrongQuestion, wrong_id)
+    wrong.source_object_id = version.id
+    session.commit()
+    source = canonical_review_source(session, owner_public_id=user.public_id, student_id=user.username, version_id=version.id)
+    assert source.question == version.prompt
+    assert source.correct_answer == "B"
+    assert source.question_version.id == version.id
+    with pytest.raises(HTTPException) as missing:
+        canonical_review_source(session, owner_public_id="another-owner", student_id="another-student", version_id=version.id)
+    assert missing.value.status_code == 404

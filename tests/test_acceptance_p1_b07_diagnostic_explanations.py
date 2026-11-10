@@ -50,7 +50,11 @@ def test_new_report_uses_model_bound_item_claims_and_public_evidence(monkeypatch
         learner, blueprint, work, _ = _submitted_diagnostic(session)
         blueprint.generation_stages = [{"key": "p1_b05", "label": "真实生成", "status": "completed"}]
         session.commit()
-        monkeypatch.setattr(diagnostic_report, "execute_registered_structured_call", _fake_gateway)
+        captured = []
+        async def capture_gateway(*args, **kwargs):
+            captured.extend(json.loads(kwargs["user_prompt"])["items"])
+            return await _fake_gateway(*args, **kwargs)
+        monkeypatch.setattr(diagnostic_report, "execute_registered_structured_call", capture_gateway)
 
         row, created = generate_diagnostic_report(
             session,
@@ -70,12 +74,23 @@ def test_new_report_uses_model_bound_item_claims_and_public_evidence(monkeypatch
         }
         assert all(item["evaluation"]["claim"].startswith("模型已结合") for item in payload["evidence"])
         assert all(item["judgmentBasis"].startswith("模型逐项") for item in payload["evidence"])
-        assert all(item["explanation"].startswith("模型解释") for item in payload["evidence"])
+        assert all(item["learningFeedback"].startswith("模型解释") for item in payload["evidence"])
+        for item in payload["evidence"]:
+            version = session.get(diagnostic_report.DBAssessmentQuestionVersion, item["questionVersionId"])
+            assert item["explanation"] == diagnostic_report.learner_safe_explanation(
+                version.explanation, prompt=version.prompt, options=version.options,
+                answer_key=version.answer_key, question_type=item["questionType"])
         assert all(
             set(item["evaluation"]["sourceRefIds"]).issubset({source["id"] for source in item["sources"]})
             for item in payload["evidence"]
         )
         assert all(source["documentId"] and source["locationLabel"] for item in payload["evidence"] for source in item["sources"])
+        assert any(item["options"] for item in captured)
+        for item in captured:
+            version = session.get(diagnostic_report.DBAssessmentQuestionVersion, item["question_version_id"])
+            assert item["options"] == (version.options or [])
+            assert item["reference_answer"] == version.answer_key
+            assert item["reference_explanation"] == version.explanation
         public = json.dumps(payload, ensure_ascii=False)
         assert "reasoning_content" not in public and "api_key" not in public and "system_prompt" not in public
     finally:
@@ -302,17 +317,111 @@ def test_frontend_exposes_evaluating_retry_and_item_evidence_without_private_tra
     source = Path("frontend/src/components/DiagnosticAssessmentSession.vue").read_text(encoding="utf-8")
 
     for expected in (
-        "评估中：正在生成逐题解析",
+        "正在准备逐题解析",
         "报告生成失败，答案仍已保存",
         "重新生成报告",
-        "历史报告 · 未重新执行模型评估",
+        "历史报告 · 保留当时的学习点评",
         "item.judgmentBasis",
-        "item.evaluation.confidence",
+        "item.options",
         "item.evaluation.claim",
         "item.sources",
         "SourceCitation",
-        "router.currentRoute.value.fullPath",
+        ':return-to="route.fullPath"',
     ):
         assert expected in source
     assert "reasoning_content" not in source
     assert "api_key" not in source
+
+
+def test_report_subjective_grader_uses_frozen_sources_after_course_changes(monkeypatch):
+    engine, session = _session()
+    try:
+        learner, blueprint, work, _ = _submitted_diagnostic(session)
+        version = session.get(diagnostic_report.DBAssessmentQuestionVersion, blueprint.question_version_ids[0])
+        question = session.get(diagnostic_report.DBAssessmentQuestion, version.question_id)
+        question.question_type = "short_answer"
+        version.scoring_rule = {"version": "frozen-grading-v1", "criteria": [
+            {"id": "meaning", "label": "理解", "weight": 1.0, "description": "解释概念"},
+        ]}
+        source = session.get(diagnostic_report.DBSourceRef, version.source_ref_ids[0])
+        frozen_quote = "诊断开始时冻结的课程解释。"
+        blueprint.review_decision = {**blueprint.review_decision, "contextSnapshot": {
+            "sourceSnapshotVersion": "p1-b08-source.v2",
+            "sourceRefs": [{"sourceRefId": source.id, "quote": frozen_quote,
+                            "sourceDocumentId": source.source_document_id, "title": "原课程标题"}],
+        }}
+        blueprint.generation_stages = [{"key": "p1_b05", "status": "completed"}]
+        source.quote = "课程后续修改的解释，不应影响已提交诊断。"
+        session.commit()
+        captured = []
+        async def stop_at_model(*args, **kwargs):
+            captured.append(kwargs)
+            raise DiagnosticReportError("frozen_source_observed", "test stops at grading boundary")
+        monkeypatch.setattr(diagnostic_report, "execute_registered_structured_call", stop_at_model)
+        with pytest.raises(DiagnosticReportError) as failure:
+            generate_diagnostic_report(session, user=learner, session_id=work.id,
+                idempotency_key="frozen-report-grading-001", llm=_ApprovedExplanationLLM())
+        assert failure.value.code == "frozen_source_observed"
+        assert captured[0]["operation"] == "diagnostic_subjective_grading"
+        supplied = json.loads(captured[0]["user_prompt"])["course_sources"]
+        assert supplied[0]["id"] == source.id
+        assert supplied[0]["quote"] == frozen_quote
+        assert source.quote not in captured[0]["user_prompt"]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize("first_failure", ["grading", "explanations"])
+def test_report_retry_reuses_completed_grading_but_retries_failed_grading(monkeypatch, first_failure):
+    from app.database import DBAssessmentAbilityState, DBAssessmentGradingResult
+    engine, session = _session()
+    try:
+        learner, blueprint, work, _ = _submitted_diagnostic(session)
+        version = session.get(diagnostic_report.DBAssessmentQuestionVersion, blueprint.question_version_ids[0])
+        question = session.get(diagnostic_report.DBAssessmentQuestion, version.question_id)
+        question.question_type = "short_answer"
+        version.scoring_rule = {"version": "retry-rubric-v1", "criteria": [
+            {"id": "meaning", "label": "理解", "weight": 1.0, "description": "解释概念"},
+        ]}
+        blueprint.generation_stages = [{"key": "p1_b05", "status": "completed"}]
+        session.commit()
+        counts = {"grading": 0, "explanations": 0}
+        async def gateway(*args, **kwargs):
+            if kwargs["operation"] == "diagnostic_subjective_grading":
+                counts["grading"] += 1
+                if first_failure == "grading" and counts["grading"] == 1:
+                    raise RuntimeError("synthetic grader interruption")
+                return SimpleNamespace(model="deepseek-v4-flash", fallback_used=False, trace_id="retry-grade",
+                    structured_output={"criteria": [{"criterion_id": "meaning", "score": 0.5,
+                        "evidence": ["合成已提交回答"], "justification": "部分解释正确", "improvement": "补充依据"}],
+                        "confidence": 0.9, "summary": "解释还不完整", "improvement_plan": ["补充依据"]})
+            counts["explanations"] += 1
+            if first_failure == "explanations" and counts["explanations"] == 1:
+                raise RuntimeError("synthetic explanation interruption")
+            return await _fake_gateway(*args, **kwargs)
+        monkeypatch.setattr(diagnostic_report, "execute_registered_structured_call", gateway)
+        with pytest.raises(DiagnosticReportError):
+            generate_diagnostic_report(session, user=learner, session_id=work.id,
+                idempotency_key="report-retry", llm=_ApprovedExplanationLLM())
+        # Reproduce committed prior work from the gateway lifecycle, then use
+        # a new database session as the actual retry request would do.
+        session.commit()
+        ability_before = [(x.id, x.response_count) for x in session.query(DBAssessmentAbilityState).all()]
+        owner_id, work_id = learner.id, work.id
+        session.close()
+        from sqlalchemy.orm import Session
+        session = Session(engine)
+        learner = session.get(diagnostic_report.DBUser, owner_id)
+        row, created = generate_diagnostic_report(session, user=learner, session_id=work_id,
+            idempotency_key="report-retry", llm=_ApprovedExplanationLLM())
+        assert created and row.report_data["evaluation"]["status"] == "completed"
+        assert counts["grading"] == (2 if first_failure == "grading" else 1)
+        grades = session.query(DBAssessmentGradingResult).filter_by(grader_type="ai").all()
+        assert sum(x.status == "completed" for x in grades) == 1
+        assert sum(x.status == "failed" for x in grades) == (first_failure == "grading")
+        if first_failure == "explanations":
+            assert [(x.id, x.response_count) for x in session.query(DBAssessmentAbilityState).all()] == ability_before
+    finally:
+        session.close()
+        engine.dispose()

@@ -1,0 +1,6 @@
+{
+  "instruction": "根据学习者对追问的实际回答，指出这次判断中需要改变的一步，给出简短解释，再给一道有完整新数据的小题检查这个环节。保留已经会的部分。",
+  "version": "gepa-r194",
+  "evidence": "scratch\\defense-reference-20261030\\b7-evaluation\\same-ai-five391\\extensions\\gepa\\run-r194\\selection.json",
+  "selected_by": "official GEPA validation"
+}

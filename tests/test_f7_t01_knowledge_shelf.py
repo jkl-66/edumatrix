@@ -2,12 +2,26 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app.database import DBCourse, DBCourseMembership, DBStudentProfile, SessionLocal
+from app.database import DBCourse, DBCourseMembership, DBSourceDocument, DBStudentProfile, SessionLocal
 from app.main import app
 from tests.api_test_helpers import auth_headers
 
 
 FLAGSHIP_COURSE_ID = "course-machine-learning-foundations-v1"
+
+
+def _seed_recommendation_candidates():
+    # Retired embedded courses are no longer seeded at startup. Supply explicit
+    # candidates for ranking and shelf mutation, independent of test order.
+    with SessionLocal() as db:
+        for suffix, title in (("preferred", "边缘人工智能与嵌入式机器学习部署"), ("general", "通用机器学习进阶")):
+            course_id = f"f7-shelf-{suffix}"
+            db.merge(DBCourse(id=course_id, title=title, version="1", visibility="public",
+                              status="published", manifest_version="test-v1"))
+            db.merge(DBSourceDocument(id=f"{course_id}-source", course_id=course_id,
+                title=title, filename="course.md", file_format="md", content_hash="f" * 64,
+                source_sha256="f" * 64, processed_sha256="f" * 64))
+        db.commit()
 
 
 def _course(payload: dict, course_id: str) -> dict:
@@ -67,6 +81,7 @@ def test_recommendations_use_explainable_profile_or_neutral_basis_only() -> None
     username = "f7_t01_profile_student"
     with TestClient(app) as client:
         headers = auth_headers(client, username)
+        _seed_recommendation_candidates()
         with SessionLocal() as session:
             profile = session.get(DBStudentProfile, username)
             if profile is None:
@@ -86,15 +101,19 @@ def test_recommendations_use_explainable_profile_or_neutral_basis_only() -> None
         assert all(item["review_status"] in {"approved", "source_review_required"} for item in payload["recommendations"])
         assert all(item["recommendation_reason"] for item in payload["recommendations"])
         recommendation_ids = [item["id"] for item in payload["recommendations"]]
-        assert recommendation_ids[0] == "course-embedded-machine-learning-engineering-v2"
-        assert "course-embedded-edge-intelligence-v1" in recommendation_ids
-        assert "边缘" in payload["recommendations"][0]["recommendation_reason"]
+        # Other API tests may create valid public courses in this shared DB.
+        # Compare the two seeded candidates, not their absolute global rank.
+        preferred_id = "f7-shelf-preferred"
+        assert recommendation_ids.index(preferred_id) < recommendation_ids.index("f7-shelf-general")
+        preferred = next(item for item in payload["recommendations"] if item["id"] == preferred_id)
+        assert "边缘" in preferred["recommendation_reason"]
 
 
 def test_adding_reviewed_public_course_to_shelf_is_idempotent() -> None:
     username = "f7_t01_shelf_member"
     with TestClient(app) as client:
         headers = auth_headers(client, username)
+        _seed_recommendation_candidates()
         initial = client.get("/api/knowledge/courses", headers=headers)
         assert initial.status_code == 200, initial.text
         recommendation = initial.json()["recommendations"][0]

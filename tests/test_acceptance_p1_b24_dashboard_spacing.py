@@ -10,7 +10,7 @@ def test_app_shell_uses_shared_content_side_inset():
     start = source.index(marker)
     block = source[start:source.index("}", start) + 1]
     assert "box-sizing: border-box" in block
-    assert "padding-inline: var(--space-panel-inline)" in block
+    assert "padding-inline: clamp(18px, 2vw, 32px)" in block
 
 
 def test_dashboard_keeps_top_spacing_token():

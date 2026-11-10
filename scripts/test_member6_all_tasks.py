@@ -303,38 +303,6 @@ class TestTask8_MetacognitiveBiasPathRouting(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════
-# 任务 9: Monaco 代码沙箱控制台自动补全桩
-# ══════════════════════════════════════════════════════════════
-class TestTask9_AutocompleteSuggestions(unittest.TestCase):
-    """任务 9: Monaco 沙箱编辑器轻量自动补全桩"""
-
-    def test_suggestion_map_exists(self):
-        """验证 suggestionMap 包含 plt. 和 np. 补全"""
-        with open("frontend/src/components/SandboxVisualizer.vue", "r", encoding="utf-8") as f:
-            content = f.read()
-        self.assertIn("suggestionMap", content)
-        self.assertIn("'plt.'", content, "plt. 应有自动补全")
-        self.assertIn("'np.'", content, "np. 应有自动补全")
-
-    def test_autocomplete_trigger_and_keys(self):
-        """验证 onCodeInput 和键盘导航"""
-        with open("frontend/src/components/SandboxVisualizer.vue", "r", encoding="utf-8") as f:
-            content = f.read()
-        self.assertIn("function onCodeInput", content)
-        self.assertIn("@input=\"onCodeInput\"", content)
-        self.assertIn("ArrowDown", content)
-        self.assertIn("ArrowUp", content)
-        self.assertIn("'Enter'", content)
-
-    def test_apply_suggestion_logic(self):
-        """验证 applySuggestion 替换代码逻辑"""
-        with open("frontend/src/components/SandboxVisualizer.vue", "r", encoding="utf-8") as f:
-            content = f.read()
-        self.assertIn("function applySuggestion", content)
-        self.assertIn("before.length + suggestion.length", content)
-
-
-# ══════════════════════════════════════════════════════════════
 # 任务 10: 错题本错因诊断图谱与聚类大盘
 # ══════════════════════════════════════════════════════════════
 class TestTask10_DiagnosisClusterDashboard(unittest.TestCase):

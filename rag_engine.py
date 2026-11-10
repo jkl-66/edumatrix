@@ -377,9 +377,12 @@ def pre_filter_index(
     course_id: str | None = None,
     owner_id: str = "",
     allow_cross_course: bool = False,
+    personal_only: bool = False,
 ) -> list[Evidence]:
     """Helper to pre-filter items of an index by doc_constraints and compute similarities."""
     matches = []
+    if personal_only and not owner_id:
+        return matches
     
     # Standardize doc_constraints to a list of lowercased strings
     constraints_list = []
@@ -402,6 +405,7 @@ def pre_filter_index(
                     course_id=course_id,
                     owner_id=owner_id,
                     allow_cross_course=allow_cross_course,
+                    personal_only=personal_only,
                 )
             )
         return sorted(matches, key=lambda x: x.score, reverse=True)[:top_k]
@@ -417,6 +421,11 @@ def pre_filter_index(
         visibility = item.metadata.get("visibility")
         item_owner = str(item.metadata.get("owner_id") or "")
         item_course = str(item.metadata.get("course_id") or "")
+        if personal_only and (
+            visibility != "private" or item_owner != owner_id
+            or item.metadata.get("canonical_source")
+        ):
+            continue
         if visibility == "private" and (not owner_id or item_owner != owner_id):
             continue
         if course_id and not allow_cross_course:
@@ -613,6 +622,7 @@ class HybridRAGPipeline:
                             query=query_with_graph,
                             top_k=top_k,
                             actor=actor,
+                            assemble_for_task=True,
                         )
                 except Exception as exc:
                     print(f"  [RAG] canonical course retrieval failed: {exc}")
@@ -630,6 +640,7 @@ class HybridRAGPipeline:
                         top_k,
                         owner_id=owner_id,
                         allow_cross_course=True,
+                        personal_only=True,
                     ),
                     owner_id,
                 )
@@ -643,7 +654,7 @@ class HybridRAGPipeline:
                         and not item.metadata.get("canonical_source")
                     )
                 ]
-                final_evidence = sorted(
+                final_evidence = canonical_evidence[:top_k] if not personal else sorted(
                     [*canonical_evidence, *personal],
                     key=lambda item: item.score,
                     reverse=True,

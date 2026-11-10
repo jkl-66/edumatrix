@@ -1,9 +1,5 @@
-"""Build the three upload archives required by the competition portal.
-
-The archives are deliberately separated:
-  00015352作品.zip  - evaluator runnable package and one-click installer
-  00015352源码.zip  - complete source package
-  00015352介绍.zip  - Word/PDF/PPT/evidence and the optional demo video
+"""Build one current evaluator runtime. Earlier three-archive helpers are retained
+for historical use; the default entry point does not rebuild presentation files.
 """
 
 from __future__ import annotations
@@ -15,6 +11,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -549,21 +546,296 @@ def build_info_package() -> None:
         }, ensure_ascii=False, indent=2))
 
 
+CURRENT_TASKS = (
+    'task-7246f1d6f3004a9fa2fee21d8b696c08',  # representative nine-resource package
+    'task-fd30eb8b784e457d85e1d56faa86a2a9',  # training and linked resources
+    'task-32490ca4251d44b59e0e0a14dd2df605',  # new learner's first path quiz
+    'task-687d04215ad347488682c96127160df9',  # review handout and questions
+)
+DEMO_ACCOUNTS = {
+    'auto_r207_software_developer': ('learner', '学习者 · 软件背景'),
+    'auto_r207_shop_ai': ('reviewer', '学习者 · 经营背景'),
+    'auto_r208_new_learner': ('explorer', '新学习者'),
+    'validation_teacher_20261025': ('teacher', '课程教师'),
+    'validation_admin_20261025': ('admin', '系统管理员'),
+}
+DEMO_PASSWORD = 'EduMatrix2026!'
+
+
+def build_current_seed(source: Path, target: Path) -> dict:
+    """Prepare only a copy of the synthetic acceptance data for distribution."""
+    import bcrypt
+    source = source.resolve()
+    assert source != target.resolve() and source.name == 'acceptance.sqlite3'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(source.as_uri() + '?mode=ro', uri=True) as original:
+        users = original.execute('select username, public_id from users').fetchall()
+        assert all(name.startswith(('validation_', 'extension-', 'auto_r207_', 'auto_r208_'))
+                   for name, _ in users), 'The source must contain only the audited synthetic accounts.'
+        published_artifacts = set()
+        for task_id in CURRENT_TASKS:
+            state = original.execute('select status from generation_tasks where id=?', (task_id,)).fetchone()
+            assert state and state[0] == 'completed', f'Current resource task unfinished: {task_id}'
+            publication = original.execute("select payload from task_events where task_id=? and event_type='publish.completed' order by sequence desc limit 1", (task_id,)).fetchone()
+            assert publication, f'Missing published output: {task_id}'
+            published_artifacts.update(ref.split(':')[0] for ref in json.loads(publication[0])['output_refs'])
+        assert not original.execute("select 1 from generation_tasks where automation_state in ('queued','running','retry_wait') limit 1").fetchone()
+        with sqlite3.connect(target) as copy_db:
+            original.backup(copy_db)
+    aliases = {old: value[0] for old, value in DEMO_ACCOUNTS.items()}
+    active_ids = [public for name, public in users if name in DEMO_ACCOUNTS]
+    with sqlite3.connect(target) as db:
+        # This is an export-only identity/privacy migration in a fresh copy.
+        # Restore the exact immutability rules before committing that copy.
+        db.execute('begin')
+        frozen_triggers = db.execute(
+            "select name,sql from sqlite_master where type='trigger' and lower(sql) like '%immutable%'"
+        ).fetchall()
+        for trigger_name, _ in frozen_triggers:
+            db.execute('drop trigger "' + trigger_name.replace('"', '""') + '"')
+        tables = [r[0] for r in db.execute("select name from sqlite_master where type='table' and name not like 'sqlite_%'")]
+        # The original synthesis and failure evidence stays in the workspace.
+        # Historical identities remain as provenance but cannot be signed into.
+        db.execute('update users set is_active=0, hashed_password=?',
+                   (bcrypt.hashpw(os.urandom(32).hex().encode(), bcrypt.gensalt()).decode(),))
+        for old, (alias, label) in DEMO_ACCOUNTS.items():
+            db.execute('update users set username=?, display_name=?, hashed_password=?, is_active=1 where username=?',
+                       (alias, label, bcrypt.hashpw(DEMO_PASSWORD.encode(), bcrypt.gensalt()).decode(), old))
+        private_keys = {'reasoning_content', 'reasoning_details', 'private_thinking', 'chain_of_thought',
+                        'api_key', 'apiKey', 'access_token', 'refresh_token', 'authorization', 'secret'}
+        def scrub(value):
+            if isinstance(value, dict):
+                return {k: scrub(v) for k, v in value.items() if k.lower() not in {s.lower() for s in private_keys}}
+            if isinstance(value, list):
+                return [scrub(v) for v in value]
+            if isinstance(value, str):
+                if value in aliases:
+                    return aliases[value]
+                if value.startswith(('{', '[')):
+                    try:
+                        return json.dumps(scrub(json.loads(value)), ensure_ascii=False)
+                    except ValueError:
+                        pass
+            return value
+        for table in tables:
+            quoted = '"' + table.replace('"', '""') + '"'
+            columns = db.execute(f'pragma table_info({quoted})').fetchall()
+            for column in columns:
+                name, kind = column[1], column[2].upper()
+                if name in {'student_id', 'legacy_student_id', 'username'}:
+                    for old, alias in aliases.items():
+                        db.execute(f'update {quoted} set "{name}"=? where "{name}"=?', (alias, old))
+                if kind == 'JSON':
+                    for row_id, raw in db.execute(f'select rowid,"{name}" from {quoted} where "{name}" is not null').fetchall():
+                        try:
+                            value = json.loads(raw)
+                        except (ValueError, TypeError):
+                            continue
+                        clean = scrub(value)
+                        if clean != value:
+                            db.execute(f'update {quoted} set "{name}"=? where rowid=?',
+                                       (json.dumps(clean, ensure_ascii=False), row_id))
+        db.execute("delete from model_quota_buckets")
+        db.execute("delete from worker_leases")
+        db.execute("delete from audit_logs")
+        # Keep originals and decisions in development evidence, not in the
+        # evaluator's task history. The published versions remain unchanged.
+        for event_type in ('resource_generation.part_result', 'resource_generation.review_group_result',
+                           'learning_generation.component'):
+            db.execute('delete from task_events where event_type=?', (event_type,))
+        db.execute("update courses set status='withdrawn' where id not in (?,?)",
+                   ('course-ai-deep-learning-agents-v1', 'course-machine-learning-foundations-v1'))
+        placeholders = ','.join('?' for _ in active_ids)
+        db.execute(f'delete from course_memberships where user_public_id not in ({placeholders})', active_ids)
+        db.execute("delete from course_memberships where course_id not in (?,?)",
+                   ('course-ai-deep-learning-agents-v1', 'course-machine-learning-foundations-v1'))
+        marks = ','.join('?' for _ in published_artifacts)
+        db.execute(f"update artifacts set status='archived', archived_at=CURRENT_TIMESTAMP where owner_public_id in ({placeholders}) and id not in ({marks})",
+                   [*active_ids, *sorted(published_artifacts)])
+        for _, trigger_sql in frozen_triggers:
+            db.execute(trigger_sql)
+        db.commit()
+        assert db.execute('pragma integrity_check').fetchone()[0] == 'ok'
+        # Existing legacy references are checked against the input, so package
+        # preparation cannot introduce a new broken foreign key.
+        foreign_keys = db.execute('pragma foreign_key_check').fetchall()
+        with sqlite3.connect(source.as_uri()+'?mode=ro', uri=True) as original:
+            original_foreign = set(original.execute('pragma foreign_key_check').fetchall())
+        assert set(foreign_keys).issubset(original_foreign), foreign_keys[:10]
+        counts = {table: db.execute(f'select count(*) from "{table}"').fetchone()[0]
+                  for table in ('users', 'artifacts', 'learning_paths', 'assessment_attempts')}
+        db.execute('vacuum')
+    return {'data_kind': '合成学习者与真实模型生成的课程成果', 'active_accounts': [v[0] for v in DEMO_ACCOUNTS.values()],
+            'source_modified': False, 'counts': counts, 'existing_legacy_foreign_keys': len(foreign_keys)}
+
+
+def build_current_package(runtime_python: Path, source_db: Path, embedding_cache: Path | None = None) -> Path:
+    destination = OUTPUT / 'current-runtime-20261110'
+    destination.mkdir(parents=True, exist_ok=True)
+    subprocess.run([str(runtime_python), '-m', 'pip', 'check'], check=True)
+    lock = subprocess.check_output([str(runtime_python), '-m', 'pip', 'freeze'], text=True, encoding='utf8')
+    # pip records a machine-local wheel URL; distribute the same official wheel
+    # and reference its package-relative path instead.
+    lock = '\n'.join('./packaging/wheels/hipporag-2.0.0a5-py3-none-any.whl' if line.lower().startswith('hipporag') else line
+                     for line in lock.splitlines()) + '\n'
+    assert not re.search(r'file:///|[A-Za-z]:[/\\]', lock)
+    seed = destination / 'build' / 'edumatrix.db'
+    data_report = build_current_seed(source_db, seed)
+    profile_report = destination / 'build' / 'demo-profile-preparation.json'
+    subprocess.run([str(runtime_python), str(Path(__file__).resolve()),
+                    '--prepare-demo-profiles', str(seed), '--profile-report', str(profile_report)], check=True)
+    data_report['profile_preparation'] = json.loads(profile_report.read_text('utf8'))
+    archive_path = destination / 'EduMatrix_当前运行包.zip'
+    added = set()
+    with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        # The runtime's obvious entry files must agree with its launcher,
+        # rather than point evaluators back to historical developer setup.
+        for name, content in {
+            'README.md': '# EduMatrix 当前版本运行包\n\n' + (PACKAGING/'README_作品运行说明.txt').read_text('utf8'),
+            'requirements.txt': lock,
+            '.env.example': (PACKAGING/'.env.runtime.template').read_text('utf8'),
+        }.items():
+            archive.writestr(name, content)
+            added.add(name)
+        add_common_runtime(archive, added)
+        add_tree(archive, ROOT/'frontend/dist', 'frontend/dist', added,
+                 lambda p: p.name != 'demo-accounts.json' and runtime_dist_path_allowed(p))
+        archive.writestr('frontend/dist/demo-accounts.json', json.dumps({
+            'student': {'username': 'learner', 'password': DEMO_PASSWORD, 'label': '学生演示账号'},
+            'teacher': {'username': 'teacher', 'password': DEMO_PASSWORD, 'label': '教师演示账号'},
+            'admin': {'username': 'admin', 'password': DEMO_PASSWORD, 'label': '管理员演示账号'},
+        }, ensure_ascii=False))
+        for directory in ('datasets', 'domain_plugins', 'manifest', 'patches'):
+            add_tree(archive, ROOT/'data'/directory, 'data/'+directory, added)
+        for course in ('ai_deep_learning_agents_v1', 'machine_learning_foundations_v1'):
+            add_tree(archive, ROOT/'data/curated'/course, 'data/curated/'+course, added)
+        # Historical source versions remain reachable from current learning
+        # records. Include only their exact audited assets, not the scratch tree.
+        with sqlite3.connect(seed) as db:
+            for raw, in db.execute("select parser_metadata from source_documents where course_id in (?,?)",
+                    ('course-ai-deep-learning-agents-v1','course-machine-learning-foundations-v1')):
+                asset = (json.loads(raw or '{}').get('bundle_asset') or {})
+                if not asset.get('path'):
+                    continue
+                path = (ROOT/asset['path']).resolve()
+                relative = path.relative_to(ROOT).as_posix()
+                assert path.is_file(), relative
+                if asset.get('sha256'):
+                    assert sha256(path) == asset['sha256'], relative
+                assert add_file(archive, path, relative, added), relative
+        add_tree(archive, ROOT/'data/models/multilingual-e5-small', 'data/models/multilingual-e5-small', added,
+                 lambda p: '.cache' not in p.parts and safe_path(p))
+        for directory in ('baseline_course', 'datasets'):
+            add_tree(archive, M0_RUNTIME/directory, f'outputs/M0_阶段0基线与架构契约/{directory}', added)
+        add_tree(archive, RAW_REPOS, 'data/raw/github_repos', added, raw_path_allowed)
+        for filename in ('poincare_projection.npy', 'dkt_weights.pth'):
+            add_file(archive, ROOT/'data'/filename, 'data/'+filename, added)
+        add_file(archive, seed, 'edumatrix.db', added)
+        if embedding_cache is not None:
+            # Built in the empty validation runtime before any learner request;
+            # only model/content hashes and vectors, never document text.
+            import math
+            with sqlite3.connect(embedding_cache.resolve().as_uri()+'?mode=ro', uri=True) as cache:
+                rows = cache.execute('select text,vector_json from embedding_cache').fetchall()
+            assert rows and all(re.fullmatch(r'[0-9a-f]{64}', key) for key, _ in rows)
+            assert all(len(values := json.loads(vector)) == 384 and
+                       all(math.isfinite(value) for value in values) for _, vector in rows)
+            add_file(archive, embedding_cache, 'embeddings_cache.db', added)
+            data_report['public_course_vectors'] = {'count': len(rows), 'sha256': sha256(embedding_cache),
+                'model': 'data/models/multilingual-e5-small', 'contains_original_text': False}
+        add_tree(archive, PACKAGING/'wheels', 'packaging/wheels', added)
+        for filename in ('install_and_run.bat','stop_services.bat','launch.ps1',
+                         '.env.runtime.template','README_作品运行说明.txt','THIRD_PARTY_RUNTIME.md'):
+            assert add_file(archive, PACKAGING/filename, filename, added), filename
+        archive.writestr('requirements-runtime.txt', (PACKAGING/'requirements-runtime.txt').read_text('utf8'))
+        archive.writestr('requirements-lock.txt', lock)
+        archive.writestr('PACKAGE_MANIFEST.json', json.dumps({
+            'created_at': datetime.now(timezone.utc).isoformat(), 'runtime': 'Windows / Python 3.11 / CPU',
+            'course_version': '1.4.4', 'model': '用户在.env配置的真实模型API',
+            'frontend': '当前已构建dist，由FastAPI提供', 'data': data_report,
+            'contents': sorted(added), 'validation': '实际解压验证结果见同目录DELIVERY_RESULT.json'}, ensure_ascii=False, indent=2))
+    (destination/'PACKAGE_SHA256.txt').write_text(sha256(archive_path)+'  '+archive_path.name+'\n',encoding='utf8')
+    print(f'Created {archive_path}; {archive_path.stat().st_size} bytes', flush=True)
+    return archive_path
+
+
+def prepare_current_demo_profiles(target: Path) -> dict:
+    """Finalize confirmed synthetic profiles through the normal product service."""
+    target = target.resolve()
+    assert target.is_file() and target != ROOT/'edumatrix.db' and target.name != 'acceptance.sqlite3'
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.database import DBUser, DBOnboardingSession, DBProfileSnapshot
+    from app.profile_onboarding import DIMENSIONS, finalize_initial_profile, onboarding_status
+    with sqlite3.connect(target) as db:
+        active = {row[0] for row in db.execute('select username from users where is_active=1')}
+        assert active == {value[0] for value in DEMO_ACCOUNTS.values()}
+        profiles_before = db.execute('select * from student_profiles order by student_id').fetchall()
+        attempts_before = db.execute('select count(*) from assessment_attempts').fetchone()[0]
+    report = {'scope': '交付副本合成账号准备，复用已确认画像；不新增回答或学习成绩。', 'accounts': {}}
+    engine = create_engine('sqlite:///' + target.as_posix())
+    try:
+        with Session(engine) as db:
+            for alias in ('learner', 'reviewer', 'explorer'):
+                user = db.query(DBUser).filter_by(username=alias, is_active=True).one()
+                before = onboarding_status(db, user, feature_enabled=True)
+                restored_from = None
+                if not before['exists'] and not before['finalized'] and not before['legacyComplete']:
+                    # The acceptance seed copied the original confirmed profile
+                    # inside its diagnostic snapshot, but omitted its session.
+                    # Restore that exact evidence in the export; do not invent
+                    # answers or project old self-reports over later learning.
+                    for snapshot in db.query(DBProfileSnapshot).filter_by(owner_public_id=user.public_id).order_by(DBProfileSnapshot.created_at.asc()):
+                        original = snapshot.snapshot or {}
+                        confirmed = original.get('self_report') or {}
+                        if all(confirmed.get(key, {}).get('values') and
+                               confirmed[key].get('turnId') and confirmed[key].get('confirmedAt') for key in DIMENSIONS):
+                            session = DBOnboardingSession(owner_public_id=user.public_id, student_id=alias,
+                                status='confirmed', current_dimension=DIMENSIONS[-1],
+                                confirmed_fields=confirmed, missing_fields=[], checkpoint=len(DIMENSIONS),
+                                course_context=original.get('course_context') or {})
+                            db.add(session)
+                            db.commit()
+                            restored_from = snapshot.id
+                            break
+                    assert restored_from, f'Missing confirmed profile evidence: {alias}'
+                ready = onboarding_status(db, user, feature_enabled=True)
+                if ready['exists'] and not ready['finalized']:
+                    assert ready['status'] == 'confirmed', alias
+                    finalize_initial_profile(db, user, feature_enabled=True)
+                after = onboarding_status(db, user, feature_enabled=True)
+                assert after['finalized'] or (not after['exists'] and after['legacyComplete']), alias
+                report['accounts'][alias] = {'before': before, 'after': after,
+                    'restored_confirmed_evidence_from': restored_from}
+    finally:
+        engine.dispose()
+    with sqlite3.connect(target) as db:
+        assert db.execute('select * from student_profiles order by student_id').fetchall() == profiles_before
+        assert db.execute('select count(*) from assessment_attempts').fetchone()[0] == attempts_before
+    report['profile_and_learning_records_unchanged'] = True
+    return report
+
+
 def main() -> None:
-    OUTPUT.mkdir(parents=True, exist_ok=True)
-    for path in (WORK_ZIP, SOURCE_ZIP, INFO_ZIP):
-        if path.exists():
-            path.unlink()
-    seed_db = build_seed_database()
-    lock = lock_text()
-    readmes = build_readme_documents()
-    raw_manifest = build_raw_repo_manifest()
-    build_work_package(seed_db, lock, readmes, raw_manifest)
-    build_source_package(lock, readmes)
-    build_info_package()
-    for path in (WORK_ZIP, SOURCE_ZIP, INFO_ZIP):
-        size = path.stat().st_size
-        print(f"created {path} size={size} sha256={sha256(path)}")
+    import argparse
+    parser = argparse.ArgumentParser(description='Build one current evaluator runtime; leave previous presentations unchanged.')
+    parser.add_argument('--runtime-python', type=Path)
+    parser.add_argument('--prepare-demo-profiles', type=Path)
+    parser.add_argument('--profile-report', type=Path)
+    parser.add_argument('--source-db', type=Path, default=ROOT/'scratch/automatic-generation-r207/acceptance.sqlite3')
+    parser.add_argument('--embedding-cache', type=Path)
+    args = parser.parse_args()
+    if args.prepare_demo_profiles:
+        os.environ['EDUMATRIX_DB_PATH'] = str(args.prepare_demo_profiles.resolve())
+        sys.path.insert(0, str(ROOT))
+        report = prepare_current_demo_profiles(args.prepare_demo_profiles)
+        assert args.profile_report
+        args.profile_report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf8')
+        print('Synthetic demo profiles finalized through the normal service.', flush=True)
+        return
+    if not args.runtime_python:
+        parser.error('--runtime-python is required to build the runtime package')
+    build_current_package(args.runtime_python.resolve(), args.source_db, args.embedding_cache)
 
 
 if __name__ == "__main__":

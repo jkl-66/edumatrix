@@ -17,7 +17,7 @@ import fs from 'node:fs'
 const servicePath = process.argv[1]
 let source = fs.readFileSync(servicePath, 'utf8')
 source = source.replace(
-  /import \{ api, buildHeaders \} from '\.\.\/api'\s*/,
+  /import \{ api, buildHeaders \} from '\.\.\/api\/common\.js'\s*/,
   "const api = {}; const buildHeaders = () => ({});\n",
 )
 
@@ -48,10 +48,25 @@ const switched = module.contextRefFromRoute({
   query: { knowledge_point_id: 'kp-b' },
 })
 const unchanged = module.contextRefFromRoute({ params: {}, query: {} })
+const pinned = module.contextRefFromRoute({ params: {}, query: { context_version: 'explicit-version' } })
+const wholeDocument = module.contextRefFromRoute({
+  params: { documentId: 'document-b' }, query: { course_id: 'course-a' },
+})
+const chapterDocument = module.contextRefFromRoute({
+  params: { documentId: 'document-b' }, query: { course_id: 'course-a', chapter_id: 'chapter-b' },
+})
+const citationDocument = module.contextRefFromRoute({
+  params: { documentId: 'document-b' },
+  query: { course_id: 'course-a', chapter_id: 'chapter-b', source_ref_id: 'source-b', context_version: 'citation-version' },
+})
 
 process.stdout.write(JSON.stringify({
   switched,
   unchanged,
+  pinned,
+  wholeDocument,
+  chapterDocument,
+  citationDocument,
   plain401Detail: module.contextErrorDetail({
     response: { status: 401, data: { detail: 'Unauthorized' } },
   }),
@@ -104,9 +119,10 @@ def test_same_course_restore_keeps_saved_context_and_only_explicit_context_error
         "resourceId": "resource-a",
         "sourceRefId": "source-a",
         "attemptId": "attempt-a",
-        "version": "ctx-a",
+        "version": None,
     }
     assert payload["plain401IsContext"] is False
+    assert payload["pinned"]["version"] == "explicit-version"
     assert payload["explicitContextIsContext"] is True
     assert payload["plain401Detail"] is None
     assert payload["structuredDetail"] == {
@@ -124,3 +140,23 @@ def test_context_recovery_safe_exit_cannot_reopen_the_failed_route():
     assert "router.push('/')" in source
     assert "返回原页面" not in source
     assert "route.query.return_to" not in source
+
+
+def test_document_navigation_does_not_inherit_another_reading_or_learning_object():
+    payload = _run_context_service_contract()
+    expected = {
+        "userId": "user-a", "courseId": "course-a", "chapterId": None,
+        "knowledgePointId": None, "taskId": None, "resourceId": None,
+        "sourceRefId": None, "attemptId": None, "version": None,
+    }
+    assert payload["wholeDocument"] == expected
+    assert payload["chapterDocument"] == {**expected, "chapterId": "chapter-b"}
+
+
+def test_document_citation_keeps_the_explicit_target_and_version():
+    payload = _run_context_service_contract()
+    assert payload["citationDocument"] == {
+        "userId": "user-a", "courseId": "course-a", "chapterId": "chapter-b",
+        "knowledgePointId": None, "taskId": None, "resourceId": None,
+        "sourceRefId": "source-b", "attemptId": None, "version": "citation-version",
+    }

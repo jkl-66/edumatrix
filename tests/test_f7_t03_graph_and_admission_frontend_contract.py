@@ -73,12 +73,13 @@ def test_relationship_projection_changes_layout_without_changing_graph_facts() -
     assert "function relationshipProjectionPositions(nodes, edges)" in explorer
     assert "zoom: props.fixedLayout || props.fitDenseGraph ? 0.92 : 1" in explorer
     assert "const denseSymbolSizes = { course: 68, chapter: 58, knowledge_point: 52, source: 38 }" in explorer
-    assert "show: props.fixedLayout || !props.fitDenseGraph || showDenseLabel" in explorer
-    assert "position: props.fixedLayout || props.fitDenseGraph ? 'inside' : 'bottom'" in explorer
-    assert "color: props.fixedLayout ? '#ffffff'" in explorer
+    assert "props.fixedLayout || !props.fitDenseGraph || showDenseLabel" in explorer
+    assert "position: usesDynamicLayout ? 'inside'" in explorer
+    assert "(props.fixedLayout || props.fitDenseGraph) ? 'inside' : 'bottom'" in explorer
+    assert "color: usesDynamicLayout ? graphTokens.ink" in explorer
     assert "const chartCategories = props.categories.map" in explorer
     assert "categories: chartCategories.length ? chartCategories : undefined" in explorer
-    assert "color: categoryColors[index % categoryColors.length]" in explorer
+    assert "color: colors[index % colors.length]" in explorer
     assert "fit-dense-graph" in workspace
 
 
@@ -117,15 +118,16 @@ def test_candidate_admission_is_license_gated_personal_and_reversible() -> None:
     assert "new Set(['personal_use_allowed', 'open_permissive'])" in source
     assert ":disabled=\"!canSubmitAdmission" in source
     for marker in (
-        "确认准入个人参考",
+        "导入目标课程",
         "拒绝该候选",
         "撤回个人参考",
-        "不进入课程图谱、RAG 或资源生成",
+        "未经保存和审核不会进入课程或资源生成",
         "admitWebSourceCandidate",
         "rejectWebSourceCandidate",
         "withdrawWebSourceCandidate",
         "authorityBoundaryText",
-        "候选资料不属于权威课程，不进入课程图谱、RAG 或资源生成",
+        "候选资料尚未进入课程、图谱或检索",
+        "只有实际下载和解析成功后才会改变状态",
     ):
         assert marker in source
     for symbol in (

@@ -1,5 +1,6 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { userMessage } from '../services/errorTranslator.js'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
@@ -17,6 +18,7 @@ import { clearAuthSession, getOnboardingStatus, getStudentProfile, loginUser, re
 import { useContextStore } from '../stores/context'
 import { useCourseContextStore } from '../stores/courseContext'
 import { roleLandingPath } from '../utils/roleLanding'
+import { rememberAccountIdentity } from '../services/accountIdentity'
 
 const router = useRouter()
 const route = useRoute()
@@ -27,11 +29,13 @@ const roles = [
   { value: 'admin', label: '管理员', icon: ShieldCheck, destination: '进入系统管理' },
 ]
 
-const demoAccounts = {
-  student: { username: 'lzz', password: '404404aA', label: '学生演示账号' },
-  teacher: { username: 'teacher', password: 'admin123', label: '教师演示账号' },
-  admin: { username: 'demo-admin', password: 'EduMatrix-Demo-2026', label: '管理员演示账号' },
-}
+const demoAccounts = ref({})
+onMounted(async () => {
+  try {
+    const response = await fetch('/demo-accounts.json')
+    if (response.ok) demoAccounts.value = await response.json()
+  } catch { /* 普通安装没有公开演示账号，仍可正常登录。 */ }
+})
 
 const selectedRole = ref('student')
 const isRegister = ref(false)
@@ -44,7 +48,7 @@ const error = ref(route.query.reason === 'session-expired' ? '登录状态已失
 const showPassword = ref(false)
 
 const currentRole = computed(() => roles.find((item) => item.value === selectedRole.value) || roles[0])
-const currentDemo = computed(() => demoAccounts[selectedRole.value])
+const currentDemo = computed(() => demoAccounts.value[selectedRole.value])
 
 function setRole(role) {
   selectedRole.value = role
@@ -53,6 +57,7 @@ function setRole(role) {
 
 function useDemoAccount() {
   const account = currentDemo.value
+  if (!account) return
   username.value = account.username
   password.value = account.password
   error.value = ''
@@ -64,9 +69,16 @@ function persistSession(data, fallbackUsername) {
   useCourseContextStore().clear({ keepCourse: false })
   localStorage.setItem('edumatrix_token', data.access_token)
   localStorage.setItem('edumatrix_username', data.username || fallbackUsername)
-  localStorage.setItem('edumatrix_display_name', data.display_name || data.username || fallbackUsername)
+  rememberAccountIdentity({ ...data, username: data.username || fallbackUsername })
   localStorage.setItem('edumatrix_role', data.role || 'student')
   localStorage.setItem('edumatrix_student_id', data.student_id || data.username || fallbackUsername)
+}
+
+function loginDestination(fallback) {
+  const target = route.query.redirect
+  if (typeof target === 'string' && target.startsWith('/') && !target.startsWith('//')
+      && !target.includes('\\') && !/^\/(login|onboarding)(?:[/?#]|$)/.test(target)) return target
+  return fallback
 }
 
 async function routeAfterStudentLogin(data) {
@@ -80,7 +92,7 @@ async function routeAfterStudentLogin(data) {
       return
     }
     localStorage.setItem('edumatrix_onboarded', 'true')
-    await router.push(data.landing_path || '/')
+    await router.push(loginDestination(data.landing_path || '/'))
   } catch {
     try {
       const profile = await getStudentProfile(data.student_id)
@@ -90,9 +102,9 @@ async function routeAfterStudentLogin(data) {
         return
       }
       localStorage.setItem('edumatrix_onboarded', 'true')
-      await router.push('/')
+      await router.push(loginDestination('/'))
     } catch {
-      await router.push('/')
+      await router.push(loginDestination('/'))
     }
   }
 }
@@ -119,7 +131,7 @@ async function login() {
     if (actualRole === 'student') {
       await routeAfterStudentLogin(data)
     } else {
-      await router.push(data.landing_path || roleLandingPath(actualRole))
+      await router.push(loginDestination(data.landing_path || roleLandingPath(actualRole)))
     }
   } catch (requestError) {
     const detail = requestError?.detail || requestError?.response?.data?.detail
@@ -261,7 +273,7 @@ function submit() {
             </span>
           </label>
 
-          <div v-if="error" class="login-error" role="alert" data-testid="login-error">{{ error }}</div>
+          <div v-if="error" class="login-error" role="alert" data-testid="login-error">{{ userMessage(error) }}</div>
 
           <button type="submit" class="login-submit" :disabled="loading" data-testid="login-submit">
             <span>{{ loading ? (isRegister ? '正在创建账号' : '正在登录') : (isRegister ? '创建账号并继续' : '登录') }}</span>
@@ -270,7 +282,7 @@ function submit() {
           </button>
         </form>
 
-        <details v-if="!isRegister" class="demo-account" open>
+        <details v-if="!isRegister && currentDemo" class="demo-account" open>
           <summary>演示账号</summary>
           <div class="demo-account__body">
             <div>
@@ -296,7 +308,7 @@ function submit() {
   grid-template-rows: 64px minmax(0, 1fr);
   overflow: auto;
   color: var(--color-text);
-  background: var(--color-page);
+  background: var(--gradient-workspace);
 }
 
 .login-header {
@@ -304,8 +316,8 @@ function submit() {
   align-items: center;
   justify-content: space-between;
   padding: 0 40px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border-bottom: 0;
+  background: transparent;
 }
 
 .back-link,
@@ -358,10 +370,10 @@ function submit() {
 
 .login-panel {
   width: min(100%, 500px);
-  padding: 34px 36px 30px;
-  border: 1px solid var(--color-border);
+  padding: 42px;
+  border: 0;
   border-radius: var(--radius-panel);
-  background: var(--color-surface);
+  background: var(--gradient-paper);
   box-shadow: 0 18px 48px rgb(23 23 23 / 7%);
 }
 
@@ -380,9 +392,11 @@ function submit() {
 .login-heading h1 {
   margin-top: 5px;
   color: var(--color-text);
-  font-size: 28px;
-  font-weight: 680;
+  font-size: 32px;
+  font-weight: 400;
   line-height: 1.35;
+
+  font-family: var(--font-editorial);
 }
 
 .login-heading > span {
@@ -519,8 +533,8 @@ function submit() {
 
 .demo-account {
   margin-top: 18px;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
+  border-top: 0;
+  border-bottom: 0;
 }
 
 .demo-account summary {

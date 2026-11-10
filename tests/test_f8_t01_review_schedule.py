@@ -10,6 +10,9 @@ from sqlalchemy.pool import StaticPool
 from app.database import (
     Base,
     DBAssessmentAttempt,
+    DBAssessmentExam,
+    DBAssessmentExamSitting,
+    DBAssessmentExamVersion,
     DBAssessmentQuestion,
     DBAssessmentQuestionVersion,
     DBAssessmentRetestTask,
@@ -346,8 +349,11 @@ def test_completion_is_trusted_idempotent_and_reuses_five_step_aggregation():
         engine.dispose()
 
 
-def test_resource_action_reuses_nine_type_job_and_does_not_create_exam_gate_rules():
-    session, engine, learner, _, _, _, plans = _fixture()
+@pytest.mark.parametrize('selection', [None, 'full', ['quiz', 'handout', 'code_sandbox']])
+def test_resource_action_reuses_selected_job_and_does_not_create_exam_gate_rules(selection):
+    from app.resource_bundles import GENERATION_RESOURCE_TYPES
+    selected = list(GENERATION_RESOURCE_TYPES) if selection == 'full' else selection
+    session, engine, learner, _, course, point, plans = _fixture()
     try:
         task_id = f"review-plan:{plans[0].id}"
         result = create_review_resource_job(
@@ -355,28 +361,31 @@ def test_resource_action_reuses_nine_type_job_and_does_not_create_exam_gate_rule
             actor=learner,
             task_id=task_id,
             idempotency_key="f8-review-resource-0001",
+            resource_types=selected,
         )
         repeated = create_review_resource_job(
             session,
             actor=learner,
             task_id=task_id,
             idempotency_key="f8-review-resource-0001",
+            resource_types=list(reversed(selected)) if selected else None,
         )
 
         assert result["created"] is True
         assert repeated["created"] is False
         assert result["job_id"] == repeated["job_id"]
-        assert [item["type"] for item in result["items"]] == [
-            "handout",
-            "mind_map",
-            "quiz",
-            "training_task",
-            "code_sandbox",
-            "video",
-            "deck",
-            "interactive_model",
-            "feynman",
-        ]
+        from app.profile_summary import build_profile_summary
+        graph = build_profile_summary(session, current_user=learner,
+            course_id=course.id)['knowledge_graph']
+        assert next(node for node in graph['nodes'] if node['id'] == point.id)['mastery'] == 0.42
+        expected = selected if selected is not None else ['handout', 'quiz']
+        assert [item["type"] for item in result["items"]] == [t for t in GENERATION_RESOURCE_TYPES if t in expected]
+        assert result['automation']['state'] == 'queued'
+        for invalid in ([], ['unknown']):
+            with pytest.raises(ReviewScheduleError) as error:
+                create_review_resource_job(session, actor=learner, task_id=task_id,
+                    idempotency_key='f8-invalid-selection', resource_types=invalid)
+            assert error.value.code == 'review_schedule.resource_types_invalid'
         task = session.get(DBGenerationTask, result["job_id"])
         assert task.capability == "learning_resource_bundle.generate"
         manifest_event = session.query(DBTaskEvent).filter_by(
@@ -389,14 +398,15 @@ def test_resource_action_reuses_nine_type_job_and_does_not_create_exam_gate_rule
         engine.dispose()
 
 
-def test_delayed_retest_reuses_the_same_resource_context_and_owner_boundary():
+@pytest.mark.parametrize('question_type', ['single_choice', 'code'])
+def test_delayed_retest_reuses_the_same_resource_context_and_owner_boundary(question_type):
     session, engine, learner, other, course, point, _ = _fixture()
     try:
         question = DBAssessmentQuestion(
             id="f8-retest-question",
             course_id=course.id,
             owner_public_id=learner.public_id,
-            question_type="single_choice",
+            question_type=question_type,
             status="approved",
         )
         session.add(question)
@@ -458,10 +468,8 @@ def test_delayed_retest_reuses_the_same_resource_context_and_owner_boundary():
             idempotency_key="f8-retest-resource-0001",
         )
         assert result["created"] is True
-        assert [item["type"] for item in result["items"]] == [
-            "handout", "mind_map", "quiz", "training_task", "code_sandbox",
-            "video", "deck", "interactive_model", "feynman",
-        ]
+        expected = ['handout', 'quiz'] + (['code_sandbox'] if question_type == 'code' else [])
+        assert [item["type"] for item in result["items"]] == expected
         with pytest.raises(ReviewScheduleError) as forbidden:
             create_review_resource_job(
                 session,
@@ -492,3 +500,87 @@ def test_review_tasks_are_owner_scoped():
     finally:
         session.close()
         engine.dispose()
+
+
+def test_review_recovers_its_saved_exam_and_drops_it_after_completion():
+    session, engine, learner, other, course, point, plans = _fixture()
+    try:
+        task_id = f"review-plan:{plans[0].id}"
+        exam = DBAssessmentExam(id="recover-exam", course_id=course.id, owner_public_id=learner.public_id, title="复习")
+        version = DBAssessmentExamVersion(id="recover-version", exam_id=exam.id, version_number=1,
+            total_points=100, manifest_hash="f" * 64, configuration={"review_task_id": task_id})
+        sitting = DBAssessmentExamSitting(id="recover-sitting", exam_id=exam.id, exam_version_id=version.id,
+            owner_public_id=learner.public_id, status="submitted", submitted_at=_utc("2026-08-16T09:00:00"))
+        event = DBLearningEvent(id="recover-exam-event", owner_public_id=learner.public_id,
+            course_id=course.id, event_type="formal_exam_submitted", object_type="assessment_exam_sitting",
+            object_id=sitting.id, trace_id="recover-exam", evidence_status="accepted", evidence_strength=0.9,
+            mastery_eligible=True, occurred_at=sitting.submitted_at,
+            payload={"graded": True, "score": 0.75, "knowledge_point_scores": [{"knowledge_point_id": point.id, "score": 0.75}]})
+        session.add_all([exam, version, sitting, event])
+        session.commit()
+        def task():
+            payload = build_review_schedule(session, actor=learner, month="2026-08",
+                now=datetime(2026, 8, 16, 10, tzinfo=timezone.utc))
+            return next(row for row in payload["tasks"] if row["id"] == task_id)
+        restored = task()["assessment"]
+        assert restored["event_id"] == event.id
+        assert restored["sitting_id"] == sitting.id
+        sitting.owner_public_id = other.public_id
+        session.flush()
+        assert "assessment" not in task()
+        sitting.owner_public_id = learner.public_id
+        event.course_id = "wrong-course"
+        session.flush()
+        assert "assessment" not in task()
+        event.course_id = course.id
+        completion = DBLearningEvent(id="recover-completion", owner_public_id=learner.public_id,
+            course_id=course.id, event_type="review_completed", trace_id="recover-completion",
+            object_id=point.id, occurred_at=_utc("2026-08-16T09:10:00"),
+            payload={"review_id": task_id, "assessment_event_id": event.id})
+        session.add(completion)
+        session.flush()
+        assert "assessment" not in task()
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_new_score_reuses_the_uniquely_resolved_manual_review_plan():
+    from app.learning_aggregation import _project_wrong_review
+    session, engine, learner, _, course, point, plans = _fixture()
+    try:
+        old_plan_id = plans[0].id
+        event = DBLearningEvent(id="manual-plan-exam", owner_public_id=learner.public_id,
+            course_id=course.id, event_type="formal_exam_submitted", trace_id="manual-plan-exam",
+            evidence_status="accepted", evidence_strength=0.9, mastery_eligible=True,
+            payload={"graded": True, "knowledge_point_scores": [{"knowledge_point_id": point.id, "score": 0.8}]})
+        session.add(event)
+        session.flush()
+        result = _project_wrong_review(session, event)
+        assert result["review_plan_id"] == old_plan_id
+        assert plans[0].course_id == course.id and plans[0].knowledge_point_id == point.id
+        assert session.query(DBReviewPlan).filter_by(student_id=learner.username).count() == 2
+    finally:
+        session.close()
+        engine.dispose()
+def test_course_bound_review_disambiguates_shared_knowledge_point():
+    from app.review_schedule import _plan_context
+    from app.learning_aggregation import _project_wrong_review
+    from tests.test_f8_t02_wrong_questions import _canonical_session, _quiz_event
+    session, user, version, _ = _canonical_session()
+    for index, course_id in enumerate(("course-a", "course-b"), 11):
+        event = _quiz_event(user, version, index)
+        event.course_id = course_id
+        session.add(event)
+        session.flush()
+        _project_wrong_review(session, event)
+    plans = session.query(DBReviewPlan).filter_by(student_id=user.username).all()
+    assert {plan.course_id for plan in plans} == {"course-a", "course-b"}
+    contexts = {"kp-f8": [
+        {"course_id": course_id, "knowledge_point_id": "kp-f8", "knowledge_point_title": "梯度", "chapter_id": course_id+"-chapter"}
+        for course_id in ("course-a", "course-b")
+    ]}
+    for plan in plans:
+        assert _plan_context(plan, contexts)["course_id"] == plan.course_id
+        assert plan.knowledge_point_id == "kp-f8"
+

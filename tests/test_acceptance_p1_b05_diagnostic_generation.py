@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.diagnostic_generation as diagnostic_generation
 from app.competition_demo_seed import seed_competition_demo
-from app.database import Base, DBDiagnosticBlueprint, DBKnowledgePoint, DBLearningEvent, DBProfileSnapshot, DBUser
+from app.database import Base, DBDiagnosticBlueprint, DBKnowledgePoint, DBLearningEvent, DBProfileSnapshot, DBSourceRef, DBUser
 from app.diagnostic_api import DiagnosticGenerateRequest
 from app.diagnostic_generation import (
     DiagnosticBlueprintRequest,
@@ -51,6 +51,11 @@ def _session():
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
     seed_competition_demo(session)
+    # This fixture exercises generation, not the historical demo's outline-only
+    # first source. Supply actual explanatory text in this isolated database.
+    session.get(DBSourceRef, 'demo-ref-01').quote += (
+        '\n\n## 闭环原理\n可信RAG把资料登记、解析、检索、生成与核验串联。'
+        '检索命中不等于回答受支持，生成主张仍须逐项核对引用，再按具体问题修订。')
     learner = session.query(DBUser).filter_by(username="lzz").one()
     return engine, session, learner
 
@@ -123,6 +128,8 @@ def _approved_review(generated):
                 "source_support": "supported",
                 "answer_consistency": "consistent",
                 "profile_fit": "fit",
+                "knowledge_alignment": "aligned",
+                "question_clarity": "self_contained",
                 "public_note": "已核对。",
             }
             for item in generated.questions

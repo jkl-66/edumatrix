@@ -67,7 +67,7 @@ def test_course_resource_page_exposes_source_preview_and_workspace_action():
         assert marker in source
     for marker in (
         'data-testid="knowledge-course-shelf"',
-        'data-testid="open-chapter-document"',
+        'data-testid="selected-resource-detail"',
         'aria-labelledby="course-search-title"',
         "课程正文检索",
         "打开来源",

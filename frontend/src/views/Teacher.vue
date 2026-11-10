@@ -1,5 +1,7 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { learningText, displayLabel } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AlertCircle,
@@ -30,6 +32,11 @@ import {
 } from '../api/teacher'
 import SearchField from '../components/ui/SearchField.vue'
 
+const CourseGovernanceWorkspace = defineAsyncComponent(() => import('./CourseGovernanceWorkspace.vue'))
+const CourseSharingWorkspace = defineAsyncComponent(() => import('./CourseSharingWorkspace.vue'))
+const courseManagementOpen = ref(false)
+const courseSharingOpen = ref(false)
+
 const route = useRoute()
 const router = useRouter()
 
@@ -57,8 +64,8 @@ const heading = computed(() => ({
   overview: ['教学总览', '先处理当前课程的教学任务，再查看薄弱点和需关注学生。'],
   courses: ['课程与资源', '查看授权课程的章节、来源、资源和班级事实。'],
   'course-detail': [payload.value?.course?.title || '课程详情', '核对课程内容与教学任务，所有数据来自当前授权课程。'],
-  students: ['学生学情', '按课程查找学生，依据学习证据决定下一步教学动作。'],
-  'student-detail': [payload.value?.student?.displayName || '学生详情', '只读查看画像、路径和学习证据；掌握度不能在教师端直接修改。'],
+  students: ['学生学情', '按课程查找学生，依据学习记录决定下一步教学动作。'],
+  'student-detail': [payload.value?.student?.displayName || '学生详情', '只读查看画像、路径和学习记录；掌握度不能在教师端直接修改。'],
 }[viewMode.value]))
 
 const courses = computed(() => {
@@ -74,9 +81,9 @@ const filteredCourses = computed(() => {
 })
 
 const selectedCourseId = computed(() => (
-  payload.value?.selectedCourse?.id
+  route.query.courseId
+  || payload.value?.selectedCourse?.id
   || payload.value?.course?.id
-  || route.query.courseId
   || ''
 ))
 
@@ -109,7 +116,7 @@ function formatTime(value) {
 function evidenceLabel(state) {
   return {
     sufficient: '证据充分',
-    snapshot_only: '仅有快照',
+    snapshot_only: '已有学习情况记录',
     insufficient: '证据不足',
   }[state] || '待核对'
 }
@@ -125,7 +132,13 @@ function statusLabel(state) {
     draft: '草稿',
     active: '进行中',
     completed: '已完成',
-  }[state] || state || '未知'
+  }[state] || displayLabel(state, '已记录')
+}
+
+function learningEventLabel(event) {
+  return ({ note: '学习笔记', feynman_resource: '费曼复述', artifact: '资源练习',
+    quiz: '随堂练习', assessment_attempt: '题目作答', formal_exam: '正式测评' })[event.objectType]
+    || displayLabel(event.eventType, '学习活动')
 }
 
 function actionTitle(action, fallback = '暂无下一步建议') {
@@ -195,6 +208,8 @@ function replaceQuery(next) {
 }
 
 function selectCourse(courseId) {
+  loading.value = true
+  payload.value = null
   replaceQuery({ courseId: courseId || undefined, q: undefined })
 }
 
@@ -298,19 +313,19 @@ watch(
 
     <section v-if="loading" class="state-panel" aria-live="polite">
       <LoaderCircle :size="24" class="spinning" />
-      <div><strong>正在读取教学数据</strong><p>课程范围和学习证据正在校验。</p></div>
+      <div><strong>正在读取教学数据</strong><p>课程范围和学习记录正在校验。</p></div>
     </section>
 
     <section v-else-if="error && !payload" class="state-panel state-panel--error" role="alert">
       <AlertCircle :size="24" />
-      <div><strong>教学数据暂时无法读取</strong><p>{{ error }}</p></div>
+      <div><strong>教学数据暂时无法读取</strong><p>{{ userMessage(error) }}</p></div>
       <button type="button" class="primary-action" @click="loadPage()">重新读取</button>
     </section>
 
     <template v-else-if="payload">
       <div v-if="error" class="inline-state" role="alert">
         <AlertCircle :size="18" />
-        <span>{{ error }} 已保留上一次读取结果。</span>
+        <span>{{ userMessage(error) }} 已保留上一次读取结果。</span>
         <button type="button" @click="loadPage({ preserve: true })">重试</button>
       </div>
 
@@ -367,7 +382,7 @@ watch(
             </section>
 
             <section class="workspace-section">
-              <div class="section-heading"><div><h2>需关注学生</h2><p>依据画像证据和路径进度生成，不支持直接修改掌握度。</p></div></div>
+              <div class="section-heading"><div><h2>需关注学生</h2></div></div>
               <div v-if="payload.attentionStudents?.length" class="row-list">
                 <button
                   v-for="student in payload.attentionStudents"
@@ -388,6 +403,14 @@ watch(
       </template>
 
       <template v-else-if="viewMode === 'courses'">
+        <details class="workspace-section" @toggle="courseManagementOpen = $event.currentTarget.open">
+          <summary>班级、成员与教学任务</summary>
+          <CourseGovernanceWorkspace v-if="courseManagementOpen" />
+        </details>
+        <details class="workspace-section" @toggle="courseSharingOpen = $event.currentTarget.open">
+          <summary>课程分享与更新</summary>
+          <CourseSharingWorkspace v-if="courseSharingOpen" />
+        </details>
         <div class="filter-toolbar">
           <SearchField v-model="courseSearch" class="teacher-search-field" aria-label="搜索课程、方向或简介" placeholder="搜索课程、方向或简介" />
           <span>{{ filteredCourses.length }} 门授权课程</span>
@@ -397,7 +420,7 @@ watch(
             <div class="course-mark"><BookOpen :size="20" /></div>
             <div class="course-main">
               <h2>{{ course.title }}</h2>
-              <p>{{ course.description || course.subject || '尚未填写课程简介' }}</p>
+              <p>{{ learningText(course.description || course.subject || '尚未填写课程简介') }}</p>
               <div class="course-facts">
                 <span>{{ course.counts?.chapters || 0 }} 章</span>
                 <span>{{ course.counts?.sources || 0 }} 个来源</span>
@@ -452,7 +475,7 @@ watch(
               </template>
               <template v-else-if="courseTab === 'resources'">
                 <FolderOpen :size="18" />
-                <div><strong>{{ item.title }}</strong><span>{{ item.type || '学习资源' }}</span></div>
+                <div><strong>{{ item.title }}</strong><span>{{ displayLabel(item.type || '学习资源') }}</span></div>
                 <span>{{ statusLabel(item.status) }} · {{ formatTime(item.updatedAt) }}</span>
               </template>
               <template v-else>
@@ -529,7 +552,7 @@ watch(
                     <p><strong>建议动作：</strong>{{ actionTitle(point.nextAction) }}</p>
                     <p v-if="actionReason(point.nextAction)"><strong>建议理由：</strong>{{ actionReason(point.nextAction) }}</p>
                     <p><strong>证据置信：</strong>{{ percentage(point.confidence) }}</p>
-                    <p v-if="point.sourceEventIds?.length"><strong>授权证据编号：</strong>{{ point.sourceEventIds.join('、') }}</p>
+                    <p v-if="point.sourceEventIds?.length">依据 {{ point.sourceEventIds.length }} 条已保存的学习记录。</p>
                     <p v-else>当前没有可下钻的学习事件。</p>
                   </div>
                 </details>
@@ -540,7 +563,7 @@ watch(
             <aside class="intervention-panel" aria-live="polite">
               <Sparkles :size="22" />
               <h2>安排下一步教学动作</h2>
-              <p>根据当前薄弱点创建学习干预。该动作只增加路径任务，不会直接修改学生掌握度。</p>
+              <p>针对薄弱点安排补充学习。</p>
               <button
                 v-if="payload.actions?.canCreateIntervention && interventionState !== 'complete'"
                 type="button"
@@ -561,19 +584,17 @@ watch(
           </div>
 
           <section class="workspace-section">
-            <div class="section-heading"><div><h2>学习证据</h2><p>按时间查看可信学习事件；普通浏览不会写入新证据。</p></div></div>
+            <div class="section-heading"><div><h2>学习记录</h2><p></p></div></div>
             <div v-if="payload.evidenceTimeline?.length" class="timeline">
               <details v-for="event in payload.evidenceTimeline" :key="event.sourceEventId">
                 <summary>
                   <Clock3 :size="17" />
-                  <span><strong>{{ event.objectType || event.eventType }}</strong><small>{{ event.source }} · {{ formatTime(event.occurredAt) }}</small></span>
-                  <span>{{ statusLabel(event.evidenceStatus) }} · {{ event.evidenceStrength || '未分级' }}</span>
+                  <span><strong>{{ learningEventLabel(event) }}</strong><small>{{ formatTime(event.occurredAt) }}</small></span>
+                  <span>{{ event.masteryEligible ? '已用于学习评价' : '学习活动已记录' }}</span>
                   <ChevronDown :size="17" />
                 </summary>
                 <div class="evidence-detail">
-                  <span>对象：{{ event.objectId || '未记录' }}</span>
-                  <span>可用于掌握度：{{ event.masteryEligible ? '是' : '否' }}</span>
-                  <span>授权证据编号：{{ event.sourceEventId }}</span>
+                  <span>{{ event.masteryEligible ? '已计入学习表现' : '学习活动' }}</span>
                 </div>
               </details>
             </div>
@@ -583,18 +604,18 @@ watch(
           <details class="agent-audit">
             <summary>
               <span><ShieldCheck :size="18" /><strong>AI 建议的公开校验记录</strong></span>
-              <span>{{ payload.agentAudit?.message }}</span>
+              <span>{{ learningText(payload.agentAudit?.message) }}</span>
               <ChevronDown :size="18" />
             </summary>
             <div v-if="payload.agentAudit?.state === 'complete'" class="agent-list">
               <article v-for="(agent, index) in payload.agentAudit.items" :key="`${agent.role}-${index}`">
-                <header><strong>{{ agent.role }}</strong><span>{{ statusLabel(agent.status) }}</span></header>
+                <header><strong>{{ displayLabel(agent.role) }}</strong><span>{{ statusLabel(agent.status) }}</span></header>
                 <p><b>候选：</b>{{ agent.candidateSummary || '未记录候选摘要' }}</p>
                 <p><b>分歧：</b>{{ agent.disagreement || '本次没有记录分歧' }}</p>
                 <p><b>校验：</b>{{ agent.validation || '未记录校验摘要' }}</p>
                 <p><b>修订：</b>{{ agent.revision || '本次没有记录修订' }}</p>
                 <p><b>决定：</b>{{ agent.decisionSummary || '未形成公开决定摘要' }}</p>
-                <details v-if="agent.inputRefs?.length" class="source-refs"><summary>查看 {{ agent.inputRefs.length }} 个输入来源</summary><p>{{ agent.inputRefs.join('、') }}</p></details>
+                <p v-if="agent.inputRefs?.length">本次建议参考了 {{ agent.inputRefs.length }} 项课程资料与学习记录。</p>
               </article>
             </div>
             <div v-else class="section-empty">{{ payload.agentAudit?.message || '当前没有可公开的协作证据。' }}</div>
@@ -624,7 +645,7 @@ watch(
   justify-content: space-between;
   gap: 24px;
   margin-bottom: 20px;
-  border-bottom: 1px solid var(--color-border);
+  
 }
 
 .heading-copy { display: flex; min-width: 0; align-items: center; gap: 14px; }

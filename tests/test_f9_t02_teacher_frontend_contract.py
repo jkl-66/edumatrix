@@ -64,7 +64,8 @@ def test_teacher_navigation_excludes_assistant_as_a_formal_role() -> None:
         assert path in teacher_nav.group(1)
     assert "role.value === 'teacher' || role.value === 'assistant'" not in app
     assert "if (role === 'teacher') return '/teacher/overview'" in role_landing
-    assert "if (role === 'assistant') return '/landing'" in role_landing
+    assert "return '/login'" in role_landing
+    assert "role === 'assistant'" not in role_landing
     assert "role === 'teacher' || role === 'assistant'" not in role_landing
     assert "['student', 'teacher', 'assistant', 'admin']" not in source(ROUTER)
 
@@ -82,7 +83,7 @@ def test_teacher_workspace_is_evidence_first_and_mastery_is_read_only() -> None:
         "待处理教学任务",
         "集中薄弱点",
         "需关注学生",
-        "授权证据编号",
+        "所有数据来自当前授权课程",
         "actionTitle(student.nextAction, student.evidenceMessage)",
         "actionTitle(point.nextAction)",
         "actionReason(point.nextAction)",
@@ -100,6 +101,7 @@ def test_teacher_workspace_is_evidence_first_and_mastery_is_read_only() -> None:
 
     assert "{{ student.nextAction || student.evidenceMessage }}" not in teacher
     assert "{{ point.nextAction }}" not in teacher
+    assert "授权证据编号" not in teacher
 
     for forbidden in (
         "updateMastery", "setMastery", 'v-model="mastery"', "冻结比赛", "演示指标", "企业治理", "专家认证",

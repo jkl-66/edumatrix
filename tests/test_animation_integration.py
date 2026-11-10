@@ -222,12 +222,7 @@ class TestEndToEndUploadAndGraph(unittest.TestCase):
         # 如果 fitz 可用，应该返回结果
         try:
             import fitz
-            self.assertGreater(len(evidence_list), 0, "fitz 可用时应返回视觉 evidence")
-            for ev in evidence_list:
-                self.assertEqual(ev.modality.value, "image")
-                self.assertIn("ml_textbook_ch3", ev.title)
-                self.assertGreater(len(ev.content), 20, f"描述太短: {ev.content[:50]}")
-            print(f"\n  [OK] PDF 视觉解析成功: {len(evidence_list)} 页, 第1页描述: {evidence_list[0].content[:100]}...")
+            self.assertEqual(evidence_list, [], "渲染页图不能冒充模型已理解教学内容")
         except ImportError:
             # fitz 不可用时返回空列表（优雅降级）
             print(f"\n  [!] PyMuPDF 未安装，跳过视觉解析测试")

@@ -16,11 +16,13 @@ from app.database import (
     DBCourse,
     DBLearningEvent,
     DBLearningEventConsumption,
+    DBKnowledgePoint,
     DBStudentProfile,
+    DBSourceDocument,
     DBUser,
 )
 from app.main import app
-from app.profile_summary import ProfileSummaryError, build_personal_activity
+from app.profile_summary import ProfileSummaryError, build_personal_activity, build_concept_learning_history
 import app.m5_api as m5_api
 
 
@@ -87,6 +89,14 @@ def _session():
         ),
     ]
     session.add_all(courses)
+    session.flush()
+    for course in courses:
+        course.status = "published"
+        session.add(DBSourceDocument(
+            id=f"{course.id}-source", course_id=course.id, title=course.title,
+            filename="course.md", file_format="md", content_hash="a" * 64,
+            source_sha256="a" * 64, processed_sha256="a" * 64,
+        ))
     session.commit()
     return engine, session, owner, other
 
@@ -156,6 +166,51 @@ def _counts(session) -> dict[str, int]:
         "consumptions": session.query(DBLearningEventConsumption).count(),
         "profiles": session.query(DBStudentProfile).count(),
     }
+
+
+def test_concept_history_uses_saved_results_without_demo_rows_or_invented_dates():
+    engine, session, owner, other = _session()
+    try:
+        point = DBKnowledgePoint(id="kp-history", domain_pack="test", code="history", version="1", title="决策树")
+        session.add(point)
+        session.commit()
+        scope = {"student_id": owner.username, "course_id": "course-f8-profile-a", "points": [{"id": point.id}]}
+        assert build_concept_learning_history(session, **scope) == {"concept": None, "history": [], "memory_retention": []}
+        today = NOW.date()
+        for name, learner, course, mastery, status in (
+            ("real", owner, "course-f8-profile-a", True, "processed"),
+            ("other-owner", other, "course-f8-profile-a", True, "processed"),
+            ("other-course", owner, "course-f8-profile-b", True, "processed"),
+            ("browse", owner, "course-f8-profile-a", False, "processed"),
+            ("pending", owner, "course-f8-profile-a", True, "pending"),
+        ):
+            event = _event(session, event_id=f"history-{name}", owner=learner, day=today,
+                           course_id=course, mastery=mastery, event_type="quiz_answered",
+                           payload={"knowledge_point_id": point.id, "score": 0.8})
+            session.add(DBLearningEventConsumption(
+                learning_event_id=event.id, consumer="learning_aggregation", processor_version="history-test",
+                status=status, processed_at=event.occurred_at,
+                result={"steps": {"profile_snapshot": {"mastery_after": {point.title: 0.63}}}},
+            ))
+        session.commit()
+        before = _counts(session)
+        learned_at = _utc_at(today).replace(tzinfo=timezone.utc)
+        result = build_concept_learning_history(session, **scope, now=learned_at)
+        assert result["concept"] == "决策树"
+        assert result["history"] == [{
+            "time": _utc_at(today).replace(tzinfo=timezone.utc).isoformat(),
+            "raw": 0.8, "smoothed": 0.63, "source_event_id": "history-real",
+        }]
+        assert result["memory_retention"] == [{"name": "决策树", "last_learned_at": learned_at.isoformat(),
+                                                 "mastery_at_learning": 0.63, "retention": 0.63}]
+        later = build_concept_learning_history(session, **scope, now=learned_at + timedelta(days=2))
+        assert 0 < later["memory_retention"][0]["retention"] < 0.63
+        assert later["history"] == result["history"]
+        assert _counts(session) == before
+        assert build_concept_learning_history(session, **{**scope, "points": []})["history"] == []
+    finally:
+        session.close()
+        engine.dispose()
 
 
 def test_duration_heatmap_streak_and_processed_trend_use_only_real_evidence():
@@ -279,6 +334,34 @@ def test_duration_heatmap_streak_and_processed_trend_use_only_real_evidence():
         assert pending.id not in result["trend"]["sourceEventIds"]
         assert failed.id not in result["trend"]["sourceEventIds"]
         assert "页面停留和普通点击不计时" in result["calculation"]["duration"]
+        assert "actual_minutes" not in result["calculation"]["duration"]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize("local_now", [datetime(2026, 11, 1, 0, 2), datetime(2027, 1, 1, 0, 2)])
+def test_history_heatmap_and_duration_agree_at_local_month_and_year_boundary(local_now):
+    engine, session, owner, _ = _session()
+    try:
+        now = local_now.replace(tzinfo=DISPLAY_TZ).astimezone(timezone.utc)
+        today = local_now.date()
+        rows = []
+        for event_id, minutes_before, duration in [("before-midnight", 3, 5), ("after-midnight", 1, 7), ("future", -1, 9)]:
+            row = _event(session, event_id=event_id, owner=owner, day=today, payload={"actual_minutes": duration})
+            row.occurred_at = (now - timedelta(minutes=minutes_before)).replace(tzinfo=None)
+            rows.append(row)
+        session.commit()
+        before = _counts(session)
+        result = build_personal_activity(session, current_user=owner, course_id="course-f8-profile-a", days=7, now=now)
+        assert _counts(session) == before
+        assert result["metrics"]["todayMinutes"]["value"] == 7
+        assert result["metrics"]["periodMinutes"]["value"] == 12
+        by_day = {item["date"]: item for item in result["heatmap"]["days"]}
+        assert by_day[today.isoformat()]["activeMinutes"] == 7
+        assert by_day[(today - timedelta(days=1)).isoformat()]["activeMinutes"] == 5
+        assert result["activity"]["total"] == 2
+        assert [item["id"] for item in result["activity"]["items"]] == ["after-midnight", "before-midnight"]
     finally:
         session.close()
         engine.dispose()
@@ -393,6 +476,14 @@ def test_activity_deep_links_are_controlled_and_withdrawn_artifacts_stay_auditab
         today = NOW.astimezone(DISPLAY_TZ).date()
         session.add_all([
             DBArtifact(
+                id="artifact-f8-experiment",
+                owner_public_id=owner.public_id,
+                course_id="course-f8-profile-a",
+                artifact_type="interactive_model",
+                title="复杂度参数实验",
+                status="published",
+            ),
+            DBArtifact(
                 id="artifact-f8-published",
                 owner_public_id=owner.public_id,
                 course_id="course-f8-profile-a",
@@ -410,6 +501,12 @@ def test_activity_deep_links_are_controlled_and_withdrawn_artifacts_stay_auditab
             ),
         ])
         session.commit()
+        experiment = _event(
+            session, event_id="le-experiment", owner=owner, day=today,
+            event_type="interactive_model_observation_submitted",
+            object_type="interactive_model", object_id="artifact-f8-experiment",
+        )
+        experiment.context_ref = {"resource_version_id": "synthetic-experiment-v1"}
         _event(
             session,
             event_id="le-artifact-published",
@@ -449,6 +546,14 @@ def test_activity_deep_links_are_controlled_and_withdrawn_artifacts_stay_auditab
         published = items["le-artifact-published"]["target"]
         withdrawn = items["le-artifact-withdrawn"]["target"]
         unknown = items["le-unknown-object"]["target"]
+        experiment_item = items["le-experiment"]
+        assert experiment_item["kind"] == "resource"
+        assert experiment_item["label"] == "完成参数实验并提交观察"
+        assert experiment_item["target"]["available"] is True
+        assert experiment_item["target"]["route"] == (
+            "/workspace/resources/models/artifact-f8-experiment"
+            "?course_id=course-f8-profile-a&version_id=synthetic-experiment-v1"
+        )
         assert published["available"] is True
         assert published["route"].startswith("/workspace/resources/handouts/artifact-f8-published")
         assert "malicious.example" not in published["route"]

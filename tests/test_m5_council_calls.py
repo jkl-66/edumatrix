@@ -1,5 +1,6 @@
 import hashlib
 import json
+import pytest
 from functools import partial
 from types import SimpleNamespace
 
@@ -162,3 +163,19 @@ def test_unowned_council_does_not_build_or_call_model(monkeypatch):
     assert backend.calls == 0
     assert result["overall_passed"] is True
     assert result["advice"] == "Agentic校验不可用，采用确定性事实检查。"
+
+
+@pytest.mark.parametrize("content,expected", [
+    ("最大池化取窗口最大值，平均池化取平均值。", True),
+    ("最大池化和平均池化不是一回事。", True),
+    ("最大池化和平均池化并非完全相同。", True),
+    ("最大池化和平均池化是一回事。", False),
+])
+def test_pooling_comparison_is_not_a_fact_conflict(content, expected):
+    resources = [
+        SimpleNamespace(agent="Teacher", content="介绍池化层的局部聚合。"),
+        SimpleNamespace(agent="Coder", content=content),
+    ]
+    result = CouncilDecisionEngine().synthesize(resources, "池化层")
+    assert result["overall_passed"] is expected
+    assert result["verdicts"][1]["passed"] is expected

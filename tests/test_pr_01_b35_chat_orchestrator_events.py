@@ -118,6 +118,33 @@ def test_chat_audit_and_message_projection_share_the_same_run_events() -> None:
     assert all(item["runId"].startswith("chat-audit-assistant-1:") for item in audit["items"])
 
 
+def test_retry_preserves_repeated_stage_results_for_each_attempt() -> None:
+    checkpoint = {}
+    for attempt in range(3):
+        if attempt:
+            retry_args = dict(run_id="same-message", event_type="run.retry", public_status="queued")
+            checkpoint = append_public_run_event(checkpoint, **retry_args)
+            count = len(checkpoint["runEvents"])
+            checkpoint = append_public_run_event(checkpoint, **retry_args)
+            assert len(checkpoint["runEvents"]) == count
+        for event_type, status in [("stage.started", "running"), ("stage.failed", "failed")]:
+            args = dict(run_id="same-message", event_type=event_type,
+                        stage_id="revision_verification", public_status=status,
+                        summary=f"attempt {attempt}")
+            checkpoint = append_public_run_event(checkpoint, **args)
+            count = len(checkpoint["runEvents"])
+            checkpoint = append_public_run_event(checkpoint, **args)
+            assert len(checkpoint["runEvents"]) == count
+        checkpoint = append_public_run_event(checkpoint, run_id="same-message",
+                                             event_type="run.failed", public_status="failed")
+    events = checkpoint["runEvents"]
+    assert len(events) == 11
+    assert [event["summary"] for event in events if event["eventType"] == "stage.failed"] == [
+        "attempt 0", "attempt 1", "attempt 2",
+    ]
+    assert len([event for event in events if event["eventType"] == "run.retry"]) == 2
+
+
 def test_new_chat_message_persists_one_run_and_initial_context_events() -> None:
     with TestClient(app) as client:
         headers = auth_headers(client, _key("b35-events"))

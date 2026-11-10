@@ -57,7 +57,7 @@ def _profile_copy(session, source: DBProfileSnapshot, profile_id: str, snapshot:
     return row
 
 
-def test_dynamic_quiz_semantics_follow_profile_and_source_context() -> None:
+def test_dynamic_quiz_context_keeps_sources_and_prefers_current_evidence_to_stale_profile() -> None:
     engine, session = _session()
     try:
         seed_competition_demo(session)
@@ -107,7 +107,15 @@ def test_dynamic_quiz_semantics_follow_profile_and_source_context() -> None:
         assert first_questions
         assert second_ids
         assert all(first_versions) and all(second_versions)
-        assert [row.prompt for row in first_versions] != [row.prompt for row in second_versions]
+        # Both snapshots belong to the same learner, with the same later real
+        # course evidence. A stale self-rating must not force harder questions.
+        from app.resource_bundles import _generation_manifest
+        first_context = _generation_manifest(session, first['job_id'])['context']
+        second_context = _generation_manifest(session, second['job_id'])['context']
+        assert first_context['current_learning_evidence']
+        assert first_context['current_learning_evidence'] == second_context['current_learning_evidence']
+        assert first_content['semanticContext']['profile_variant'] == second_content['semanticContext']['profile_variant']
+        assert [row.prompt for row in first_versions] == [row.prompt for row in second_versions]
     finally:
         session.close()
         engine.dispose()

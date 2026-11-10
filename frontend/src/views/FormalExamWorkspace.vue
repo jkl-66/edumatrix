@@ -1,4 +1,6 @@
 <script setup>
+import { displayLabel, learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -9,12 +11,14 @@ import {
 import {
   answerM5FormalSitting, assignM5FormalExam, completeM5FormalReview,
   createM5FormalExam, createM5IntelligentExam, generateM5FormalReport,
-  getM5IntelligentExamContext, getM5TodayWork, listM5AssessmentQuestions, listM5FormalExams,
-  listM5FormalReviews, startM5FormalSitting, submitM5FormalSitting,
+  getM5IntelligentExamContext, getM5IntelligentExamGeneration, getM5TodayWork, listM5AssessmentQuestions, listM5FormalExams,
+  listM5FormalReviews, requestM5FormalReview, startM5FormalSitting, submitM5FormalSitting,
   transitionM5FormalExam,
 } from '../api/m5'
 import { listKnowledgeCourseShelf } from '../api/knowledge'
+import { getTeacherCourses, getTeacherStudents } from '../api/teacher'
 import AggregationStatus from '../components/AggregationStatus.vue'
+import IncrementalMarkdownRenderer from '../components/IncrementalMarkdownRenderer.vue'
 import { useCourseContextStore } from '../stores/courseContext'
 import {
   calculateAssessmentDuration,
@@ -48,11 +52,12 @@ const exams = ref([])
 const questions = ref([])
 const reviews = ref([])
 const courseCatalog = ref([])
+const assignmentLearners = ref([])
 const todayWork = ref([])
 const todayWorkError = ref('')
 const todayWorkLoading = ref(false)
 const generationStatus = ref('idle')
-const selectedId = ref(String(route.params.examId || ''))
+const selectedId = ref(String(route.params.examId || route.query.exam_id || ''))
 const currentQuestionIndex = ref(0)
 const reportEnvelope = ref(null)
 const now = ref(Date.now())
@@ -61,9 +66,52 @@ const drafts = reactive({})
 const saveStates = reactive({})
 const pendingSaveKeys = reactive({})
 const reviewDrafts = reactive({})
+const reviewReasons = reactive({})
+const requestingReview = ref('')
 const assignLearner = ref('')
 const formInitialized = ref(false)
 let timerHandle = null
+let generationTimer = null
+let generationEpoch = 0
+let disposed = false
+const generationMessage = ref('')
+
+function stopGenerationWatch() {
+  generationEpoch += 1
+  if (generationTimer) window.clearTimeout(generationTimer)
+  generationTimer = null
+}
+
+async function observeGeneration(taskId = '', epoch = generationEpoch) {
+  const activeCourse = courseId.value
+  try {
+    const payload = await getM5IntelligentExamGeneration(activeCourse, taskId, reviewTaskId.value)
+    if (disposed || epoch !== generationEpoch || courseId.value !== activeCourse) return
+    const task = payload.generation
+      if (!task) { busy.value = false; generationStatus.value = 'idle'; return }
+    generationMessage.value = task.automation?.message || ''
+    if (task.status === 'completed' && task.result) {
+      busy.value = false
+      // On refresh, preserve the user's selected historical exam.
+      if (taskId || !selectedId.value) await acceptGeneratedExam(task.result)
+      return
+    }
+    if (task.status === 'cancelled') { busy.value = false; generationStatus.value = 'idle'; return }
+    busy.value = true
+    generationStatus.value = 'generating'
+    generationTimer = window.setTimeout(() => observeGeneration(task.id, epoch), 2500)
+    } catch (value) {
+    if (!disposed && epoch === generationEpoch) {
+        if ([401, 403, 404, 409, 422].includes(value?.response?.status)) {
+          busy.value = false
+          generationStatus.value = 'error'
+          error.value = messageFrom(value)
+          return
+        }
+      generationTimer = window.setTimeout(() => observeGeneration(taskId, epoch), 4000)
+    }
+  }
+}
 
 const createForm = reactive({ course_id: '', title: '', duration_minutes: 60, questionIds: [] })
 const learnerForm = reactive({
@@ -72,7 +120,6 @@ const learnerForm = reactive({
   chapter_ids: [],
   knowledge_point_ids: [],
   difficulty: 'adaptive',
-  source_limit: 8,
   counts: {
     single_choice: 0,
     multiple_choice: 0,
@@ -134,7 +181,11 @@ const generationModeReason = computed(() => (
     : '题目围绕当前课程知识点和你的近期学习情况安排，难度与题型已经准备完成。'
 ))
 const canAnswer = computed(() => sitting.value?.status === 'in_progress' && remainingSeconds.value > 0)
+const reportAvailable = computed(() => selected.value?.version?.feedback_policy !== 'teacher_only'
+  && (selected.value?.version?.feedback_policy === 'after_submission'
+    || ['closed', 'archived'].includes(selected.value?.status)))
 const currentQuestion = computed(() => selected.value?.items?.[currentQuestionIndex.value] || null)
+const contentIssue = computed(() => selected.value?.items?.find(item => item.content_issue)?.content_issue || '')
 const courseTitle = computed(() => (
   context.value?.course?.title
   || localStorage.getItem('edumatrix_course_title')
@@ -142,6 +193,17 @@ const courseTitle = computed(() => (
 ))
 const completedCount = computed(() => gate.value?.completed_task_ids?.length || 0)
 const requiredCount = computed(() => gate.value?.required_task_ids?.length || 0)
+const missingTaskCount = computed(() => gate.value?.missing_tasks?.length || 0)
+const lockedHeading = computed(() => (
+  missingTaskCount.value ? `还需完成 ${missingTaskCount.value} 项必做任务`
+    : gate.value?.reason === 'active_path_required' ? '先建立本课程的学习路径'
+      : '当前没有可用于组卷的学习任务'
+))
+const lockedDescription = computed(() => (
+  missingTaskCount.value ? '完成下方练习并提交结果后，即可开始组卷。'
+    : gate.value?.reason === 'active_path_required' ? '完成入学诊断并确认学习路径后，再从知识点开始学习。'
+      : '可以从学习路径继续安排学习，也可以在下方回顾历史试卷。'
+))
 const requestedCount = computed(() => configurableTypes.reduce(
   (sum, type) => sum + Number(learnerForm.counts[type] || 0), 0,
 ))
@@ -192,9 +254,10 @@ const remainingSeconds = computed(() => {
   if (!sitting.value?.due_at || sitting.value.status !== 'in_progress') return null
   const dueAt = parseUtcTimestamp(sitting.value.due_at)
   if (!Number.isFinite(dueAt)) return null
-  return Math.max(0, Math.floor((dueAt - now.value) / 1000))
+  return Math.max(0, Math.ceil((dueAt - now.value) / 1000))
 })
 const remainingLabel = computed(() => {
+  if (['submitted', 'released'].includes(sitting.value?.status)) return '已交卷'
   if (remainingSeconds.value === null) return '尚未开始'
   const minutes = Math.floor(remainingSeconds.value / 60)
   const seconds = remainingSeconds.value % 60
@@ -224,7 +287,7 @@ function clearObject(target) {
 }
 
 function availableCount(type) {
-  if (liveGenerationEnabled.value) return 50
+  if (liveGenerationEnabled.value) return Number.POSITIVE_INFINITY
   return Number(context.value?.question_type_counts?.[type] || 0)
 }
 
@@ -245,10 +308,11 @@ function initializeLearnerForm() {
     const first = configurableTypes.find(type => availableCount(type) > 0)
     if (first) learnerForm.counts[first] = 1
   }
-  const requestedPoint = String(route.query.knowledge_point_id || '')
+  const requestedPoint = String(context.value.review_scope?.knowledge_point_id || route.query.knowledge_point_id || '')
   if (requestedPoint && context.value.knowledge_points.some(item => item.id === requestedPoint)) {
     learnerForm.knowledge_point_ids = [requestedPoint]
   }
+  if (context.value.review_scope?.chapter_id) learnerForm.chapter_ids = [context.value.review_scope.chapter_id]
   formInitialized.value = true
 }
 
@@ -287,6 +351,7 @@ function hydrateExam(exam) {
 }
 
 function normalizeReportEnvelope(data) {
+  if (!data?.report) return null
   if (data?.report?.report) {
     return {
       ...data.report,
@@ -295,6 +360,7 @@ function normalizeReportEnvelope(data) {
       learning_feedback: data.learning_feedback,
       recoverable: data.recoverable,
       feedback_updates: data.feedback_updates,
+      reviews: data.reviews || [],
     }
   }
   return data
@@ -308,7 +374,7 @@ function handleFeedbackRecovered(feedback) {
     learning_feedback: feedback || reportEnvelope.value.learning_feedback,
     aggregation: feedback || reportEnvelope.value.aggregation,
   }
-  notice.value = '学习反馈已同步，画像、路径和复习安排已更新。'
+  notice.value = '本次考试记录已应用到后续学习安排。'
 }
 
 async function load() {
@@ -332,26 +398,36 @@ async function load() {
   }
   try {
     if (manager.value) {
-      const [catalog, questionCatalog, reviewCatalog] = await Promise.all([
+      const available = await getTeacherCourses()
+      courseCatalog.value = available.items || []
+      const activeCourse = courseCatalog.value.find(item => item.id === courseId.value) || courseCatalog.value[0]
+      createForm.course_id = activeCourse?.id || ''
+      if (!activeCourse) {
+        exams.value = []; questions.value = []; reviews.value = []; assignmentLearners.value = []
+        return
+      }
+      const [catalog, questionCatalog, reviewCatalog, students] = await Promise.all([
         listM5FormalExams(),
-        listM5AssessmentQuestions({ course_id: courseId.value }),
+        listM5AssessmentQuestions({ course_id: activeCourse.id }),
         listM5FormalReviews(),
+        getTeacherStudents({ courseId: activeCourse.id }),
       ])
-      exams.value = catalog.items || []
+      exams.value = (catalog.items || []).filter(item => item.course_id === activeCourse.id)
       questions.value = questionCatalog.items || []
-      reviews.value = reviewCatalog.items || []
+      reviews.value = (reviewCatalog.items || []).filter(item => item.course_id === activeCourse.id)
+      assignmentLearners.value = students.items || []
+      if (!assignmentLearners.value.some(item => item.publicId === assignLearner.value)) assignLearner.value = ''
       reviews.value.forEach((review) => {
         if (!reviewDrafts[review.id]) {
-          reviewDrafts[review.id] = { score: 0.8, note: '已根据冻结评分证据完成复核。' }
+          reviewDrafts[review.id] = { score: Math.round((review.selected_grading?.score || 0) * 100), note: review.decision_note || '' }
         }
       })
-      createForm.course_id ||= courseId.value
     } else {
       const [catalog, examContext] = await Promise.all([
         listM5FormalExams(),
-        getM5IntelligentExamContext(courseId.value),
+        getM5IntelligentExamContext(courseId.value, reviewTaskId.value),
       ])
-      exams.value = catalog.items || []
+      exams.value = (catalog.items || []).filter(item => item.course_id === courseId.value)
       context.value = examContext
       gate.value = examContext.gate
       try {
@@ -362,6 +438,16 @@ async function load() {
       }
       await loadTodayWork()
       initializeLearnerForm()
+      const requestedSittingId = String(route.query.sitting_id || '')
+      if (requestedSittingId) {
+        const requestedExam = exams.value.find(item => item.sitting?.id === requestedSittingId)
+        if (requestedExam) {
+          await selectExam(requestedExam)
+        } else {
+          selectedId.value = ''
+          error.value = '没有找到这次作答，请从下方历史试卷中重新选择。'
+        }
+      }
       if (selectedId.value && !selected.value) {
         selectedId.value = ''
         await router.replace({
@@ -374,6 +460,7 @@ async function load() {
         })
       }
       if (selected.value) hydrateExam(selected.value)
+      await observeGeneration()
     }
   } catch (value) {
     error.value = messageFrom(value)
@@ -422,7 +509,6 @@ function resetLearnerConfiguration() {
   learnerForm.knowledge_point_ids = []
   configurableTypes.forEach((type) => { learnerForm.counts[type] = 0 })
   learnerForm.difficulty = 'adaptive'
-  learnerForm.source_limit = 8
   formInitialized.value = false
   generationKey.value = newGenerationKey()
   generationStatus.value = 'idle'
@@ -441,8 +527,13 @@ function chooseCourse(nextCourseId) {
   const value = String(nextCourseId || '').trim()
   if (!value || value === courseId.value || busy.value) return
   const query = { course_id: value }
-  if (reviewTaskId.value) query.review_task = reviewTaskId.value
   router.replace({ path: '/workspace/assessment/exams', query })
+}
+
+function chooseManagedCourse(nextCourseId) {
+  if (!nextCourseId || busy.value) return
+  loading.value = true
+  router.replace({ path: route.path, query: { course_id: nextCourseId } })
 }
 
 function changeCount(type, delta) {
@@ -464,6 +555,7 @@ function toggleChapter(chapterId) {
 }
 
 function toggleKnowledgePoint(pointId) {
+  if (reviewScoped.value) return
   const selectedPoints = new Set(learnerForm.knowledge_point_ids)
   if (selectedPoints.has(pointId)) selectedPoints.delete(pointId)
   else selectedPoints.add(pointId)
@@ -477,6 +569,8 @@ async function createLearnerExam() {
   generationStatus.value = 'generating'
   error.value = ''
   notice.value = ''
+  stopGenerationWatch()
+  const epoch = generationEpoch
   try {
     const created = await createM5IntelligentExam({
       configuration: {
@@ -494,9 +588,36 @@ async function createLearnerExam() {
             .filter(type => learnerForm.counts[type] > 0)
             .map(type => [type, Number(learnerForm.counts[type])]),
         ),
-        source_limit: Number(learnerForm.source_limit),
       },
     })
+    if (disposed || epoch !== generationEpoch) return
+    if (created.generation) {
+      await observeGeneration(created.generation.id, epoch)
+      return
+    }
+    await acceptGeneratedExam(created)
+  } catch (value) {
+    if (disposed || epoch !== generationEpoch) return
+      if (value?.response?.status >= 400 && value?.response?.status < 500) {
+        generationStatus.value = 'error'
+        error.value = messageFrom(value)
+        busy.value = false
+        return
+      }
+    // The submit response may be lost after the server saved the task.
+    generationMessage.value = '正在确认试卷准备进度。'
+    await observeGeneration('', epoch)
+    if (!generationTimer && generationStatus.value !== 'complete') {
+      generationStatus.value = 'error'
+      error.value = messageFrom(value)
+      busy.value = false
+    }
+  } finally {
+    if (epoch === generationEpoch && generationStatus.value !== 'generating') busy.value = false
+  }
+}
+
+async function acceptGeneratedExam(created) {
     const existingIndex = exams.value.findIndex(item => item.id === created.id)
     if (existingIndex >= 0) exams.value.splice(existingIndex, 1, created)
     else exams.value.unshift(created)
@@ -515,12 +636,6 @@ async function createLearnerExam() {
     notice.value = created.created === false
       ? '已恢复同一配置生成的试卷，可以继续作答。'
       : '试卷已生成，可以开始作答。'
-  } catch (value) {
-    generationStatus.value = 'error'
-    error.value = messageFrom(value)
-  } finally {
-    busy.value = false
-  }
 }
 
 function openMissingTask(task) {
@@ -531,12 +646,18 @@ function openMissingTask(task) {
 }
 
 function selectExam(exam) {
+  if (manager.value) {
+    return router.replace({ path: route.path, query: { course_id: exam.course_id, exam_id: exam.id } })
+  }
   selectedId.value = exam.id
   reportEnvelope.value = null
   hydrateExam(exam)
-  router.replace({
+  return router.replace({
     path: `/workspace/assessment/exams/${exam.id}`,
-    query: { course_id: courseId.value },
+    query: {
+      course_id: exam.course_id,
+      ...(exam.version?.configuration?.review_task_id ? { review_task: exam.version.configuration.review_task_id } : {}),
+    },
   })
 }
 
@@ -546,7 +667,10 @@ function backToBuilder() {
   reportEnvelope.value = null
   clearObject(answers)
   clearObject(drafts)
-  router.replace({ path: '/workspace/assessment/exams', query: { course_id: courseId.value } })
+  router.replace({ path: '/workspace/assessment/exams', query: {
+    course_id: courseId.value,
+    ...(reviewTaskId.value ? { review_task: reviewTaskId.value } : {}),
+  } })
 }
 
 async function createManagedExam() {
@@ -571,7 +695,7 @@ async function transition(target) {
   await runManagerAction(() => transitionM5FormalExam(selected.value.id, {
     expected_lock_version: selected.value.lock_version,
     target_status: target,
-  }), `考试已切换为 ${target}。`)
+  }), `考试已${{ published: '发布', open: '开放作答', closed: '封卷' }[target] || '更新'}。`)
 }
 
 async function assign() {
@@ -587,12 +711,32 @@ async function finishReview(review) {
   await runManagerAction(() => completeM5FormalReview(review.id, {
     expected_lock_version: review.lock_version,
     result: {
-      score: Number(reviewDraft.score),
+      score: Number(reviewDraft.score) / 100,
       confidence: 0.9,
       note: reviewDraft.note,
       criterion_results: [],
     },
-  }), '复核结果已追加为新的评分证据。')
+  }), '复核结果已保存，学生可以查看更新后的报告。')
+}
+
+function itemReview(item) {
+  return (reportEnvelope.value?.reviews || []).find(review => review.attempt_id === item.attempt_id)
+}
+
+async function requestItemReview(item) {
+  const reason = String(reviewReasons[item.attempt_id] || '').trim()
+  if (!reason || requestingReview.value) return
+  requestingReview.value = item.attempt_id
+  error.value = ''
+  try {
+    await requestM5FormalReview(sitting.value.id, item.attempt_id, reason)
+    reportEnvelope.value = normalizeReportEnvelope(await generateM5FormalReport(sitting.value.id))
+    notice.value = '复核申请已保存，请等待老师核对。'
+  } catch (value) {
+    error.value = messageFrom(value)
+  } finally {
+    requestingReview.value = ''
+  }
 }
 
 async function start() {
@@ -681,8 +825,12 @@ async function saveAnswer(item, moveNext = false) {
 
 async function submitExam({ recoverOnly = false } = {}) {
   if (!recoverOnly) {
-    if (!allDraftsSaved.value || busy.value) return
-    if (!window.confirm('提交后不能再修改答案，确认提交本次试卷吗？')) return
+    if (contentIssue.value) { error.value = contentIssue.value; return }
+    if ((!allDraftsSaved.value && remainingSeconds.value !== 0) || busy.value) return
+    const confirmation = remainingSeconds.value === 0
+      ? '作答时间已到，将按此前保存的答案计分，未保存的修改不会计入；未答题记为零分。确认提交吗？'
+      : '提交后不能再修改答案，确认提交本次试卷吗？'
+    if (!window.confirm(confirmation)) return
   }
   busy.value = true
   error.value = ''
@@ -691,7 +839,9 @@ async function submitExam({ recoverOnly = false } = {}) {
     const data = await submitM5FormalSitting(sitting.value.id, sitting.value.lock_version)
     selected.value.sitting = data.sitting
     reportEnvelope.value = normalizeReportEnvelope(data)
-    notice.value = data.recoverable
+    notice.value = data.feedback_pending
+      ? '试卷已提交。老师公布结果后，可以在这里查看报告和复习建议。'
+      : data.recoverable
       ? '试卷已提交并完成计分，部分学习反馈仍在处理，可继续恢复。'
       : '试卷已提交，画像、路径、下一日安排、错题和复习计划已记录。'
     if (reviewScoped.value && data.event_id) {
@@ -736,9 +886,10 @@ function displayAnswer(value) {
     if ('choices' in value) return (value.choices || []).join('、') || '未作答'
     if ('value' in value) return value.value ? '正确' : '错误'
     if ('blanks' in value) return (value.blanks || []).join(' / ') || '未作答'
+    if ('reference_answer' in value) return value.reference_answer || '请结合下方解析查看参考思路。'
     if ('text' in value) return value.text || '未作答'
     if ('code' in value) return value.code || '未作答'
-    return JSON.stringify(value)
+    return '已提交作答，请结合题目和点评查看。'
   }
   return String(value)
 }
@@ -762,10 +913,14 @@ onMounted(() => {
 watch(courseId, async (nextCourseId, previousCourseId) => {
   if (manager.value || !nextCourseId || nextCourseId === previousCourseId) return
   resetLearnerConfiguration()
+  stopGenerationWatch()
+  busy.value = false
   await load()
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  stopGenerationWatch()
   if (timerHandle) window.clearInterval(timerHandle)
 })
 </script>
@@ -775,7 +930,7 @@ onBeforeUnmount(() => {
     <header class="page-header">
       <div>
         <span><ClipboardList :size="16" />{{ manager ? '正式测评管理' : '测评中心 · 智能组卷' }}</span>
-        <h1>{{ manager ? '试卷管理' : '用一份正式试卷检验今日学习' }}</h1>
+        <h1>{{ manager ? '试卷管理' : reviewScoped ? '检验本次复习的理解' : '用一份正式试卷检验今日学习' }}</h1>
         <p>{{ manager ? '管理试卷发布、分配与复核。' : '设置范围并生成试卷，逐题保存后提交；完成后会得到详细讲解和复习建议。' }}</p>
       </div>
       <button class="icon-button" type="button" title="刷新当前状态" :disabled="loading || busy" @click="load">
@@ -783,7 +938,7 @@ onBeforeUnmount(() => {
       </button>
     </header>
 
-    <div v-if="error" class="banner error" role="alert"><AlertCircle :size="17" />{{ error }}</div>
+    <div v-if="error" class="banner error" role="alert"><AlertCircle :size="17" />{{ userMessage(error) }}</div>
     <div v-else-if="notice" class="banner notice" role="status"><CheckCircle2 :size="17" />{{ notice }}</div>
     <div v-if="loading" class="loading-state"><LoaderCircle class="spin" :size="20" />正在核对课程、今日任务和历史试卷</div>
 
@@ -807,7 +962,10 @@ onBeforeUnmount(() => {
       <section class="manager-authoring">
         <div class="section-heading"><div><span>教师工具</span><h2>建立正式试卷</h2></div></div>
         <div class="manager-form">
-          <input v-model="createForm.course_id" placeholder="课程 ID" aria-label="课程 ID" />
+          <select :value="createForm.course_id" aria-label="选择教学课程" :disabled="loading || busy" @change="chooseManagedCourse($event.target.value)">
+            <option v-if="!courseCatalog.length" value="">暂无可管理课程</option>
+            <option v-for="course in courseCatalog" :key="course.id" :value="course.id">{{ course.title }}</option>
+          </select>
           <input v-model="createForm.title" placeholder="考试名称" aria-label="考试名称" />
           <input v-model.number="createForm.duration_minutes" type="number" min="1" aria-label="考试时长" />
           <button class="primary-button" :disabled="busy" @click="createManagedExam"><FileCheck2 :size="17" />建立试卷</button>
@@ -826,18 +984,21 @@ onBeforeUnmount(() => {
         <aside class="history-list">
           <h2>考试列表 <span>{{ exams.length }}</span></h2>
           <button v-for="exam in exams" :key="exam.id" :class="{ active: selectedId === exam.id }" @click="selectExam(exam)">
-            <strong>{{ exam.title }}</strong><small>{{ exam.status }} · {{ exam.items.length }} 题</small>
+            <strong>{{ exam.title }}</strong><small>{{ displayLabel(exam.status) }} · {{ exam.items.length }} 题</small>
           </button>
         </aside>
         <section v-if="selected" class="manager-stage">
           <h2>{{ selected.title }}</h2>
-          <p>{{ selected.duration_minutes }} 分钟 · {{ selected.version.total_points }} 分 · {{ selected.status }}</p>
+          <p>{{ selected.duration_minutes }} 分钟 · {{ selected.version.total_points }} 分 · {{ displayLabel(selected.status) }}</p>
           <div class="manager-tools">
             <button v-if="selected.status === 'draft'" @click="transition('published')">发布</button>
             <button v-if="selected.status === 'published'" @click="transition('open')">开放考试</button>
             <button v-if="selected.status === 'open'" @click="transition('closed')">封卷</button>
-            <input v-model="assignLearner" placeholder="考生 public_id" />
-            <button :disabled="!assignLearner" @click="assign">分配场次</button>
+            <select v-model="assignLearner" aria-label="选择参加考试的学生" :disabled="busy">
+              <option value="">{{ assignmentLearners.length ? '选择学生' : '当前课程暂无学生' }}</option>
+              <option v-for="student in assignmentLearners" :key="student.publicId" :value="student.publicId">{{ student.displayName }}（{{ student.username }}）</option>
+            </select>
+            <button :disabled="!assignLearner || busy" @click="assign">分配场次</button>
           </div>
           <ol class="compact-items"><li v-for="item in selected.items" :key="item.id">{{ item.position }}. {{ item.prompt }}</li></ol>
         </section>
@@ -846,12 +1007,22 @@ onBeforeUnmount(() => {
 
       <section v-if="reviews.length" class="review-queue">
         <h2>复核队列</h2>
-        <div v-for="review in reviews" :key="review.id">
-          <span>{{ review.reason || '未填写原因' }}</span>
-          <input v-model.number="reviewDrafts[review.id].score" type="number" min="0" max="1" step="0.05" />
-          <input v-model="reviewDrafts[review.id].note" />
-          <button :disabled="review.status === 'completed' || busy" @click="finishReview(review)">完成复核</button>
-        </div>
+        <article v-for="review in reviews" :key="review.id" class="teacher-review" data-testid="exam-review-case">
+          <h3>{{ review.exam_title }}</h3>
+          <IncrementalMarkdownRenderer :text="review.question?.prompt || ''" preserve-content />
+          <p v-for="(option, index) in review.question?.options || []" :key="index">{{ String.fromCharCode(65 + index) }}. {{ option }}</p>
+          <dl>
+            <div><dt>学生答案</dt><dd>{{ displayAnswer(review.learner_answer) }}</dd></div>
+            <div><dt>参考答案</dt><dd><IncrementalMarkdownRenderer :text="displayAnswer(review.question?.correct_answer)" /></dd></div>
+            <div><dt>原评分</dt><dd>{{ review.initial_grading?.score == null ? '待评分' : `${Math.round(review.initial_grading.score * 100)}%` }} · {{ learningText(review.initial_grading?.feedback || '') }}</dd></div>
+            <div><dt>申请原因</dt><dd>{{ learningText(review.reason || '未填写原因') }}</dd></div>
+          </dl>
+          <div class="review-controls">
+            <label>本题得分比例（%）<input v-model.number="reviewDrafts[review.id].score" type="number" min="0" max="100" step="1" :disabled="review.status === 'completed'" /></label>
+            <label>复核说明<textarea v-model="reviewDrafts[review.id].note" :disabled="review.status === 'completed'" /></label>
+            <button :disabled="review.status === 'completed' || busy || !reviewDrafts[review.id].note.trim() || reviewDrafts[review.id].score === '' || reviewDrafts[review.id].score < 0 || reviewDrafts[review.id].score > 100" @click="finishReview(review)">{{ review.status === 'completed' ? '已完成复核' : '完成复核' }}</button>
+          </div>
+        </article>
       </section>
     </template>
 
@@ -860,9 +1031,8 @@ onBeforeUnmount(() => {
         <div class="generation-waiting__icon"><LoaderCircle class="spin" :size="34" /></div>
         <div>
           <span class="eyebrow">智能测评生成中</span>
-          <h2>正在根据当前课程生成试卷</h2>
-          <p>{{ courseTitle }} · {{ scopeLabel }} · {{ requestedCount }} 题 · 预计 {{ computedDurationMinutes }} 分钟</p>
-          <small>题目生成完成后才会显示试卷并开始作答，当前请不要重复点击。</small>
+          <h2>正在出题并核对讲解</h2>
+          <p>{{ generationMessage || '正在准备试卷，完成后即可开始作答。' }}</p>
         </div>
       </section>
 
@@ -871,10 +1041,10 @@ onBeforeUnmount(() => {
           <span class="lock-icon"><LockKeyhole :size="25" /></span>
           <div>
             <span>智能组卷尚未解锁</span>
-            <h2>先完成今天的 {{ gate?.missing_tasks?.length || 0 }} 项必做任务</h2>
-            <p>完成必做练习并提交结果后即可解锁；只浏览资源不会被当作已经学会。</p>
+            <h2>{{ lockedHeading }}</h2>
+            <p>{{ lockedDescription }}</p>
           </div>
-          <strong>{{ completedCount }}/{{ requiredCount || (gate?.missing_tasks?.length || 0) }}</strong>
+          <strong v-if="requiredCount || missingTaskCount">{{ completedCount }}/{{ requiredCount || missingTaskCount }}</strong>
         </div>
         <div v-if="gate?.missing_tasks?.length" class="missing-list">
           <button v-for="(task, index) in gate.missing_tasks" :key="task.id" type="button" @click="openMissingTask(task)">
@@ -884,14 +1054,13 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <div v-else class="snapshot-required">
-          <span><strong>先从今日知识点生成完整资源包</strong><small>完成其中的必做练习后，就可以开始智能组卷。</small></span>
           <button class="primary-button" @click="router.push({ path: '/workspace/path', query: { course_id: courseId } })">前往学习路径</button>
         </div>
       </section>
 
       <section v-else-if="!selectedId" class="builder-layout" data-testid="exam-builder-unlocked">
         <aside class="exam-config">
-          <div class="unlock-mark"><Check :size="16" />今日必做任务已完成</div>
+          <div class="unlock-mark"><Check :size="16" />{{ reviewScoped ? '围绕当前知识点复习' : '今日必做任务已完成' }}</div>
           <h2>组卷设置</h2>
 
           <label class="field"><span>试卷名称</span><input v-model="learnerForm.title" maxlength="256" @input="markConfigChanged" /></label>
@@ -909,7 +1078,7 @@ onBeforeUnmount(() => {
                 @click="toggleChapter(chapter.id)"
               ><Check v-if="learnerForm.chapter_ids.includes(chapter.id)" :size="15" />{{ chapter.title }}</button>
             </div>
-            <small>不选择时覆盖当前课程全部章节。</small>
+            <small>{{ reviewScoped ? '本次测验围绕当前复习知识点。' : '不选择时覆盖当前课程全部章节。' }}</small>
           </fieldset>
 
           <details class="scope-details">
@@ -930,7 +1099,7 @@ onBeforeUnmount(() => {
             <label class="field"><span>考试时间</span><output class="computed-duration">{{ computedDurationMinutes }}<small>分钟</small></output></label>
           </div>
 
-          <p v-if="todayWorkError" class="today-work-warning"><span>今日知识点暂时无法读取，仍可按课程知识点选择测评范围。{{ todayWorkError }}</span><button type="button" :disabled="todayWorkLoading" @click="loadTodayWork">{{ todayWorkLoading ? '重试中' : '重试' }}</button></p>
+          <p v-if="todayWorkError" class="today-work-warning"><span>今日知识点暂时无法读取，仍可按课程知识点选择测评范围。{{ userMessage(todayWorkError) }}</span><button type="button" :disabled="todayWorkLoading" @click="loadTodayWork">{{ todayWorkLoading ? '重试中' : '重试' }}</button></p>
 
           <div class="question-counts">
             <span>题型与题量</span>
@@ -982,17 +1151,18 @@ onBeforeUnmount(() => {
         <button class="back-button" type="button" @click="backToBuilder"><ArrowLeft :size="17" />返回智能组卷</button>
 
         <header class="exam-titlebar">
-          <div><span>{{ selected.sitting?.status || selected.status }} · {{ selected.items.length }} 题</span><h2>{{ selected.title }}</h2><p>{{ selected.version.configuration?.theme || selected.version.instructions }}</p></div>
-          <dl><div><dt>时长</dt><dd>{{ selected.duration_minutes }} 分钟</dd></div><div><dt>已保存</dt><dd>{{ savedCount }}/{{ selected.items.length }}</dd></div><div><dt>总分</dt><dd>{{ selected.version.total_points }}</dd></div></dl>
+          <div><span>{{ displayLabel(selected.sitting?.status || selected.status) }} · {{ selected.items.length }} 题</span><h2>{{ selected.title }}</h2><p>{{ selected.version.configuration?.theme || selected.version.instructions }}</p></div>
+          <dl><div><dt>时长</dt><dd>{{ selected.duration_minutes }} 分钟</dd></div><div><dt>已保存</dt><dd>{{ savedCount }}/{{ selected.items.length }}</dd></div><div><dt>总分</dt><dd>{{ Math.round(selected.version.total_points * 100) / 100 }}</dd></div></dl>
           <button v-if="sitting?.status === 'assigned'" class="primary-button" :disabled="busy" @click="start"><Play :size="17" />开始作答</button>
-          <button v-else-if="sitting?.status === 'in_progress'" class="primary-button" :disabled="busy || !allDraftsSaved" @click="submitExam()"><Send :size="17" />提交试卷</button>
-          <button v-else-if="['submitted','released'].includes(sitting?.status) && !reportEnvelope" class="primary-button" :disabled="busy" @click="buildReport"><FileCheck2 :size="17" />查看报告</button>
+          <button v-else-if="sitting?.status === 'in_progress'" class="primary-button" :disabled="busy || (!allDraftsSaved && remainingSeconds !== 0)" @click="submitExam()"><Send :size="17" />提交试卷</button>
+          <button v-else-if="['submitted','released'].includes(sitting?.status) && !reportEnvelope && reportAvailable" class="primary-button" :disabled="busy" @click="buildReport"><FileCheck2 :size="17" />查看报告</button>
         </header>
 
         <div v-if="sitting?.status === 'assigned'" class="frozen-notice" data-testid="generated-exam-preview">
           <FileCheck2 :size="20" />
-          <span><strong>试卷已经准备好</strong><small>开始前可以查看题量和范围；开始后会计时，并自动保存每道题的答案。</small></span>
+          <span><strong>试卷已经准备好</strong><small>开始前可以查看题量和范围；开始后会计时，请逐题点击保存，刷新后可继续已保存的作答。</small></span>
         </div>
+        <p v-if="sitting?.status === 'in_progress' && remainingSeconds === 0" class="banner notice" role="status">作答时间已到，请提交试卷。以此前保存的答案为准，未保存的修改不会计入；未答题记为零分。</p>
 
         <div class="answer-layout">
           <nav class="question-nav" aria-label="题目导航">
@@ -1011,9 +1181,10 @@ onBeforeUnmount(() => {
               <span>第 {{ currentQuestion.position }} 题 · {{ currentQuestion.points }} 分</span>
               <small>{{ typeLabels[currentQuestion.question_type] }} · {{ currentQuestion.knowledge_point?.title }}</small>
             </header>
-            <h3>{{ currentQuestion.prompt }}</h3>
+            <div class="question-prompt" role="heading" aria-level="3"><IncrementalMarkdownRenderer :text="currentQuestion.prompt" preserve-content /></div>
 
-            <div v-if="['single_choice','multiple_choice'].includes(currentQuestion.question_type)" class="option-list">
+            <p v-if="currentQuestion.content_issue" role="alert">{{ currentQuestion.content_issue }}</p>
+            <div v-else-if="['single_choice','multiple_choice'].includes(currentQuestion.question_type)" class="option-list">
               <button
                 v-for="(option, index) in currentQuestion.options"
                 :key="option"
@@ -1021,7 +1192,7 @@ onBeforeUnmount(() => {
                 :disabled="!canAnswer"
                 :class="{ selected: currentQuestion.question_type === 'single_choice' ? answers[currentQuestion.id] === optionLabel(option, index) : (answers[currentQuestion.id] || []).includes(optionLabel(option, index)) }"
                 @click="currentQuestion.question_type === 'single_choice' ? chooseAnswer(currentQuestion, optionLabel(option, index)) : toggleMultipleChoice(currentQuestion, optionLabel(option, index))"
-              ><b>{{ optionLabel(option, index) }}</b><span>{{ optionText(option) }}</span><Check v-if="currentQuestion.question_type === 'single_choice' ? answers[currentQuestion.id] === optionLabel(option, index) : (answers[currentQuestion.id] || []).includes(optionLabel(option, index))" :size="17" /></button>
+              ><b>{{ optionLabel(option, index) }}</b><div class="option-text"><IncrementalMarkdownRenderer :text="optionText(option)" preserve-content /></div><Check v-if="currentQuestion.question_type === 'single_choice' ? answers[currentQuestion.id] === optionLabel(option, index) : (answers[currentQuestion.id] || []).includes(optionLabel(option, index))" :size="17" /></button>
             </div>
 
             <div v-else-if="currentQuestion.question_type === 'true_false'" class="binary-options">
@@ -1038,13 +1209,13 @@ onBeforeUnmount(() => {
             />
 
             <footer>
-              <span v-if="saveStates[currentQuestion.id] === 'saved'"><CheckCircle2 :size="16" />答案已保存，仍可修改</span>
+              <span v-if="saveStates[currentQuestion.id] === 'saved'"><CheckCircle2 :size="16" />{{ canAnswer ? '答案已保存，仍可修改' : '答案已保存' }}</span>
               <span v-else-if="saveStates[currentQuestion.id] === 'dirty'">答案已修改，尚未保存</span>
-              <span v-else-if="saveStates[currentQuestion.id] === 'error'"><AlertCircle :size="16" />保存失败，未修改答案时重试会复用同一次请求</span>
+              <span v-else-if="saveStates[currentQuestion.id] === 'error'"><AlertCircle :size="16" />答案暂未保存，请再试一次。</span>
               <span v-else>{{ canAnswer ? '作答后保存本题' : '开始作答后才能填写答案' }}</span>
               <div>
                 <button type="button" :disabled="currentQuestionIndex === 0" title="上一题" @click="currentQuestionIndex -= 1"><ChevronLeft :size="17" /></button>
-                <button v-if="canAnswer" type="button" :disabled="savingItemId || !hasAnswer(currentQuestion)" @click="saveAnswer(currentQuestion, true)"><LoaderCircle v-if="savingItemId === currentQuestion.id" class="spin" :size="16" /><Check v-else :size="16" />保存{{ currentQuestionIndex < selected.items.length - 1 ? '并下一题' : '本题' }}</button>
+                <button v-if="canAnswer && !currentQuestion.content_issue" type="button" :disabled="savingItemId || !hasAnswer(currentQuestion)" @click="saveAnswer(currentQuestion, true)"><LoaderCircle v-if="savingItemId === currentQuestion.id" class="spin" :size="16" /><Check v-else :size="16" />保存{{ currentQuestionIndex < selected.items.length - 1 ? '并下一题' : '本题' }}</button>
                 <button type="button" :disabled="currentQuestionIndex >= selected.items.length - 1" title="下一题" @click="currentQuestionIndex += 1"><ChevronRight :size="17" /></button>
               </div>
             </footer>
@@ -1057,16 +1228,18 @@ onBeforeUnmount(() => {
               <div><dt>尚未保存</dt><dd>{{ unsavedCount }} 题</dd></div>
               <div><dt>当前题</dt><dd>{{ currentQuestionIndex + 1 }}/{{ selected.items.length }}</dd></div>
             </dl>
-            <p v-if="sitting?.status === 'in_progress' && !allDraftsSaved">保存全部题目后才能提交。刷新页面会从最新保存版本恢复。</p>
+            <p v-if="sitting?.status === 'in_progress' && remainingSeconds === 0">时间已到，提交后查看已保存答案的得分与未答题解析。</p>
+            <p v-else-if="sitting?.status === 'in_progress' && !allDraftsSaved">保存全部题目后才能提交。刷新页面会从最新保存版本恢复。</p>
             <p v-else-if="sitting?.status === 'in_progress'">全部答案已保存。提交后将立即计分并记录学习反馈。</p>
             <p v-else-if="sitting?.status === 'assigned'">开始后计时。请先确认题量和测评范围。</p>
+            <p v-else-if="!reportAvailable">试卷已提交，等待老师公布结果。</p>
             <p v-else>试卷已经提交，答案不可再修改。</p>
           </aside>
         </div>
 
         <section v-if="reportData" class="report-section" data-testid="formal-exam-report">
           <header>
-            <div><span>本轮成绩</span><strong>{{ reportData.final_ratio === null ? '待评分' : `${Math.round(reportData.final_ratio * 100)}%` }}</strong><small>{{ reportData.earned_points }} / {{ reportData.total_points }} 分</small></div>
+            <div><span>本轮成绩</span><strong>{{ reportData.final_ratio === null ? '待评分' : `${Math.round(reportData.final_ratio * 100)}%` }}</strong><small>{{ Math.round(reportData.earned_points * 100) / 100 }} / {{ Math.round(reportData.total_points * 100) / 100 }} 分</small></div>
             <div><h2>成绩与反馈报告</h2><p>逐题查看答案、详细讲解和需要优先复习的知识点。</p></div>
             <span :class="['sync-state', { recoverable: reportEnvelope?.recoverable }]">{{ reportEnvelope?.recoverable ? '反馈仍在处理' : '学习闭环已记录' }}</span>
           </header>
@@ -1084,7 +1257,7 @@ onBeforeUnmount(() => {
           <section class="coverage-section">
             <h3>知识点覆盖</h3>
             <div v-for="item in reportData.coverage || []" :key="item.id">
-              <span><strong>{{ item.title }}</strong><small>{{ item.question_count }} 题 · {{ item.earned_points }}/{{ item.total_points }} 分</small></span>
+              <span><strong>{{ item.title }}</strong><small>{{ item.question_count }} 题 · {{ Math.round(item.earned_points * 100) / 100 }}/{{ item.total_points }} 分</small></span>
               <b>{{ Math.round((item.ratio || 0) * 100) }}%</b>
             </div>
           </section>
@@ -1092,19 +1265,31 @@ onBeforeUnmount(() => {
           <section class="answer-review">
             <h3>逐题解析</h3>
             <article v-for="item in reportData.items || []" :key="item.position">
-              <header><span>第 {{ item.position }} 题 · {{ typeLabels[item.question_type] }}</span><b :class="{ wrong: item.correct === false }">{{ item.score === null ? '待评分' : `${Math.round(item.score * item.points * 10) / 10}/${item.points} 分` }}</b></header>
-              <h4>{{ item.prompt }}</h4>
+              <header><span>第 {{ item.position }} 题 · {{ typeLabels[item.question_type] }}</span><b :class="{ wrong: item.correct === false }">{{ item.score === null ? '待评分' : `${Math.round(item.score * item.points * 100) / 100}/${item.points} 分` }}</b></header>
+              <div class="question-prompt" role="heading" aria-level="4"><IncrementalMarkdownRenderer :text="item.prompt" preserve-content /></div>
               <dl>
                 <div><dt>你的答案</dt><dd>{{ displayAnswer(item.learner_answer) }}</dd></div>
-                <div><dt>正确答案</dt><dd>{{ displayAnswer(item.correct_answer) }}</dd></div>
-                <div><dt>解析</dt><dd>{{ item.explanation || '暂无解析' }}</dd></div>
-                <div v-if="publicErrorReason(item)"><dt>错误原因</dt><dd>{{ publicErrorReason(item) }}</dd></div>
+                <div><dt>正确答案</dt><dd><IncrementalMarkdownRenderer :text="displayAnswer(item.correct_answer)" /></dd></div>
+                <div class="report-explanation"><dt>解析</dt><dd><IncrementalMarkdownRenderer :text="item.explanation || '暂无解析'" preserve-content /></dd></div>
+                <div v-if="publicErrorReason(item)" class="report-explanation"><dt>错误原因</dt><dd>{{ publicErrorReason(item) }}</dd></div>
               </dl>
               <footer v-if="item.correct === false || item.retest_action">
                 <button type="button" @click="router.push({ path: '/workspace/review/wrong-questions', query: { course_id: courseId } })">查看错题记录</button>
                 <button type="button" @click="router.push({ path: '/workspace/review', query: { course_id: courseId, knowledge_point_id: item.knowledge_point?.id } })">进入复习计划</button>
                 <button v-if="item.retest_action" type="button" @click="goToRetest(item.retest_action)">针对该知识点重新组卷</button>
               </footer>
+              <div v-if="item.attempt_id" class="student-review" data-testid="exam-item-review">
+                <template v-if="itemReview(item)">
+                  <strong>{{ itemReview(item).status === 'completed' ? '老师已完成复核' : '复核申请已保存，等待老师核对' }}</strong>
+                  <p>申请说明：{{ learningText(itemReview(item).reason) }}</p>
+                  <p v-if="itemReview(item).decision_note">老师反馈：{{ learningText(itemReview(item).decision_note) }}</p>
+                </template>
+                <details v-else>
+                  <summary>对本题评分有疑问？申请老师复核</summary>
+                  <label>希望老师核对的地方<textarea v-model="reviewReasons[item.attempt_id]" placeholder="请指出你的解答中希望老师重新核对的内容。" maxlength="4000" /></label>
+                  <button type="button" :disabled="busy || Boolean(requestingReview) || !String(reviewReasons[item.attempt_id] || '').trim()" @click="requestItemReview(item)">提交复核申请</button>
+                </details>
+              </div>
             </article>
           </section>
         </section>
@@ -1113,7 +1298,7 @@ onBeforeUnmount(() => {
       <section v-if="historical.length || (!selectedId && exams.length)" class="history-section" data-testid="historical-exams">
         <h2><History :size="19" />历史试卷与报告</h2>
         <button v-for="exam in (selectedId ? historical : exams)" :key="exam.id" type="button" @click="selectExam(exam)">
-          <span><strong>{{ exam.title }}</strong><small>{{ exam.items.length }} 题 · {{ exam.duration_minutes }} 分钟 · {{ exam.sitting?.status || exam.status }}</small></span>
+          <span><strong>{{ exam.title }}</strong><small>{{ exam.items.length }} 题 · {{ exam.duration_minutes }} 分钟 · {{ displayLabel(exam.sitting?.status || exam.status) }}</small></span>
           <ChevronRight :size="18" />
         </button>
       </section>
@@ -1122,17 +1307,27 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.exam-shell{width:min(1280px,100%);margin:0 auto;padding:10px 0 56px;color:#06141b;font-family:"Source Han Sans SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;letter-spacing:0}.page-header{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:18px 0 24px;border-bottom:1px solid #ccd0cf}.page-header>div>span{display:flex;align-items:center;gap:8px;color:#4a5c6a;font-size:14px;font-weight:700}.page-header h1{margin:9px 0 8px;font-family:"Source Han Serif SC","Noto Serif CJK SC",serif;font-size:30px;line-height:1.25;letter-spacing:0}.page-header p{margin:0;color:#60727c;font-size:15px;line-height:1.6}.icon-button{display:grid;width:42px;height:42px;place-items:center;border:1px solid #ccd0cf;border-radius:6px;background:#fff;color:#11212d;cursor:pointer}.icon-button:hover{background:#f5f7f7}.banner,.loading-state{display:flex;align-items:center;gap:9px;margin:16px 0;padding:13px 15px;border:1px solid #ccd0cf;border-radius:6px;background:#fff;font-size:14px}.banner.error{border-color:#c7867d;background:#fff8f7;color:#842b24}.banner.notice{background:#eef2f3;color:#11212d}.loading-state{color:#60727c}.spin{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-.course-required-state{display:grid;max-width:680px;min-height:260px;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:16px;margin:48px auto;padding:28px;border:1px solid #ccd0cf;border-radius:8px;background:#fff}.course-required-state h2{margin:0;font-size:20px;line-height:1.45}.course-required-state p{margin:8px 0 0;color:#60727c;font-size:14px;line-height:1.65}.course-required-state .primary-button{grid-column:2;justify-self:start}
-.course-picker-field{grid-column:2;display:grid;gap:7px}.course-picker-field span{font-size:14px;font-weight:700}.course-picker-field select{width:100%;min-height:42px;border:1px solid #b9c2c5;border-radius:5px;background:#fff;padding:9px 11px;color:#06141b;font-size:14px}.course-picker-empty{grid-column:2;margin:0!important}.course-required-state .secondary-button{grid-column:2;justify-self:start;min-height:42px;border:1px solid #9ba8ab;border-radius:6px;background:#fff;padding:10px 17px;color:#11212d;font-size:14px;font-weight:700;cursor:pointer}.generation-waiting{display:flex;max-width:760px;align-items:center;gap:20px;margin:48px auto;padding:34px 30px;border:1px solid #ccd0cf;border-radius:8px;background:#fff}.generation-waiting__icon{display:grid;width:66px;height:66px;flex:0 0 auto;place-items:center;border-radius:50%;background:#eef2f3;color:#11212d}.generation-waiting .eyebrow{color:#60727c;font-size:14px;font-weight:700}.generation-waiting h2{margin:7px 0 6px;font-size:22px}.generation-waiting p{margin:0;color:#4a5c6a;font-size:14px;line-height:1.6}.generation-waiting small{display:block;margin-top:8px;color:#60727c;font-size:14px;line-height:1.55}.today-work-warning{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 16px;color:#842b24;font-size:14px;line-height:1.55}.today-work-warning span{flex:1}.today-work-warning button{flex:0 0 auto;border:1px solid #b87970;border-radius:5px;background:#fff8f7;padding:6px 10px;color:#842b24;font-size:14px;cursor:pointer}.today-work-warning button:disabled{cursor:not-allowed;opacity:.65}.computed-duration{display:flex;min-height:42px;align-items:center;justify-content:space-between;border:1px solid #b9c2c5;border-radius:5px;background:#eef2f3;padding:9px 11px;color:#06141b;font-size:16px;font-weight:700}.computed-duration small{color:#60727c;font-size:14px;font-weight:400}.knowledge-point-title{min-width:0;flex:1}.knowledge-choices button em{font-style:normal;color:#842b24;font-size:12px;font-weight:700;white-space:nowrap}.knowledge-choices button.selected em{color:#fff}
-.primary-button{display:inline-flex;min-height:42px;align-items:center;justify-content:center;gap:8px;border:0;border-radius:6px;background:#11212d;padding:10px 17px;color:#fff;font-size:14px;font-weight:700;cursor:pointer}.primary-button:hover:not(:disabled){background:#06141b}.primary-button:disabled{background:#dce1e2;color:#60727c;cursor:not-allowed}.back-button{display:inline-flex;align-items:center;gap:7px;margin-bottom:16px;border:0;background:transparent;padding:6px 0;color:#11212d;font-size:14px;font-weight:700;cursor:pointer}.back-button:hover{text-decoration:underline}.section-heading span{color:#60727c;font-size:14px;font-weight:700}.section-heading h2{margin:5px 0 0;font-size:21px}
-.locked-stage{margin-top:24px;border-top:1px solid #ccd0cf;border-bottom:1px solid #ccd0cf;background:#fff}.lock-summary{display:grid;grid-template-columns:54px minmax(0,1fr) 90px;align-items:center;gap:18px;padding:28px 20px;background:#eef2f3}.lock-icon{display:grid;width:48px;height:48px;place-items:center;border:1px solid #9ba8ab;border-radius:7px;color:#11212d}.lock-summary>div>span{color:#4a5c6a;font-size:14px;font-weight:700}.lock-summary h2{margin:5px 0 8px;font-size:24px;letter-spacing:0}.lock-summary p{margin:0;color:#60727c;font-size:14px;line-height:1.65}.lock-summary>strong{font-size:26px;text-align:right}.missing-list{display:grid}.missing-list>button{display:grid;grid-template-columns:54px minmax(0,1fr) 110px;align-items:center;gap:16px;min-height:92px;padding:18px 20px;border:0;border-top:1px solid #dce1e2;background:#fff;color:#06141b;text-align:left;cursor:pointer}.missing-list>button:hover{background:#f5f7f7}.missing-list>button>span:first-child{color:#60727c;font-size:14px;font-weight:700}.missing-list>button>span:nth-child(2){display:grid;gap:6px}.missing-list strong{font-size:16px}.missing-list small{color:#60727c;font-size:14px;line-height:1.55}.missing-list>button>span:last-child{display:flex;align-items:center;justify-content:flex-end;gap:5px;color:#11212d;font-size:14px;font-weight:700}.snapshot-required{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:24px 20px;border-top:1px solid #dce1e2}.snapshot-required>span{display:grid;gap:5px}.snapshot-required strong{font-size:17px}.snapshot-required small{color:#60727c;font-size:14px}
-.builder-layout{display:grid;grid-template-columns:minmax(340px,35fr) minmax(0,65fr);min-height:700px;margin-top:24px;border:1px solid #ccd0cf;border-radius:8px;overflow:hidden;background:#fff}.exam-config{padding:24px;border-right:1px solid #ccd0cf;background:#f5f7f7}.unlock-mark{display:flex;align-items:center;gap:7px;color:#11212d;font-size:14px;font-weight:700}.exam-config h2{margin:9px 0 22px;font-size:23px}.field{display:grid;gap:7px;margin-bottom:16px}.field>span:first-child,.question-counts>span,.scope-fieldset legend{font-size:14px;font-weight:700}.field input,.field select,.manager-form input,.manager-tools input,.review-queue input{width:100%;min-height:42px;box-sizing:border-box;border:1px solid #b9c2c5;border-radius:5px;background:#fff;padding:9px 11px;color:#06141b;font-size:14px}.field input:focus,.field select:focus{border-color:#11212d;outline:2px solid #dce1e2;outline-offset:1px}.field input:disabled{background:#eef2f3;color:#4a5c6a}.inline-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}.input-unit{position:relative;display:block}.input-unit small{position:absolute;right:12px;top:12px;color:#60727c;font-size:14px}.input-unit input{padding-right:48px}.scope-fieldset{margin:0 0 16px;padding:0;border:0}.choice-grid{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}.choice-grid button{display:inline-flex;min-height:36px;align-items:center;gap:6px;border:1px solid #b9c2c5;border-radius:5px;background:#fff;padding:7px 10px;color:#11212d;font-size:14px;text-align:left;cursor:pointer}.choice-grid button.selected{border-color:#11212d;background:#11212d;color:#fff}.scope-fieldset>small{display:block;margin-top:8px;color:#60727c;font-size:14px;line-height:1.5}.scope-details{margin-bottom:18px;border-top:1px solid #dce1e2;border-bottom:1px solid #dce1e2;padding:12px 0}.scope-details summary{display:flex;justify-content:space-between;gap:12px;color:#11212d;font-size:14px;font-weight:700;cursor:pointer}.scope-details summary span{color:#60727c;font-weight:400}.knowledge-choices{max-height:180px;overflow:auto;padding:2px}.question-counts{margin-top:4px;border-top:1px solid #ccd0cf;padding-top:18px}.question-counts>div{display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:58px;border-bottom:1px solid #dce1e2}.question-counts>div>span:first-child{display:grid;gap:3px}.question-counts strong{font-size:14px}.question-counts small{color:#60727c;font-size:14px}.stepper{display:grid;grid-template-columns:34px 34px 34px;align-items:center}.stepper button{display:grid;width:34px;height:34px;place-items:center;border:1px solid #b9c2c5;background:#fff;color:#11212d;cursor:pointer}.stepper button:disabled{color:#9ba8ab;cursor:not-allowed}.stepper button:first-child{border-radius:5px 0 0 5px}.stepper button:last-child{border-radius:0 5px 5px 0}.stepper b{display:grid;height:34px;place-items:center;border-top:1px solid #b9c2c5;border-bottom:1px solid #b9c2c5;font-size:14px}.source-limit{margin-top:17px}.config-warning{margin:10px 0 0;color:#842b24;font-size:14px;line-height:1.5}.generate-button{width:100%;margin-top:18px}
-.exam-preview{display:flex;min-width:0;flex-direction:column;padding:28px 32px}.exam-preview>header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding-bottom:22px;border-bottom:2px solid #11212d}.exam-preview>header span{color:#60727c;font-size:14px;font-weight:700}.exam-preview h2{margin:7px 0 5px;font-family:"Source Han Serif SC","Noto Serif CJK SC",serif;font-size:27px}.exam-preview header p{margin:0;color:#60727c;font-size:14px}.exam-preview dl,.exam-titlebar dl{display:flex;gap:22px;margin:0}.exam-preview dl div,.exam-titlebar dl div{display:grid;gap:4px;text-align:right}.exam-preview dt,.exam-titlebar dt{color:#60727c;font-size:14px}.exam-preview dd,.exam-titlebar dd{margin:0;font-size:16px;font-weight:700}.blueprint-summary{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #ccd0cf}.blueprint-summary>div{display:flex;min-width:0;align-items:flex-start;gap:10px;padding:18px 12px}.blueprint-summary>div:first-child{padding-left:0}.blueprint-summary>div+div{border-left:1px solid #dce1e2}.blueprint-summary span{display:grid;min-width:0;gap:5px}.blueprint-summary small{color:#60727c;font-size:14px}.blueprint-summary strong{overflow-wrap:anywhere;font-size:14px;line-height:1.5}.blueprint-list{display:grid}.blueprint-list article{display:grid;grid-template-columns:42px minmax(0,1fr) 60px;gap:14px;align-items:start;padding:20px 0;border-bottom:1px solid #dce1e2}.blueprint-list article>span{color:#60727c;font-size:14px;font-weight:700}.blueprint-list article>div{display:grid;gap:7px}.blueprint-list strong{font-size:16px}.blueprint-list small{color:#60727c;font-size:14px;line-height:1.55}.blueprint-list article>b{text-align:right;font-size:14px}.preview-empty{display:grid;min-height:300px;place-items:center;color:#60727c;font-size:15px}.preview-note{margin-top:auto;border-top:1px solid #ccd0cf;padding-top:20px}.preview-note span{color:#11212d;font-size:14px;font-weight:700}.preview-note p{margin:7px 0 0;color:#60727c;font-size:14px;line-height:1.65}
-.exam-detail{margin-top:24px}.exam-titlebar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:28px;padding:22px 24px;border:1px solid #ccd0cf;border-radius:7px;background:#fff}.exam-titlebar>div>span{color:#4a5c6a;font-size:14px;font-weight:700}.exam-titlebar h2{margin:6px 0 4px;font-size:24px}.exam-titlebar p{margin:0;color:#60727c;font-size:14px}.frozen-notice{display:flex;align-items:center;gap:12px;margin-top:14px;border-left:3px solid #11212d;background:#eef2f3;padding:14px 16px}.frozen-notice>span{display:grid;gap:4px}.frozen-notice strong{font-size:14px}.frozen-notice small{color:#60727c;font-size:14px;line-height:1.5}.answer-layout{display:grid;grid-template-columns:190px minmax(0,1fr) 220px;gap:18px;margin-top:18px}.question-nav,.exam-status{align-self:start;border-top:2px solid #11212d;border-bottom:1px solid #ccd0cf;background:#fff}.question-nav>span{display:block;padding:15px 12px;border-bottom:1px solid #ccd0cf;font-size:14px;font-weight:700}.question-nav>button{display:grid;grid-template-columns:30px minmax(0,1fr) 18px;align-items:center;gap:8px;width:100%;min-height:48px;border:0;border-bottom:1px solid #dce1e2;background:#fff;padding:8px 12px;color:#06141b;text-align:left;cursor:pointer}.question-nav>button:hover{background:#f5f7f7}.question-nav>button.active{background:#11212d;color:#fff}.question-nav>button.saved:not(.active)>span{font-weight:800}.question-nav>button.dirty:not(.active){border-left:3px solid #60727c}.question-nav>button.failed:not(.active){border-left:3px solid #842b24}.question-nav>button span,.question-nav>button small{font-size:14px}.answer-stage{min-width:0;border:1px solid #ccd0cf;border-radius:7px;background:#fff;padding:24px}.answer-stage>header{display:flex;align-items:center;justify-content:space-between;gap:16px}.answer-stage>header span,.answer-stage>header small{color:#60727c;font-size:14px}.answer-stage h3{margin:20px 0;font-size:18px;line-height:1.7;letter-spacing:0}.option-list{display:grid;gap:10px}.option-list>button{display:grid;grid-template-columns:34px minmax(0,1fr) 20px;align-items:center;gap:12px;min-height:52px;border:1px solid #b9c2c5;border-radius:6px;background:#fff;padding:10px 13px;color:#06141b;font-size:14px;text-align:left;cursor:pointer}.option-list>button:hover:not(:disabled){border-color:#11212d;background:#f5f7f7}.option-list>button.selected{border-color:#11212d;background:#11212d;color:#fff}.option-list>button:disabled{cursor:not-allowed}.option-list b{display:grid;width:30px;height:30px;place-items:center;border:1px solid currentColor;border-radius:50%;font-size:14px}.binary-options{display:grid;grid-template-columns:1fr 1fr;gap:10px}.binary-options button{min-height:48px;border:1px solid #b9c2c5;border-radius:5px;background:#fff;color:#11212d;font-size:14px;cursor:pointer}.binary-options button.selected{border-color:#11212d;background:#11212d;color:#fff}.answer-stage>textarea{width:100%;min-height:180px;box-sizing:border-box;border:1px solid #b9c2c5;border-radius:5px;padding:12px;color:#06141b;font-family:inherit;font-size:14px;line-height:1.65;resize:vertical}.answer-stage>textarea:focus{border-color:#11212d;outline:2px solid #dce1e2;outline-offset:1px}.question-sources,.report-sources{margin-top:18px;border-top:1px solid #dce1e2;border-bottom:1px solid #dce1e2;padding:12px 0}.question-sources summary,.report-sources summary{display:flex;justify-content:space-between;gap:12px;font-size:14px;font-weight:700;cursor:pointer}.question-sources summary span,.report-sources summary span{color:#60727c;font-weight:400}.question-sources>div,.report-sources>div{padding:12px 4px 4px}.question-sources strong,.report-sources strong{font-size:14px}.question-sources p,.report-sources p{margin:5px 0 0;color:#60727c;font-size:14px;line-height:1.6}.answer-stage>footer{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:18px}.answer-stage>footer>span{display:flex;align-items:center;gap:6px;color:#4a5c6a;font-size:14px;line-height:1.45}.answer-stage>footer>div{display:flex;gap:7px}.answer-stage>footer button{display:inline-flex;min-height:38px;align-items:center;justify-content:center;gap:6px;border:1px solid #9ba8ab;border-radius:5px;background:#fff;padding:8px 11px;color:#11212d;font-size:14px;font-weight:700;cursor:pointer}.answer-stage>footer button:disabled{color:#9ba8ab;cursor:not-allowed}.exam-status{padding:0 14px 16px}.timer-block{display:flex;align-items:center;gap:10px;padding:16px 0;border-bottom:1px solid #ccd0cf}.timer-block>span{display:grid;gap:3px}.timer-block small{color:#60727c;font-size:14px}.timer-block strong{font-variant-numeric:tabular-nums;font-size:24px}.timer-block strong.expired{color:#842b24}.exam-status dl{margin:0}.exam-status dl div{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 0;border-bottom:1px solid #dce1e2}.exam-status dt,.exam-status dd{font-size:14px}.exam-status dd{margin:0;font-weight:700}.exam-status p{margin:14px 0 0;color:#60727c;font-size:14px;line-height:1.65}
-.report-section{margin-top:28px;border-top:2px solid #11212d;border-bottom:1px solid #ccd0cf;background:#fff}.report-section>header{display:grid;grid-template-columns:180px minmax(0,1fr) auto;align-items:center;gap:22px;padding:24px;background:#eef2f3}.report-section>header>div:first-child{display:grid}.report-section>header>div:first-child>span,.report-section>header>div:first-child>small{font-size:14px}.report-section>header>div:first-child>strong{font-family:"Source Han Serif SC","Noto Serif CJK SC",serif;font-size:36px}.report-section>header h2{margin:0 0 6px;font-size:21px}.report-section>header p{margin:0;color:#60727c;font-size:14px;line-height:1.6}.sync-state{border:1px solid #9ba8ab;border-radius:999px;padding:7px 10px;color:#11212d;font-size:14px;font-weight:700}.sync-state.recoverable{border-color:#b87970;color:#842b24}.coverage-section,.answer-review{padding:24px}.coverage-section h3,.answer-review>h3{margin:0 0 14px;font-size:18px}.coverage-section>div{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 0;border-top:1px solid #dce1e2}.coverage-section>div>span{display:grid;gap:4px}.coverage-section strong{font-size:14px}.coverage-section small{color:#60727c;font-size:14px}.coverage-section b{font-size:17px}.answer-review{border-top:1px solid #ccd0cf}.answer-review>article{padding:20px 0;border-top:1px solid #dce1e2}.answer-review article>header{display:flex;align-items:center;justify-content:space-between;gap:14px}.answer-review article>header span,.answer-review article>header b{font-size:14px}.answer-review article>header b.wrong{color:#842b24}.answer-review h4{margin:13px 0;font-size:16px;line-height:1.6}.answer-review dl{display:grid;grid-template-columns:1fr 1fr;gap:0;margin:0;border-top:1px solid #dce1e2}.answer-review dl div{display:grid;grid-template-columns:88px minmax(0,1fr);gap:10px;padding:12px 10px;border-bottom:1px solid #dce1e2}.answer-review dl div:nth-child(odd){border-right:1px solid #dce1e2}.answer-review dt{color:#60727c;font-size:14px}.answer-review dd{margin:0;overflow-wrap:anywhere;font-size:14px;line-height:1.6;white-space:pre-wrap}.answer-review article>footer{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.answer-review article>footer button{border:1px solid #9ba8ab;border-radius:5px;background:#fff;padding:8px 11px;color:#11212d;font-size:14px;font-weight:700;cursor:pointer}
-.history-section{margin-top:32px;border-top:1px solid #ccd0cf}.history-section h2{display:flex;align-items:center;gap:8px;margin:0;padding:20px 4px 14px;font-size:18px}.history-section>button{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:72px;padding:14px 16px;border:0;border-top:1px solid #dce1e2;background:#fff;color:#06141b;text-align:left;cursor:pointer}.history-section>button:hover{background:#f5f7f7}.history-section>button>span{display:grid;gap:5px}.history-section strong{font-size:15px}.history-section small{color:#60727c;font-size:14px}.manager-authoring,.review-queue{margin-top:24px;padding:22px;border-top:1px solid #ccd0cf;border-bottom:1px solid #ccd0cf;background:#f5f7f7}.manager-form{display:grid;grid-template-columns:1fr 1.4fr 120px auto;gap:10px;margin-top:16px}.question-picker{display:grid;max-height:260px;margin-top:15px;overflow:auto;border-top:1px solid #ccd0cf}.question-picker label{display:grid;grid-template-columns:22px 90px minmax(0,1fr);gap:10px;padding:12px 4px;border-bottom:1px solid #dce1e2;font-size:14px}.question-picker strong,.question-picker span{font-size:14px}.manager-layout{display:grid;grid-template-columns:280px minmax(0,1fr);min-height:320px;margin-top:20px;border:1px solid #ccd0cf}.history-list{border-right:1px solid #ccd0cf}.history-list h2{display:flex;justify-content:space-between;margin:0;padding:16px;font-size:17px}.history-list button{display:grid;width:100%;gap:5px;border:0;border-top:1px solid #dce1e2;background:#fff;padding:13px 16px;text-align:left}.history-list button.active{background:#11212d;color:#fff}.history-list strong,.history-list small{font-size:14px}.manager-stage,.empty-stage{padding:22px}.manager-stage h2{margin-top:0}.manager-stage p,.compact-items li{font-size:14px;line-height:1.6}.manager-tools{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.manager-tools input{width:220px}.manager-tools button,.review-queue button{border:1px solid #9ba8ab;border-radius:5px;background:#fff;padding:9px 13px;color:#11212d;font-size:14px;font-weight:700}.review-queue h2{margin-top:0}.review-queue>div{display:grid;grid-template-columns:minmax(0,1fr) 100px minmax(220px,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid #dce1e2}.review-queue span{font-size:14px}
-.generation-mode-notice{display:flex;align-items:center;gap:12px;margin-top:10px;border:1px solid #ccd0cf;background:#f5f7f7;padding:12px 16px;color:#11212d}.generation-mode-notice>span{display:grid;gap:4px}.generation-mode-notice strong{font-size:14px}.generation-mode-notice small{color:#60727c;font-size:14px;line-height:1.5}
+.teacher-review{padding:18px 0;border-top:1px solid var(--color-border-strong)}
+.teacher-review dl{display:grid;gap:12px}.teacher-review dl>div{display:grid;grid-template-columns:80px minmax(0,1fr);gap:12px}.teacher-review dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.review-controls{display:flex;gap:16px;align-items:end;flex-wrap:wrap}.review-controls label,.student-review label{display:grid;gap:8px}.review-controls label:nth-child(2){flex:1;min-width:240px}
+.review-controls input,.review-controls textarea,.student-review textarea{font:inherit;padding:10px;border:1px solid var(--color-border-strong);border-radius:5px}.review-controls input{width:100px}.review-controls textarea,.student-review textarea{min-height:80px;resize:vertical}
+.student-review{margin-top:18px;padding:16px;background:var(--color-surface-subtle,var(--color-surface-subtle));border:1px solid var(--color-border-strong);border-radius:5px;font-size:14px}.student-review summary{cursor:pointer}.student-review label{margin-top:16px}.student-review button{margin-top:12px;padding:9px 13px;border:1px solid var(--color-border-strong);border-radius:5px;background:white;color:inherit;font:inherit;cursor:pointer}.student-review button:disabled{opacity:.5;cursor:default}
+.question-prompt { margin: 20px 0; font-size: 18px; line-height: 1.7; font-weight: 650; }
+.question-prompt, .option-text { min-width: 0; overflow-wrap: anywhere; }
+.question-prompt :deep(.incremental-md-renderer), .option-text :deep(.incremental-md-renderer) { color: inherit; font-size: inherit; line-height: inherit; }
+.option-text :deep(.inc-paragraph) { margin: 0; }
+.manager-form select, .manager-tools select { min-height: 42px; max-width: 100%; padding: 9px 11px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); color: var(--color-text); font-size: 14px; }
+.exam-shell{width:min(1280px,100%);margin:0 auto;padding:10px 0 56px;color:var(--color-text);font-family:"Source Han Sans SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;letter-spacing:0}.page-header{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:18px 0 24px;border-bottom:1px solid var(--color-border-strong)}.page-header>div>span{display:flex;align-items:center;gap:8px;color:var(--color-text-secondary);font-size:14px;font-weight:700}.page-header h1{margin:9px 0 8px;font-family:"Source Han Serif SC","Noto Serif CJK SC",serif;font-size:30px;line-height:1.25;letter-spacing:0}.page-header p{margin:0;color:var(--color-text-muted);font-size:15px;line-height:1.6}.icon-button{display:grid;width:42px;height:42px;place-items:center;border:1px solid var(--color-border-strong);border-radius:6px;background:var(--color-surface);color:var(--color-text);cursor:pointer}.icon-button:hover{background:var(--color-surface-subtle)}.banner,.loading-state{display:flex;align-items:center;gap:9px;margin:16px 0;padding:13px 15px;border:1px solid var(--color-border-strong);border-radius:6px;background:var(--color-surface);font-size:14px}.banner.error{border-color:#c7867d;background:var(--color-danger-soft);color:var(--color-danger)}.banner.notice{background:var(--color-surface-subtle);color:var(--color-text)}.loading-state{color:var(--color-text-muted)}.spin{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.course-required-state{display:grid;max-width:680px;min-height:260px;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:16px;margin:48px auto;padding:28px;border:1px solid var(--color-border-strong);border-radius:8px;background:var(--color-surface)}.course-required-state h2{margin:0;font-size:20px;line-height:1.45}.course-required-state p{margin:8px 0 0;color:var(--color-text-muted);font-size:14px;line-height:1.65}.course-required-state .primary-button{grid-column:2;justify-self:start}
+.course-picker-field{grid-column:2;display:grid;gap:7px}.course-picker-field span{font-size:14px;font-weight:700}.course-picker-field select{width:100%;min-height:42px;border:1px solid var(--color-border-strong);border-radius:5px;background:var(--color-surface);padding:9px 11px;color:var(--color-text);font-size:14px}.course-picker-empty{grid-column:2;margin:0!important}.course-required-state .secondary-button{grid-column:2;justify-self:start;min-height:42px;border:1px solid #9ba8ab;border-radius:6px;background:var(--color-surface);padding:10px 17px;color:var(--color-text);font-size:14px;font-weight:700;cursor:pointer}.generation-waiting{display:flex;max-width:760px;align-items:center;gap:20px;margin:48px auto;padding:34px 30px;border:1px solid var(--color-border-strong);border-radius:8px;background:var(--color-surface)}.generation-waiting__icon{display:grid;width:66px;height:66px;flex:0 0 auto;place-items:center;border-radius:50%;background:var(--color-surface-subtle);color:var(--color-text)}.generation-waiting .eyebrow{color:var(--color-text-muted);font-size:14px;font-weight:700}.generation-waiting h2{margin:7px 0 6px;font-size:22px}.generation-waiting p{margin:0;color:var(--color-text-secondary);font-size:14px;line-height:1.6}.generation-waiting small{display:block;margin-top:8px;color:var(--color-text-muted);font-size:14px;line-height:1.55}.today-work-warning{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 16px;color:var(--color-danger);font-size:14px;line-height:1.55}.today-work-warning span{flex:1}.today-work-warning button{flex:0 0 auto;border:1px solid #b87970;border-radius:5px;background:var(--color-danger-soft);padding:6px 10px;color:var(--color-danger);font-size:14px;cursor:pointer}.today-work-warning button:disabled{cursor:not-allowed;opacity:.65}.computed-duration{display:flex;min-height:42px;align-items:center;justify-content:space-between;border:1px solid var(--color-border-strong);border-radius:5px;background:var(--color-surface-subtle);padding:9px 11px;color:var(--color-text);font-size:16px;font-weight:700}.computed-duration small{color:var(--color-text-muted);font-size:14px;font-weight:400}.knowledge-point-title{min-width:0;flex:1}.knowledge-choices button em{font-style:normal;color:var(--color-danger);font-size:12px;font-weight:700;white-space:nowrap}.knowledge-choices button.selected em{color:#fff}
+.primary-button{display:inline-flex;min-height:42px;align-items:center;justify-content:center;gap:8px;border:0;border-radius:6px;background:var(--color-text);padding:10px 17px;color:#fff;font-size:14px;font-weight:700;cursor:pointer}.primary-button:hover:not(:disabled){background:var(--color-text)}.primary-button:disabled{background:var(--color-border);color:var(--color-text-muted);cursor:not-allowed}.back-button{display:inline-flex;align-items:center;gap:7px;margin-bottom:16px;border:0;background:transparent;padding:6px 0;color:var(--color-text);font-size:14px;font-weight:700;cursor:pointer}.back-button:hover{text-decoration:underline}.section-heading span{color:var(--color-text-muted);font-size:14px;font-weight:700}.section-heading h2{margin:5px 0 0;font-size:21px}
+.locked-stage{margin-top:24px;border-top:1px solid var(--color-border-strong);border-bottom:1px solid var(--color-border-strong);background:var(--color-surface)}.lock-summary{display:grid;grid-template-columns:54px minmax(0,1fr) 90px;align-items:center;gap:18px;padding:28px 20px;background:var(--color-surface-subtle)}.lock-icon{display:grid;width:48px;height:48px;place-items:center;border:1px solid #9ba8ab;border-radius:7px;color:var(--color-text)}.lock-summary>div>span{color:var(--color-text-secondary);font-size:14px;font-weight:700}.lock-summary h2{margin:5px 0 8px;font-size:24px;letter-spacing:0}.lock-summary p{margin:0;color:var(--color-text-muted);font-size:14px;line-height:1.65}.lock-summary>strong{font-size:26px;text-align:right}.missing-list{display:grid}.missing-list>button{display:grid;grid-template-columns:54px minmax(0,1fr) 110px;align-items:center;gap:16px;min-height:92px;padding:18px 20px;border:0;border-top:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text);text-align:left;cursor:pointer}.missing-list>button:hover{background:var(--color-surface-subtle)}.missing-list>button>span:first-child{color:var(--color-text-muted);font-size:14px;font-weight:700}.missing-list>button>span:nth-child(2){display:grid;gap:6px}.missing-list strong{font-size:16px}.missing-list small{color:var(--color-text-muted);font-size:14px;line-height:1.55}.missing-list>button>span:last-child{display:flex;align-items:center;justify-content:flex-end;gap:5px;color:var(--color-text);font-size:14px;font-weight:700}.snapshot-required{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:24px 20px;border-top:1px solid var(--color-border)}.snapshot-required>span{display:grid;gap:5px}.snapshot-required strong{font-size:17px}.snapshot-required small{color:var(--color-text-muted);font-size:14px}
+.builder-layout{display:grid;grid-template-columns:minmax(340px,35fr) minmax(0,65fr);min-height:700px;margin-top:24px;border:1px solid var(--color-border-strong);border-radius:8px;overflow:hidden;background:var(--color-surface)}.exam-config{padding:24px;border-right:1px solid var(--color-border-strong);background:var(--color-surface-subtle)}.unlock-mark{display:flex;align-items:center;gap:7px;color:var(--color-text);font-size:14px;font-weight:700}.exam-config h2{margin:9px 0 22px;font-size:23px}.field{display:grid;gap:7px;margin-bottom:16px}.field>span:first-child,.question-counts>span,.scope-fieldset legend{font-size:14px;font-weight:700}.field input,.field select,.manager-form input,.manager-tools input,.review-queue input{width:100%;min-height:42px;box-sizing:border-box;border:1px solid var(--color-border-strong);border-radius:5px;background:var(--color-surface);padding:9px 11px;color:var(--color-text);font-size:14px}.field input:focus,.field select:focus{border-color:var(--color-text);outline:2px solid var(--color-border);outline-offset:1px}.field input:disabled{background:var(--color-surface-subtle);color:var(--color-text-secondary)}.inline-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}.input-unit{position:relative;display:block}.input-unit small{position:absolute;right:12px;top:12px;color:var(--color-text-muted);font-size:14px}.input-unit input{padding-right:48px}.scope-fieldset{margin:0 0 16px;padding:0;border:0}.choice-grid{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}.choice-grid button{display:inline-flex;min-height:36px;align-items:center;gap:6px;border:1px solid var(--color-border-strong);border-radius:5px;background:var(--color-surface);padding:7px 10px;color:var(--color-text);font-size:14px;text-align:left;cursor:pointer}.choice-grid button.selected{border-color:var(--color-text);background:var(--color-text);color:#fff}.scope-fieldset>small{display:block;margin-top:8px;color:var(--color-text-muted);font-size:14px;line-height:1.5}.scope-details{margin-bottom:18px;border-top:1px solid var(--color-border);border-bottom:1px solid var(--color-border);padding:12px 0}.scope-details summary{display:flex;justify-content:space-between;gap:12px;color:var(--color-text);font-size:14px;font-weight:700;cursor:pointer}.scope-details summary span{color:var(--color-text-muted);font-weight:400}.knowledge-choices{max-height:180px;overflow:auto;padding:2px}.question-counts{margin-top:4px;border-top:1px solid var(--color-border-strong);padding-top:18px}.question-counts>div{display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:58px;border-bottom:1px solid var(--color-border)}.question-counts>div>span:first-child{display:grid;gap:3px}.question-counts strong{font-size:14px}.question-counts small{color:var(--color-text-muted);font-size:14px}.stepper{display:grid;grid-template-columns:34px 34px 34px;align-items:center}.stepper button{display:grid;width:34px;height:34px;place-items:center;border:1px solid var(--color-border-strong);background:var(--color-surface);color:var(--color-text);cursor:pointer}.stepper button:disabled{color:#9ba8ab;cursor:not-allowed}.stepper button:first-child{border-radius:5px 0 0 5px}.stepper button:last-child{border-radius:0 5px 5px 0}.stepper b{display:grid;height:34px;place-items:center;border-top:1px solid var(--color-border-strong);border-bottom:1px solid var(--color-border-strong);font-size:14px}.source-limit{margin-top:17px}.config-warning{margin:10px 0 0;color:var(--color-danger);font-size:14px;line-height:1.5}.generate-button{width:100%;margin-top:18px}
+.exam-preview{display:flex;min-width:0;flex-direction:column;padding:28px 32px}.exam-preview>header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding-bottom:22px;border-bottom:2px solid var(--color-text)}.exam-preview>header span{color:var(--color-text-muted);font-size:14px;font-weight:700}.exam-preview h2{margin:7px 0 5px;font-family:"Source Han Serif SC","Noto Serif CJK SC",serif;font-size:27px}.exam-preview header p{margin:0;color:var(--color-text-muted);font-size:14px}.exam-preview dl,.exam-titlebar dl{display:flex;gap:22px;margin:0}.exam-preview dl div,.exam-titlebar dl div{display:grid;gap:4px;text-align:right}.exam-preview dt,.exam-titlebar dt{color:var(--color-text-muted);font-size:14px}.exam-preview dd,.exam-titlebar dd{margin:0;font-size:16px;font-weight:700}.blueprint-summary{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--color-border-strong)}.blueprint-summary>div{display:flex;min-width:0;align-items:flex-start;gap:10px;padding:18px 12px}.blueprint-summary>div:first-child{padding-left:0}.blueprint-summary>div+div{border-left:1px solid var(--color-border)}.blueprint-summary span{display:grid;min-width:0;gap:5px}.blueprint-summary small{color:var(--color-text-muted);font-size:14px}.blueprint-summary strong{overflow-wrap:anywhere;font-size:14px;line-height:1.5}.blueprint-list{display:grid}.blueprint-list article{display:grid;grid-template-columns:42px minmax(0,1fr) 60px;gap:14px;align-items:start;padding:20px 0;border-bottom:1px solid var(--color-border)}.blueprint-list article>span{color:var(--color-text-muted);font-size:14px;font-weight:700}.blueprint-list article>div{display:grid;gap:7px}.blueprint-list strong{font-size:16px}.blueprint-list small{color:var(--color-text-muted);font-size:14px;line-height:1.55}.blueprint-list article>b{text-align:right;font-size:14px}.preview-empty{display:grid;min-height:300px;place-items:center;color:var(--color-text-muted);font-size:15px}.preview-note{margin-top:auto;border-top:1px solid var(--color-border-strong);padding-top:20px}.preview-note span{color:var(--color-text);font-size:14px;font-weight:700}.preview-note p{margin:7px 0 0;color:var(--color-text-muted);font-size:14px;line-height:1.65}
+.exam-detail{margin-top:24px}.exam-titlebar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:28px;padding:22px 24px;border:1px solid var(--color-border-strong);border-radius:7px;background:var(--color-surface)}.exam-titlebar>div>span{color:var(--color-text-secondary);font-size:14px;font-weight:700}.exam-titlebar h2{margin:6px 0 4px;font-size:24px}.exam-titlebar p{margin:0;color:var(--color-text-muted);font-size:14px}.frozen-notice{display:flex;align-items:center;gap:12px;margin-top:14px;border-left:3px solid var(--color-text);background:var(--color-surface-subtle);padding:14px 16px}.frozen-notice>span{display:grid;gap:4px}.frozen-notice strong{font-size:14px}.frozen-notice small{color:var(--color-text-muted);font-size:14px;line-height:1.5}.answer-layout{display:grid;grid-template-columns:190px minmax(0,1fr) 220px;gap:18px;margin-top:18px}.question-nav,.exam-status{align-self:start;border-top:2px solid var(--color-text);border-bottom:1px solid var(--color-border-strong);background:var(--color-surface)}.question-nav>span{display:block;padding:15px 12px;border-bottom:1px solid var(--color-border-strong);font-size:14px;font-weight:700}.question-nav>button{display:grid;grid-template-columns:30px minmax(0,1fr) 18px;align-items:center;gap:8px;width:100%;min-height:48px;border:0;border-bottom:1px solid var(--color-border);background:var(--color-surface);padding:8px 12px;color:var(--color-text);text-align:left;cursor:pointer}.question-nav>button:hover{background:var(--color-surface-subtle)}.question-nav>button.active{background:var(--color-text);color:#fff}.question-nav>button.saved:not(.active)>span{font-weight:800}.question-nav>button.dirty:not(.active){border-left:3px solid var(--color-text-muted)}.question-nav>button.failed:not(.active){border-left:3px solid var(--color-danger)}.question-nav>button span,.question-nav>button small{font-size:14px}.answer-stage{min-width:0;border:1px solid var(--color-border-strong);border-radius:7px;background:var(--color-surface);padding:24px}.answer-stage>header{display:flex;align-items:center;justify-content:space-between;gap:16px}.answer-stage>header span,.answer-stage>header small{color:var(--color-text-muted);font-size:14px}.answer-stage h3{margin:20px 0;font-size:18px;line-height:1.7;letter-spacing:0}.option-list{display:grid;gap:10px}.option-list>button{display:grid;grid-template-columns:34px minmax(0,1fr) 20px;align-items:center;gap:12px;min-height:52px;border:1px solid var(--color-border-strong);border-radius:6px;background:var(--color-surface);padding:10px 13px;color:var(--color-text);font-size:14px;text-align:left;cursor:pointer}.option-list>button:hover:not(:disabled){border-color:var(--color-text);background:var(--color-surface-subtle)}.option-list>button.selected{border-color:var(--color-text);background:var(--color-text);color:#fff}.option-list>button:disabled{cursor:not-allowed}.option-list b{display:grid;width:30px;height:30px;place-items:center;border:1px solid currentColor;border-radius:50%;font-size:14px}.binary-options{display:grid;grid-template-columns:1fr 1fr;gap:10px}.binary-options button{min-height:48px;border:1px solid var(--color-border-strong);border-radius:5px;background:var(--color-surface);color:var(--color-text);font-size:14px;cursor:pointer}.binary-options button.selected{border-color:var(--color-text);background:var(--color-text);color:#fff}.answer-stage>textarea{width:100%;min-height:180px;box-sizing:border-box;border:1px solid var(--color-border-strong);border-radius:5px;padding:12px;color:var(--color-text);font-family:inherit;font-size:14px;line-height:1.65;resize:vertical}.answer-stage>textarea:focus{border-color:var(--color-text);outline:2px solid var(--color-border);outline-offset:1px}.question-sources,.report-sources{margin-top:18px;border-top:1px solid var(--color-border);border-bottom:1px solid var(--color-border);padding:12px 0}.question-sources summary,.report-sources summary{display:flex;justify-content:space-between;gap:12px;font-size:14px;font-weight:700;cursor:pointer}.question-sources summary span,.report-sources summary span{color:var(--color-text-muted);font-weight:400}.question-sources>div,.report-sources>div{padding:12px 4px 4px}.question-sources strong,.report-sources strong{font-size:14px}.question-sources p,.report-sources p{margin:5px 0 0;color:var(--color-text-muted);font-size:14px;line-height:1.6}.answer-stage>footer{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:18px}.answer-stage>footer>span{display:flex;align-items:center;gap:6px;color:var(--color-text-secondary);font-size:14px;line-height:1.45}.answer-stage>footer>div{display:flex;gap:7px}.answer-stage>footer button{display:inline-flex;min-height:38px;align-items:center;justify-content:center;gap:6px;border:1px solid #9ba8ab;border-radius:5px;background:var(--color-surface);padding:8px 11px;color:var(--color-text);font-size:14px;font-weight:700;cursor:pointer}.answer-stage>footer button:disabled{color:#9ba8ab;cursor:not-allowed}.exam-status{padding:0 14px 16px}.timer-block{display:flex;align-items:center;gap:10px;padding:16px 0;border-bottom:1px solid var(--color-border-strong)}.timer-block>span{display:grid;gap:3px}.timer-block small{color:var(--color-text-muted);font-size:14px}.timer-block strong{font-variant-numeric:tabular-nums;font-size:24px}.timer-block strong.expired{color:var(--color-danger)}.exam-status dl{margin:0}.exam-status dl div{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 0;border-bottom:1px solid var(--color-border)}.exam-status dt,.exam-status dd{font-size:14px}.exam-status dd{margin:0;font-weight:700}.exam-status p{margin:14px 0 0;color:var(--color-text-muted);font-size:14px;line-height:1.65}
+.report-section{margin-top:28px;border-top:2px solid var(--color-text);border-bottom:1px solid var(--color-border-strong);background:var(--color-surface)}.report-section>header{display:grid;grid-template-columns:180px minmax(0,1fr) auto;align-items:center;gap:22px;padding:24px;background:var(--color-surface-subtle)}.report-section>header>div:first-child{display:grid}.report-section>header>div:first-child>span,.report-section>header>div:first-child>small{font-size:14px}.report-section>header>div:first-child>strong{font-family:"Source Han Serif SC","Noto Serif CJK SC",serif;font-size:36px}.report-section>header h2{margin:0 0 6px;font-size:21px}.report-section>header p{margin:0;color:var(--color-text-muted);font-size:14px;line-height:1.6}.sync-state{border:1px solid #9ba8ab;border-radius:999px;padding:7px 10px;color:var(--color-text);font-size:14px;font-weight:700}.sync-state.recoverable{border-color:#b87970;color:var(--color-danger)}.coverage-section,.answer-review{padding:24px}.coverage-section h3,.answer-review>h3{margin:0 0 14px;font-size:18px}.coverage-section>div{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 0;border-top:1px solid var(--color-border)}.coverage-section>div>span{display:grid;gap:4px}.coverage-section strong{font-size:14px}.coverage-section small{color:var(--color-text-muted);font-size:14px}.coverage-section b{font-size:17px}.answer-review{border-top:1px solid var(--color-border-strong)}.answer-review>article{padding:20px 0;border-top:1px solid var(--color-border)}.answer-review article>header{display:flex;align-items:center;justify-content:space-between;gap:14px}.answer-review article>header span,.answer-review article>header b{font-size:14px}.answer-review article>header b.wrong{color:var(--color-danger)}.answer-review h4{margin:13px 0;font-size:16px;line-height:1.6}.answer-review dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;margin:0;border-top:1px solid var(--color-border)}.answer-review dl>div{display:grid;grid-template-columns:88px minmax(0,1fr);gap:10px;padding:12px 10px;border-bottom:1px solid var(--color-border)}.answer-review dl>div:nth-child(odd):not(.report-explanation){border-right:1px solid var(--color-border)}.answer-review dl>.report-explanation{grid-column:1/-1}.answer-review dt{color:var(--color-text-muted);font-size:14px}.answer-review dd{min-width:0;margin:0;overflow-wrap:anywhere;font-size:14px;line-height:1.6;white-space:pre-wrap}.answer-review article>footer{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.answer-review article>footer button{border:1px solid #9ba8ab;border-radius:5px;background:var(--color-surface);padding:8px 11px;color:var(--color-text);font-size:14px;font-weight:700;cursor:pointer}
+.history-section{margin-top:32px;border-top:1px solid var(--color-border-strong)}.history-section h2{display:flex;align-items:center;gap:8px;margin:0;padding:20px 4px 14px;font-size:18px}.history-section>button{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:72px;padding:14px 16px;border:0;border-top:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text);text-align:left;cursor:pointer}.history-section>button:hover{background:var(--color-surface-subtle)}.history-section>button>span{display:grid;gap:5px}.history-section strong{font-size:15px}.history-section small{color:var(--color-text-muted);font-size:14px}.manager-authoring,.review-queue{margin-top:24px;padding:22px;border-top:1px solid var(--color-border-strong);border-bottom:1px solid var(--color-border-strong);background:var(--color-surface-subtle)}.manager-form{display:grid;grid-template-columns:1fr 1.4fr 120px auto;gap:10px;margin-top:16px}.question-picker{display:grid;max-height:260px;margin-top:15px;overflow:auto;border-top:1px solid var(--color-border-strong)}.question-picker label{display:grid;grid-template-columns:22px 90px minmax(0,1fr);gap:10px;padding:12px 4px;border-bottom:1px solid var(--color-border);font-size:14px}.question-picker strong,.question-picker span{font-size:14px}.manager-layout{display:grid;grid-template-columns:280px minmax(0,1fr);min-height:320px;margin-top:20px;border:1px solid var(--color-border-strong)}.history-list{border-right:1px solid var(--color-border-strong)}.history-list h2{display:flex;justify-content:space-between;margin:0;padding:16px;font-size:17px}.history-list button{display:grid;width:100%;gap:5px;border:0;border-top:1px solid var(--color-border);background:var(--color-surface);padding:13px 16px;text-align:left}.history-list button.active{background:var(--color-text);color:#fff}.history-list strong,.history-list small{font-size:14px}.manager-stage,.empty-stage{padding:22px}.manager-stage h2{margin-top:0}.manager-stage p,.compact-items li{font-size:14px;line-height:1.6}.manager-tools{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.manager-tools input{width:220px}.manager-tools button,.review-queue button{border:1px solid #9ba8ab;border-radius:5px;background:var(--color-surface);padding:9px 13px;color:var(--color-text);font-size:14px;font-weight:700}.review-queue h2{margin-top:0}.review-queue>div{display:grid;grid-template-columns:minmax(0,1fr) 100px minmax(220px,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--color-border)}.review-queue span{font-size:14px}
+.generation-mode-notice{display:flex;align-items:center;gap:12px;margin-top:10px;border:1px solid var(--color-border-strong);background:var(--color-surface-subtle);padding:12px 16px;color:var(--color-text)}.generation-mode-notice>span{display:grid;gap:4px}.generation-mode-notice strong{font-size:14px}.generation-mode-notice small{color:var(--color-text-muted);font-size:14px;line-height:1.5}
 .answer-stage h3,.answer-stage .option-list>button span,.question-sources p,.report-sources p,.answer-review h4{min-width:0;overflow-wrap:anywhere;white-space:normal;word-break:break-word}
 @media (max-width:1180px){.answer-layout{grid-template-columns:170px minmax(0,1fr)}.exam-status{grid-column:1/-1;display:grid;grid-template-columns:220px minmax(0,1fr);gap:18px;align-items:center}.exam-status dl{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.exam-status p{margin:0}}
 </style>

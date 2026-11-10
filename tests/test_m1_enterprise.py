@@ -344,7 +344,7 @@ def test_enterprise_write_services_enforce_scope_snapshot_versions_and_audit():
         assert certification.standard_snapshot["competencies"][0]["version"] == "standard-1"
         audited_types = {
             row.object_type for row in session.query(DBAuditLog).all()
-            if (row.metadata_json or {}).get("organization_id") == organization.id
+            if (row.metadata_json or {}).get("context", {}).get("organization_id") == organization.id
         }
         assert {"organization", "organization_membership", "job_family", "job_level",
                 "competency_standard", "training_program", "training_cohort",

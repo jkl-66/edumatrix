@@ -25,6 +25,7 @@ from app.auth import get_password_hash
 from fastapi.testclient import TestClient
 from app.main import app
 from tests.api_test_helpers import auth_headers
+from course_catalog import MASTER_COURSE_ID
 
 
 def _user(session):
@@ -128,7 +129,7 @@ def test_task_and_artifact_apis_persist_and_enforce_owner_scope():
         task_request = {
             "capability": "lesson.generate",
             "idempotency_key": new_public_id("request"),
-            "course_id": "course-rag-engineering-m0",
+            "course_id": MASTER_COURSE_ID,
         }
         task = client.post("/api/v1/generation-tasks", json=task_request, headers=owner_headers)
         assert task.status_code == 201
@@ -137,9 +138,16 @@ def test_task_and_artifact_apis_persist_and_enforce_owner_scope():
         assert duplicate.json()["id"] == task.json()["id"]
         assert duplicate.json()["created"] is False
 
+        with SessionLocal() as session:
+            append_task_event(session, task_id=task.json()['id'], event_type='diagnostic.work_saved',
+                              payload={'kind': 'candidate', 'generated': {'reference_answer': 'unpublished diagnostic answer'}})
+            session.commit()
+
         restored = client.get(f"/api/v1/generation-tasks/{task.json()['id']}", headers=owner_headers)
         assert restored.status_code == 200
         assert restored.json()["events"][0]["event_type"] == "generation_task.created"
+        assert len(restored.json()['events']) == 1
+        assert 'unpublished diagnostic answer' not in restored.text
         assert client.get(
             f"/api/v1/generation-tasks/{task.json()['id']}", headers=other_headers
         ).status_code == 403
@@ -150,7 +158,7 @@ def test_task_and_artifact_apis_persist_and_enforce_owner_scope():
                 "artifact_type": "lesson",
                 "title": "Persistent lesson",
                 "content": "v1",
-                "course_id": "course-rag-engineering-m0",
+                "course_id": MASTER_COURSE_ID,
                 "creating_task_id": task.json()["id"],
             },
             headers=owner_headers,

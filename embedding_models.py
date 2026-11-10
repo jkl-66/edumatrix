@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+from threading import RLock
 from typing import Protocol
 from urllib import request
 
@@ -41,19 +42,40 @@ class SentenceTransformerEmbedding:
 
     def __post_init__(self):
         self._model = None
+        self._lock = RLock()
 
     def _load_model(self):
         if self._model is None:
+            import torch
+            # Small CPU encoders slow down markedly when every request fans out
+            # to all machine cores. Keep a configurable throughput setting.
+            torch.set_num_threads(max(1, CONFIG.embedding_cpu_threads))
             import sentence_transformers
-            self._model = sentence_transformers.SentenceTransformer(
-                self.model_name,
-                device="cpu",
-            )
+            try:
+                self._model = sentence_transformers.SentenceTransformer(
+                    self.model_name, device="cpu", local_files_only=True,
+                )
+            except OSError:
+                # A first installation still downloads the configured model.
+                # An already-installed encoder needs no Hub metadata requests.
+                self._model = sentence_transformers.SentenceTransformer(
+                    self.model_name, device="cpu",
+                )
+
+    def prepare(self) -> None:
+        with self._lock:
+            self._load_model()
 
     def embed(self, text: str) -> tuple[float, ...]:
-        self._load_model()
-        vec = self._model.encode(text, normalize_embeddings=True)
-        return tuple(float(v) for v in vec)
+        return self.embed_many([text])[0]
+
+    def embed_many(self, texts: list[str]) -> list[tuple[float, ...]]:
+        if not texts:
+            return []
+        with self._lock:
+            self._load_model()
+            vectors = self._model.encode(texts, batch_size=32, normalize_embeddings=True, show_progress_bar=False)
+        return [tuple(float(v) for v in vector) for vector in vectors]
 
     def score(self, query: str, document: str) -> float:
         q_vec = self.embed(query)
@@ -92,7 +114,12 @@ class OpenAICompatibleEmbeddingBackend:
     name: str = "openai-compatible-embedding"
 
     def embed(self, text: str) -> tuple[float, ...]:
-        payload = json.dumps({"model": self.model, "input": text}, ensure_ascii=False).encode("utf-8")
+        return self.embed_many([text])[0]
+
+    def embed_many(self, texts: list[str]) -> list[tuple[float, ...]]:
+        if not texts:
+            return []
+        payload = json.dumps({"model": self.model, "input": texts}, ensure_ascii=False).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
@@ -100,7 +127,10 @@ class OpenAICompatibleEmbeddingBackend:
         req = request.Request(self.endpoint, data=payload, headers=headers, method="POST")
         with request.urlopen(req, timeout=self.timeout_seconds) as response:
             data = json.loads(response.read().decode("utf-8"))
-        return tuple(float(value) for value in data["data"][0]["embedding"])
+        ordered = sorted(data['data'], key=lambda row: row['index'])
+        if len(ordered) != len(texts) or [row['index'] for row in ordered] != list(range(len(texts))):
+            raise ValueError('embedding_batch_incomplete')
+        return [tuple(float(value) for value in row['embedding']) for row in ordered]
 
     def score(self, query: str, document: str) -> float:
         return cosine_similarity(self.embed(query), self.embed(document))
@@ -199,6 +229,53 @@ class CachingEmbeddingBackend:
             "model": str(getattr(self._backend, "model_name", getattr(self._backend, "model", ""))),
             "dim": int(getattr(self._backend, "dim", 0) or 0),
         }
+
+    @property
+    def semantic_capable(self) -> bool:
+        return self.identity()['name'] in {'sentence-transformer', 'openai-compatible-embedding'}
+
+    def prepare(self) -> None:
+        # Cached document vectors alone do not load the query encoder. Warm it
+        # even when every document is already cached after a server restart.
+        prepare = getattr(self._backend, 'prepare', None)
+        if prepare is not None:
+            prepare()
+
+    def embed_many(self, texts: list[str]) -> list[tuple[float, ...]]:
+        """Read/write the existing cache in batches; encode each missing text once."""
+        if not texts:
+            return []
+        import sqlite3
+        keys = [self._cache_key(text) for text in texts]
+        found = {key: value for key in set(keys) if (value := self._cache.get(key)) is not None}
+        pending = list(dict.fromkeys(key for key in keys if key not in found))
+        try:
+            with sqlite3.connect(self._db_path, timeout=10.0) as db:
+                for start in range(0, len(pending), 400):
+                    batch = pending[start:start+400]
+                    rows = db.execute('SELECT text,vector_json FROM embedding_cache WHERE text IN (' + ','.join('?' for _ in batch) + ')', batch)
+                    for key, encoded in rows:
+                        found[key] = tuple(float(value) for value in json.loads(encoded))
+        except (sqlite3.Error, ValueError, TypeError):
+            pass
+        missing = {key: text for key, text in zip(keys, texts) if key not in found}
+        pairs = list(missing.items())
+        for start in range(0, len(pairs), 64):
+            batch = pairs[start:start+64]
+            encode_many = getattr(self._backend, 'embed_many', None)
+            vectors = encode_many([text for _, text in batch]) if encode_many else [self._backend.embed(text) for _, text in batch]
+            if len(vectors) != len(batch):
+                raise ValueError('embedding_batch_incomplete')
+            found.update((key, tuple(vector)) for (key, _), vector in zip(batch, vectors))
+            try:
+                with sqlite3.connect(self._db_path, timeout=10.0) as db:
+                    db.executemany('INSERT OR REPLACE INTO embedding_cache (text,vector_json) VALUES (?,?)',
+                                   [(key, json.dumps(found[key])) for key, _ in batch])
+            except sqlite3.Error:
+                pass
+        for key, value in found.items():
+            self._cache[key] = value
+        return [found[key] for key in keys]
 
 
 def build_embedding_backend() -> EmbeddingBackend:

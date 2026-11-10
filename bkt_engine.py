@@ -1249,6 +1249,7 @@ class DktService:
                 cls._instance.model.eval()
         return cls._instance
 
+    @torch.no_grad()
     def predict_mastery(self, history_records: list[tuple[str, bool]], extra_concepts: list[str] | None = None, student_bias: list[float] | None = None) -> dict[str, float]:
         """根据学生最近 50 次答题序列与学生专属偏置推理最新的概念掌握度，支持动态额外概念追踪"""
         seq_len = min(50, len(history_records))
@@ -1276,10 +1277,9 @@ class DktService:
         else:
             bias_tensor = torch.tensor([0.0] * 384, dtype=torch.float32)
         
-        # 推理在 torch.no_grad() 下是天然线程安全的，不需要对主模型加互斥锁进行同步
-        with torch.no_grad():
-            tensor_in = torch.from_numpy(input_matrix)
-            s_t = self.model(tensor_in, bias_tensor).squeeze(0) # (384,)
+        # 整次预测（包括后面的概念投影）都不建立训练梯度图。
+        tensor_in = torch.from_numpy(input_matrix)
+        s_t = self.model(tensor_in, bias_tensor).squeeze(0) # (384,)
             
         # 计算所有概念在当前信念下的答对概率 (mastery)
         preds = {}

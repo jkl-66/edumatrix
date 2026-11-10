@@ -33,7 +33,7 @@ def test_all_existing_search_inputs_use_the_shared_control() -> None:
     expected = (
         "views/Notes.vue",
         "views/KnowledgeDocumentReader.vue",
-        "components/KnowledgeGraphExplorer.vue",
+        "components/KnowledgeGalaxy.vue",
         "views/History.vue",
         "views/KnowledgeDiscoveryWorkspace.vue",
         "views/MindmapWorkspace.vue",
@@ -44,7 +44,6 @@ def test_all_existing_search_inputs_use_the_shared_control() -> None:
         "views/MarketplaceWorkspace.vue",
         "components/KnowledgeCourseShelf.vue",
         "components/ReviewHistoryPanel.vue",
-        "views/InternalObjectInspector.vue",
     )
     for relative in expected:
         assert "SearchField" in read(FRONTEND / relative)
@@ -62,7 +61,7 @@ def test_original_search_behaviors_and_accessible_names_remain() -> None:
     checks = {
         "views/Notes.vue": ("v-model=\"searchQuery\"", "aria-label=\"搜索笔记\"", "搜索正文、概念或标签"),
         "views/KnowledgeDocumentReader.vue": ("v-model=\"searchQuery\"", "在当前文档中搜索", "上一个搜索结果", "下一个搜索结果"),
-        "components/KnowledgeGraphExplorer.vue": ("v-model=\"searchQuery\"", "@update:model-value=\"doSearch\"", "检索知识点"),
+        "components/KnowledgeGalaxy.vue": ("v-model=\"query\"", "@keydown.enter=\"searchFirst\"", "检索知识点"),
         "views/KnowledgeDiscoveryWorkspace.vue": ("v-model=\"query\"", "data-testid=\"discovery-search-input\"", "联网搜索"),
         "views/MindmapWorkspace.vue": ("v-model=\"query\"", "搜索思维导图节点", "没有找到匹配节点。"),
         "views/ResourceCenter.vue": ("v-model=\"query\"", "clearable", "aria-label=\"搜索资源\""),

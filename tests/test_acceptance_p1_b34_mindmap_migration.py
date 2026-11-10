@@ -110,15 +110,18 @@ def test_mindmap_frontend_uses_migrated_layout_in_canonical_workspace():
     component = (ROOT / "frontend" / "src" / "components" / "CollapsibleMindmap.vue").read_text(encoding="utf-8")
     workspace = (ROOT / "frontend" / "src" / "views" / "MindmapWorkspace.vue").read_text(encoding="utf-8")
 
-    assert "layout = d3.tree().nodeSize([104, 220])" in component
+    assert "layout = d3.tree().nodeSize([NODE_SIZE.verticalGap, NODE_SIZE.horizontalGap])" in component
     assert "applyInitialCollapse" in component
     assert "depth >= 2" in component
-    assert "scaleExtent([0.25, 3.2])" in component
+    assert "scaleExtent([0.15, 4])" in component
     assert "labelWidth" in component
     assert "compatibility-note" in workspace
     assert "projection.value?.legacy?.hierarchy" in workspace
     assert ":root-node-id=\"graphRootNodeId\"" in workspace
-    assert "foreignObject" not in component
+    # Later formula support uses escaped HTML inside SVG foreignObject.
+    assert "function escapeHtml" in component
+    assert "return escapeHtml(raw)" in component
+    assert "window.katex.renderToString" in component
     assert "v-html" not in component
     for forbidden in ("recordLearningEvent", "completeWorkItem", "updateProfile", "unlockExam"):
         assert forbidden not in workspace

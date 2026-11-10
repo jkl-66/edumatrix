@@ -58,9 +58,11 @@ def test_component_exposes_complete_honest_states_without_a_second_report_wall()
         "重试同步",
         "跨页面同步状态",
         "下一日安排",
-        "一致版本",
+        "feedback.event?.occurredAt",
     ):
         assert marker in component
+    assert "consistencyToken" not in component
+    assert "一致版本" not in component
     for forbidden in (
         "props.eventId ? response.feedback : response.feedback",
         "已完全掌握",

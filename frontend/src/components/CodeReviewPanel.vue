@@ -1,4 +1,6 @@
 <script setup>
+import { displayLabel } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, ref, watch } from 'vue'
 import {
   AlertCircle,
@@ -34,7 +36,8 @@ const eligibleStatuses = new Set(['success', 'runtime_error', 'timeout'])
 const eligible = computed(() => Boolean(props.run && eligibleStatuses.has(props.run.status)))
 const evidenceLabel = computed(() => {
   if (!props.run) return '尚未选择运行记录'
-  return `${statusLabel(props.run.status)} · ${shortId(props.run.runAttemptId)}`
+  const time = props.run.completedAt ? new Date(props.run.completedAt).toLocaleString('zh-CN') : ''
+  return [statusLabel(props.run.status), time].filter(Boolean).join(' · ')
 })
 const disabledReason = computed(() => {
   if (!props.run) return '请先运行当前代码，或从左侧历史选择一条已经结束的真实运行。'
@@ -54,11 +57,6 @@ const reviewModeLabel = computed(() => {
 function message(caught, fallback = '代码点评暂时不可用，请稍后重试。') {
   const value = caught?.response?.data?.detail || caught?.detail
   return value?.message || (typeof value === 'string' ? value : '') || caught?.message || fallback
-}
-
-function shortId(value) {
-  const text = String(value || '')
-  return text.length > 16 ? `${text.slice(0, 7)}…${text.slice(-7)}` : text
 }
 
 function statusLabel(status) {
@@ -164,11 +162,10 @@ watch(() => props.run?.runAttemptId, loadReview, { immediate: true })
 
     <div class="evidence-strip">
       <span>{{ evidenceLabel }}</span>
-      <code v-if="run?.codeSha256">code {{ shortId(run.codeSha256) }}</code>
     </div>
 
     <div v-if="error" class="review-message error" role="alert">
-      <AlertCircle :size="16" /><span>{{ error }}</span><button type="button" @click="error = ''">关闭</button>
+      <AlertCircle :size="16" /><span>{{ userMessage(error) }}</span><button type="button" @click="error = ''">关闭</button>
     </div>
     <div v-else-if="notice" class="review-message notice" role="status">
       <CheckCircle2 :size="16" /><span>{{ notice }}</span><button type="button" @click="notice = ''">关闭</button>
@@ -179,7 +176,7 @@ watch(() => props.run?.runAttemptId, loadReview, { immediate: true })
     </div>
 
     <div v-else-if="error" class="review-state review-state--error">
-      <AlertCircle :size="23" /><strong>暂时无法完成点评</strong><p>{{ error }}</p>
+      <AlertCircle :size="23" /><strong>暂时无法完成点评</strong><p>{{ userMessage(error) }}</p>
       <button type="button" class="review-action" :disabled="generating" @click="requestReview">
         <LoaderCircle v-if="generating" :size="16" class="spin" /><Sparkles v-else :size="16" />
         {{ generating ? '正在重新请求模型' : '重新请求点评' }}
@@ -201,7 +198,7 @@ watch(() => props.run?.runAttemptId, loadReview, { immediate: true })
       </button>
 
       <div v-if="!review && !generating" class="review-state compact">
-        <FileDiff :size="22" /><strong>真实证据已就绪</strong><p>点评将引用当前 runAttemptId、代码哈希、输入、输出、错误和检查结果。</p>
+        <FileDiff :size="22" /><strong>可以开始点评</strong><p>点评会结合你本次提交的代码、运行结果和检查情况，说明问题与改进方向。</p>
       </div>
 
       <article v-else-if="review" class="review-result">
@@ -257,11 +254,11 @@ watch(() => props.run?.runAttemptId, loadReview, { immediate: true })
         </section>
 
         <details class="audit-details">
-          <summary><span>可审计协作摘要</span><ChevronDown :size="16" /></summary>
-          <p>仅展示职责、输入引用、候选结论、分歧、校验、修订和最终决策摘要。</p>
+          <summary><span>这次点评如何帮助你</span><ChevronDown :size="16" /></summary>
+          <p>查看本次检查发现了什么，以及接下来如何验证改进效果。</p>
           <ol>
             <li v-for="agent in review.agentAudit" :key="agent.runId">
-              <strong>{{ agent.role }}</strong>
+              <strong>{{ displayLabel(agent.role) }}</strong>
               <span>{{ agent.candidateSummary }}</span>
               <small>校验：{{ agent.validation }}</small>
               <small>修订：{{ agent.revision }}</small>
@@ -270,37 +267,32 @@ watch(() => props.run?.runAttemptId, loadReview, { immediate: true })
           </ol>
         </details>
 
-        <footer class="review-evidence">
-          <span>证据引用</span>
-          <code>run {{ shortId(review.evidenceRefs.runAttemptId) }}</code>
-          <code>stderr {{ shortId(review.evidenceRefs.stderrSha256) }}</code>
-        </footer>
       </article>
     </template>
   </section>
 </template>
 
 <style scoped>
-.review-panel { min-width: 0; color: #06141b; font-family: 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; }
-.review-header { display: flex; align-items: center; gap: 9px; padding: 14px; border-bottom: 1px solid #e4e8e8; }
-.review-icon { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border-radius: 8px; background: #eef2f2; color: #11212d; }
-.review-header div { min-width: 0; }.review-header strong { display: block; font-size: 15px; line-height: 1.4; }.review-header p { margin: 2px 0 0; color: #60727c; font-size: 14px; line-height: 1.4; }
-.evidence-strip { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #e4e8e8; background: #f7f9f9; color: #4a5c6a; font-size: 14px; }
-.evidence-strip span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.evidence-strip code { flex: 0 0 auto; color: #253745; font: 14px/1.4 'Cascadia Code', Consolas, monospace; }
-.review-message { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 7px; margin: 10px 12px 0; padding: 9px; border: 1px solid #ccd0cf; border-radius: 8px; font-size: 14px; line-height: 1.5; }
-.review-message.error { border-color: #d8aaa5; background: #fff5f3; color: #873d35; }.review-message.notice { background: #f6f8f8; color: #253745; }.review-message button { border: 0; padding: 0; background: transparent; color: inherit; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
-.review-state { display: grid; min-height: 210px; place-content: center; justify-items: center; gap: 7px; padding: 22px; color: #60727c; text-align: center; }.review-state.compact { min-height: 150px; border-top: 1px solid #e4e8e8; }.review-state strong { color: #06141b; font-size: 15px; }.review-state p { max-width: 31ch; margin: 0; font-size: 14px; line-height: 1.6; }
-.focus-field { display: grid; gap: 7px; padding: 13px 14px; }.focus-field > span { color: #253745; font-size: 14px; font-weight: 650; }.focus-field small { color: #60727c; font-size: 14px; font-weight: 400; }.focus-field textarea { min-width: 0; resize: vertical; border: 1px solid #ccd0cf; border-radius: 8px; padding: 9px 10px; background: #fff; color: #06141b; font-family: inherit; font-size: 14px; line-height: 1.55; }
-.review-action, .apply-action { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 7px; border: 1px solid #11212d; border-radius: 8px; padding: 0 11px; background: #11212d; color: #fff; font-size: 14px; font-weight: 650; cursor: pointer; }
+.review-panel { min-width: 0; color: var(--color-text); font-family: 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; }
+.review-header { display: flex; align-items: center; gap: 9px; padding: 14px; border-bottom: 1px solid var(--color-border); }
+.review-icon { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border-radius: 8px; background: var(--color-surface-subtle); color: var(--color-text); }
+.review-header div { min-width: 0; }.review-header strong { display: block; font-size: 15px; line-height: 1.4; }.review-header p { margin: 2px 0 0; color: var(--color-text-muted); font-size: 14px; line-height: 1.4; }
+.evidence-strip { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--color-border); background: var(--color-surface-subtle); color: var(--color-text-secondary); font-size: 14px; }
+.evidence-strip span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.evidence-strip code { flex: 0 0 auto; color: var(--color-text); font: 14px/1.4 'Cascadia Code', Consolas, monospace; }
+.review-message { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 7px; margin: 10px 12px 0; padding: 9px; border: 1px solid var(--color-border-strong); border-radius: 8px; font-size: 14px; line-height: 1.5; }
+.review-message.error { border-color: #d8aaa5; background: var(--color-danger-soft); color: var(--color-danger); }.review-message.notice { background: #f6f8f8; color: var(--color-text); }.review-message button { border: 0; padding: 0; background: transparent; color: inherit; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.review-state { display: grid; min-height: 210px; place-content: center; justify-items: center; gap: 7px; padding: 22px; color: var(--color-text-muted); text-align: center; }.review-state.compact { min-height: 150px; border-top: 1px solid var(--color-border); }.review-state strong { color: var(--color-text); font-size: 15px; }.review-state p { max-width: 31ch; margin: 0; font-size: 14px; line-height: 1.6; }
+.focus-field { display: grid; gap: 7px; padding: 13px 14px; }.focus-field > span { color: var(--color-text); font-size: 14px; font-weight: 650; }.focus-field small { color: var(--color-text-muted); font-size: 14px; font-weight: 400; }.focus-field textarea { min-width: 0; resize: vertical; border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 9px 10px; background: var(--color-surface); color: var(--color-text); font-family: inherit; font-size: 14px; line-height: 1.55; }
+.review-action, .apply-action { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--color-text); border-radius: 8px; padding: 0 11px; background: var(--color-text); color: #fff; font-size: 14px; font-weight: 650; cursor: pointer; }
 .review-action { width: calc(100% - 28px); margin: 0 14px 13px; }.apply-action { width: 100%; margin-top: 12px; }.review-action:disabled, .apply-action:disabled { cursor: default; opacity: .48; }
-button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid #11212d; outline-offset: 2px; }
-.review-result { border-top: 1px solid #ccd0cf; }.review-section { padding: 14px; border-bottom: 1px solid #e4e8e8; }.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }.section-heading h3 { margin: 0; font-size: 15px; line-height: 1.4; }.section-heading > span { color: #60727c; font-size: 14px; }
-.finding-list, .risk-list, .advice-list { margin: 0; padding: 0; list-style: none; }.finding-list li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid #eef1f1; }.finding-list li:first-child { padding-top: 0; border-top: 0; }.finding-mark { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 7px; background: #eef2f2; color: #253745; }.finding-mark.error, .finding-mark.warning { background: #fff2f0; color: #873d35; }.finding-list li > div { display: grid; min-width: 0; gap: 4px; }.finding-list strong { font-size: 14px; line-height: 1.45; }.finding-list p, .finding-list small { margin: 0; overflow-wrap: anywhere; color: #4a5c6a; font-size: 14px; line-height: 1.55; }.finding-list small { color: #60727c; }.row-meta { color: #60727c; font-size: 14px; line-height: 1.4; }
-.focus-result { margin: 0; overflow-wrap: anywhere; color: #4a5c6a; font-size: 14px; line-height: 1.65; }.risk-list { display: grid; gap: 10px; }.risk-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 7px; }.risk-list li > span { grid-row: 1 / 3; align-self: start; border: 1px solid #ccd0cf; border-radius: 7px; padding: 3px 6px; color: #4a5c6a; font-size: 14px; white-space: nowrap; }.risk-list strong { font-size: 14px; line-height: 1.45; }.risk-list p { grid-column: 2; margin: 0; overflow-wrap: anywhere; color: #60727c; font-size: 14px; line-height: 1.5; }
-.improved-code { max-height: 270px; margin: 0; overflow: auto; padding: 11px; background: #10181d; color: #eef3f3; font: 14px/1.6 'Cascadia Code', Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.advice-list { display: grid; gap: 7px; counter-reset: advice; }.advice-list li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 7px; color: #4a5c6a; font-size: 14px; line-height: 1.55; counter-increment: advice; }.advice-list li::before { content: counter(advice); display: grid; width: 22px; height: 22px; place-items: center; border-radius: 6px; background: #eef2f2; color: #253745; font-size: 14px; font-variant-numeric: tabular-nums; }
-.applied-state { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid #ccd0cf; border-radius: 8px; background: #f7f9f9; color: #253745; }.applied-state strong { font-size: 14px; }.applied-state p { margin: 3px 0 0; color: #60727c; font-size: 14px; line-height: 1.5; }
-.audit-details { border-bottom: 1px solid #e4e8e8; }.audit-details summary { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 14px; color: #253745; font-size: 14px; font-weight: 650; cursor: pointer; list-style: none; }.audit-details summary::-webkit-details-marker { display: none; }.audit-details[open] summary svg { transform: rotate(180deg); }.audit-details > p { margin: 0; padding: 0 14px 10px; color: #60727c; font-size: 14px; line-height: 1.5; }.audit-details ol { display: grid; gap: 0; margin: 0; padding: 0 14px 14px; list-style: none; }.audit-details li { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid #e4e8e8; }.audit-details strong, .audit-details span, .audit-details small { overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }.audit-details span { color: #4a5c6a; }.audit-details small { color: #60727c; }
-.review-evidence { display: flex; flex-wrap: wrap; gap: 6px; padding: 11px 14px; background: #f7f9f9; color: #60727c; font-size: 14px; }.review-evidence span { width: 100%; color: #253745; font-weight: 650; }.review-evidence code { min-width: 0; max-width: 100%; overflow: hidden; border: 1px solid #e0e5e5; border-radius: 6px; padding: 3px 6px; background: #fff; color: #4a5c6a; font: 14px/1.4 'Cascadia Code', Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
+.review-result { border-top: 1px solid var(--color-border-strong); }.review-section { padding: 14px; border-bottom: 1px solid var(--color-border); }.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }.section-heading h3 { margin: 0; font-size: 15px; line-height: 1.4; }.section-heading > span { color: var(--color-text-muted); font-size: 14px; }
+.finding-list, .risk-list, .advice-list { margin: 0; padding: 0; list-style: none; }.finding-list li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid #eef1f1; }.finding-list li:first-child { padding-top: 0; border-top: 0; }.finding-mark { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 7px; background: var(--color-surface-subtle); color: var(--color-text); }.finding-mark.error, .finding-mark.warning { background: #fff2f0; color: var(--color-danger); }.finding-list li > div { display: grid; min-width: 0; gap: 4px; }.finding-list strong { font-size: 14px; line-height: 1.45; }.finding-list p, .finding-list small { margin: 0; overflow-wrap: anywhere; color: var(--color-text-secondary); font-size: 14px; line-height: 1.55; }.finding-list small { color: var(--color-text-muted); }.row-meta { color: var(--color-text-muted); font-size: 14px; line-height: 1.4; }
+.focus-result { margin: 0; overflow-wrap: anywhere; color: var(--color-text-secondary); font-size: 14px; line-height: 1.65; }.risk-list { display: grid; gap: 10px; }.risk-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 7px; }.risk-list li > span { grid-row: 1 / 3; align-self: start; border: 1px solid var(--color-border-strong); border-radius: 7px; padding: 3px 6px; color: var(--color-text-secondary); font-size: 14px; white-space: nowrap; }.risk-list strong { font-size: 14px; line-height: 1.45; }.risk-list p { grid-column: 2; margin: 0; overflow-wrap: anywhere; color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
+.improved-code { max-height: 270px; margin: 0; overflow: auto; padding: 11px; background: #10181d; color: #eef3f3; font: 14px/1.6 'Cascadia Code', Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.advice-list { display: grid; gap: 7px; counter-reset: advice; }.advice-list li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 7px; color: var(--color-text-secondary); font-size: 14px; line-height: 1.55; counter-increment: advice; }.advice-list li::before { content: counter(advice); display: grid; width: 22px; height: 22px; place-items: center; border-radius: 6px; background: var(--color-surface-subtle); color: var(--color-text); font-size: 14px; font-variant-numeric: tabular-nums; }
+.applied-state { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-surface-subtle); color: var(--color-text); }.applied-state strong { font-size: 14px; }.applied-state p { margin: 3px 0 0; color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
+.audit-details { border-bottom: 1px solid var(--color-border); }.audit-details summary { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 14px; color: var(--color-text); font-size: 14px; font-weight: 650; cursor: pointer; list-style: none; }.audit-details summary::-webkit-details-marker { display: none; }.audit-details[open] summary svg { transform: rotate(180deg); }.audit-details > p { margin: 0; padding: 0 14px 10px; color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }.audit-details ol { display: grid; gap: 0; margin: 0; padding: 0 14px 14px; list-style: none; }.audit-details li { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid var(--color-border); }.audit-details strong, .audit-details span, .audit-details small { overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }.audit-details span { color: var(--color-text-secondary); }.audit-details small { color: var(--color-text-muted); }
+.review-evidence { display: flex; flex-wrap: wrap; gap: 6px; padding: 11px 14px; background: var(--color-surface-subtle); color: var(--color-text-muted); font-size: 14px; }.review-evidence span { width: 100%; color: var(--color-text); font-weight: 650; }.review-evidence code { min-width: 0; max-width: 100%; overflow: hidden; border: 1px solid #e0e5e5; border-radius: 6px; padding: 3px 6px; background: var(--color-surface); color: var(--color-text-secondary); font: 14px/1.4 'Cascadia Code', Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .spin { animation: spin .8s linear infinite; }@keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 1.6s; } }
 </style>

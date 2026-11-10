@@ -1,6 +1,8 @@
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { userMessage } from '../services/errorTranslator.js'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as d3 from 'd3'
+import IncrementalMarkdownRenderer from './IncrementalMarkdownRenderer.vue'
 
 const props = defineProps({
   code: { type: String, default: '' },
@@ -8,6 +10,7 @@ const props = defineProps({
   rootNodeId: { type: String, default: '' },
   selectedNodeId: { type: String, default: '' },
   height: { type: Number, default: 560 },
+  showToolbar: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['select', 'view-change', 'render-error'])
@@ -17,6 +20,13 @@ const containerRef = ref(null)
 const isFullscreen = ref(false)
 const rendering = ref(true)
 const renderError = ref('')
+// Flowcharts describe explicit edges, not indentation. Use the shared diagram
+// renderer so cross-links and teaching labels remain intact.
+const flowchartCode = computed(() => {
+  if (props.nodes.length) return ''
+  const code = props.code.trim().replace(/^```mermaid\s*\n?/i, '').replace(/\n?```$/, '')
+  return /^(?:graph|flowchart)\s+(?:TD|TB|BT|RL|LR)\b/.test(code) ? `\`\`\`mermaid\n${code}\n\`\`\`` : ''
+})
 
 let svg = null
 let group = null
@@ -96,10 +106,10 @@ function bandLabel(value) {
 
 function colors(datum) {
   const selected = datum.data.nodeId === props.selectedNodeId
-  if (selected) return { fill: '#172b3a', stroke: '#172b3a', text: '#ffffff', line: '#172b3a' }
-  if (datum.depth === 0) return { fill: '#e8ecfb', stroke: '#818cf8', text: '#4338ca', line: '#4f46e5' }
-  if (datum.depth === 1) return { fill: '#eff6ff', stroke: '#3b82f6', text: '#1e3a8a', line: '#2563eb' }
-  return { fill: '#ecfdf5', stroke: '#10b981', text: '#064e3b', line: '#059669' }
+  if (selected) return { fill: 'var(--color-success)', stroke: 'var(--color-success)', text: '#ffffff', line: 'var(--color-success)' }
+  if (datum.depth === 0) return { fill: 'var(--color-accent-soft)', stroke: 'var(--color-accent)', text: 'var(--color-text)', line: 'var(--color-accent)' }
+  if (datum.depth === 1) return { fill: 'var(--color-success-soft)', stroke: 'var(--color-success)', text: 'var(--color-text)', line: 'var(--color-success)' }
+  return { fill: 'var(--color-reading-paper)', stroke: 'var(--color-border-strong)', text: 'var(--color-text)', line: 'var(--color-text-muted)' }
 }
 
 function escapeHtml(value) {
@@ -272,7 +282,7 @@ function center({ animate = true } = {}) {
   if (!bounds || !Number.isFinite(bounds.width) || !bounds.width) return
   const width = element.clientWidth || 900
   const height = element.clientHeight || props.height
-  const scale = Math.max(0.45, Math.min(1.2, 0.88 / Math.max(bounds.width / width, bounds.height / height)))
+  const scale = Math.max(0.15, Math.min(1.2, 0.88 / Math.max(bounds.width / width, bounds.height / height)))
   const transform = d3.zoomIdentity
     .translate(width / 2 - scale * (bounds.x + bounds.width / 2), height / 2 - scale * (bounds.y + bounds.height / 2))
     .scale(scale)
@@ -281,6 +291,11 @@ function center({ animate = true } = {}) {
 }
 
 function init({ applyInitialCollapse = true } = {}) {
+  if (flowchartCode.value) {
+    rendering.value = false
+    root = null
+    return
+  }
   rendering.value = true
   renderError.value = ''
   try {
@@ -297,7 +312,7 @@ function init({ applyInitialCollapse = true } = {}) {
     svg.call(zoom)
     if (applyInitialCollapse && collapsedNodeIds.size === 0) {
       const collapseDeep = (item, depth = 0) => {
-        if (depth >= 2 && item.children?.length) collapsedNodeIds.add(item.nodeId)
+        if (depth >= 1 && item.children?.length) collapsedNodeIds.add(item.nodeId)
         item.children?.forEach(child => collapseDeep(child, depth + 1))
       }
       collapseDeep(data)
@@ -328,9 +343,9 @@ function expandAll() {
 
 function collapseAll() {
   const data = structuredTree()
-  const visit = (item, depth = 0) => {
-    if (depth > 0 && item.children?.length) collapsedNodeIds.add(item.nodeId)
-    item.children?.forEach(child => visit(child, depth + 1))
+  const visit = item => {
+    if (item.children?.length) collapsedNodeIds.add(item.nodeId)
+    item.children?.forEach(visit)
   }
   if (data) visit(data)
   init({ applyInitialCollapse: false })
@@ -343,13 +358,29 @@ function toggleFullscreen() {
 }
 
 function focusNode(nodeId) {
+  // Search may target a node hidden inside a collapsed branch.
+  const ancestors = (node, path = []) => {
+    if (node.nodeId === nodeId) return path
+    for (const child of node.children || []) {
+      const found = ancestors(child, [...path, node.nodeId])
+      if (found) return found
+    }
+    return null
+  }
+  const data = structuredTree()
+  const path = data ? ancestors(data) : null
+  if (path?.some(id => collapsedNodeIds.has(id))) {
+    path.forEach(id => collapsedNodeIds.delete(id))
+    init({ applyInitialCollapse: false })
+  }
   const item = root?.descendants().find(value => value.data.nodeId === nodeId)
   const element = activeSvgElement()
   if (!item || !element || !svg || !zoom) return false
+  const scale = Math.max(1, currentTransform.k)
   const transform = d3.zoomIdentity
-    .translate((element.clientWidth || 900) / 2 - item.y, (element.clientHeight || props.height) / 2 - item.x)
-    .scale(Math.max(1, currentTransform.k))
-  svg.transition().duration(220).call(zoom.transform, transform)
+    .translate((element.clientWidth || 900) / 2 - item.y * scale, (element.clientHeight || props.height) / 2 - item.x * scale)
+    .scale(scale)
+  nextTick(() => svg.transition().duration(220).call(zoom.transform, transform))
   emit('select', item.data)
   return true
 }
@@ -362,7 +393,7 @@ function restoreView(value) {
   if (transform && svg && zoom) nextTick(() => svg.call(zoom.transform, d3.zoomIdentity.translate(transform.x, transform.y).scale(transform.k)))
 }
 
-defineExpose({ center, collapseAll, expandAll, focusNode, restoreView, zoomBy })
+defineExpose({ center, collapseAll, expandAll, focusNode, restoreView, zoomBy, toggleFullscreen })
 
 watch(() => [props.code, props.nodes, props.rootNodeId], () => {
   collapsedNodeIds.clear()
@@ -372,7 +403,14 @@ watch(() => props.selectedNodeId, () => draw(root))
 
 onMounted(() => {
   nextTick(() => init())
-  resizeObserver = new ResizeObserver(() => center({ animate: false }))
+  let observedSize = null
+  resizeObserver = new ResizeObserver(([entry]) => {
+    const size = `${entry.contentRect.width}:${entry.contentRect.height}`
+    // The first notification is not a resize; initial layout/restoration already
+    // placed the canvas. Re-centering here would discard a restored zoom level.
+    if (observedSize !== null && observedSize !== size) center({ animate: false })
+    observedSize = size
+  })
   if (containerRef.value) resizeObserver.observe(containerRef.value)
 })
 
@@ -380,22 +418,25 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
 </script>
 
 <template>
-  <div ref="containerRef" class="collapsible-mindmap" :style="{ '--mindmap-height': `${height}px` }">
+  <div ref="containerRef" class="collapsible-mindmap" :class="{ 'collapsible-mindmap--embedded': !showToolbar }" :style="{ '--mindmap-height': `${height}px` }">
     <div v-show="!isFullscreen" class="mindmap-card">
-      <div class="mindmap-toolbar">
-        <div class="mindmap-toolbar__title"><span aria-hidden="true">📊</span><strong>概念思维导图</strong><span class="mindmap-badge">可交互</span></div>
+      <div v-if="showToolbar" class="mindmap-toolbar">
+        <div class="mindmap-toolbar__title"><strong>思维导图</strong></div>
         <div class="mindmap-toolbar__actions">
-          <button type="button" @click="expandAll">展开</button>
-          <button type="button" @click="collapseAll">折叠</button>
-          <button type="button" @click="center()">居中</button>
+          <button v-if="!flowchartCode" type="button" @click="expandAll">展开</button>
+          <button v-if="!flowchartCode" type="button" @click="collapseAll">折叠</button>
+          <button v-if="!flowchartCode" type="button" @click="center()">居中</button>
           <button type="button" @click="toggleFullscreen">放大/全屏</button>
         </div>
       </div>
-      <div class="mindmap-canvas">
+      <div v-if="flowchartCode" class="mindmap-canvas mindmap-flowchart">
+        <IncrementalMarkdownRenderer :text="flowchartCode" />
+      </div>
+      <div v-else class="mindmap-canvas">
         <div v-if="rendering" class="mindmap-state" role="status">正在整理知识关系...</div>
-        <div v-else-if="renderError" class="mindmap-state mindmap-state--error" role="alert">{{ renderError }}</div>
+        <div v-else-if="renderError" class="mindmap-state mindmap-state--error" role="alert">{{ userMessage(renderError) }}</div>
         <svg ref="svgRef" class="mindmap-svg" aria-label="可缩放、可折叠的思维导图画布" />
-        <div class="mindmap-help">点击节点查看详情 · 点击节点右侧圆钮折叠分支 · 拖拽移动 · 滚轮缩放</div>
+        <div class="mindmap-help">拖动平移 · 滚轮缩放</div>
       </div>
     </div>
 
@@ -403,15 +444,18 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
       <div v-if="isFullscreen" class="mindmap-modal" role="dialog" aria-label="全屏思维导图" @click.self="toggleFullscreen">
         <div class="mindmap-modal__panel">
           <div class="mindmap-toolbar mindmap-toolbar--modal">
-            <div class="mindmap-toolbar__title"><span aria-hidden="true">📊</span><strong>概念思维导图</strong><span class="mindmap-badge">全屏交互画布</span></div>
+            <div class="mindmap-toolbar__title"><strong>思维导图</strong></div>
             <div class="mindmap-toolbar__actions">
-              <button type="button" @click="expandAll">展开分支</button>
-              <button type="button" @click="collapseAll">折叠分支</button>
-              <button type="button" @click="center()">视图居中</button>
+              <button v-if="!flowchartCode" type="button" @click="expandAll">展开分支</button>
+              <button v-if="!flowchartCode" type="button" @click="collapseAll">折叠分支</button>
+              <button v-if="!flowchartCode" type="button" @click="center()">视图居中</button>
               <button type="button" aria-label="关闭全屏" @click="toggleFullscreen">关闭</button>
             </div>
           </div>
-          <div class="mindmap-modal__canvas">
+          <div v-if="flowchartCode" class="mindmap-modal__canvas mindmap-flowchart">
+            <IncrementalMarkdownRenderer :text="flowchartCode" />
+          </div>
+          <div v-else class="mindmap-modal__canvas">
             <svg ref="fullscreenSvgRef" class="mindmap-svg" aria-label="全屏可缩放、可折叠的思维导图画布" />
             <div class="mindmap-help">拖拽移动 · 滚轮缩放 · 节点右侧圆钮折叠/展开</div>
           </div>
@@ -422,18 +466,22 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
 </template>
 
 <style scoped>
-.collapsible-mindmap{position:relative;width:100%;height:var(--mindmap-height);min-height:420px;overflow:hidden;background:#fff;border:1px solid #e2e8f0;border-radius:12px}
-.mindmap-card{height:100%;background:#fff}
-.mindmap-toolbar{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid #edf1f4;background:#fafbfc;gap:12px}
-.mindmap-toolbar__title,.mindmap-toolbar__actions{display:flex;align-items:center;gap:8px}.mindmap-toolbar__title{color:#263746;font-size:14px}.mindmap-toolbar__title span:first-child{font-size:16px}.mindmap-badge{font-size:14px;color:#6b4cc2;background:#f0ebff;border-radius:4px;padding:3px 7px;font-weight:600}
-.mindmap-toolbar__actions button{border:0;border-radius:6px;background:#f1f5f9;color:#475569;padding:6px 9px;font-size:14px;cursor:pointer}.mindmap-toolbar__actions button:hover{background:#e2e8f0;color:#172b3a}.mindmap-toolbar__actions button:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
-.mindmap-canvas,.mindmap-modal__canvas{position:relative;height:calc(100% - 48px);background:#fff}.mindmap-modal__canvas{height:calc(100% - 58px)}
+.mindmap-flowchart { overflow: auto; padding: 12px; }
+.mindmap-flowchart :deep(.inc-mermaid svg) { min-width: 720px; }
+.collapsible-mindmap{position:relative;width:100%;height:var(--mindmap-height);min-height:420px;overflow:hidden;background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-panel)}
+.collapsible-mindmap--embedded{border:0;border-radius:0}
+.mindmap-card{height:100%;background:var(--color-surface)}
+.mindmap-toolbar{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--color-border);background:var(--color-surface-subtle);gap:12px}
+.mindmap-toolbar__title,.mindmap-toolbar__actions{display:flex;align-items:center;gap:8px}.mindmap-toolbar__title{color:var(--color-text);font-size:14px}
+.mindmap-toolbar__actions button{border:0;border-radius:var(--radius-control);background:var(--color-surface-muted);color:var(--color-text-secondary);padding:6px 9px;font-size:14px;cursor:pointer}.mindmap-toolbar__actions button:hover{background:var(--color-accent-soft);color:var(--color-text)}.mindmap-toolbar__actions button:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}
+.mindmap-canvas,.mindmap-modal__canvas{position:relative;height:calc(100% - 48px);background:var(--color-surface)}.mindmap-modal__canvas{height:calc(100% - 58px)}
+.collapsible-mindmap--embedded .mindmap-canvas{height:100%}
 .mindmap-svg{display:block;width:100%;height:100%;cursor:grab;outline:none;touch-action:none}.mindmap-svg:active{cursor:grabbing}
 .mindmap-state{position:absolute;inset:0;z-index:2;display:grid;place-items:center;background:rgba(255,255,255,.94);color:#526475;font-size:14px}.mindmap-state--error{color:#a33d3d}
 .mindmap-help{position:absolute;right:14px;bottom:10px;z-index:1;pointer-events:none;color:#64748b;font-size:14px;background:rgba(255,255,255,.92);padding:3px 6px;border-radius:4px}
 :deep(.mindmap-node){cursor:pointer;outline:none}:deep(.mindmap-node:focus-visible .mindmap-node__rect){stroke:#172b3a;stroke-width:3}
 :deep(.mindmap-node-content){display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:0 6px;text-align:center;line-height:1.3;word-break:break-word;overflow:hidden;user-select:none}
 :deep(.mindmap-node-content .katex){font-size:1em}:deep(.mindmap-node__toggle){cursor:pointer}:deep(.mindmap-node__toggle-label){font:700 16px/1 var(--font-sans);pointer-events:none}
-.mindmap-modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.62)}.mindmap-modal__panel{width:min(1240px,96vw);height:min(88vh,820px);display:flex;flex-direction:column;overflow:hidden;background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(15,23,42,.3)}.mindmap-toolbar--modal{height:58px}
+.mindmap-modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.62)}.mindmap-modal__panel{width:min(1240px,96vw);height:min(88vh,820px);display:flex;flex-direction:column;overflow:hidden;background:var(--color-surface);border-radius:14px;box-shadow:0 20px 60px rgba(15,23,42,.3)}.mindmap-toolbar--modal{height:58px}
 @media (max-width:760px){.mindmap-toolbar{padding:0 8px}.mindmap-toolbar__title strong{display:none}.mindmap-toolbar__actions{gap:4px}.mindmap-toolbar__actions button{padding:5px 6px;font-size:14px}.mindmap-help{font-size:14px;right:6px}}
 </style>

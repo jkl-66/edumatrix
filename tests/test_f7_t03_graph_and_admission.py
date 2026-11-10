@@ -12,6 +12,7 @@ from app.database import (
     DBLearningEvent,
     DBPathNode,
     DBProfileSnapshot,
+    DBSourceDocument,
     DBSourceRef,
     DBUser,
     DBWebSourceCandidate,
@@ -99,6 +100,11 @@ def test_course_graph_requires_authentication_and_course_access() -> None:
                 manifest_version="f7-t03-private-v1",
             )
             session.merge(course)
+            session.merge(DBSourceDocument(
+                id="f7-t03-private-source", course_id=course.id,
+                title="私有资料", filename="private.md", file_format="md",
+                content_hash="e" * 64, source_sha256="e" * 64, processed_sha256="e" * 64,
+            ))
             session.merge(DBCourseMembership(
                 course_id=course.id,
                 user_public_id=owner.public_id,
@@ -190,6 +196,11 @@ def test_candidate_admission_is_owner_scoped_license_gated_and_imports_real_cour
         )
         assert course_response.status_code == 201, course_response.text
         course_id = course_response.json()["course"]["id"]
+        after_creation = _protected_counts()
+        assert after_creation["snapshots"] == before["snapshots"] + 1
+        assert after_creation["events"] == before["events"]
+        assert after_creation["path_nodes"] == before["path_nodes"]
+        before = after_creation
         candidate_payload = {
             "query": "机器学习课程",
             "title": "开放课程讲义",
@@ -295,6 +306,30 @@ def test_candidate_admission_is_owner_scoped_license_gated_and_imports_real_cour
         )
         assert withdrawn.status_code == 200
         assert withdrawn.json()["candidate"]["reviewStatus"] == "withdrawn"
+        assert withdrawn.json()['candidate']['processingStatus'] == 'withdrawn'
+        assert withdrawn.json()['candidate']['retryable'] is False
+        # Re-saving is an explicit decision to review again; preserve the
+        # original course document and candidate identity, without duplicates.
+        reopened = client.post('/api/knowledge/discovery/candidates', headers=headers, json=candidate_payload)
+        assert reopened.status_code == 200
+        reopened_data = reopened.json()
+        assert reopened_data['reopened'] is True and reopened_data['created'] is False
+        assert reopened_data['candidate']['id'] == candidate['id']
+        assert reopened_data['candidate']['reviewStatus'] == 'pending_review'
+        assert reopened_data['candidate']['resourceGenerationEligible'] is False
+        assert reopened_data['candidate']['importResult']['source_document_id'] == imported['importResult']['source_document_id']
+        assert client.post(f"/api/knowledge/discovery/candidates/{candidate['id']}/reject", headers=headers).status_code == 200
+        rejected_resaved = client.post('/api/knowledge/discovery/candidates', headers=headers, json=candidate_payload).json()
+        assert rejected_resaved['reopened'] is True
+        assert rejected_resaved['candidate']['reviewStatus'] == 'pending_review'
+        from app.source_admission import complete_candidate_import
+        with SessionLocal() as session:
+            row = session.get(DBWebSourceCandidate, candidate['id'])
+            actor = session.query(DBUser).filter_by(public_id=row.owner_public_id).one()
+            updated = complete_candidate_import(session, actor, row.id,
+                course_id=course_id, document_id='synthetic-new-document', source_document_id='synthetic-new-source')
+            assert updated['candidate']['importedVersion'] == 'synthetic-new-source-v1'
+            assert row.imported_version == 'synthetic-new-source-v1'
         after = _protected_counts()
         assert after["events"] == before["events"]
         assert after["snapshots"] == before["snapshots"]

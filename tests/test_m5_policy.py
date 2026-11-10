@@ -101,3 +101,29 @@ def test_m5_atomic_quota_reservation_rolls_back_all_scopes_on_limit():
     buckets = session.query(DBModelQuotaBucket).order_by(DBModelQuotaBucket.scope_type).all()
     assert len(buckets) == 3
     assert all(item.call_count == 1 and item.reserved_tokens == 30 for item in buckets)
+
+
+def test_default_daily_quotas_are_unbounded_and_still_record_actual_usage():
+    session = _session()
+    registration = _registration('fast-1', 'fast').model_copy(update={'input_cost_per_million': 50.0})
+    policy = GatewayPolicy(policy_version='unbounded', allowed_models=(ModelRef(provider='secure-provider', model='fast-1'),))
+    for _ in range(2):
+        reserve_daily_quota(session, owner_public_id='test-unbounded', course_id='test-course',
+                            registration=registration, policy=policy,
+                            estimated_input_tokens=200_000_000, estimated_output_tokens=100_000_000)
+        session.commit()
+    buckets = session.query(DBModelQuotaBucket).all()
+    assert len(buckets) == 3
+    assert all(row.call_count == 2 and row.reserved_tokens == 600_000_000 for row in buckets)
+    assert all(row.reserved_cost == 20_000 for row in buckets)
+    enforce_daily_quota(session, owner_public_id='test-unbounded', course_id='test-course',
+                        registration=registration, policy=policy, estimated_input_tokens=200_000_000)
+
+
+def test_explicit_positive_quota_also_checks_first_reservation():
+    session = _session()
+    with pytest.raises(M5CapabilityError, match='user daily'):
+        reserve_daily_quota(session, owner_public_id='test-small-budget', course_id=None,
+                            registration=_registration('fast-1', 'fast'), policy=_policy(),
+                            estimated_input_tokens=101, estimated_output_tokens=10)
+    assert session.query(DBModelQuotaBucket).count() == 0

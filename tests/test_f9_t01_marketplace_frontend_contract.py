@@ -71,7 +71,7 @@ def test_preview_actions_keep_one_primary_action_and_preserve_loaded_content() -
     assert "selected.value = null" not in market[market.index("async function saveCopy"):market.index("async function toggleFavorite")]
     assert "selected.value = null" not in market[market.index("async function toggleFavorite"):market.index("function choosePublishType")]
     assert market.count('class="primary-button"') >= 5
-    assert 'class="icon-button" :title="selected.engagement?.is_favorited' in market
+    assert re.search(r'<button[^>]*class="icon-button"[^>]*:title="selected\.engagement\?\.is_favorited', market)
 
 
 def test_source_license_demo_and_personal_copy_states_are_visible() -> None:
@@ -103,14 +103,15 @@ def test_personal_copy_routes_open_real_bundle_and_owned_learning_path() -> None
     assert ": await getGenerationJob(bundleId)" in bundle
     assert "v-else-if=\"item.state === 'failed' && !isPersonalCopy\"" in bundle
     assert "router.push('/marketplace/mine')" in bundle
-    assert "个人副本独立保存，上游变化不会覆盖当前内容" in bundle
+    assert "这是你的个人副本，原作者的修改不会覆盖这里。" in bundle
 
     assert "String(route.query.path_id || '')" in path
     assert "const isPersonalPath = computed(() => Boolean(route.query.path_id))" in path
-    assert "isPersonalPath.value ? Promise.resolve(null)" in path
+    assert "Promise.resolve(null)" in path
+    assert "getCompetitionDemoContext(" not in path
     assert "isLearner.value && !isPersonalPath.value && courseId" in path
     assert 'v-if="isLearner && !isPersonalPath"' in path
-    assert 'v-if="!isPersonalPath" type="button" class="path-secondary-action"' in path
+    assert 'if (isPersonalPath.value || !courseId || textbookDraftLoading.value || pathTaskBusy.value) return' in path
     assert "m5Paths.value.find(item => String(item.id) === requestedPathId)" in path
     assert "这条个人学习路径不存在或不属于当前账号" in path
     assert "m5Path.value = requestedPath" in path
@@ -131,10 +132,10 @@ def test_marketplace_deep_links_stay_in_one_of_eight_student_spaces() -> None:
     ):
         assert route_contract in router
     assert router.count("component: MarketplaceWorkspace") >= 4
-    assert "targetMeta('学习市场', '资源发现', STUDENT, { navigationLevel: 'primary' })" in router
-    assert "targetMeta('学习资源详情', '学习市场', STUDENT)" in router
-    assert "targetMeta('发布学习内容', '学习市场', STUDENT)" in router
-    assert "targetMeta('我的分享与收藏', '学习市场', STUDENT)" in router
+    assert "targetMeta('学习市场', '资源发现', STUDENT_AND_TEACHER, { navigationLevel: 'primary' })" in router
+    assert "targetMeta('学习资源详情', '学习市场', STUDENT_AND_TEACHER)" in router
+    assert "targetMeta('发布学习内容', '学习市场', STUDENT_AND_TEACHER)" in router
+    assert "targetMeta('我的分享与收藏', '学习市场', STUDENT_AND_TEACHER)" in router
 
     match = re.search(r"const studentNav = \[(.*?)\n\]", app, flags=re.DOTALL)
     assert match

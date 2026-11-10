@@ -53,7 +53,7 @@ function authenticationLabel(value) {
 
 function healthStateLabel(state) {
   return {
-    not_observed: '近期正常',
+    not_observed: '近期暂无记录',
     issue_observed: '需要处理',
     missing_configuration: '缺少配置',
   }[state] || '状态待确认'
@@ -77,9 +77,8 @@ onMounted(loadModels)
 <template>
   <main class="admin-page" data-testid="admin-models-page">
     <PageHeader
-      eyebrow="管理工作区"
+
       title="模型配置"
-      description="检查生成、多模态与知识检索三个能力是否可用。确认配置状态和近期故障分类后，本页任务即完成。"
     >
       <template #actions>
         <button
@@ -105,17 +104,13 @@ onMounted(loadModels)
     />
 
     <template v-else>
-      <section class="task-guide" aria-label="当前任务说明">
-        <strong>完成条件</strong>
-        <span>三个配置槽位都有明确状态，且认证、容量、限流、超时没有未处理问题。</span>
-        <span>本页只读取脱敏状态，不会发起模型调用。</span>
-      </section>
+      
 
       <section class="status-panel" aria-labelledby="configuration-title">
         <div class="section-heading">
           <div>
             <h2 id="configuration-title">能力配置</h2>
-            <p>仅显示业务所需的配置结果，不回显连接私值。</p>
+            <p></p>
           </div>
         </div>
 
@@ -151,7 +146,7 @@ onMounted(loadModels)
         <div class="section-heading">
           <div>
             <h2 id="health-title">近期可用性</h2>
-            <p>按业务可恢复方式区分问题，未观察到的问题不会被描述为已经验证成功。</p>
+            
           </div>
         </div>
         <div class="health-list">
@@ -211,7 +206,7 @@ onMounted(loadModels)
 
 .section-heading {
   padding: 18px 20px;
-  border-bottom: 1px solid var(--color-border);
+  
 }
 
 .section-heading h2,

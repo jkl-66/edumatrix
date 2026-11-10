@@ -21,6 +21,7 @@ from app.database import (
     DBChatConversation,
     DBCourse,
     DBCourseMembership,
+    DBSourceDocument,
     DBUser,
 )
 from app.schemas import ContextRef
@@ -95,6 +96,11 @@ def db_and_users():
         ),
     ]
     db.add_all(courses)
+    db.add_all([
+        DBSourceDocument(id=f"source-{course.id}", course_id=course.id, title="课程资料",
+                         filename="source.md", file_format="md", content_hash="a" * 64)
+        for course in courses
+    ])
     db.add(
         DBCourseMembership(
             course_id="b31-member",

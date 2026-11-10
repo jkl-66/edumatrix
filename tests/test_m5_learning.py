@@ -42,7 +42,7 @@ def _session():
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
     session.add(DBCourse(
-        id=COURSE, version="1", title="M5 Learning", manifest_version="1",
+        id=COURSE, version="1", title="M5 Learning", status="published", manifest_version="1",
     ))
     session.add(DBSourceDocument(
         id="src-m5-learning", course_id=COURSE, title="Source", filename="source.md",
@@ -102,6 +102,24 @@ def test_draft_is_idempotent_and_does_not_create_path():
         _draft(session, spec=_spec(goal="Changed goal"))
 
 
+def test_path_and_today_open_the_selected_chapter_in_the_current_reader():
+    from urllib.parse import parse_qs, urlsplit
+    from app.m5_learning import path_task_route
+    session = _session()
+    plan, _, _ = _draft(session, spec=_spec(_node("node-2", "chapter-2")))
+    path = confirm_plan(session, plan=plan, owner_public_id=OWNER, expected_lock_version=1)
+    node = session.query(DBPathNode).filter_by(learning_path_id=path.id).one()
+    route = path_task_route(session, node=node, course_id=COURSE)
+    parsed = urlsplit(route)
+    assert parsed.path == "/knowledge/documents/src-m5-learning"
+    assert parse_qs(parsed.query) == {
+        "course_id": [COURSE], "chapter_id": ["chapter-2"],
+        "return_to": [f"/workspace/path?course_id={COURSE}&node_id={node.id}"],
+    }
+    assert today_work_items(session, owner_public_id=OWNER)[0]["continue_route"] == route
+    assert multi_course_schedule(session, owner_public_id=OWNER)["selected"]["tasks"][0]["continue_route"] == route
+
+
 def test_plan_targets_require_course_membership_or_explicit_extension():
     session = _session()
     with pytest.raises(M5LearningError, match="confirmed course"):
@@ -128,6 +146,11 @@ def test_confirmation_revision_diff_and_lineage_replacement():
     )
     assert first_path.status == "active"
     assert session.query(DBPathNode).filter_by(learning_path_id=first_path.id).count() == 2
+    finished = session.query(DBPathNode).filter_by(learning_path_id=first_path.id, target_object_id="chapter-1").one()
+    finished.status = "completed"
+    finished.actual_minutes = 17
+    session.flush()
+    events_before = session.query(DBLearningEvent).count()
 
     revised = _spec(
         _node("node-2", "chapter-2"),
@@ -147,6 +170,36 @@ def test_confirmation_revision_diff_and_lineage_replacement():
     assert replacement.supersedes_path_id == first_path.id
     assert first_path.status == "archived"
     assert plan.confirmed_version_id == plan.current_version_id
+    replacement_nodes = session.query(DBPathNode).filter_by(learning_path_id=replacement.id).all()
+    assert next(node for node in replacement_nodes if node.target_object_id == "chapter-1").status == "completed"
+    assert next(node for node in replacement_nodes if node.target_object_id == "chapter-1").actual_minutes == 17
+    assert next(node for node in replacement_nodes if node.target_object_id == "chapter-2").status == "pending"
+    assert finished.status == "completed" and finished.actual_minutes == 17
+    assert session.query(DBLearningEvent).count() == events_before
+
+
+def test_content_revision_preserves_profile_until_an_explicit_replacement():
+    from app.database import DBProfileSnapshot
+    from app.m5_api import _plan_payload
+    session = _session()
+    for key in ('profile-original', 'profile-updated'):
+        session.add(DBProfileSnapshot(id=key, owner_public_id=OWNER, profile_version=key,
+            snapshot={'learning_goal': key}, content_hash=key, trace_id='synthetic-profile-revision'))
+    session.flush()
+    plan, first, _ = create_plan_draft(session, owner_public_id=OWNER, course_id=COURSE,
+        title='Profile-bound plan', idempotency_key='profile-bound-plan', spec=_spec(),
+        profile_snapshot_id='profile-original')
+    second, _ = propose_plan_revision(session, plan=plan, owner_public_id=OWNER,
+        expected_lock_version=plan.lock_version, spec=_spec(goal='Correct the teaching task'))
+    assert second.profile_snapshot_id == first.profile_snapshot_id == 'profile-original'
+    third, _ = propose_plan_revision(session, plan=plan, owner_public_id=OWNER,
+        expected_lock_version=plan.lock_version, spec=_spec(goal='Adjust to new confirmed conditions'),
+        profile_snapshot_id='profile-updated')
+    assert third.profile_snapshot_id == 'profile-updated'
+    assert [item['profile_snapshot_id'] for item in _plan_payload(session, plan)['versions']] == [
+        'profile-original', 'profile-original', 'profile-updated']
+    assert session.query(DBLearningEvent).count() == 0
+    assert session.query(DBLearningPath).count() == 0
 
 
 def test_path_pause_resume_locking_and_no_manual_completion():

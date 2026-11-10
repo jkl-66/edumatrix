@@ -87,8 +87,12 @@ def test_review_export_is_user_scoped_and_does_not_expose_answers(monkeypatch):
         with TestClient(app) as client:
             response = client.get("/api/v1/m5/review-export")
         assert response.status_code == 200, response.text
-        assert "复习诊疗材料" in response.text
+        assert "复习报告" in response.text
         assert "来源核验" in response.text
+        assert "复习类型：间隔复习" in response.text
+        assert "北京时间" in response.text
+        for internal_term in ("sm2_review_plan", "scheduled", "algorithmic_schedule", "rate_review_quality", "API Key", "SM-2"):
+            assert internal_term not in response.text
         assert "answer" not in response.text.lower()
         assert "api_key" not in response.text.lower()
         assert "other-learner" not in response.text

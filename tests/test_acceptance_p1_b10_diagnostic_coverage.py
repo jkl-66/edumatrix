@@ -5,7 +5,7 @@ import pytest
 
 import app.diagnostic_generation as diagnostic_generation
 from app.competition_demo_seed import seed_competition_demo
-from app.database import Base, DBProfileSnapshot, DBCourse, DBUser
+from app.database import Base, DBProfileSnapshot, DBCourse, DBUser, DBSourceRef
 from app.diagnostic_generation import _generation_scope, _question_type_quotas, _validate_generated_set
 from app.knowledge_graph import build_course_graph
 from sqlalchemy import create_engine
@@ -23,6 +23,7 @@ def _session():
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
     seed_competition_demo(session)
+    session.get(DBSourceRef, "demo-ref-01").quote += "\n\n## 闭环原理\n可信 RAG 将来源登记、解析、检索、生成和核验串联。检索召回不能保证回答受支持；生成后的主张需逐项核对引用，发现不一致再修订。"
     learner = session.query(DBUser).filter_by(username="lzz").one()
     return engine, session, learner
 
@@ -137,12 +138,9 @@ def test_course_graph_exposes_read_only_mastery_evidence_fields():
 
 def test_graph_frontend_explains_unknown_and_read_only_mastery_evidence():
     source = GRAPH_VIEW.read_text(encoding="utf-8")
-    for marker in (
-        "初始掌握证据",
-        "交叉证据",
-        "graph-mastery-boundary",
-        "查看图谱不会修改掌握度",
-        "尚无足够诊断证据",
-    ):
+    for marker in ("projectCourseMasteryNode", "selectedProfileNode.mastery == null", "待补证据",
+                   "course-graph-node-no-behaviors", "course-graph-node-evidence"):
         assert marker in source
+    for mutation in ("updateMastery", "createLearningEvent", "completePathTask"):
+        assert mutation not in source
     assert "event_name" not in source

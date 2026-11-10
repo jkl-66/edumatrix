@@ -211,11 +211,36 @@ def test_feynman_model_json_exposes_stable_retryable_error_without_provider_deta
 
     monkeypatch.setattr(feynman_module, "_live_model_backend", lambda: EmptyBackend())
     with pytest.raises(FeynmanError) as exc_info:
-        _model_json(system="只输出 JSON 对象", user={"text": "复述"}, role="feynman_evaluator")
+        _model_json(system="只输出 JSON 对象", user={"text": "复述"}, role="feynman_evaluator", state=_live_state())
     assert exc_info.value.code == "feynman_model_call_failed"
     assert str(exc_info.value) == "真实模型评价失败，请重试：模型未返回可用的结构化内容。"
     assert "structured model" not in str(exc_info.value).lower()
     assert "reasoning_content" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("role,kind,expected", [
+    ("feynman_tutor", "explanation", "disabled"),
+    ("feynman_tutor", "reasoning", "max"),
+    ("feynman_tutor", "practice", "max"),
+    ("feynman_evaluator", "explanation", "max"),
+])
+def test_feynman_tutor_adapts_question_depth_without_changing_grading(monkeypatch, role, kind, expected):
+    backend = llm_client.AsyncOpenAIChatLLM(endpoint="https://test.invalid/chat", api_key="test",
+                                           model="test", thinking_mode="max", reasoning_effort="max")
+    monkeypatch.setattr(feynman_module, "_live_model_backend", lambda: backend)
+    classified = []
+    async def classify(*args, **kwargs):
+        classified.append(True)
+        return {"question_kind": kind}
+    monkeypatch.setattr("app.m5_intent.classify_academic_intent", classify)
+    async def call(active, *, response_validator, **kwargs):
+        assert active.thinking_mode == expected
+        response_validator('{"answer":"沿负梯度方向更新参数。"}')
+    monkeypatch.setattr(feynman_module, "audited_legacy_text_call", call)
+    result = _model_json(system="答疑", user={"question": "为什么沿负梯度更新？"}, role=role, state=_live_state())
+    assert result["answer"] == "沿负梯度方向更新参数。"
+    assert bool(classified) == (role == "feynman_tutor")
+    assert backend.thinking_mode == "max"
 
 
 def test_live_evaluation_keeps_strict_five_dimension_contract(monkeypatch):
@@ -298,7 +323,8 @@ def test_feynman_question_prompt_also_requires_public_content(monkeypatch):
     monkeypatch.setattr(feynman_module, "_live_model_backend", lambda: TutorBackend())
     answer = _live_answer_question(_live_state(), "为什么要先确认前提？")
     assert answer.answer_mode == "llm_grounded"
-    assert "必须把最终 JSON 放在公开 content 字段返回" in systems[0][1]
+    tutor_prompt = next(system for role, system in systems if role == "feynman_tutor")
+    assert "必须把最终 JSON 放在公开 content 字段返回" in tutor_prompt
     assert answer.answer == "从学习内容来看，先确认前提，再解释机制。"
     assert all(marker not in answer.answer for marker in ("依据", "来源", "上下文", "确定性"))
 
@@ -343,7 +369,11 @@ def test_empty_evaluation_keeps_submitted_text_and_version_retryable(monkeypatch
             async def generate(self, system, user, *, role):
                 raise llm_client.StructuredModelContentError("模型未返回可用的结构化正文")
 
+        async def local_audit(operation):
+            return operation(session)
+
         monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(feynman_module, "run_db_op", local_audit)
         monkeypatch.setattr(feynman_module, "_live_model_backend", lambda: EmptyBackend())
         try:
             with pytest.raises(FeynmanError) as exc_info:
@@ -358,3 +388,51 @@ def test_empty_evaluation_keeps_submitted_text_and_version_retryable(monkeypatch
     finally:
         session.close()
         engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def feynman_audit_identity():
+    from app.database import SessionLocal, DBUser, DBCourse
+    with SessionLocal() as db:
+        if not db.query(DBUser).filter_by(public_id="owner-live").first():
+            db.add(DBUser(public_id="owner-live", username="feynman-unit-live", hashed_password="unused", role="student"))
+        if not db.get(DBCourse, "course-live"):
+            db.add(DBCourse(id="course-live", version="1", title="机器学习导论", manifest_version="1"))
+        db.commit()
+
+
+@pytest.mark.parametrize("result, expected_status, expected_error", [
+    ("valid", "completed", ""),
+    ("invalid_json", "failed", "feynman_evaluator_output_invalid"),
+    ("invalid_rubric", "failed", "feynman_evaluator_output_invalid"),
+    ("provider_error", "failed", "feynman_evaluator_provider_failed"),
+])
+def test_feynman_call_records_terminal_status_without_student_text(monkeypatch, result, expected_status, expected_error):
+    from app.database import SessionLocal, DBModelCall
+    class Backend:
+        provider = "openai"
+        model = "deepseek-v4-flash"
+        async def generate(self, system, user, *, role):
+            if result == "provider_error":
+                raise RuntimeError("synthetic provider outage")
+            if result == "invalid_json":
+                return "not JSON"
+            if result == "invalid_rubric":
+                return json.dumps({"dimensions": []})
+            return json.dumps(_valid_evaluation_payload())
+    monkeypatch.setattr(feynman_module, "_live_model_backend", lambda: Backend())
+    state = _live_state().model_copy(update={"session_id": "audit-" + result})
+    student_text = "private student retelling for audit regression"
+    if expected_status == "failed":
+        with pytest.raises(FeynmanError):
+            _live_evaluate(student_text, state, round_number=1)
+    else:
+        assert _live_evaluate(student_text, state, round_number=1).score == 82
+    with SessionLocal() as db:
+        rows = db.query(DBModelCall).filter_by(owner_public_id=state.owner_public_id, capability="feynman_evaluator").all()
+        row = next(row for row in rows if row.input_summary.get("session_id") == state.session_id)
+        assert row.status == expected_status
+        assert row.error_code == expected_error
+        assert row.completed_at is not None
+        assert row.course_id == state.course_id
+        assert student_text not in json.dumps(row.input_summary)

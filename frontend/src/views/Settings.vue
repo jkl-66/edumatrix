@@ -1,4 +1,5 @@
 <script setup>
+import { learningText, displayLabel } from '../utils/learningCopy.js'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   AlertTriangle,
@@ -32,6 +33,8 @@ import {
   withdrawLongTermMemory,
 } from '../api/nextCore'
 import TaskState from '../components/TaskState.vue'
+import AccountProfileEditor from '../components/AccountProfileEditor.vue'
+import { readPreference, writePreference } from '../utils/learningPreferenceStorage'
 import { translateError } from '../services/errorTranslator'
 
 const role = localStorage.getItem('edumatrix_role') || 'student'
@@ -46,11 +49,11 @@ const introCopy = isAdmin
       description: '偏好只影响资源表达和交互方式，不会直接改变掌握度。',
     }
 
-const teachingStyle = ref(localStorage.getItem('edumatrix_teaching_style') || 'socratic')
-const responseDepth = ref(localStorage.getItem('edumatrix_response_depth') || 'focused')
-const imageAnalysis = ref(localStorage.getItem('edumatrix_multimodal_image_enabled') !== 'false')
-const speechInput = ref(localStorage.getItem('edumatrix_speech_input_enabled') !== 'false')
-const readAloud = ref(localStorage.getItem('edumatrix_read_aloud_enabled') === 'true')
+const teachingStyle = ref(readPreference('edumatrix_teaching_style') || 'socratic')
+const responseDepth = ref(readPreference('edumatrix_response_depth') || 'focused')
+const imageAnalysis = ref(readPreference('edumatrix_multimodal_image_enabled') !== 'false')
+const speechInput = ref(readPreference('edumatrix_speech_input_enabled') !== 'false')
+const readAloud = ref(readPreference('edumatrix_read_aloud_enabled') === 'true')
 const saved = ref(false)
 const dirty = ref(false)
 
@@ -90,6 +93,17 @@ const memoryTypeLabels = {
   learning_context: '学习背景',
 }
 
+function memoryTitle(item) {
+  if (item.source_type !== 'profile') return item.title
+  return profileFields.find(([key]) => key === String(item.title || '').replaceAll(' ', '_'))?.[1] || '已确认的学习情况'
+}
+
+function memoryContent(item) {
+  if (item.source_type !== 'profile') return item.content
+  try { return learningText(JSON.parse(item.content), '请在学习画像中查看详情') }
+  catch { return learningText(item.content) }
+}
+
 const credits = [
   ['FastAPI', 'MIT'], ['SQLAlchemy', 'MIT'], ['Vue 3', 'MIT'],
   ['Vite', 'MIT'], ['Tailwind CSS', 'MIT'], ['ECharts', 'Apache-2.0'],
@@ -107,11 +121,12 @@ watch([teachingStyle, responseDepth, imageAnalysis, speechInput, readAloud], () 
 })
 
 function savePreferences() {
-  localStorage.setItem('edumatrix_teaching_style', teachingStyle.value)
-  localStorage.setItem('edumatrix_response_depth', responseDepth.value)
-  localStorage.setItem('edumatrix_multimodal_image_enabled', String(imageAnalysis.value))
-  localStorage.setItem('edumatrix_speech_input_enabled', String(speechInput.value))
-  localStorage.setItem('edumatrix_read_aloud_enabled', String(readAloud.value))
+  writePreference('edumatrix_teaching_style', teachingStyle.value)
+  writePreference('edumatrix_response_depth', responseDepth.value)
+  writePreference('edumatrix_multimodal_image_enabled', String(imageAnalysis.value))
+  writePreference('edumatrix_speech_input_enabled', String(speechInput.value))
+  writePreference('edumatrix_read_aloud_enabled', String(readAloud.value))
+  window.dispatchEvent(new Event('edumatrix-preferences-changed'))
   dirty.value = false
   saved.value = true
   window.setTimeout(() => { saved.value = false }, 3000)
@@ -280,7 +295,7 @@ onMounted(() => {
       <header class="settings-intro">
       <div>
         <h2>{{ introCopy.title }}</h2>
-        <span>{{ introCopy.description }}</span>
+        <span>{{ learningText(introCopy.description) }}</span>
       </div>
       <div v-if="!isAdmin" class="settings-save">
         <span v-if="saved"><CheckCircle2 :size="16" /> 已保存</span>
@@ -291,13 +306,15 @@ onMounted(() => {
       </div>
       </header>
 
+      <AccountProfileEditor />
+
       <section v-if="!isAdmin" class="settings-section" aria-labelledby="learning-preferences-title">
       <div class="settings-section__heading">
         <div>
           <span>学习偏好</span>
           <h3 id="learning-preferences-title">回答方式</h3>
         </div>
-        <p>系统生成讲义和回答时优先采用这些表达方式。</p>
+        <p>智能对话优先采用这些表达方式；学习资源还会结合你的画像和生成要求。</p>
       </div>
 
       <div class="setting-row">
@@ -341,7 +358,7 @@ onMounted(() => {
           <span>多模态</span>
           <h3 id="multimodal-title">图片与语音</h3>
         </div>
-        <p>关闭后，相应入口会隐藏；已有学习内容不会被删除。</p>
+        <p>选择需要显示的学习工具。</p>
       </div>
 
       <label class="toggle-row">
@@ -351,7 +368,7 @@ onMounted(() => {
       </label>
       <label class="toggle-row">
         <span class="toggle-row__icon"><Mic :size="18" /></span>
-        <span><strong>语音输入</strong><small>允许通过麦克风输入问题和费曼复述。</small></span>
+        <span><strong>语音输入</strong><small>允许在费曼复述中录入复述内容和疑问。</small></span>
         <input v-model="speechInput" type="checkbox" />
       </label>
       <label class="toggle-row">
@@ -367,7 +384,7 @@ onMounted(() => {
           <span>运行连接</span>
           <h3 id="model-status-title">模型状态</h3>
         </div>
-        <p>{{ isAdmin ? '模型凭据由部署环境配置，页面只显示脱敏状态。' : '连接由系统管理员统一配置，不需要填写 API Key。' }}</p>
+        <p>{{ isAdmin ? '模型凭据由部署环境配置，页面只显示脱敏状态。' : '学习助手由管理员统一连接，你可以直接使用。' }}</p>
       </div>
 
       <TaskState v-if="healthLoading" state="loading" title="正在检查运行环境" message="本地页面仍可继续使用。" />
@@ -376,7 +393,7 @@ onMounted(() => {
           <span class="connection-row__icon"><BrainCircuit :size="18" /></span>
           <div>
             <strong>文本模型</strong>
-            <span>{{ textModel?.available ? '已连接' : '未连接，系统将使用可用的本地能力' }}</span>
+            <span>{{ testResults.text?.status === 'error' ? '本次连接未成功，可以重试' : testResults.text?.status === 'ok' ? '本次连接成功' : textModel?.available ? '已设置，可测试当前是否能回答' : '暂未连接，部分智能学习功能可能无法使用' }}</span>
           </div>
           <i :class="{ available: textModel?.available }" />
           <button type="button" class="ui-button ui-button--secondary ui-button--sm" :disabled="testing === 'text'" @click="testConnection('text')">
@@ -396,7 +413,7 @@ onMounted(() => {
           <span class="connection-row__icon"><Eye :size="18" /></span>
           <div>
             <strong>视觉模型</strong>
-            <span>{{ visionModel?.available ? '已连接' : '未连接，图片分析入口会提示不可用' }}</span>
+            <span>{{ testResults.vision?.status === 'error' ? '本次连接未成功，可以重试' : testResults.vision?.status === 'ok' ? '本次连接成功' : visionModel?.available ? '已设置，可测试当前是否能看图' : '未连接，图片分析入口会提示不可用' }}</span>
           </div>
           <i :class="{ available: visionModel?.available }" />
           <button type="button" class="ui-button ui-button--secondary ui-button--sm" :disabled="testing === 'vision'" @click="testConnection('vision')">
@@ -417,7 +434,7 @@ onMounted(() => {
         <summary>查看部署配置说明</summary>
         <div class="disclosure-copy">
           <ShieldCheck :size="18" />
-          <p>文本与视觉模型的端点、模型名和密钥由后端环境变量提供。浏览器不会保存或回显完整密钥，修改部署配置后需要重启后端服务。</p>
+          <p>在服务器 .env 文件中修改连接，重启服务后生效。</p>
         </div>
       </details>
       </section>
@@ -438,7 +455,7 @@ onMounted(() => {
             <div class="memory-subsection__heading">
               <div>
                 <strong>画像同步范围</strong>
-                <span>{{ profileSubscription?.status === 'active' ? `已启用 · 版本 ${profileSubscription.lock_version}` : '尚未启用' }}</span>
+                <span>{{ profileSubscription?.status === 'active' ? '已启用' : '尚未启用' }}</span>
               </div>
               <div>
                 <button v-if="profileSubscription?.status === 'active'" type="button" class="ui-button ui-button--ghost ui-button--sm" :disabled="memorySaving" @click="revokeSubscription"><Trash2 :size="16" /> 撤回</button>
@@ -480,8 +497,9 @@ onMounted(() => {
                 </template>
                 <template v-else>
                   <div class="memory-copy">
-                    <div><strong>{{ item.title }}</strong><span>{{ memoryTypeLabels[item.memory_type] || item.memory_type }} · 版本 {{ item.lock_version }}</span></div>
-                    <p>{{ item.content }}</p>
+                    <strong>{{ memoryTitle(item) }}</strong>
+                    <span>{{ item.status === 'active' ? '正在使用' : '已撤回' }}</span>
+                    <p>{{ memoryContent(item) }}</p>
                   </div>
                   <div v-if="item.status === 'active'" class="memory-icon-actions">
                     <button v-if="item.source_type === 'manual'" type="button" title="编辑记忆" aria-label="编辑记忆" @click="beginEdit(item)"><Pencil :size="16" /></button>
@@ -496,7 +514,7 @@ onMounted(() => {
             <summary><History :size="16" /> 操作记录（{{ auditItems.length }}）</summary>
             <div class="audit-list">
               <p v-if="!auditItems.length">暂无操作记录。</p>
-              <div v-for="item in auditItems" :key="item.id"><strong>{{ item.action }}</strong><span>{{ item.created_at?.replace('T', ' ').slice(0, 19) }}</span></div>
+              <div v-for="item in auditItems" :key="item.id"><strong>{{ displayLabel(item.action) }}</strong><span>{{ item.created_at?.replace('T', ' ').slice(0, 19) }}</span></div>
             </div>
           </details>
         </template>
@@ -525,9 +543,9 @@ onMounted(() => {
 
 .settings-surface {
   overflow: hidden;
-  border: 1px solid var(--color-border);
+  border: 0;
   border-radius: 12px;
-  background: var(--color-surface);
+  background: var(--gradient-paper);
   box-shadow: 0 10px 30px rgb(6 20 27 / 5%);
 }
 
@@ -616,7 +634,7 @@ onMounted(() => {
   min-height: 66px;
   align-items: center;
   gap: 24px;
-  border-top: 1px solid #eceef0;
+  border-top: 1px solid var(--color-surface-muted);
 }
 
 .setting-row {
@@ -800,7 +818,7 @@ onMounted(() => {
 
 .memory-subsection {
   padding: 20px 0;
-  border-top: 1px solid #eceef0;
+  border-top: 1px solid var(--color-surface-muted);
 }
 
 .memory-subsection__heading {
@@ -876,7 +894,7 @@ onMounted(() => {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
   padding: 14px 0;
-  border-top: 1px solid #eceef0;
+  border-top: 1px solid var(--color-surface-muted);
 }
 
 .memory-list article.withdrawn {
@@ -925,14 +943,14 @@ onMounted(() => {
   color: var(--color-text-secondary);
   border: 1px solid var(--color-border);
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--color-surface);
   cursor: pointer;
 }
 
 .audit-disclosure {
   margin-top: 12px;
   padding-top: 14px;
-  border-top: 1px solid #eceef0;
+  border-top: 1px solid var(--color-surface-muted);
 }
 
 .audit-disclosure summary {
@@ -954,7 +972,7 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   padding: 9px 0;
-  border-top: 1px solid #eceef0;
+  border-top: 1px solid var(--color-surface-muted);
 }
 
 .audit-list p,
@@ -969,15 +987,15 @@ onMounted(() => {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
   margin-top: 20px;
-  border-top: 1px solid #eceef0;
-  border-left: 1px solid #eceef0;
+  border-top: 1px solid var(--color-surface-muted);
+  border-left: 1px solid var(--color-surface-muted);
 }
 
 .credits-list > div {
   display: grid;
   padding: 12px;
-  border-right: 1px solid #eceef0;
-  border-bottom: 1px solid #eceef0;
+  border-right: 1px solid var(--color-surface-muted);
+  border-bottom: 1px solid var(--color-surface-muted);
 }
 
 .credits-list strong,

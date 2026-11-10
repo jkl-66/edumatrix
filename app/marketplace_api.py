@@ -21,6 +21,8 @@ class ListingInput(StrictModel):
     course_id: str | None = Field(default=None,min_length=1,max_length=128)
     source_object_id: str | None = Field(default=None,min_length=1,max_length=128)
     source_version_id: str | None = Field(default=None,min_length=1,max_length=128)
+    revision_of: str | None = Field(default=None,min_length=1,max_length=64)
+    expected_version: int | None = Field(default=None,ge=1)
     title: str = Field(min_length=1,max_length=256)
     summary: str = Field(min_length=8,max_length=4000); category: str = Field(min_length=1,max_length=128)
     tags: list[str] = Field(default_factory=list,max_length=20)

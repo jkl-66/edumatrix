@@ -10,8 +10,8 @@ const activeStudentId = computed(() => props.studentId || localStorage.getItem('
 <template>
   <div class="revision-page">
     <ReviewScheduleBoard>
-      <template #tools>
-        <ReviewToolsPanel :student-id="activeStudentId" />
+      <template #tools="{ refresh, courseId }">
+        <ReviewToolsPanel :student-id="activeStudentId" :course-id="courseId" @changed="refresh()" />
       </template>
     </ReviewScheduleBoard>
   </div>

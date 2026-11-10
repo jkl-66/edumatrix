@@ -129,6 +129,45 @@ def _canonical_graph_payload() -> dict:
     return payload
 
 
+def _exercise_cluster_filter(page, payload):
+    """The current UI filters clusters with a select, not the removed pill panel."""
+    from playwright.sync_api import expect
+
+    cluster = payload["topicClusters"][0]
+    picker = page.get_by_test_id("graph-cluster-filter")
+    picker.select_option(cluster["id"])
+    expect(picker).to_have_value(cluster["id"])
+    page.get_by_label("按节点类型筛选").select_option(label="知识点")
+    expected_ids = sorted(node["id"] for node in payload["nodes"]
+                          if node["nodeType"] == "knowledge_point" and node["id"] in cluster["memberNodeIds"])
+    page.wait_for_function("""expected => {
+      const root = document.querySelector('[data-testid="knowledge-graph-explorer"]');
+      const host = [root, ...(root ? root.querySelectorAll('*') : [])]
+        .find(element => element?.__edumatrixChartInstance);
+      const data = host?.__edumatrixChartInstance?.getOption()?.series?.[0]?.data || [];
+      return JSON.stringify(data.map(item => String(item.id)).sort()) === JSON.stringify(expected);
+    }""", arg=expected_ids)
+    assert expected_ids
+    picker.select_option("all")
+    expect(picker).to_have_value("all")
+    page.get_by_label("按节点类型筛选").select_option("all")
+
+
+def _respond_to_context_read(route, course):
+    """Context resolution uses POST for a read payload; learning writes remain forbidden."""
+    path = urlparse(route.request.url).path
+    if path == "/api/v1/m5/context/resolve":
+        assert route.request.method == "POST"
+        context = route.request.post_data_json["context"]
+        assert context["courseId"] == course["id"]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({
+            "context": context, "course": course, "knowledgePoint": None,
+        }, ensure_ascii=False))
+        return True
+    assert route.request.method == "GET", f"Browsing must not write learning state: {path}"
+    return False
+
+
 def test_dynamic_graph_decision_clusters_and_spacing_two_desktop_viewports(tmp_path: Path):
     from playwright.sync_api import sync_playwright
 
@@ -140,8 +179,8 @@ def test_dynamic_graph_decision_clusters_and_spacing_two_desktop_viewports(tmp_p
     with _frontend_server() as base_url, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 900), (1366, 768)):
-                context = browser.new_context(viewport={"width": width, "height": height})
+            for width, height in ((1707, 876), (1440, 900), (1366, 768)):
+                context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1.5 if width == 1707 else 1)
                 context.add_init_script(
                     "localStorage.setItem('edumatrix_token', 'browser-token');"
                     "localStorage.setItem('edumatrix_role', 'student');"
@@ -152,6 +191,8 @@ def test_dynamic_graph_decision_clusters_and_spacing_two_desktop_viewports(tmp_p
                 page.on("pageerror", lambda error: browser_errors.append(str(error)))
 
                 def handle(route):
+                    if _respond_to_context_read(route, payload["course"]):
+                        return
                     path = urlparse(route.request.url).path
                     if path.endswith("/api/auth/me"):
                         body = {"public_id": "b29-browser-user", "username": "b29-browser", "display_name": "B29 浏览器验收", "role": "student"}
@@ -168,14 +209,11 @@ def test_dynamic_graph_decision_clusters_and_spacing_two_desktop_viewports(tmp_p
                 page.route("**/api/**", handle)
                 page.goto(f"{base_url}/knowledge/graph/{course_id}", wait_until="networkidle")
                 page.get_by_test_id("course-knowledge-graph-workspace").wait_for()
-                page.get_by_test_id("graph-layout-decision").wait_for()
-                assert page.get_by_test_id("graph-readonly-note").is_visible()
-                assert page.get_by_text("本次布局：dynamic_cluster").is_visible()
+                page.get_by_test_id("knowledge-graph-explorer").wait_for()
+                assert page.get_by_role("searchbox", name="检索知识点").is_visible()
+                assert page.get_by_test_id("graph-cluster-filter").locator("option").count() == 3
                 assert page.get_by_test_id("graph-cluster-filter").is_visible()
-                cluster_button = page.locator("[data-testid=graph-layout-decision] .topic-cluster-strip button").first
-                cluster_button.click()
-                assert cluster_button.get_attribute("aria-expanded") == "false"
-                page.locator("[data-testid=graph-layout-decision] .topic-cluster-strip button").first.click()
+                _exercise_cluster_filter(page, payload)
                 assert not browser_errors, browser_errors
                 page.screenshot(path=str(evidence / f"{width}x{height}.png"), full_page=True)
                 layout = page.evaluate("""() => ({
@@ -219,6 +257,8 @@ def test_graph_state_matrix_surfaces_empty_failure_and_permission(tmp_path: Path
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
             def handle(route):
+                if _respond_to_context_read(route, payload["course"]):
+                    return
                 path = urlparse(route.request.url).path
                 if path.endswith("/api/auth/me"):
                     body = {"public_id": "b29-state-user", "username": "b29-state", "display_name": "B29 状态矩阵", "role": "student"}
@@ -267,8 +307,8 @@ def test_graph_state_matrix_surfaces_empty_failure_and_permission(tmp_path: Path
 
             mode["value"] = "ready"
             page.goto(f"{base_url}/knowledge/graph/{course_id}", wait_until="networkidle")
-            page.get_by_test_id("graph-readonly-note").wait_for()
-            assert page.get_by_text("本次布局：dynamic_cluster").is_visible()
+            page.get_by_test_id("knowledge-graph-explorer").wait_for()
+            assert page.get_by_test_id("graph-cluster-filter").locator("option").count() == 3
             states.append("ready")
             assert not page_errors, page_errors
             context.close()
@@ -296,8 +336,8 @@ def test_canonical_graph_payload_drives_desktop_views_and_readonly_interactions(
     with _frontend_server() as base_url, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 900), (1366, 768)):
-                context = browser.new_context(viewport={"width": width, "height": height})
+            for width, height in ((1707, 876), (1440, 900), (1366, 768)):
+                context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1.5 if width == 1707 else 1)
                 context.add_init_script(
                     "localStorage.setItem('edumatrix_token', 'browser-token');"
                     "localStorage.setItem('edumatrix_role', 'student');"
@@ -308,6 +348,8 @@ def test_canonical_graph_payload_drives_desktop_views_and_readonly_interactions(
                 page.on("pageerror", lambda error: browser_errors.append(str(error)))
 
                 def handle(route):
+                    if _respond_to_context_read(route, payload["course"]):
+                        return
                     path = urlparse(route.request.url).path
                     if path.endswith("/api/auth/me"):
                         body = {"public_id": "b29-canonical-browser", "username": "b29_canonical_browser", "display_name": "B29 Canonical", "role": "student"}
@@ -331,8 +373,8 @@ def test_canonical_graph_payload_drives_desktop_views_and_readonly_interactions(
                 page.route("**/api/**", handle)
                 page.goto(f"{base_url}/knowledge/graph/{course_id}", wait_until="networkidle")
                 page.get_by_test_id("course-knowledge-graph-workspace").wait_for()
-                page.get_by_test_id("graph-layout-decision").wait_for()
-                assert page.get_by_test_id("graph-readonly-note").is_visible()
+                page.get_by_test_id("knowledge-graph-explorer").wait_for()
+                assert page.get_by_role("searchbox", name="检索知识点").is_visible()
                 assert page.get_by_test_id("graph-chapter-filter").is_visible()
                 assert page.get_by_test_id("graph-relation-filter").is_visible()
                 assert page.get_by_test_id("graph-cluster-filter").is_visible()
@@ -363,11 +405,7 @@ def test_canonical_graph_payload_drives_desktop_views_and_readonly_interactions(
                 page.get_by_role("button", name="关系图").click()
                 page.get_by_test_id("knowledge-graph-explorer").wait_for()
 
-                cluster_button = page.locator("[data-testid=graph-layout-decision] .topic-cluster-strip button").first
-                cluster_button.click()
-                assert cluster_button.get_attribute("aria-expanded") == "false"
-                page.locator("[data-testid=graph-layout-decision] .topic-cluster-strip button").first.click()
-                assert cluster_button.get_attribute("aria-expanded") == "true"
+                _exercise_cluster_filter(page, payload)
 
                 page.get_by_role("button", name="重置视图").click()
                 assert not page.get_by_role("heading", name=knowledge_node["name"]).is_visible()
@@ -422,6 +460,8 @@ def test_high_density_local_focus_keeps_chart_nodes_separated_and_in_bounds():
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
             def handle(route):
+                if _respond_to_context_read(route, payload["course"]):
+                    return
                 path = urlparse(route.request.url).path
                 if path.endswith("/api/auth/me"):
                     body = {"public_id": "b29-density-user", "username": "b29-density", "display_name": "B29 密度验收", "role": "student"}
@@ -438,7 +478,21 @@ def test_high_density_local_focus_keeps_chart_nodes_separated_and_in_bounds():
             page.route("**/api/**", handle)
             page.goto(f"{base_url}/knowledge/graph/{course_id}", wait_until="networkidle")
             page.get_by_test_id("knowledge-graph-explorer").wait_for()
-            assert page.get_by_text("本次布局：local_focus").is_visible()
+            assert "点击知识点展开后续内容" in page.get_by_test_id("graph-decision-summary").inner_text()
+            # Default progressive disclosure hides later layers; select the
+            # knowledge-node view to measure all 81 semantic nodes together.
+            page.get_by_label("按节点类型筛选").select_option(label="知识点")
+            page.wait_for_function("""() => {
+              const host = [...document.querySelectorAll('[data-testid="knowledge-graph-explorer"] *')]
+                .find(element => element?.__edumatrixChartInstance);
+              return host?.__edumatrixChartInstance?.getOption()?.series?.[0]?.data?.length === 81;
+            }""")
+            page.locator('[data-testid="knowledge-graph-explorer"] .chart').scroll_into_view_if_needed()
+            page.wait_for_function("""() => {
+              const host = [...document.querySelectorAll('[data-testid="knowledge-graph-explorer"] *')]
+                .find(element => element?.__edumatrixChartInstance);
+              return host?.__edumatrixChartInstance?.getZr().animation.isFinished();
+            }""")
             chart = page.evaluate("""() => {
               const root = document.querySelector('[data-testid="knowledge-graph-explorer"]');
               const chartDom = [root, ...(root ? root.querySelectorAll('*') : [])]
@@ -446,16 +500,21 @@ def test_high_density_local_focus_keeps_chart_nodes_separated_and_in_bounds():
               const instance = chartDom?.__edumatrixChartInstance;
               if (!instance) return null;
               const option = instance.getOption();
-              return { width: instance.getWidth(), height: instance.getHeight(), series: option.series || [] };
+              return { width: instance.getWidth(), height: instance.getHeight(), series: option.series || [],
+                points: (option.series?.[0]?.data || []).map(item => {
+                  const pixel = instance.convertToPixel({seriesIndex: 0}, [item.x, item.y]);
+                  return [String(item.id), pixel[0], pixel[1], Number(item.symbolSize || 0)];
+                }) };
             }""")
             assert chart is not None and "series" in chart, chart
             series = chart["series"][0]
             data = series["data"]
-            assert len(data) == len(payload["nodes"]), {"data_count": len(data), "node_count": len(payload["nodes"])}
-            points = [(str(item.get("id")), float(item["x"]), float(item["y"]), float(item.get("symbolSize") or 0)) for item in data]
-            assert all(-500 <= x <= 500 and -240 <= y <= 240 for _, x, y, _ in points), points[:3]
+            assert len(data) == 81 and {item["id"] for item in data} == {node["id"] for node in payload["nodes"] if node["nodeType"] == "knowledge_point"}
+            points = chart["points"]
+            (evidence / "high-density-pixel-geometry.json").write_text(json.dumps(chart, ensure_ascii=False, indent=2), encoding="utf-8")
+            assert all(size / 2 <= x <= chart["width"] - size / 2 and size / 2 <= y <= chart["height"] - size / 2 for _, x, y, size in points), points[:3]
             min_clearance = min(
-                ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5 - max(size1, size2) / 2
+                ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5 - (size1 + size2) / 2
                 for index, (_, x1, y1, size1) in enumerate(points)
                 for _, x2, y2, size2 in points[index + 1:]
             )
@@ -464,7 +523,7 @@ def test_high_density_local_focus_keeps_chart_nodes_separated_and_in_bounds():
                 for right in points[index + 1:]:
                     _, x1, y1, size1 = left
                     _, x2, y2, size2 = right
-                    clearance = ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5 - max(size1, size2) / 2
+                    clearance = ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5 - (size1 + size2) / 2
                     candidate = (clearance, left[0], right[0])
                     if closest_pair is None or candidate[0] < closest_pair[0]:
                         closest_pair = candidate

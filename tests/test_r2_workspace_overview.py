@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -8,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth import get_current_user
 from app.competition_demo_seed import seed_competition_demo
-from app.database import Base, DBCourse, DBUser
+from app.database import Base, DBCourse, DBUser, DBReviewPlan, DBKnowledgePoint
 import app.m5_api as m5_api
 from app.m5_workspace import M5WorkspaceError, workspace_overview
 
@@ -29,7 +31,7 @@ def test_workspace_overview_composes_existing_demo_facts():
         seed_competition_demo(session)
         learner = session.query(DBUser).filter_by(username="lzz").one()
 
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
 
         assert payload["schema_version"] == "r2.workspace-overview.v1"
         assert payload["state"] == "ready"
@@ -50,7 +52,13 @@ def test_workspace_overview_composes_existing_demo_facts():
         assert len(payload["recent_artifacts"]) == 3
         assert payload["running_tasks"] == []
         assert payload["review"]["due_count"] == 2
-        assert payload["next_action"]["route"] == "/workspace?node_id=demo-task-lzz-read-01"
+        from urllib.parse import urlparse, parse_qs
+        route = payload["next_action"]["route"]
+        assert route == payload["today_tasks"][0]["continue_route"]
+        assert urlparse(route).path == "/knowledge/documents/demo-src-04"
+        query = parse_qs(urlparse(route).query)
+        assert query["course_id"] == ["demo-course-rag-trust-v1"]
+        assert "demo-task-lzz-read-01" in query["return_to"][0]
     finally:
         session.close()
         engine.dispose()
@@ -72,6 +80,36 @@ def test_workspace_overview_returns_explainable_empty_state_without_course():
         assert payload["course"] is None
         assert payload["today_tasks"] == []
         assert payload["next_action"] == {"label": "选择课程", "route": "/knowledge"}
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_home_and_today_resolve_legacy_review_titles_and_respect_course_scope():
+    engine, session = _session()
+    try:
+        seed_competition_demo(session)
+        learner = session.query(DBUser).filter_by(username="lzz").one()
+        plans = session.query(DBReviewPlan).filter_by(student_id=learner.username).order_by(DBReviewPlan.id).all()
+        legacy = plans[0]
+        point = session.get(DBKnowledgePoint, legacy.concept)
+        legacy.concept = point.title
+        legacy.knowledge_point_id = None
+        legacy.course_id = None
+        legacy.next_review_at = datetime.utcnow() - timedelta(hours=1)
+        # A similarly named plan explicitly belonging elsewhere must not leak.
+        other = plans[1]
+        other.course_id = "unrelated-course"
+        session.flush()
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
+        assert payload["review"]["due_count"] == 1
+        item = payload["review"]["items"][0]
+        assert item["id"] == legacy.id
+        assert item["knowledge_point_id"] == point.id
+        assert item["title"] == point.title
+        assert item["next_review_at"].endswith("+00:00")
+        review_tasks = [item for item in payload["today_tasks"] if item["task_kind"] == "review"]
+        assert [item["review_task_id"] for item in review_tasks] == [f"review-plan:{legacy.id}"]
     finally:
         session.close()
         engine.dispose()
@@ -124,7 +162,7 @@ def test_workspace_api_uses_authenticated_owner_and_registers_main_route(monkeyp
     app.dependency_overrides[get_current_user] = lambda: learner
     client = TestClient(app)
     try:
-        response = client.get("/api/v1/m5/workspace")
+        response = client.get("/api/v1/m5/workspace?course_id=demo-course-rag-trust-v1")
         assert response.status_code == 200
         assert response.json()["course"]["id"] == "demo-course-rag-trust-v1"
 

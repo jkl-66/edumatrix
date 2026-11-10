@@ -40,6 +40,43 @@ class StructuredModelContentError(RuntimeError):
     """The provider returned no public assistant content for a structured call."""
 
 
+class ModelOutputLimitError(StructuredModelContentError):
+    """Repeating an exhausted output budget unchanged is not a transport retry."""
+
+
+def _request_token_estimate(text: str) -> int:
+    # English course text/code usually has several characters per token; using
+    # len/2 for every language made ordinary QA queue for a minute locally.
+    ascii_chars = sum(char.isascii() for char in text)
+    return max(1, (ascii_chars + 3) // 4 + len(text) - ascii_chars) + 500
+
+
+def for_answer_step(backend: Any, *, deep_reasoning: bool, reasoning_effort: str | None = None) -> Any:
+    """Use normal inference for routine QA without mutating shared settings.
+
+    Callers explicitly opt in for answering steps; grading and resource
+    generation keep their configured model requirements. Copies share the
+    original limiter and HTTP connection pool.
+    """
+    if deep_reasoning and not reasoning_effort:
+        return backend
+    from copy import copy
+    if isinstance(backend, AsyncOpenAIChatLLM):
+        result = copy(backend)
+        result.thinking_mode = "enabled" if deep_reasoning else "disabled"
+        result.reasoning_effort = reasoning_effort if deep_reasoning else ""
+        return result
+    if isinstance(backend, FallbackAsyncLLMWrapper):
+        result = copy(backend)
+        result.primary = for_answer_step(backend.primary, deep_reasoning=deep_reasoning, reasoning_effort=reasoning_effort)
+        return result
+    if isinstance(backend, MultimodalOnlyAsyncLLM):
+        result = copy(backend)
+        result.vision_backend = for_answer_step(backend.vision_backend, deep_reasoning=deep_reasoning, reasoning_effort=reasoning_effort)
+        return result
+    return backend
+
+
 def extract_openai_message_content(message: Any) -> str:
     """Extract public text from common OpenAI-compatible message shapes.
 
@@ -160,10 +197,7 @@ def requires_json_object(system_prompt: str) -> bool:
     return (
         "json schema" in normalized
         or "return json only" in normalized
-        or "只输出 json" in normalized
-        or "仅输出 json" in normalized
-        or "只输出符合 json" in normalized
-        or "只输出一个符合给定 json" in normalized
+        or bool(re.search(r"(?:只|仅)输出\s*(?:一个\s*)?(?:符合\s*(?:给定\s*)?)?json", normalized))
     )
 
 
@@ -247,7 +281,7 @@ class AsyncOpenAIChatLLM:
         return self if self.has_external_vision else None
 
     async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
-        estimated_tokens = len(system_prompt + user_prompt) // 2 + 500
+        estimated_tokens = _request_token_estimate(system_prompt + user_prompt)
 
         async def _do_call() -> str:
             acquired = await self.rate_limiter.acquire(
@@ -280,7 +314,14 @@ class AsyncOpenAIChatLLM:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                message = data["choices"][0]["message"]
+                usage = data.get("usage") or {}
+                actual_tokens = usage.get("total_tokens")
+                if isinstance(actual_tokens, int) and actual_tokens > 0:
+                    await self.rate_limiter.account_usage(estimated_tokens, actual_tokens)
+                choice = data["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    raise ModelOutputLimitError("这次回答还没有整理完整，请缩小问题范围后重试。")
+                message = choice["message"]
                 content = extract_openai_message_content(message)
                 if not content and requires_json_object(system_prompt):
                     content = extract_structured_json_from_reasoning(
@@ -288,9 +329,6 @@ class AsyncOpenAIChatLLM:
                     )
                 if not content:
                     raise StructuredModelContentError("模型未返回可用的结构化正文")
-                usage = data.get("usage", {})
-                prompt_tokens = usage.get("prompt_tokens", 0)
-                completion_tokens = usage.get("completion_tokens", 0)
                 return content
             finally:
                 self.rate_limiter.release()
@@ -301,6 +339,10 @@ class AsyncOpenAIChatLLM:
                 max_attempts=CONFIG.llm_retry_max_attempts,
                 base_delay=1.0,
                 max_delay=30.0,
+                retryable=lambda exc: (
+                    not isinstance(exc, ModelOutputLimitError)
+                    and getattr(getattr(exc, "response", None), "status_code", None) != 402
+                ),
             )
         )
 
@@ -358,7 +400,7 @@ class AsyncOpenAIChatLLM:
         if self.circuit_breaker.state == CircuitState.OPEN:
             raise CircuitBreakerOpenError(f"熔断器 {self.circuit_breaker.name} 已打开，拒绝流式请求。")
 
-        estimated_tokens = len(system_prompt + user_prompt) // 2 + 500
+        estimated_tokens = _request_token_estimate(system_prompt + user_prompt)
         acquired = await self.rate_limiter.acquire(
             estimated_tokens=estimated_tokens, timeout=30.0
         )
@@ -386,28 +428,42 @@ class AsyncOpenAIChatLLM:
                 "max_tokens": self.max_tokens,
                 "stream": True,
             }
+            if requires_json_object(system_prompt):
+                payload["response_format"] = {"type": "json_object"}
             apply_thinking_mode(payload, self.thinking_mode, self.reasoning_effort)
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
             }
 
+            received_text = False
+            finish_reason = None
             async with client.stream("POST", self.endpoint, json=payload, headers=headers) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     line = line.strip()
                     if not line:
                         continue
-                    if line.startswith("data: "):
-                        data_str = line[6:]
+                    if line.startswith("data:"):
+                        data_str = line[5:].strip()
                         if data_str == "[DONE]":
                             break
                         try:
                             chunk = json.loads(data_str)
-                            delta = chunk["choices"][0]["delta"]
-                            if "content" in delta and delta["content"] is not None:
-                                yield delta["content"]
-                        except Exception:
-                            pass
+                            choices = chunk.get("choices") or []
+                            if not choices:
+                                continue
+                            choice = choices[0]
+                            finish_reason = choice.get("finish_reason") or finish_reason
+                            content = (choice.get("delta") or {}).get("content")
+                        except (ValueError, TypeError, KeyError):
+                            continue
+                        if isinstance(content, str) and content:
+                            received_text = received_text or bool(content.strip())
+                            yield content
+            if not received_text:
+                raise RuntimeError("回答暂时没有生成，请重试。")
+            if finish_reason == "length":
+                raise RuntimeError("回答尚未写完，请继续回答。")
         except Exception as exc:
             async with self.circuit_breaker._lock:
                 self.circuit_breaker._failure_count += 1
@@ -428,6 +484,8 @@ class OpenAIChatLLM:
         temperature: float = 0.3,
         max_tokens: int = 8192,
         timeout_seconds: int = 60,
+        thinking_mode: str = "",
+        reasoning_effort: str = "",
     ) -> None:
         self.endpoint = endpoint
         self.api_key = api_key
@@ -435,18 +493,29 @@ class OpenAIChatLLM:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
+        self.thinking_mode = thinking_mode
+        self.reasoning_effort = reasoning_effort
 
     def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
+        content, _ = self.infer_messages([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ])
+        return content
+
+    def infer_messages(self, messages: list[dict[str, str]], *, max_tokens: int | None = None,
+                       response_format: dict | None = None) -> tuple[str, dict]:
+        """Synchronous bridge for libraries which supply their own message templates."""
         import requests
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens or self.max_tokens,
         }
+        apply_thinking_mode(payload, self.thinking_mode, self.reasoning_effort)
+        if response_format is not None:
+            payload['response_format'] = response_format
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
@@ -460,10 +529,13 @@ class OpenAIChatLLM:
             )
             resp.raise_for_status()
             data = resp.json()
-            content = extract_openai_message_content(data["choices"][0]["message"])
+            choice = data["choices"][0]
+            if choice.get("finish_reason") == "length":
+                raise ModelOutputLimitError("模型输出尚未完成")
+            content = extract_openai_message_content(choice["message"])
             if not content:
                 raise StructuredModelContentError("模型未返回可用正文")
-            return content
+            return content, {**(data.get("usage") or {}), "finish_reason": choice.get("finish_reason"), "model": data.get("model", self.model)}
         except Exception as exc:
             raise RuntimeError(f"OpenAI API 调用失败: {exc}") from exc
 

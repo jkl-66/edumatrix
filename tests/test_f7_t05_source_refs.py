@@ -27,6 +27,23 @@ from app.resource_bundles import _source_snapshots
 from app.source_refs import chat_source_ref, project_selection, project_source_ref
 
 
+def test_outline_prefers_current_parser_reference_and_keeps_old_citation(source_context):
+    from app.m1_repository import M1Repository
+    session, _, _, _, _, source, old, _ = source_context
+    old.location_kind = 'chapter'
+    source.parser_version = 'parser-v2'
+    current = DBSourceRef(id='ref-current-v2', source_document_id=source.id, chapter_id=old.chapter_id,
+        parser_version='parser-v2', location_kind='chapter', char_start=old.char_start,
+        char_end=old.char_end, content_hash=old.content_hash, quote=old.quote)
+    session.add(current);session.flush()
+    outline = M1Repository(session).course_outline(source.course_id)
+    assert outline[0]['source_ref_id'] == current.id
+    history = project_source_ref(session, old.id)
+    assert history['quote'] == old.quote
+    assert history['available'] is False
+    assert history['reason_code'] == 'source_ref_version_changed'
+
+
 @pytest.fixture()
 def source_context(tmp_path):
     engine = create_engine(
@@ -150,6 +167,26 @@ def test_source_projection_authorizes_and_builds_exact_reader_route(source_conte
     assert unavailable["reason_code"] == "permission_changed"
 
 
+@pytest.mark.parametrize("location_kind", ["selection", "reader_document"])
+def test_explicit_reader_scope_has_no_fake_chapter_and_expires_with_source(source_context, location_kind) -> None:
+    session, _, member, _, course, source, original, _ = source_context
+    ref=DBSourceRef(source_document_id=source.id,parser_version=source.parser_version,
+        content_hash=source.processed_sha256,location_kind=location_kind,char_start=0,
+        char_end=4,quote=original.quote[:4])
+    session.add(ref);session.flush()
+    from app.canonical_retrieval import list_canonical_source_refs
+    from app.source_refs import source_ref_teaching_text
+    for frozen in (None, {"chapter_id":"None"}):
+        projected=project_source_ref(session,ref.id,actor=member,frozen=frozen)
+        assert projected["available"] and projected["chapter_id"] is None
+        assert "chapter_id=" not in projected["route"]
+    assert ref.id not in {item["source_ref_id"] for item in list_canonical_source_refs(session,course_id=course.id)}
+    assert source_ref_teaching_text(session,ref,max_chars=None)==original.quote[:4]
+    source.processed_sha256="changed";session.flush()
+    assert not project_source_ref(session,ref.id,actor=member)["available"]
+    assert source_ref_teaching_text(session,ref,max_chars=None)==""
+
+
 def test_frozen_source_history_survives_withdrawal_drift_and_removal(source_context) -> None:
     session, _, member, _, course, source, source_ref, _ = source_context
     frozen = chat_source_ref(project_source_ref(session, source_ref.id, actor=member))
@@ -201,6 +238,68 @@ def test_selection_projection_keeps_exact_image_region_and_detects_stale_source(
     stale = project_selection(session, member, selection)
     assert stale["available"] is False
     assert stale["reason_code"] == "document_version_changed"
+
+
+def test_recovered_original_resolves_frozen_route_without_rewriting_history(source_context):
+    from copy import deepcopy
+    from app.course_source_updates import _copy
+    from app.database import DBCourseDocument
+    from knowledge_api import build_canonical_course_source_detail
+    from app.document_selection import _reader_document_payload
+    session, _, member, outsider, course, source, ref, _ = source_context
+    frozen = chat_source_ref(project_source_ref(session, ref.id, actor=member))
+    original_snapshot = deepcopy(frozen)
+    chapter = session.get(DBChapter, ref.chapter_id)
+    archive = _copy(source, id="src-recovered", parser_metadata={
+        "retired_from_catalog": True, "restored_from_source_id": source.id,
+        "restored_chapter_ids": {chapter.id: "ch-recovered"},
+    })
+    archive_chapter = _copy(chapter, id="ch-recovered", source_document_id=archive.id,
+                            stable_key="structure-history:ch-recovered")
+    session.add_all([archive, archive_chapter])
+    session.flush()
+    ref.source_document_id, ref.chapter_id = archive.id, archive_chapter.id
+    source.processed_sha256 = source.content_hash = "a" * 64
+    source.parser_version = "parser-v2"
+    session.flush()
+
+    restored = project_source_ref(session, ref.id, actor=member, frozen=frozen)
+    assert restored["available"]
+    assert restored["source_document_id"] == archive.id
+    assert restored["chapter_id"] == archive_chapter.id
+    assert restored["quote"] == original_snapshot["quote"]
+    assert restored["document_version"] == original_snapshot["documentVersion"]
+    assert "/src-recovered?" in restored["route"]
+    assert "chapter_id=ch-recovered" in restored["route"]
+    assert frozen == original_snapshot
+    # Both existing reading APIs must serve the same archived body.
+    document = DBCourseDocument(id="doc-recovered",course_id=course.id,chapter_order=1,
+        filename=archive.filename,title=archive.title,content=ref.quote,
+        content_hash=archive.content_hash,status="retired")
+    session.add(document)
+    archive.legacy_document_id = document.id
+    session.flush()
+    assert build_canonical_course_source_detail(session,member,archive.id)["content"] == ref.quote
+    reading = _reader_document_payload(session,member,archive,course)
+    assert [c['id'] for c in reading['chapters']] == [archive_chapter.id]
+    assert [r['id'] for r in reading['source_refs']] == [ref.id]
+    for changed in ({"sourceDocumentId": "another-source"}, {"contentHash": "b" * 64},
+                    {"documentVersion": "c" * 64}, {"parserVersion": "other-parser"}):
+        assert not project_source_ref(session, ref.id, frozen={**frozen, **changed})["available"]
+    assert not project_source_ref(session, ref.id, frozen=frozen,
+                                  expected_course_id="another-course")["available"]
+    with pytest.raises(HTTPException) as denied:
+        project_source_ref(session, ref.id, actor=outsider, frozen=frozen)
+    assert denied.value.status_code == 403
+
+
+def test_chapter_projection_detects_changed_body_with_same_parser(source_context):
+    session, _, member, _, _, source, ref, _ = source_context
+    ref.location_kind = "chapter"
+    source.processed_sha256 = "d" * 64
+    projection = project_source_ref(session, ref.id, actor=member)
+    assert not projection["available"]
+    assert projection["reason_code"] == "source_ref_content_changed"
 
 
 def test_m1_reader_chat_and_resource_boundaries_share_one_read_only_projection(source_context) -> None:

@@ -14,6 +14,8 @@ from app.feynman import (
     get_session,
     list_sessions,
     session_payload,
+    action_task,
+    queue_action,
 )
 from app.m2_contracts import StrictModel
 
@@ -23,6 +25,7 @@ router = APIRouter(prefix="/api/v1/feynman", tags=["feynman"])
 
 class SessionInput(StrictModel):
     source_resource_id: str = Field(min_length=1, max_length=64)
+    source_resource_version_id: str | None = Field(default=None, min_length=1, max_length=64)
     idempotency_key: str = Field(min_length=8, max_length=128)
 
 
@@ -36,9 +39,10 @@ class ActionInput(StrictModel):
         "evaluate_round2",
         "apply",
     ]
-    text: str | None = Field(default=None, max_length=12_000)
+    text: str | None = None
     expected_version: int = Field(ge=1)
     idempotency_key: str = Field(min_length=8, max_length=128)
+    background: bool = False
 
 
 def _http(exc: FeynmanError) -> HTTPException:
@@ -58,11 +62,12 @@ def _http(exc: FeynmanError) -> HTTPException:
 @router.get("/sessions")
 async def sessions(
     source_resource_id: str | None = None,
+    source_resource_version_id: str | None = None,
     current_user: DBUser = Depends(get_current_user),
 ):
     return await run_db_op(lambda db: {
         "schema_version": "f6.feynman-session-list.v1",
-        "items": list_sessions(db, current_user.public_id, source_resource_id),
+        "items": list_sessions(db, current_user.public_id, source_resource_id, source_resource_version_id),
     })
 
 
@@ -103,11 +108,18 @@ async def post_action(
     def operation(db):
         try:
             actor = db.query(DBUser).filter_by(public_id=current_user.public_id).one()
+            if payload.background:
+                from app.learning_generation_jobs import LearningGenerationError
+                try:
+                    return {'task': queue_action(db, session_id=session_id, actor=actor,
+                                                **payload.model_dump(exclude={'background'}))}
+                except LearningGenerationError as exc:
+                    raise FeynmanError('feynman_action_conflict', str(exc)) from exc
             result, created = apply_action(
                 db,
                 session_id=session_id,
                 actor=actor,
-                **payload.model_dump(),
+                **payload.model_dump(exclude={'background'}),
             )
             db.commit()
             return {**result, "action_created": created}
@@ -115,4 +127,14 @@ async def post_action(
             db.rollback()
             raise _http(exc) from exc
 
+    return await run_db_op(operation)
+
+
+@router.get('/sessions/{session_id}/action-task')
+async def get_action_task(session_id: str, current_user: DBUser = Depends(get_current_user)):
+    def operation(db):
+        try:
+            return {'task': action_task(db, session_id=session_id, owner=current_user.public_id)}
+        except FeynmanError as exc:
+            raise _http(exc) from exc
     return await run_db_op(operation)

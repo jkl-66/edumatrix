@@ -1,4 +1,6 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -29,6 +31,7 @@ const itemType = ref('')
 const mineTab = ref('copies')
 const publishStep = ref(1)
 const publishedResult = ref(null)
+const revision = ref(null)
 const draft = ref({
   item_type: 'resource',
   source_object_id: '',
@@ -53,7 +56,7 @@ const categories = computed(() => Array.from(new Set(items.value.map((item) => i
 const publishableSources = computed(() => workspace.value?.publishable_sources?.[draft.value.item_type] || [])
 const selectedSource = computed(() => publishableSources.value.find((item) => item.id === draft.value.source_object_id) || null)
 const provenance = computed(() => selectedSource.value?.provenance || null)
-const favoriteItems = computed(() => (workspace.value?.published || []).filter((item) => item.engagement?.is_favorited))
+const favoriteItems = computed(() => workspace.value?.favorites || (workspace.value?.published || []).filter((item) => item.engagement?.is_favorited))
 const managedItems = computed(() => workspace.value?.managed || [])
 const personalCopies = computed(() => workspace.value?.personal_copies || [])
 const mineItems = computed(() => {
@@ -113,6 +116,14 @@ async function load() {
   try {
     await loadWorkspace()
     if (isDiscover.value) await loadSelected()
+    if (isPublish.value && route.query.revise) {
+      revision.value = await getMarketplaceListing(String(route.query.revise))
+      if (!revision.value.can_resubmit) throw new Error('这份分享已有新的处理结果，请返回我的内容查看。')
+      const item = revision.value
+      draft.value = { item_type: item.item_type, source_object_id: item.source_object_id,
+        title: item.title, summary: item.summary, category: item.category, tags: (item.tags || []).join(',') }
+      publishStep.value = 2
+    }
   } catch (exception) {
     error.value = message(exception, '学习市场暂时无法加载。')
   } finally {
@@ -216,6 +227,7 @@ async function submitPublication() {
       summary: draft.value.summary.trim(),
       category: draft.value.category.trim(),
       tags: draft.value.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      ...(revision.value ? { revision_of: revision.value.id, expected_version: revision.value.lock_version } : {}),
     })
     notice.value = '已提交公开审核。个人原件和版本历史保持不变。'
     await loadWorkspace()
@@ -245,7 +257,7 @@ onMounted(load)
     </header>
 
     <p v-if="notice" class="feedback feedback--success" role="status"><CheckCircle2 :size="18" /> {{ notice }}</p>
-    <p v-if="error" class="feedback feedback--error" role="alert"><AlertTriangle :size="18" /> {{ error }}</p>
+    <p v-if="error" class="feedback feedback--error" role="alert"><AlertTriangle :size="18" /> {{ userMessage(error) }}</p>
 
     <section v-if="loading" class="loading-surface" aria-live="polite">
       <LoaderCircle class="spin" :size="24" />
@@ -280,7 +292,7 @@ onMounted(load)
               <span class="row-main">
                 <span class="row-meta"><b>{{ typeLabel(item.item_type) }}</b><span>{{ item.category }}</span></span>
                 <strong>{{ item.title }}</strong>
-                <span class="row-summary">{{ item.summary }}</span>
+                <span class="row-summary">{{ learningText(item.summary) }}</span>
                 <span class="row-tags"><i v-for="tag in item.tags?.slice(0, 3)" :key="tag">{{ tag }}</i></span>
               </span>
               <span class="row-side"><span>{{ item.provenance?.course_title || '来源课程' }}</span><span>{{ item.saved_copy ? '已保存' : '可保存副本' }}</span><ChevronRight :size="18" /></span>
@@ -288,7 +300,7 @@ onMounted(load)
           </div>
           <div v-else class="empty-surface">
             <Search :size="24" /><strong>没有找到符合条件的内容</strong>
-            <p>调整关键词或类型，已保存的个人副本不会受影响。</p>
+            <p>试试其他关键词或类型。</p>
             <button type="button" class="secondary-button" @click="clearFilters">清空筛选</button>
           </div>
         </div>
@@ -296,16 +308,24 @@ onMounted(load)
         <aside class="preview-surface" data-testid="marketplace-preview">
           <div v-if="detailLoading" class="preview-loading"><LoaderCircle class="spin" :size="22" /><span>正在加载预览</span></div>
           <div v-else-if="detailError && !selected" class="preview-empty" role="alert">
-            <AlertTriangle :size="24" /><strong>这份分享当前不可查看</strong><p>{{ detailError }}</p>
+            <AlertTriangle :size="24" /><strong>这份分享当前不可查看</strong><p>{{ userMessage(detailError) }}</p>
             <button type="button" class="secondary-button" @click="router.push('/marketplace')">返回市场</button>
           </div>
           <div v-else-if="selected" class="preview-content">
             <div class="preview-type"><component :is="currentType.icon" :size="17" />{{ currentType.label }}</div>
             <h2>{{ selected.title }}</h2>
-            <p class="preview-author">来自 {{ selected.provenance?.course_title || selected.author?.public_id || '公开分享者' }}</p>
-            <p class="preview-summary">{{ selected.summary }}</p>
+            <p class="preview-author">来自 {{ selected.provenance?.course_title || '公开分享者' }}</p>
+            <p class="preview-summary">{{ learningText(selected.summary) }}</p>
+            <section v-if="selected.status !== 'published' || selected.decisions?.length" class="source-panel" data-testid="marketplace-review-status">
+              <strong>{{ statusLabel(selected.status) }}</strong>
+              <p v-if="selected.status === 'withdrawn'">这份分享已下架，已保存的个人副本可以继续使用。</p>
+              <p v-for="entry in (selected.decisions || []).filter(item => item.action !== 'submit')" :key="entry.id">{{ learningText(entry.reason) }}</p>
+              <button v-if="selected.can_resubmit && selected.item_type !== 'course'" class="secondary-button" type="button" @click="router.push({ name: 'MarketplacePublish', query: { revise: selected.id } })">修改后重新提交</button>
+              <button v-if="selected.resubmitted_listing_id" class="secondary-button" type="button" @click="selectItem({ id: selected.resubmitted_listing_id })">查看重新提交的内容</button>
+              <button v-if="selected.can_resubmit && selected.source_open_route" class="secondary-button" type="button" @click="openRoute(selected.source_open_route)">查看学习原件</button>
+            </section>
             <dl class="preview-metrics">
-              <div><dt>版本</dt><dd>{{ selected.course_version || '冻结版本' }}</dd></div>
+              <div><dt>版本</dt><dd>发布时保存的内容</dd></div>
               <div><dt>包含</dt><dd>{{ selected.preview?.document_count ?? selected.preview?.node_count ?? previewItems.length }} 项</dd></div>
               <div><dt>保存状态</dt><dd>{{ selectedSavedCopy ? '已加入个人空间' : '尚未保存' }}</dd></div>
             </dl>
@@ -319,11 +339,11 @@ onMounted(load)
               <span>{{ selected.provenance?.license_label || selected.license?.course_license || '许可信息待补充' }}</span>
               <em v-if="selected.provenance?.is_demo_data">{{ selected.provenance.demo_label || '演示数据' }}</em>
             </section>
-            <p v-if="detailError" class="inline-error"><AlertTriangle :size="16" />{{ detailError }}</p>
+            <p v-if="detailError" class="inline-error"><AlertTriangle :size="16" />{{ userMessage(detailError) }}</p>
             <div class="preview-actions">
-              <button type="button" class="icon-button" :title="selected.engagement?.is_favorited ? '取消收藏' : '收藏'" :aria-label="selected.engagement?.is_favorited ? '取消收藏' : '收藏'" @click="toggleFavorite"><Heart :size="19" :fill="selected.engagement?.is_favorited ? 'currentColor' : 'none'" /></button>
+              <button v-if="['published', 'withdrawn'].includes(selected.status)" type="button" class="icon-button" :disabled="Boolean(busy)" :title="selected.engagement?.is_favorited ? '取消收藏' : '收藏'" :aria-label="selected.engagement?.is_favorited ? '取消收藏' : '收藏'" @click="toggleFavorite"><Heart :size="19" :fill="selected.engagement?.is_favorited ? 'currentColor' : 'none'" /></button>
               <button v-if="selectedSavedCopy" type="button" class="primary-button" @click="openRoute(selectedSavedCopy.open_route)">打开个人副本 <ExternalLink :size="17" /></button>
-              <button v-else type="button" class="primary-button" :disabled="Boolean(busy)" @click="saveCopy"><LoaderCircle v-if="busy === 'save'" class="spin" :size="17" /><PackageOpen v-else :size="17" /> 保存到学习空间</button>
+              <button v-else-if="selected.status === 'published'" type="button" class="primary-button" :disabled="Boolean(busy)" @click="saveCopy"><LoaderCircle v-if="busy === 'save'" class="spin" :size="17" /><PackageOpen v-else :size="17" /> 保存到学习空间</button>
             </div>
           </div>
           <div v-else class="preview-empty"><PackageOpen :size="28" /><strong>选择一份内容查看概览</strong><p>先看包含内容与来源，再决定是否保存个人副本。</p></div>
@@ -332,15 +352,20 @@ onMounted(load)
     </template>
 
     <section v-else-if="workspace && isPublish" class="publish-surface" data-testid="marketplace-publish-wizard">
+      <section v-if="revision" class="source-panel">
+        <strong>根据审核意见修改</strong>
+        <p v-for="entry in revision.decisions.filter(item => item.action === 'request_changes')" :key="entry.id">{{ learningText(entry.reason) }}</p>
+        <p>修改分享说明后可重新提交。如果需要修改教学内容，请先到学习原件保存，再回到这里；重新提交会使用原件的当前版本。</p>
+      </section>
       <ol class="wizard-steps" aria-label="发布步骤">
         <li v-for="step in 3" :key="step" :class="{ active: publishStep === step, done: publishStep > step || publishedResult }">
           <span><Check v-if="publishStep > step || publishedResult" :size="15" /><template v-else>{{ step }}</template></span>
-          <div><strong>{{ ['选择类型', '选择内容并说明', '确认并提交'][step - 1] }}</strong><small>{{ ['确定分享什么', '使用个人冻结版本', '核对来源与公开信息'][step - 1] }}</small></div>
+          <div><strong>{{ ['选择类型', '选择内容并说明', '确认并提交'][step - 1] }}</strong><small>{{ ['确定分享什么', '选择要分享的版本', '核对来源与公开信息'][step - 1] }}</small></div>
         </li>
       </ol>
       <div v-if="publishedResult" class="publish-complete">
         <CheckCircle2 :size="30" /><h2>已提交公开审核</h2>
-        <p>发布的是冻结副本，不会修改你的个人原件。审核完成前可在“我的内容”查看状态。</p>
+        <p>提交后，可在“我的内容”查看审核进度。</p>
         <button type="button" class="primary-button" @click="router.push('/marketplace/mine')">查看我的发布 <ArrowRight :size="17" /></button>
       </div>
       <template v-else>
@@ -358,7 +383,7 @@ onMounted(load)
           <section class="source-selector">
             <div class="step-heading"><h2>选择个人内容</h2><p>只显示你拥有且已冻结当前版本的{{ typeLabel(draft.item_type) }}。</p></div>
             <div v-if="publishableSources.length" class="source-list">
-              <button v-for="source in publishableSources" :key="source.id" type="button" :class="{ selected: draft.source_object_id === source.id }" @click="selectPublishSource(source)">
+              <button v-for="source in publishableSources" :key="source.id" type="button" :disabled="Boolean(revision) && source.id !== revision.source_object_id" :class="{ selected: draft.source_object_id === source.id }" @click="selectPublishSource(source)">
                 <span><component :is="typeIcon(draft.item_type)" :size="18" /></span>
                 <span><strong>{{ source.title }}</strong><small>{{ source.course.title }} · v{{ source.course.version }}</small></span>
                 <Check v-if="draft.source_object_id === source.id" :size="18" />
@@ -378,7 +403,7 @@ onMounted(load)
         <div v-else class="publish-step publish-review">
           <section>
             <p class="preview-type"><component :is="typeIcon(draft.item_type)" :size="17" />{{ typeLabel(draft.item_type) }}</p>
-            <h2>{{ draft.title }}</h2><p>{{ draft.summary }}</p>
+            <h2>{{ draft.title }}</h2><p>{{ learningText(draft.summary) }}</p>
             <div class="review-tags"><span>{{ draft.category }}</span><span v-for="tag in draft.tags.split(',').map((value) => value.trim()).filter(Boolean)" :key="tag">{{ tag }}</span></div>
             <div v-if="publishPreviewItems.length" class="included-list"><h3>预览包含内容</h3><div v-for="(item, index) in publishPreviewItems.slice(0, 6)" :key="`${item.title}-${index}`"><span>{{ index + 1 }}</span><p>{{ item.title }}</p></div></div>
           </section>
@@ -389,7 +414,7 @@ onMounted(load)
           </aside>
         </div>
         <footer class="wizard-actions">
-          <button v-if="publishStep > 1" type="button" class="secondary-button" :disabled="Boolean(busy)" @click="publishStep -= 1"><ArrowLeft :size="17" /> 上一步</button><span v-else />
+          <button v-if="publishStep > (revision ? 2 : 1)" type="button" class="secondary-button" :disabled="Boolean(busy)" @click="publishStep -= 1"><ArrowLeft :size="17" /> 上一步</button><span v-else />
           <button v-if="publishStep < 3" type="button" class="primary-button" @click="nextPublishStep">下一步 <ArrowRight :size="17" /></button>
           <button v-else type="button" class="primary-button" :disabled="Boolean(busy) || !provenance?.complete" @click="submitPublication"><LoaderCircle v-if="busy === 'publish'" class="spin" :size="17" /><Store v-else :size="17" /> 提交公开审核</button>
         </footer>
@@ -410,7 +435,7 @@ onMounted(load)
             <strong>{{ item.title || item.copy_object_id }}</strong>
             <p v-if="item.source_status === 'withdrawn'">来源已下架，个人副本仍可继续使用。</p>
             <p v-else-if="mineTab === 'copies'">保存于 {{ item.created_at ? new Date(item.created_at).toLocaleDateString('zh-CN') : '个人空间' }}</p>
-            <p v-else>{{ item.summary }}</p>
+            <p v-else>{{ learningText(item.summary) }}</p>
           </div>
           <button v-if="mineTab === 'copies'" type="button" class="secondary-button" @click="openRoute(item.open_route)">打开个人副本 <ExternalLink :size="16" /></button>
           <button v-else type="button" class="secondary-button" @click="selectItem(item)">查看详情 <ChevronRight :size="16" /></button>

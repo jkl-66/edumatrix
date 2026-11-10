@@ -1,4 +1,6 @@
 <script setup>
+import { learningText, referenceTitle } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -105,7 +107,7 @@ defineExpose({ refresh })
           <CheckCircle2 :size="16" />
           <strong>{{ entry.label }}</strong>
         </div>
-        <p>{{ entry.summary }}</p>
+        <p>{{ learningText(entry.summary) }}</p>
       </article>
     </div>
 
@@ -149,14 +151,14 @@ defineExpose({ refresh })
       <div>
         <span class="eyebrow"><BrainCircuit :size="14" /> {{ compact ? '当前学习重点' : '三画像可解释摘要' }}</span>
         <h2 v-if="!compact">{{ data?.summary?.title || '会什么、哪里困难、下一步做什么' }}</h2>
-        <p v-if="data">{{ data.course.title }} · {{ evidenceCount }} 条当前证据 · {{ data.summary.diagnostic_response_count }} 次有效诊断作答</p>
+        <p v-if="data">{{ data.course.title }} · {{ evidenceCount }} 条当前依据 · {{ data.summary.learning_response_count ?? data.summary.diagnostic_response_count }} 次有效作答</p>
       </div>
       <button type="button" title="刷新画像摘要" :disabled="loading" @click="refresh"><RefreshCw :size="15" /></button>
     </header>
 
     <div v-if="loading" class="summary-state"><LoaderCircle class="spin" :size="16" />正在组合课程画像证据</div>
     <div v-else-if="error && !data" class="summary-state error" role="alert">
-      <AlertCircle :size="16" /><span>{{ error }}</span>
+      <AlertCircle :size="16" /><span>{{ userMessage(error) }}</span>
       <button type="button" class="summary-retry" @click="refresh">重试</button>
     </div>
 
@@ -196,11 +198,11 @@ defineExpose({ refresh })
             </div>
             <div v-for="item in section.evidence" :key="`${item.source_type}-${item.source_id}`" class="evidence-row">
               <strong>{{ item.label }} · {{ item.value }}</strong>
-              <span>{{ item.source_type }} / {{ item.source_id }}</span>
+              <span>{{ item.source_type }} / {{ referenceTitle(item) }}</span>
               <span><Clock3 :size="11" />{{ item.observed_at || '时间未记录' }}</span>
               <p>{{ item.recommendation_impact }}</p>
             </div>
-            <div v-if="!section.evidence.length" class="evidence-empty">当前证据不足，系统不会形成固定判断。</div>
+            <div v-if="!section.evidence.length" class="evidence-empty">还需要更多练习记录。</div>
           </article>
         </div>
         <p class="compact-boundary">{{ data.boundary }}</p>
@@ -226,11 +228,11 @@ defineExpose({ refresh })
           <summary>查看来源、时间与推荐影响</summary>
           <div v-for="item in section.evidence" :key="`${item.source_type}-${item.source_id}`" class="evidence-row">
             <strong>{{ item.label }} · {{ item.value }}</strong>
-            <span>{{ item.source_type }} / {{ item.source_id }}</span>
+            <span>{{ item.source_type }} / {{ referenceTitle(item) }}</span>
             <span><Clock3 :size="11" />{{ item.observed_at || '时间未记录' }}</span>
             <p>{{ item.recommendation_impact }}</p>
           </div>
-          <div v-if="!section.evidence.length" class="evidence-empty">当前证据不足，系统不会形成固定判断。</div>
+          <div v-if="!section.evidence.length" class="evidence-empty">还需要更多练习记录。</div>
         </details>
         <button class="next-action" type="button" @click="openNext(section)">
           <span><small>下一步</small><strong>{{ section.next_step.title }}</strong></span>
@@ -341,7 +343,7 @@ defineExpose({ refresh })
   gap: 10px;
   padding: 17px 22px;
   border-top: 1px solid var(--color-border);
-  background: #fbfcfb;
+  background: var(--color-surface-subtle);
 }
 
 .onboarding-signals h3 { margin: 0; font-size: 15px; }
@@ -355,7 +357,7 @@ defineExpose({ refresh })
   color: var(--color-text-secondary);
   border: 1px solid var(--color-border);
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--color-surface);
   font-size: 12px;
   line-height: 1.4;
 }

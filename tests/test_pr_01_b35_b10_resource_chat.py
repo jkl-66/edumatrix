@@ -2,40 +2,112 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pytest
 
-from app.chat_api import MessageInput, create_message_pair, execute_resource_chat_run
+from app.chat_api import MessageInput, create_message_pair, execute_resource_chat_run, message_payload
 from app.competition_demo_seed import seed_competition_demo
-from app.database import DBChatConversation, DBProfileSnapshot, DBSourceRef, DBUser
+from app.database import DBChatConversation, DBChatMessage, DBKnowledgePoint, DBProfileSnapshot, DBSourceRef, DBUser
 from app.resource_bundles import GENERATION_RESOURCE_TYPES
 from tests.test_f6_t03_code_sandbox_resource import _session
 
 
-class _Backend:
-    model = "deepseek-v4-flash"
-    provider = "openai"
+# Reuse the current full resource contract; these tests exercise chat orchestration.
+from tests.test_pr_01_b35_b09_resource_supervisor import _SupervisorBackend, _fake_web_video_search
 
-    async def generate(self, system_prompt: str, user_prompt: str, *, role: str) -> str:
-        await asyncio.sleep(0)
-        if role == "resource_planner":
-            return json.dumps({
-                "summary": "共享资源计划",
-                "plan": "依据冻结课程来源规划九类资源，并在审核后发布。",
-                "resourceBriefs": [],
-            }, ensure_ascii=False)
-        if role == "resource_reviewer":
-            return json.dumps({"approved": True, "summary": "审核通过", "findings": [], "rejectedTypes": []})
-        return json.dumps({
-            "summary": "资源候选",
-            "learningGoal": "完成课程目标",
-            "narrative": "依据冻结课程来源组织资源内容。",
-            "practiceSteps": [],
-            "starterCode": "print('ok')",
-            "observationPrompt": "观察参数变化",
-            "quizQuestions": [
-                {"prompt": f"题{i}", "options": ["选项一", "选项二", "选项三", "选项四"], "answer": "A", "explanation": "解析", "bloom": "remember", "difficulty": 0.3}
-                for i in range(1, 4)
-            ],
-        }, ensure_ascii=False)
+class _Backend(_SupervisorBackend):
+    pass
+
+
+@pytest.fixture(autouse=True)
+def complete_projected_job(monkeypatch):
+    # These tests cover terminal content/event projections with a fake model.
+    # Dispatch/leases and the real queued handoff are tested separately in
+    # test_generation_dispatch and test_chat_resource_answer_binding.
+    from app.resource_bundles import execute_generation_job
+    monkeypatch.setattr("app.generation_dispatch.submit_resource_job", execute_generation_job)
+
+
+@pytest.mark.parametrize("selected", [["handout"], ["handout", "code_sandbox"]])
+def test_rejected_resources_never_claim_completed_learning_materials(monkeypatch, selected):
+    backend = _Backend(review_approved=False)
+    monkeypatch.setattr("app.resource_bundles._real_model_backend", lambda: backend)
+    engine, session = _session()
+    try:
+        seed_competition_demo(session)
+        learner = session.query(DBUser).filter_by(username="lzz").one()
+        conversation = DBChatConversation(owner_public_id=learner.public_id,
+                                          course_id="demo-course-rag-trust-v1", title="审核失败反馈")
+        session.add(conversation)
+        session.commit()
+        pair = create_message_pair(session, learner, conversation.id, MessageInput(
+            content="请生成学习内容", idempotency_key="review-rejected-chat",
+            intent="resource_generation", resource_types=selected,
+            context_refs=[{"courseId": conversation.course_id, "knowledgePointId": "demo-kp-07", "sourceRefId": "demo-ref-07"}]))
+        result = execute_resource_chat_run(session, learner, pair["assistantMessage"]["id"])
+        assert all('并做一次简短回顾' not in item['completion_rule'] for item in result['job']['items'])
+        if 'code_sandbox' in selected:
+            code_item = next(item for item in result['job']['items'] if item['type'] == 'code_sandbox')
+            assert '必需检查' in code_item['completion_rule']
+        assert result["job"]["status"] == ("failed" if len(selected) == 1 else "partial_success")
+        assert result["message"]["status"] == "failed"
+        assert "重试" in result["message"]["content"]
+        assert "已按你的学习情况" not in result["message"]["content"]
+        assert all(link["status"] != "completed" for link in result["resource_links"])
+        assert all("/bundles/" in link["route"] for link in result["resource_links"])
+        assert all("resourceType" not in event["summary"] for event in result["run_events"])
+
+        row = session.get(DBChatMessage, pair["assistantMessage"]["id"])
+        row.content = "资源生成已完成：成功 0 项，失败 1 项。\n\n本轮已按你的学习情况组织内容。"
+        row.status = "completed"
+        row.stream_checkpoint = {**row.stream_checkpoint, "resourceStatus": "partial_success", "runEvents": [
+            {"summary": '内容仍需调整。具体审核意见：[{"resourceType": "handout", "severity":'}]}
+        before = json.dumps(row.stream_checkpoint, ensure_ascii=False)
+        visible = message_payload(row)
+        assert visible["status"] == "failed" and visible["resourceStatus"] == "failed"
+        assert "成功 0" not in visible["content"] and "已按" not in visible["content"]
+        assert visible["runEvents"][0]["summary"] == "内容仍需调整。"
+        assert json.dumps(row.stream_checkpoint, ensure_ascii=False) == before
+        assert row.content.startswith("资源生成已完成")
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_chat_recovers_resource_result_after_retry_from_another_page(monkeypatch):
+    from app.resource_bundles import retry_generation_item, execute_generation_job
+    backend = _Backend(review_approved=False)
+    monkeypatch.setattr("app.resource_bundles._real_model_backend", lambda: backend)
+    engine, session = _session()
+    try:
+        seed_competition_demo(session)
+        learner = session.query(DBUser).filter_by(username="lzz").one()
+        conversation = DBChatConversation(owner_public_id=learner.public_id,
+            course_id="demo-course-rag-trust-v1", title="跨页重试")
+        session.add(conversation)
+        session.commit()
+        pair = create_message_pair(session, learner, conversation.id, MessageInput(
+            content="请生成学习讲义", idempotency_key="retry-from-resource-page", intent="resource_generation",
+            resource_types=["handout"], context_refs=[{"courseId": conversation.course_id,
+                "knowledgePointId": "demo-kp-07", "sourceRefId": "demo-ref-07"}]))
+        failed = execute_resource_chat_run(session, learner, pair["assistantMessage"]["id"])
+        row = session.get(DBChatMessage, pair["assistantMessage"]["id"])
+        original_content = row.content
+        original_checkpoint = json.dumps(row.stream_checkpoint, ensure_ascii=False)
+        retry_generation_item(session, learner, failed["job"]["job_id"], "handout")
+        backend.review_approved = True
+        completed = execute_generation_job(session, learner, failed["job"]["job_id"])
+        visible = message_payload(row, db=session, actor=learner, course_id=conversation.course_id)
+        assert visible["status"] == "completed" and visible["resourceStatus"] == "succeeded"
+        assert "已准备好" in visible["content"] and visible["failure"] is None
+        assert visible["resourceLinks"][0]["resourceVersionId"] == completed["items"][0]["resource"]["version"]["id"]
+        assert visible["agentAudit"]["status"] == "completed"
+        assert any(event["eventType"] == "run.failed" for event in visible["runEvents"])
+        assert any(event["eventType"] == "publish.completed" for event in visible["runEvents"])
+        assert row.status == "failed" and row.content == original_content
+        assert json.dumps(row.stream_checkpoint, ensure_ascii=False) == original_checkpoint
+    finally:
+        session.close()
+        engine.dispose()
 
 
 def test_resource_chat_uses_one_job_and_projects_events(monkeypatch):
@@ -73,6 +145,11 @@ def test_resource_chat_uses_one_job_and_projects_events(monkeypatch):
         result = execute_resource_chat_run(session, learner, pair["assistantMessage"]["id"])
         assert result["job"]["manifest"]["conversation_id"] == conversation.id
         assert result["job"]["manifest"]["message_id"] == pair["assistantMessage"]["id"]
+        assert result["job"]["manifest"]["user_instruction"] == "请生成完整资源包"
+        assert result["job"]["context"]["learning_goal"] == "请生成完整资源包"
+        point_title = session.get(DBKnowledgePoint, "demo-kp-07").title
+        assert all(item["title"].endswith(point_title) for item in result["job"]["items"])
+        assert all("请生成完整资源包" not in item["title"] for item in result["job"]["items"])
         assert result["job"]["status"] == "succeeded"
         events = result["run_events"]
         event_types = [item["eventType"] for item in events]
@@ -129,12 +206,13 @@ def test_resource_chat_accepts_multi_select_subset_and_stream_callback(monkeypat
         assert result["job"]["status"] == "succeeded"
         assert [item["type"] for item in result["job"]["items"]] == selected
         assert len(result["resource_links"]) == len(selected)
-        assert observed
-        assert observed[0]["event_type"] in {"stage.completed", "stage.started"}
-        assert any(item["event_type"] == "resource.item.started" for item in observed)
-        assert any(item["event_type"] == "resource.item.completed" for item in observed)
-        assert observed[-1]["event_type"] in {"publish.completed", "run.completed"}
-        assert all("prompt" not in item and "reasoning_content" not in item for item in observed)
+        # Worker events are restored from the job; HTTP no longer owns a
+        # synchronous generation callback.
+        projected = result["run_events"]
+        assert any(item["eventType"] == "resource.item.started" for item in projected)
+        assert any(item["eventType"] == "resource.item.completed" for item in projected)
+        assert projected[-1]["eventType"] in {"publish.completed", "run.completed"}
+        assert all("prompt" not in item and "reasoning_content" not in item for item in projected)
     finally:
         session.close()
         engine.dispose()

@@ -1,5 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   Brain,
   CalendarDays,
@@ -16,7 +18,6 @@ import {
   createReviewPlan,
   deleteReviewPlan,
   getAllFlashcards,
-  getCompetitionDemoContext,
   getM5ReviewQueue,
   getReviewPlans,
   reviewFlashcard,
@@ -26,17 +27,23 @@ import AnkiFlashcard from './AnkiFlashcard.vue'
 import CollapsibleMindmap from './CollapsibleMindmap.vue'
 import ReviewHistoryPanel from './ReviewHistoryPanel.vue'
 
-const props = defineProps({ studentId: { type: String, default: '' } })
+const props = defineProps({ studentId: { type: String, default: '' }, courseId: { type: String, default: 'all' } })
+const emit = defineEmits(['changed'])
 
 const activeStudentId = computed(() => props.studentId || localStorage.getItem('edumatrix_student_id') || localStorage.getItem('edumatrix_username') || '')
 const activeTab = ref('queue')
 const reviews = ref([])
-const demoContext = ref(null)
 const unifiedQueue = ref([])
 const dueFlashcards = ref([])
+const cardsLoading = ref(false)
+const cardsLoaded = ref(false)
+const cardsError = ref('')
 const loading = ref(true)
 const loadError = ref('')
 const showForm = ref(false)
+const savingPlan = ref(false)
+const pendingDeletePlanId = ref('')
+const deletingPlan = ref(false)
 const form = ref({ concept: '', mastery: 0.5, interval_days: 3 })
 const actionFeedback = ref('')
 const reviewingKey = ref('')
@@ -57,7 +64,7 @@ const qualityActions = [
 
 const tabs = computed(() => [
   { id: 'queue', label: '待处理', icon: ListChecks, count: unifiedQueue.value.length },
-  { id: 'flashcards', label: '闪卡', icon: Brain, count: dueFlashcards.value.length },
+  { id: 'flashcards', label: '闪卡', icon: Brain, count: cardsLoaded.value ? dueFlashcards.value.length : null },
   { id: 'plans', label: '计划', icon: CalendarDays, count: reviews.value.length },
   { id: 'history', label: '记录', icon: History, count: null },
 ])
@@ -79,21 +86,23 @@ function setAction(message) {
   }, 3200)
 }
 
-async function load() {
+function matchesCourse(item) {
+  return !props.courseId || props.courseId === 'all'
+    || (props.courseId === 'unclassified' ? !item.course_id : item.course_id === props.courseId)
+}
+
+async function load({ refresh = false, changed = false } = {}) {
   if (!activeStudentId.value) return
-  loading.value = true
+  if (!refresh) loading.value = true
   loadError.value = ''
   try {
-    const [plans, queue, cards, context] = await Promise.all([
+    const [plans, queue] = await Promise.all([
       getReviewPlans(activeStudentId.value),
       getM5ReviewQueue(),
-      getAllFlashcards(activeStudentId.value),
-      getCompetitionDemoContext().catch(() => null),
     ])
-    reviews.value = Array.isArray(plans) ? plans : []
-    unifiedQueue.value = queue?.items || []
-    dueFlashcards.value = cards?.cards || []
-    demoContext.value = context
+    reviews.value = (Array.isArray(plans) ? plans : []).filter(matchesCourse)
+    unifiedQueue.value = (queue?.items || []).filter(matchesCourse)
+    if (changed) emit('changed')
   } catch (exception) {
     loadError.value = errorMessage(exception, '复习工具加载失败，请重试。')
   } finally {
@@ -101,20 +110,44 @@ async function load() {
   }
 }
 
+async function loadCards() {
+  if (cardsLoading.value) return
+  cardsLoading.value = true
+  cardsError.value = ''
+  try {
+    const result = await getAllFlashcards(activeStudentId.value, props.courseId)
+    dueFlashcards.value = result?.cards || []
+    cardsLoaded.value = true
+    if (result?.failures?.length) cardsError.value = '部分闪卡暂时没有准备好，已准备好的卡片仍可复习。请稍后重试。'
+  } catch (exception) {
+    cardsError.value = errorMessage(exception, '闪卡暂时没有准备好，请稍后重试。')
+  } finally {
+    cardsLoading.value = false
+  }
+}
+
+watch(activeTab, tab => {
+  if (tab === 'flashcards' && !cardsLoaded.value) loadCards()
+})
+
 async function addPlan() {
-  if (!form.value.concept.trim()) return
+  if (!form.value.concept.trim() || savingPlan.value) return
+  savingPlan.value = true
   try {
     await createReviewPlan(activeStudentId.value, {
       concept: form.value.concept.trim(),
       mastery: form.value.mastery,
       interval_days: form.value.interval_days,
+      course_id: !props.courseId || ['all', 'unclassified'].includes(props.courseId) ? null : props.courseId,
     })
     form.value = { concept: '', mastery: 0.5, interval_days: 3 }
     showForm.value = false
     setAction('复习计划已创建。')
-    await load()
+    await load({ changed: true })
   } catch (exception) {
     setAction(errorMessage(exception, '复习计划创建失败。'))
+  } finally {
+    savingPlan.value = false
   }
 }
 
@@ -124,11 +157,11 @@ async function submitReview(plan, quality) {
   reviewingKey.value = key
   failedReview.value = null
   try {
-    const result = await reviewFlashcard(activeStudentId.value, plan.concept, quality)
+    const result = await reviewFlashcard(activeStudentId.value, plan.concept, quality, '', plan.id)
     adaptiveReview.value = result?.adaptive_review?.triggered ? result.adaptive_review : null
     const interval = result?.review_plan?.interval_days || result?.interval_new || '-'
     setAction(`反馈已记录，下次复习间隔为 ${interval} 天。`)
-    await load()
+    await load({ changed: true })
   } catch (exception) {
     failedReview.value = { plan, quality }
     setAction(`${errorMessage(exception, '真实模型生成失败。')} 可重试。`)
@@ -144,19 +177,24 @@ async function retryFailedReview() {
 }
 
 async function removePlan(planId) {
-  if (!confirm('确定要删除该复习计划吗？')) return
+  if (deletingPlan.value) return
+  deletingPlan.value = true
   try {
     await deleteReviewPlan(planId)
+    pendingDeletePlanId.value = ''
     setAction('复习计划已删除。')
-    await load()
+    await load({ changed: true })
   } catch (exception) {
     setAction(errorMessage(exception, '复习计划删除失败。'))
+  } finally {
+    deletingPlan.value = false
   }
 }
 
 async function handleCardReviewed() {
   setAction('闪卡复习已记录，下一次安排已经更新。')
-  await load()
+  await load({ refresh: true, changed: true })
+  await loadCards()
 }
 
 async function exportDiagnosis() {
@@ -178,8 +216,7 @@ async function exportDiagnosis() {
 }
 
 function conceptLabel(concept) {
-  const matched = demoContext.value?.knowledge_points?.find(item => item.id === concept)
-  return matched?.title || concept
+  return learningText(concept, '待巩固知识点')
 }
 
 function nextReviewDate(plan) {
@@ -260,7 +297,7 @@ async function submitRetest(item) {
       : result.attempt.grading_status === 'manual_required'
         ? '该题仍需审核，本次尚未形成掌握证据。'
         : '本次未通过，可按计划复习后再次尝试。'
-    await load()
+    await load({ changed: true })
   } catch (exception) {
     retestFeedback.value[task.id] = errorMessage(exception, '复测提交失败。')
   } finally {
@@ -302,7 +339,7 @@ onMounted(load)
 
     <p v-if="actionFeedback" class="review-tools-panel__feedback" role="status">{{ actionFeedback }}</p>
     <div v-if="loadError" class="review-tools-panel__error" role="alert">
-      <span>{{ loadError }}</span>
+      <span>{{ userMessage(loadError) }}</span>
       <button type="button" @click="load">重试</button>
     </div>
 
@@ -321,7 +358,7 @@ onMounted(load)
               <div><strong>{{ queueTitle(item) }}</strong><span>{{ queueSource(item) }}</span></div>
               <span class="review-queue-list__status">{{ queueStatus(item) }}</span>
             </div>
-            <p>{{ item.reason }}</p>
+            <p>{{ learningText(item.reason) }}</p>
             <small><Clock3 :size="16" />{{ queueDue(item) }}</small>
             <template v-if="item.retest_task">
               <button
@@ -363,6 +400,11 @@ onMounted(load)
         <header class="review-tool-view__heading">
           <div><h2 id="review-flashcards-title">记忆闪卡</h2><p>翻看卡片并按真实回忆情况评分，系统自动安排下一次复习。</p></div>
         </header>
+        <p v-if="cardsLoading" role="status">正在准备闪卡，已有复习计划不受影响。</p>
+        <div v-if="cardsError" class="review-tools-panel__error" role="alert">
+          <span>{{ userMessage(cardsError) }}</span>
+          <button type="button" :disabled="cardsLoading" @click="loadCards">重新准备闪卡</button>
+        </div>
         <div v-if="dueFlashcards.length" class="review-flashcard-list">
           <article v-for="card in dueFlashcards" :key="card.id" data-testid="canonical-flashcard">
             <header>
@@ -372,7 +414,7 @@ onMounted(load)
             <AnkiFlashcard :card="card" :student-id="activeStudentId" @reviewed="handleCardReviewed" />
           </article>
         </div>
-        <div v-else class="review-tool-view__empty">
+        <div v-else-if="!cardsLoading && !cardsError" class="review-tool-view__empty">
           <Brain :size="30" />
           <strong>暂无待复习闪卡</strong>
           <p>完成测验、错题整理或笔记学习后，新的闪卡会进入这里。</p>
@@ -385,9 +427,9 @@ onMounted(load)
         </header>
 
         <form v-if="showForm" class="review-plan-form" @submit.prevent="addPlan">
-          <label class="review-plan-form__concept"><span>知识点</span><input v-model="form.concept" placeholder="输入知识点名称" /></label>
+          <label class="review-plan-form__concept"><span>知识点</span><input v-model="form.concept" maxlength="128" placeholder="输入知识点名称" /></label>
           <label class="review-plan-form__mastery">
-            <span>当前掌握度 <strong>{{ Math.round(form.mastery * 100) }}%</strong></span>
+            <span>自评熟悉程度 <strong>{{ Math.round(form.mastery * 100) }}%</strong></span>
             <input v-model.number="form.mastery" type="range" min="0" max="1" step="0.05" />
           </label>
           <fieldset>
@@ -402,23 +444,23 @@ onMounted(load)
           </fieldset>
           <div class="review-plan-form__actions">
             <button type="button" class="ui-button ui-button--secondary" @click="showForm = false">取消</button>
-            <button type="submit" class="ui-button ui-button--primary" :disabled="!form.concept.trim()">创建计划</button>
+            <button type="submit" class="ui-button ui-button--primary" :disabled="!form.concept.trim() || savingPlan">{{ savingPlan ? '正在保存' : '创建计划' }}</button>
           </div>
         </form>
 
         <section v-if="adaptiveReview" class="review-adaptive" aria-labelledby="review-adaptive-title">
           <header>
             <div><h3 id="review-adaptive-title">{{ adaptiveReview.title }}</h3><p>{{ adaptiveReview.simplified_explanation }}</p></div>
-            <span>{{ adaptiveReview.model || 'deepseek-v4-flash' }} · 掌握 {{ Math.round((adaptiveReview.mastery || 0) * 100) }}%</span>
+            <span>根据这次复习感受调整讲法</span>
           </header>
-          <ol v-if="adaptiveReview.agent_trace?.length" class="review-adaptive__trace" aria-label="降维解释生成过程">
+          <ol v-if="adaptiveReview.agent_trace?.length" class="review-adaptive__trace" aria-label="学习解释生成过程">
             <li v-for="step in adaptiveReview.agent_trace" :key="step">{{ step }}</li>
           </ol>
           <CollapsibleMindmap v-if="adaptiveReview.mermaid" :code="adaptiveReview.mermaid" />
         </section>
         <section v-if="failedReview" class="review-adaptive review-adaptive--error" role="alert">
-          <strong>真实模型内容没有生成</strong>
-          <p>本次没有使用模板内容；可以重试生成降维解释和思维导图。</p>
+          <strong>这次解释暂时没有准备好</strong>
+          <p>请重试，学习伙伴会换个说法并配上关系图。</p>
           <button type="button" class="ui-button ui-button--secondary" :disabled="Boolean(reviewingKey)" @click="retryFailedReview">
             {{ reviewingKey ? '重试中' : '重试生成' }}
           </button>
@@ -433,7 +475,7 @@ onMounted(load)
               </div>
               <p>下次复习 {{ nextReviewDate(plan) }} · 已复习 {{ plan.review_count || 0 }} 次</p>
               <div class="review-plan-list__mastery">
-                <span>掌握度 {{ Math.round((plan.mastery || 0) * 100) }}%</span>
+                <span>复习参考熟悉度 {{ Math.round((plan.mastery || 0) * 100) }}%</span>
                 <i><b :style="{ width: `${(plan.mastery || 0) * 100}%` }" /></i>
               </div>
             </div>
@@ -447,9 +489,14 @@ onMounted(load)
                   :disabled="Boolean(reviewingKey)"
                   @click="submitReview(plan, action.quality)"
                 >{{ reviewingKey === `${plan.id || plan.concept}:${action.quality}` ? '提交中' : action.label }}</button>
-                <button type="button" class="review-plan-list__delete" title="删除复习计划" aria-label="删除复习计划" @click="removePlan(plan.id)">
+                <button type="button" class="review-plan-list__delete" title="删除复习计划" aria-label="删除复习计划" @click="pendingDeletePlanId = plan.id">
                   <Trash2 :size="17" />
                 </button>
+              </div>
+              <div v-if="pendingDeletePlanId === plan.id" role="group" aria-label="确认删除复习计划">
+                <span>删除这项复习安排？已有学习记录仍保留。</span>
+                <button type="button" :disabled="deletingPlan" @click="pendingDeletePlanId = ''">保留计划</button>
+                <button type="button" :disabled="deletingPlan" @click="removePlan(plan.id)">{{ deletingPlan ? '删除中' : '确认删除计划' }}</button>
               </div>
             </div>
           </article>
@@ -462,7 +509,7 @@ onMounted(load)
       </section>
 
       <div v-show="activeTab === 'history'" class="review-tool-view review-tool-view--history">
-        <ReviewHistoryPanel :student-id="activeStudentId" :plans="displayPlans" @recorded="load" />
+        <ReviewHistoryPanel :student-id="activeStudentId" :plans="displayPlans" @recorded="load({ changed: true })" />
       </div>
     </template>
   </div>
@@ -582,6 +629,7 @@ onMounted(load)
 
 .review-flashcard-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .review-flashcard-list article:nth-child(odd) { border-right: 1px solid var(--color-border); }
+.review-flashcard-list article:only-child { grid-column: 1 / -1; border-right: 0; }
 .review-flashcard-list article > header { align-items: center; margin-bottom: 12px; }
 
 .review-plan-form { display: grid; grid-template-columns: minmax(260px, 1.2fr) minmax(220px, 1fr) minmax(250px, auto); gap: 16px 20px; padding: 20px 26px; border-bottom: 1px solid var(--color-border); background: var(--color-surface-subtle); }

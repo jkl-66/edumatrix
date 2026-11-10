@@ -11,7 +11,11 @@ def test_handout_saves_complete_content_and_reuses_notes_flow():
     toolbar = TOOLBAR.read_text(encoding="utf-8")
 
     assert "handoutNoteMarkdown" in view
-    for heading in ("学习目标", "核心概念", "应用示例", "边界与反例", "代码阅读", "学习检查", "参考材料"):
+    assert "orderedHandoutSections(content).map(handoutSectionMarkdown)" in view
+    order = (VIEW.parents[1] / "utils/handoutReadingOrder.js").read_text(encoding="utf-8")
+    for kind in ("concepts", "examples", "counterExamples", "codeBlocks", "miniQuiz", "transferTasks"):
+        assert kind in order
+    for heading in ("学习目标", "参考材料"):
         assert heading in view
     assert "createNote, getNotes, updateNote" in view
     assert "handout-note-upgrade-" in view

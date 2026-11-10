@@ -55,7 +55,7 @@ def _frontend_server():
 def _conversation_payload(state):
     messages = list(state["messages"])
     latest_user = next((item for item in reversed(messages) if item["role"] == "user"), None)
-    refs = list((latest_user or {}).get("contextRefs") or [])
+    refs = list(state.get("initial_courses") or (latest_user or {}).get("contextRefs") or [])
     courses = []
     seen = set()
     for ref in refs:
@@ -70,7 +70,7 @@ def _conversation_payload(state):
         "courseIds": [item["id"] for item in courses],
         "courses": courses,
         "contextMode": "course" if courses else "general",
-        "title": "B31 浏览器对话",
+        "title": state.get("title") or "B31 浏览器对话",
         "status": "active",
         "lockVersion": state["lock_version"],
         "createdAt": "2026-08-26T08:00:00Z",
@@ -106,6 +106,7 @@ def _install_api_mocks(page, *, course_mode="ready", hold_courses=False):
         "course_mode": course_mode,
         "conversation_id": "chat-b31-browser",
         "created": False,
+        "conversations": {},
         "lock_version": 1,
         "messages": [],
         "message_contexts": [],
@@ -153,26 +154,30 @@ def _install_api_mocks(page, *, course_mode="ready", hold_courses=False):
             course_response(route)
             return
         if path.endswith("/api/v1/chat/conversations") and method == "GET":
-            items = [_conversation_payload(state)] if state["created"] else []
+            items = [_conversation_payload(item) for item in reversed(list(state["conversations"].values()))]
             respond(route, {"schemaVersion": "edumatrix.chat-conversation-list.v1", "items": items})
             return
         if path.endswith("/api/v1/chat/conversations") and method == "POST":
             payload = json.loads(request.post_data or "{}")
             state["created"] = True
-            state["lock_version"] = 1
             selected = [str(item) for item in payload.get("course_ids") or []]
             if payload.get("course_id") and payload["course_id"] not in selected:
                 selected.insert(0, str(payload["course_id"]))
-            if selected:
-                refs = [{"courseId": course_id, "course": next((item for item in courses if item["id"] == course_id), {"id": course_id, "title": course_id})} for course_id in selected]
-                state["messages"] = []
-                state["initial_courses"] = refs
-            respond(route, _conversation_payload(state))
+            conversation_id = f"chat-b31-browser-{len(state['conversations']) + 1}"
+            conversation = {
+                "conversation_id": conversation_id, "lock_version": 1, "messages": [],
+                "title": payload.get("title") or "B31 浏览器对话",
+                "initial_courses": [{"courseId": course_id, "course": next(item for item in courses if item["id"] == course_id)} for course_id in selected],
+            }
+            state["conversations"][conversation_id] = conversation
+            state["conversation_id"] = conversation_id
+            respond(route, _conversation_payload(conversation))
             return
         if "/api/v1/chat/conversations/" in path and method == "GET":
-            respond(route, _conversation_payload(state))
+            respond(route, _conversation_payload(state["conversations"][path.rsplit("/", 1)[-1]]))
             return
-        if path.endswith("/api/v1/chat/conversations/chat-b31-browser/messages") and method == "POST":
+        if "/api/v1/chat/conversations/" in path and path.endswith("/messages") and method == "POST":
+            conversation = state["conversations"][path.split("/")[-2]]
             payload = json.loads(request.post_data or "{}")
             state["message_counter"] += 1
             index = state["message_counter"]
@@ -186,7 +191,7 @@ def _install_api_mocks(page, *, course_mode="ready", hold_courses=False):
                 hydrated_refs.append({**ref, "course": course} if course else dict(ref))
             user = {
                 "id": user_id,
-                "conversationId": state["conversation_id"],
+                "conversationId": conversation["conversation_id"],
                 "replyToMessageId": None,
                 "sequence": index * 2 - 1,
                 "role": "user",
@@ -203,7 +208,7 @@ def _install_api_mocks(page, *, course_mode="ready", hold_courses=False):
             }
             assistant = {
                 "id": assistant_id,
-                "conversationId": state["conversation_id"],
+                "conversationId": conversation["conversation_id"],
                 "replyToMessageId": user_id,
                 "sequence": index * 2,
                 "role": "assistant",
@@ -218,10 +223,10 @@ def _install_api_mocks(page, *, course_mode="ready", hold_courses=False):
                 "updatedAt": "2026-08-26T08:00:00Z",
                 "lockVersion": 1,
             }
-            state["messages"].extend([user, assistant])
+            conversation["messages"].extend([user, assistant])
             state["message_contexts"].append(context_refs)
             state["stream_by_user"][user_id] = assistant
-            state["lock_version"] += 1
+            conversation["lock_version"] += 1
             respond(route, {"created": True, "userMessage": user, "assistantMessage": assistant})
             return
         if path.endswith("/api/stream/chat") and method == "POST":
@@ -252,7 +257,7 @@ def _layout(page, width, screenshot_path):
     result = page.evaluate(
         """() => {
           const root = document.querySelector('[data-testid=focused-chat-workspace]');
-          const important = ['[data-testid=chat-current-course-label]', '[data-testid=chat-course-picker] .course-picker__trigger', '[data-testid=chat-composer-context]'];
+          const important = ['[data-testid=chat-current-course-label]', '[data-testid=chat-course-picker] .course-picker__trigger'];
           const trigger = document.querySelector('[data-testid=chat-course-picker] .course-picker__trigger')?.getBoundingClientRect();
           const status = document.querySelector('.answer-status')?.getBoundingClientRect();
           return {
@@ -288,8 +293,8 @@ def test_multicourse_chat_path_two_desktop_viewports(tmp_path):
     with _frontend_server() as base_url, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 900), (1366, 768)):
-                context = browser.new_context(viewport={"width": width, "height": height})
+            for width, height in ((1707, 876), (1440, 900), (1366, 768)):
+                context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1.5 if width == 1707 else 1)
                 context.add_init_script(
                     "localStorage.setItem('edumatrix_token', 'b31-browser-token');"
                     "localStorage.setItem('edumatrix_role', 'student');"
@@ -315,22 +320,35 @@ def test_multicourse_chat_path_two_desktop_viewports(tmp_path):
                     "b31-browser-course-b",
                 ]
 
+                course_conversation_id = state["conversation_id"]
                 page.get_by_test_id("chat-course-picker").locator("button").click()
                 page.get_by_role("button", name="使用通用对话").click()
                 assert page.get_by_test_id("chat-current-course-label").inner_text() == "未绑定课程（通用对话）"
-                assert page.locator(".conversation-course").first.inner_text() == "通用对话 · 未绑定课程"
+                from playwright.sync_api import expect
+                expect(page.locator(".conversation-item.active .conversation-course")).to_have_text("通用对话 · 未绑定课程")
                 page.get_by_label("输入问题").fill("再给一个不绑定课程的通用解释")
                 page.get_by_role("button", name="发送").click()
                 page.get_by_text("已结合所选课程上下文完成回答。", exact=True).last.wait_for()
                 assert state["message_contexts"][1] == []
 
+                assert state["conversation_id"] != course_conversation_id
+                page.locator(f'[data-conversation-id="{course_conversation_id}"] .conversation-select').click()
+                page.get_by_text("比较两门课程的核心概念", exact=True).wait_for()
                 page.locator(".message-row").nth(0).click()
+                if page.get_by_test_id("chat-evidence-toggle").get_attribute("aria-expanded") == "false":
+                    page.get_by_test_id("chat-evidence-toggle").click()
+                page.get_by_test_id("chat-tab-course").click()
                 context_panel = page.get_by_test_id("chat-context-refs")
                 context_panel.get_by_text("机器学习基础", exact=True).wait_for()
                 context_panel.get_by_text("数据结构与算法", exact=True).wait_for()
 
                 page.reload(wait_until="networkidle")
+                page.locator(f'[data-conversation-id="{course_conversation_id}"] .conversation-select').click()
+                page.get_by_text("比较两门课程的核心概念", exact=True).wait_for()
                 page.locator(".message-row").nth(0).click()
+                if page.get_by_test_id("chat-evidence-toggle").get_attribute("aria-expanded") == "false":
+                    page.get_by_test_id("chat-evidence-toggle").click()
+                page.get_by_test_id("chat-tab-course").click()
                 page.get_by_test_id("chat-context-refs").get_by_text("机器学习基础", exact=True).wait_for()
                 page.get_by_test_id("chat-context-refs").get_by_text("数据结构与算法", exact=True).wait_for()
                 assert not page_errors, page_errors

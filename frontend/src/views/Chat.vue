@@ -1,4 +1,7 @@
 <script setup>
+import { displayLabel, learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
+import { groupSourcePassages, passagePreview, sourcePassageKey } from '../utils/sourceCitationRoute.js'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -32,7 +35,10 @@ import { getM5Resource } from '../api'
 import AgentTimeline from '../components/AgentTimeline.vue'
 import InlineQuizCard from '../components/InlineQuizCard.vue'
 import IncrementalMarkdownRenderer from '../components/IncrementalMarkdownRenderer.vue'
+import ReadAloudButton from '../components/ReadAloudButton.vue'
+import { useLearningPreferences } from '../services/learningPreferences'
 import SourceCitation from '../components/SourceCitation.vue'
+import SearchField from '../components/ui/SearchField.vue'
 import { useChatStore } from '../stores/chat'
 import { useCourseContextStore } from '../stores/courseContext'
 
@@ -42,7 +48,10 @@ const chatStore = useChatStore()
 const courseContext = useCourseContextStore()
 
 const draft = ref('')
+const initializing = ref(true)
+const switchingConversation = ref(false)
 const fileInput = ref(null)
+const preferences = useLearningPreferences()
 const messageScroller = ref(null)
 const activeEvidenceMessageId = ref('')
 const localError = ref('')
@@ -54,10 +63,11 @@ const courseSelectionError = ref('')
 const routeResourceMessageStarted = ref(false)
 const resourcePickerOpen = ref(false)
 const selectedResourceTypes = ref([])
+const resourceSourceMessageId = ref('')
 const quizLoading = ref(false)
 const quizError = ref('')
 const quizDetail = ref(null)
-const evidenceTab = ref('trace')
+const evidenceTab = ref('course')
 const evidenceRailCollapsed = ref(true)
 
 const messages = computed(() => chatStore.messages)
@@ -117,12 +127,7 @@ const resourceMessageText = computed(() => {
   }
   return `请基于当前课程“${currentCourseTitle.value}”和已选资料，帮我定制生成${labels}，主题围绕“${resourceMessageTitle.value}”。请根据我的学习情况控制难度，并在生成过程中展示规划、协作和审核步骤。`
 })
-const resourceMessageContextRefs = computed(() => {
-  const base = outgoingContextRef.value
-  if (!base) return []
-  if (!routeSourceRefIds.value.length) return outgoingContextRefs.value
-  return routeSourceRefIds.value.map((sourceRefId) => ({ ...base, sourceRefId }))
-})
+const resourceMessageContextRefs = computed(() => outgoingContextRefs.value)
 const selectedCourseIds = computed(() => chatStore.selectedCourseIds)
 const selectedCourses = computed(() => selectedCourseIds.value
   .map((id) => chatStore.availableCourses.find((course) => String(course.id) === String(id)))
@@ -175,16 +180,27 @@ const courseSelectionLabel = computed(() => {
   if (displayCourses.value.length > 1) return `已选择 ${displayCourses.value.length} 门课程`
   return '通用对话（未绑定课程）'
 })
+const conversationContextRef = computed(() => {
+  // An entry from another learning page supplies its own scope. Omitted fields
+  // must stay empty, even when we reuse a conversation for the same course.
+  if (!route.query.conversation_id && [
+    'intent', 'chapter_id', 'knowledge_point_id', 'task_id', 'resource_id',
+    'quiz_resource_id', 'source_ref_id', 'source_ref_ids', 'attempt_id',
+  ].some(key => route.query[key])) return {}
+  const previousQuestion = [...messages.value].reverse().find(message => message.role === 'user')
+  const previous = previousQuestion?.contextRefs?.find(item => item.context?.courseId === currentCourseId.value)
+  return previous?.context || {}
+})
 const currentKnowledgePointId = computed(() => String(
   route.query.knowledge_point_id
-  || (effectiveCourseIds.value.includes(String(courseContext.contextRef?.courseId || ''))
-    ? courseContext.contextRef?.knowledgePointId
-    : '')
+  || conversationContextRef.value.knowledgePointId
   || '',
 ))
 const currentKnowledgePointTitle = computed(() => (
   currentKnowledgePointId.value
-    ? (courseContext.knowledgePoint?.title || cleanQueryValue(route.query.knowledge_point_title) || '未绑定具体知识点')
+    ? (cleanQueryValue(route.query.knowledge_point_title)
+      || messages.value.findLast(message => message.role === 'user')?.contextRefs?.find(item => item.knowledgePoint?.id === currentKnowledgePointId.value)?.knowledgePoint?.title
+      || '当前知识点')
     : currentCourseTitle.value
 ))
 
@@ -201,9 +217,14 @@ const attachmentQueueSummary = computed(() => {
   return parts.join(' · ')
 })
 const hasDraftContent = computed(() => Boolean(draft.value.trim() || selectedAttachmentCount.value))
+const conversationBusy = computed(() => initializing.value || switchingConversation.value || chatStore.creatingConversation || chatStore.loading)
 const sendDisabledReason = computed(() => {
+  if (conversationBusy.value) return '正在打开对话'
+  if (chatStore.submitting) return '正在发送问题'
+  if (chatStore._pendingRetry) return '等待连接恢复'
   if (chatStore.sending) return '当前回答尚未结束'
   if (chatStore.attachmentBlockReason) return chatStore.attachmentBlockReason
+  if (resourceSourceMessageId.value && !selectedResourceTypes.value.length) return '请选择要生成的资源'
   if (!hasDraftContent.value) return '请输入问题或添加附件'
   return ''
 })
@@ -211,6 +232,7 @@ const canSend = computed(() => !sendDisabledReason.value)
 
 watch(() => chatStore.activeConversationId, () => {
   attachmentsCollapsed.value = false
+  resourceSourceMessageId.value = ''
 })
 
 const latestAssistant = computed(() => (
@@ -224,6 +246,7 @@ const evidenceMessage = computed(() => (
 ))
 const evidenceContextRefs = computed(() => evidenceMessage.value?.contextRefs || [])
 const evidenceSourceRefs = computed(() => evidenceMessage.value?.sourceRefs || [])
+const evidenceSourceGroups = computed(() => groupSourcePassages(evidenceSourceRefs.value))
 const evidenceCandidateSourceRefs = computed(() => {
   const explicit = evidenceMessage.value?.streamCheckpoint?.candidateSourceRefs
   if (Array.isArray(explicit)) return explicit
@@ -234,11 +257,7 @@ const evidenceCandidateSourceRefs = computed(() => {
 const evidenceResourceLinks = computed(() => evidenceMessage.value?.resourceLinks || [])
 const evidenceAttachments = computed(() => messageAttachments(evidenceMessage.value))
 const evidenceReturnTo = computed(() => String(evidenceMessage.value?.streamCheckpoint?.returnTo || ''))
-const evidenceAgentAudit = computed(() => (
-  evidenceMessage.value?.agentAudit
-  || evidenceMessage.value?.streamCheckpoint?.agentAudit
-  || null
-))
+const evidenceAgentAudit = computed(() => messageAgentAudit(evidenceMessage.value))
 const evidenceRunEvents = computed(() => (
   evidenceMessage.value?.runEvents
   || evidenceMessage.value?.streamCheckpoint?.runEvents
@@ -286,7 +305,7 @@ const quizResourceLocation = computed(() => ({
 }))
 
 const outgoingContextRef = computed(() => {
-  const inherited = courseContext.contextRef || {}
+  const inherited = conversationContextRef.value
   const quizSource = quizSourceRefs.value[0]
   const value = {
     courseId: currentCourseId.value || null,
@@ -294,6 +313,8 @@ const outgoingContextRef = computed(() => {
     knowledgePointId: currentKnowledgePointId.value || null,
     taskId: route.query.task_id || inherited.taskId || null,
     resourceId: quizResourceId.value || route.query.resource_id || inherited.resourceId || null,
+    resourceVersionId: route.query.version_id || inherited.resourceVersionId || null,
+    resourcePartId: route.query.resource_part_id || route.query.slide_id || route.query.node_id || inherited.resourcePartId || null,
     sourceRefId: route.query.source_ref_id || quizSource?.id || inherited.sourceRefId || null,
     attemptId: route.query.attempt_id || inherited.attemptId || null,
   }
@@ -303,7 +324,12 @@ const outgoingContextRefs = computed(() => {
   const ids = effectiveCourseIds.value
   if (!ids.length) return []
   const base = outgoingContextRef.value
-  if (base) return [base, ...ids.slice(1).map((courseId) => ({ courseId }))]
+  if (base) {
+    const primary = routeSourceRefIds.value.length
+      ? routeSourceRefIds.value.map((sourceRefId) => ({ ...base, sourceRefId }))
+      : [base]
+    return [...primary, ...ids.slice(1).map((courseId) => ({ courseId }))]
+  }
   return ids.map((courseId) => ({ courseId }))
 })
 const outgoingReturnTo = computed(() => {
@@ -426,7 +452,7 @@ async function finishCourseSelection() {
   try {
     const first = next[0] || ''
     const course = chatStore.availableCourses.find((item) => String(item.id) === first)
-    await chatStore.createConversation({
+    const conversation = await chatStore.createConversation({
       courseId: first,
       courseIds: next,
       title: course?.title ? `${course.title}对话` : '通用对话',
@@ -438,6 +464,7 @@ async function finishCourseSelection() {
     courseContext.setChatCourseIds(next)
     coursePickerOpen.value = false
     courseSelectionError.value = ''
+    await activateConversation(conversation)
   } catch (error) {
     courseSelectionError.value = error?.message || '切换课程失败，请重试'
   }
@@ -505,7 +532,23 @@ function formatBytes(value) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function statusText(status) {
+function resourceAutomation(message) {
+  return message?.resourceAutomation || message?.streamCheckpoint?.resourceAutomation || {}
+}
+
+function statusText(message) {
+  if (message?.resourceJobId) {
+    const automation = resourceAutomation(message)
+    const labels = {
+      queued: '排队准备', running: '正在准备资源',
+      retry_wait: automation.phase === 'repairing' ? '正在调整内容' : '等待自动继续',
+      waiting_configuration: '等待服务恢复', needs_attention: '生成遇到问题',
+      completed: '资源已就绪', cancelled: '已取消生成',
+    }
+    if (labels[automation.state]) return labels[automation.state]
+    if (['succeeded', 'completed'].includes(message.resourceStatus)) return '资源已就绪'
+    return ['failed', 'stopped'].includes(message.status) ? '资源尚未就绪' : '正在准备资源'
+  }
   const labels = {
     queued: '等待回答',
     streaming: '正在回答',
@@ -514,7 +557,7 @@ function statusText(status) {
     failed: '回答失败',
     needs_input: '等待补充信息',
   }
-  return labels[status] || '状态未记录'
+  return labels[message?.status] || '状态未记录'
 }
 
 function attachmentStatus(item) {
@@ -568,6 +611,12 @@ function contextRows(refs) {
     }
   }
   return rows
+}
+
+function showMessageEvidence(message, tab) {
+  activeEvidenceMessageId.value = message.id
+  evidenceTab.value = tab
+  evidenceRailCollapsed.value = false
 }
 
 function openQuizSource(sourceId) {
@@ -630,8 +679,17 @@ async function handleQuizFollowUp(payload) {
   }
 }
 
-function openResourceLink(link) {
-  if (isInternalPath(link?.route)) router.push(link.route)
+function openResourceLink(link, message = evidenceMessage.value) {
+  if (!isInternalPath(link?.route)) return
+  const target = router.resolve(link.route)
+  const context = message?.contextRefs?.[0]?.context || {}
+  router.push({ path: target.path, query: {
+    ...target.query,
+    course_id: context.courseId || currentCourseId.value || undefined,
+    knowledge_point_id: context.knowledgePointId || undefined,
+    task_id: context.taskId || undefined,
+    version_id: link.resourceVersionId || undefined,
+  } })
 }
 
 function openReturnPath() {
@@ -647,7 +705,13 @@ function openCourseKnowledge() {
 }
 
 function messageAgentAudit(message) {
-  return message?.agentAudit || message?.streamCheckpoint?.agentAudit || null
+  const audit = message?.agentAudit || message?.streamCheckpoint?.agentAudit || null
+  if (!message?.resourceJobId) return audit
+  const events = message.runEvents || message.streamCheckpoint?.runEvents || []
+  if (!events.length) return null
+  const state = resourceAutomation(message).state
+  const status = { retry_wait: 'running', needs_attention: 'failed', cancelled: 'stopped' }[state] || state || audit?.status
+  return { ...audit, status, events, items: [] }
 }
 
 function workflowEventCount(message) {
@@ -665,18 +729,59 @@ function messageGroundingLevel(message) {
   ).toUpperCase()
 }
 
+function conversationQuery(conversation) {
+  const ids = Array.isArray(conversation?.courseIds) ? conversation.courseIds : (conversation?.courseId ? [conversation.courseId] : [])
+  const query = { conversation_id: conversation.id }
+  if (ids.length) {
+    query.course_id = ids[0]
+    query.course_ids = ids.join(',')
+  }
+  const latest = [...(conversation.messages || [])].reverse().find(message => message.role === 'user')
+  const context = latest?.contextRefs?.[0]?.context || {}
+  if (ids.includes(context.courseId)) {
+    for (const [key, field] of Object.entries({ chapter_id: 'chapterId', knowledge_point_id: 'knowledgePointId',
+      resource_id: 'resourceId', version_id: 'resourceVersionId', resource_part_id: 'resourcePartId',
+      source_ref_id: 'sourceRefId', task_id: 'taskId', attempt_id: 'attemptId' })) {
+      if (context[field]) query[key] = context[field]
+    }
+    const sourceIds = [...new Set((latest.contextRefs || [])
+      .filter(item => item.context?.courseId === context.courseId)
+      .map(item => item.context?.sourceRefId).filter(Boolean))]
+    if (sourceIds.length > 1) {
+      delete query.source_ref_id
+      query.source_ref_ids = sourceIds.join(',')
+    }
+    if (isInternalPath(latest.returnTo)) query.return_to = latest.returnTo
+  }
+  return query
+}
+
+async function activateConversation(conversation) {
+  switchingConversation.value = true
+  const previousPath = route.fullPath
+  courseContext.clear({ keepCourse: false })
+  activeEvidenceMessageId.value = ''
+  try {
+    await router.replace({ path: '/learn', query: conversationQuery(conversation) })
+  } finally {
+    // A changed route remounts this workspace. Keep the departing composer
+    // disabled so a new draft cannot be entered and lost during that change.
+    if (route.fullPath === previousPath) switchingConversation.value = false
+  }
+}
+
 async function createConversation() {
+  if (conversationBusy.value) return
   localError.value = ''
   try {
-    await chatStore.createConversation({
+    const conversation = await chatStore.createConversation({
       courseId: effectiveCourseIds.value[0] || '',
       courseIds: effectiveCourseIds.value,
       title: '新对话',
     })
     draft.value = ''
     activeEvidenceMessageId.value = ''
-    await nextTick()
-    scrollToBottom(false)
+    await activateConversation(conversation)
   } catch (error) {
     localError.value = error?.message || '新建对话失败'
   }
@@ -686,10 +791,8 @@ async function openConversation(conversationId) {
   if (!conversationId || conversationId === chatStore.activeConversationId) return
   localError.value = ''
   try {
-    await chatStore.openConversation(conversationId)
-    activeEvidenceMessageId.value = ''
-    await nextTick()
-    scrollToBottom(false)
+    const conversation = await chatStore.openConversation(conversationId)
+    await activateConversation(conversation)
   } catch (error) {
     localError.value = error?.message || '打开对话失败'
   }
@@ -699,6 +802,9 @@ async function archiveConversation(conversationId) {
   localError.value = ''
   try {
     await chatStore.archiveConversation(conversationId)
+    if (String(route.query.conversation_id || '') === conversationId && chatStore.activeConversation) {
+      await activateConversation(chatStore.activeConversation)
+    }
   } catch (error) {
     localError.value = error?.message || '归档对话失败'
   }
@@ -707,7 +813,15 @@ async function archiveConversation(conversationId) {
 async function chooseFiles(event) {
   const files = [...(event.target.files || [])]
   event.target.value = ''
+  if (conversationBusy.value) {
+    localError.value = '对话还在加载，请稍后重新选择附件。'
+    return
+  }
   for (const file of files) {
+    if (!preferences.imageAnalysis && (file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(file.name))) {
+      localError.value = '图片理解已关闭，可以在设置中开启后再上传。'
+      continue
+    }
     try {
       await chatStore.uploadAttachment(file)
     } catch {
@@ -756,10 +870,12 @@ async function sendMessage(intentOverride = '') {
       returnTo: outgoingReturnTo.value,
       intent,
       resourceTypes: intent === 'general_qa' ? [] : resourceTypes,
+      sourceMessageId: intent === 'resource_generation' ? resourceSourceMessageId.value : '',
     })
     if (pair) {
       draft.value = ''
       selectedResourceTypes.value = []
+      resourceSourceMessageId.value = ''
       resourcePickerOpen.value = false
     }
     await nextTick()
@@ -770,6 +886,7 @@ async function sendMessage(intentOverride = '') {
 }
 
 async function continueWithGeneralKnowledge(message) {
+  resourceSourceMessageId.value = ''
   const userMessage = messages.value.find((item) => item.id === message?.replyToMessageId)
   const question = String(userMessage?.content || '').trim()
   draft.value = question
@@ -824,13 +941,25 @@ async function continueResponse(messageId) {
 }
 
 function startResourceFromMessage(message) {
+  resourceSourceMessageId.value = message?.id || ''
   activeEvidenceMessageId.value = message?.id || activeEvidenceMessageId.value
   resourcePickerOpen.value = true
   localError.value = ''
   if (!draft.value.trim()) {
-    draft.value = '请描述你希望基于本条回答生成的资源内容、难度和练习要求。'
+    draft.value = '基于这条回答生成所选学习资源，保留原问题的数据和推导，并安排新的独立练习。'
   }
 }
+
+watch(() => chatStore.pendingSend, (pending, previous) => {
+  if (!pending && previous && messages.value.some(message =>
+    message.role === 'user' && message.idempotencyKey === previous.idempotency_key)) {
+    draft.value = ''
+    localError.value = ''
+    selectedResourceTypes.value = []
+    resourceSourceMessageId.value = ''
+    resourcePickerOpen.value = false
+  }
+})
 
 function onComposerKeydown(event) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
@@ -944,12 +1073,20 @@ onMounted(async () => {
   }
   try {
     const inheritedCourseId = routeCourseIds.value[0] || courseContext.contextRef?.courseId || ''
+    if (route.query.resource_id && !route.query.conversation_id && !resourceIntent.value) {
+      const conversation = await chatStore.createConversation({
+        courseId: inheritedCourseId,
+        title: cleanQueryValue(route.query.context) || '学习材料问答',
+      })
+      await router.replace({ query: { ...route.query, conversation_id: conversation.id } })
+      return
+    }
     const conversation = await chatStore.initialize({
       courseId: inheritedCourseId,
       conversationId: cleanQueryValue(route.query.conversation_id),
       createIfEmpty: !quizResourceId.value,
     })
-    const restoredIds = conversation?.courseIds?.length
+    const restoredIds = Array.isArray(conversation?.courseIds)
       ? conversation.courseIds
       : (routeCourseIds.value.length ? routeCourseIds.value : (inheritedCourseId ? [inheritedCourseId] : []))
     syncSelectedCourses(restoredIds)
@@ -957,6 +1094,7 @@ onMounted(async () => {
     // The page renders the store's recoverable load error.
   }
   await loadQuizContext()
+  initializing.value = false
   await sendRouteResourceMessage()
   await nextTick()
   if (quizResourceId.value) {
@@ -975,9 +1113,8 @@ onUnmounted(() => chatStore.cleanup())
       <div class="rail-heading">
         <div>
           <span>会话</span>
-          <strong>{{ conversations.length }}</strong>
         </div>
-        <button type="button" class="icon-button" title="新建对话" aria-label="新建对话" :disabled="chatStore.creatingConversation" @click="createConversation">
+        <button type="button" class="icon-button" title="新建对话" aria-label="新建对话" :disabled="conversationBusy" @click="createConversation">
           <LoaderCircle v-if="chatStore.creatingConversation" :size="18" class="spin" />
           <Plus v-else :size="18" />
         </button>
@@ -1008,9 +1145,9 @@ onUnmounted(() => chatStore.cleanup())
             @click="openConversation(conversation.id)"
           >
             <span class="conversation-copy">
-              <strong>{{ conversation.title || '新对话' }}</strong>
+              <strong>{{ learningText(conversation.title, '新对话') }}</strong>
               <small>{{ formatTime(conversation.updatedAt) }}</small>
-              <small class="conversation-course" data-testid="conversation-course-label">{{ conversationCourseLabel(conversation) }}</small>
+              <small class="conversation-course" :title="conversationCourseLabel(conversation)" data-testid="conversation-course-label">{{ conversationCourseLabel(conversation) }}</small>
             </span>
           </button>
           <button
@@ -1025,19 +1162,12 @@ onUnmounted(() => chatStore.cleanup())
         </div>
       </div>
 
-      <div class="rail-footer">
-        <BookOpen :size="16" />
-        <span>
-          <small>当前对话课程</small>
-          <strong data-testid="chat-current-course-label">{{ currentCourseTitle }}</strong>
-        </span>
-      </div>
     </aside>
 
     <section class="answer-workspace" data-testid="chat-answer-workspace">
       <header class="answer-heading">
         <div>
-          <span class="answer-heading__context" :title="currentKnowledgePointTitle">{{ currentKnowledgePointTitle }}</span>
+          <span v-if="currentKnowledgePointId" class="answer-heading__context" :title="currentKnowledgePointTitle">{{ currentKnowledgePointTitle }}</span>
           <h1 class="answer-heading__title" :title="chatStore.activeConversation?.title || '新对话'">{{ chatStore.activeConversation?.title || '新对话' }}</h1>
         </div>
         <div class="answer-heading__actions">
@@ -1050,7 +1180,7 @@ onUnmounted(() => chatStore.cleanup())
               @click="openCoursePicker"
             >
               <BookOpen :size="16" />
-              <span>{{ courseSelectionLabel }}</span>
+              <span data-testid="chat-current-course-label" :title="currentCourseTitle">{{ chatStore.loadingCourses ? courseSelectionLabel : currentCourseTitle }}</span>
               <span class="course-picker__chevron">⌄</span>
             </button>
             <div v-if="coursePickerOpen" class="course-picker__panel" role="dialog" aria-label="选择对话课程">
@@ -1059,13 +1189,10 @@ onUnmounted(() => chatStore.cleanup())
                 <button type="button" class="icon-button" aria-label="关闭课程选择" title="关闭" @click="coursePickerOpen = false"><X :size="15" /></button>
               </header>
               <p>课程只影响后续新消息，历史消息保留当时选择的课程。</p>
-              <label class="course-picker__search">
-                <Library :size="15" aria-hidden="true" />
-                <input v-model="courseSearch" type="search" placeholder="搜索课程或专业" aria-label="搜索课程或专业" />
-              </label>
+              <SearchField v-model="courseSearch" placeholder="搜索课程或专业" aria-label="搜索课程或专业" clearable />
               <div v-if="chatStore.loadingCourses" class="course-picker__state"><LoaderCircle :size="16" class="spin" />正在加载可用课程</div>
               <div v-else-if="chatStore.courseCatalogError" class="course-picker__error" role="alert">
-                <AlertCircle :size="16" />{{ courseSelectionError || chatStore.courseCatalogError }}
+                <AlertCircle :size="16" />{{ userMessage(courseSelectionError || chatStore.courseCatalogError) }}
                 <button type="button" class="text-button" @click="chatStore.loadCourseOptions"><RefreshCw :size="15" />重试</button>
               </div>
               <div v-else-if="!chatStore.availableCourses.length" class="course-picker__state">暂无可用课程，可以使用通用对话。</div>
@@ -1092,9 +1219,9 @@ onUnmounted(() => chatStore.cleanup())
               </footer>
             </div>
           </div>
-          <span class="answer-status" :data-status="latestAssistant?.status || 'idle'" aria-live="polite">
+          <span v-if="latestAssistant && latestAssistant.status !== 'completed'" class="answer-status" :data-status="latestAssistant.status" aria-live="polite">
             <span class="status-dot" />
-            {{ latestAssistant ? statusText(latestAssistant.status) : '等待提问' }}
+            {{ latestAssistant ? statusText(latestAssistant) : '等待提问' }}
           </span>
         </div>
       </header>
@@ -1111,7 +1238,7 @@ onUnmounted(() => chatStore.cleanup())
           <div v-if="quizLoading" class="inline-state"><LoaderCircle :size="18" class="spin" />正在加载题目</div>
           <div v-else-if="quizError" class="inline-error" role="alert">
             <AlertCircle :size="18" />
-            <span>{{ quizError }}</span>
+            <span>{{ userMessage(quizError) }}</span>
             <button type="button" class="text-button" @click="loadQuizContext"><RefreshCw :size="16" />重试</button>
           </div>
           <div v-else-if="quizQuestion" class="quiz-context__body">
@@ -1189,7 +1316,7 @@ onUnmounted(() => chatStore.cleanup())
               <div class="assistant-label">
                 <span class="assistant-mark">E</span>
                 <strong>EduMatrix</strong>
-                <span>{{ statusText(message.status) }}</span>
+                <span>{{ statusText(message) }}</span>
                 <time>{{ formatTime(message.updatedAt || message.createdAt) }}</time>
               </div>
 
@@ -1201,12 +1328,14 @@ onUnmounted(() => chatStore.cleanup())
                 </div>
               </div>
 
-              <details v-if="workflowEventCount(message) || message.claims?.length || messageAgentAudit(message)" class="message-workflow" :open="message.intent === 'resource_generation' || message.intent === 'path_bundle'">
-                <summary><Network :size="16" />查看回答过程</summary>
+              <details v-if="workflowEventCount(message) || message.claims?.length || messageAgentAudit(message)" class="message-workflow">
+                <summary><Network :size="16" />{{ message.resourceJobId ? '查看生成过程' : '查看回答过程' }}</summary>
                 <AgentTimeline
                   :audit="messageAgentAudit(message)"
                   :run-events="message.runEvents"
                   :claims="message.claims || message.streamCheckpoint?.claims || []"
+                  :answer-revision="message.streamCheckpoint?.answerRevision"
+                  :answer-revision-history="message.streamCheckpoint?.answerRevisionHistory || []"
                    :source-refs="message.sourceRefs || []"
                    :return-to="route.fullPath"
                    hide-completed
@@ -1221,7 +1350,7 @@ onUnmounted(() => chatStore.cleanup())
               <div v-if="message.status === 'failed'" class="message-failure" role="alert">
                 <AlertCircle :size="18" />
                 <div>
-                  <strong>回答暂时中断</strong>
+                  <strong>{{ message.resourceJobId ? '学习资源还未准备好' : '回答暂时中断' }}</strong>
                   <span>{{ message.failure?.message || '已保留当前内容，可以继续回答。' }}</span>
                 </div>
               </div>
@@ -1237,24 +1366,28 @@ onUnmounted(() => chatStore.cleanup())
               </button>
 
               <div v-if="message.resourceLinks?.length" class="resource-link-list" data-testid="chat-compact-resource-links">
-                <button v-for="link in message.resourceLinks" :key="`${link.type}-${link.taskId}`" type="button" @click.stop="openResourceLink(link)">
+                <button v-for="link in message.resourceLinks" :key="`${link.type}-${link.taskId}`" type="button" @click.stop="openResourceLink(link, message)">
                   <Library :size="17" />
-                  <span><strong>{{ link.title }}</strong><small>{{ link.status === 'completed' ? '已生成' : '正在学习空间中生成' }}</small></span>
+                  <span><strong>{{ link.title }}</strong><small>{{ link.status === 'completed' ? '已生成' : link.status === 'failed' ? '需要重试' : '正在学习空间中准备' }}</small></span>
                   <ExternalLink :size="15" />
                 </button>
               </div>
 
               <div class="message-actions">
-                <button v-if="['stopped', 'failed'].includes(message.status)" type="button" class="text-button" @click.stop="continueResponse(message.id)">
+                <ReadAloudButton v-if="message.status === 'completed'" :text="message.content" />
+                <button v-if="message.resourceJobId" type="button" class="text-button" @click.stop="router.push(`/workspace/resources/bundles/${message.resourceJobId}`)">
+                  <Library :size="16" />{{ resourceAutomation(message).state === 'completed' ? '查看资源包' : '查看准备进度' }}
+                </button>
+                <button v-else-if="['stopped', 'failed'].includes(message.status)" type="button" class="text-button" @click.stop="continueResponse(message.id)">
                   <RefreshCw :size="16" />继续回答
                 </button>
-                <button v-if="message.status === 'completed'" type="button" class="text-button" @click.stop="startResourceFromMessage(message)">
+                <button v-if="message.status === 'completed' && !message.resourceJobId" type="button" class="text-button" @click.stop="startResourceFromMessage(message)">
                   <Plus :size="16" />在输入框生成资源
                 </button>
-                <button v-if="message.sourceRefs?.length" type="button" class="text-button" @click.stop="activeEvidenceMessageId = message.id">
+                <button v-if="message.sourceRefs?.length" type="button" class="text-button" @click.stop="showMessageEvidence(message, 'course')">
                   <BookOpen :size="16" />参考内容
                 </button>
-                <button v-if="messageAgentAudit(message)" type="button" class="text-button" @click.stop="activeEvidenceMessageId = message.id">
+                <button v-if="messageAgentAudit(message)" type="button" class="text-button" @click.stop="showMessageEvidence(message, 'trace')">
                   <Network :size="16" />AI 协作
                 </button>
               </div>
@@ -1346,12 +1479,17 @@ onUnmounted(() => chatStore.cleanup())
         </div>
 
         <div class="composer-box">
+          <button v-if="resourceSourceMessageId" type="button" class="resource-picker-trigger"
+            aria-label="取消引用所选回答" @click="resourceSourceMessageId = ''">
+            <span>基于所选回答</span><X :size="14" />
+          </button>
           <textarea
             v-model="draft"
             class="composer-input"
             rows="3"
             :placeholder="composerPlaceholder"
             aria-label="输入问题"
+            :disabled="conversationBusy"
             @keydown="onComposerKeydown"
           />
           <div class="composer-tools">
@@ -1360,10 +1498,11 @@ onUnmounted(() => chatStore.cleanup())
               hidden
               type="file"
               multiple
-              accept=".ppt,.pdf,.pptx,.docx,.md,.txt,.png,.jpg,.jpeg,.webp"
+              :disabled="conversationBusy || uploading"
+              :accept="preferences.imageAnalysis ? '.ppt,.pdf,.pptx,.docx,.md,.txt,.png,.jpg,.jpeg,.webp' : '.ppt,.pdf,.pptx,.docx,.md,.txt'"
               @change="chooseFiles"
             />
-            <button type="button" class="icon-button" title="添加附件" aria-label="添加附件" :disabled="uploading" @click="fileInput?.click()">
+            <button type="button" class="icon-button" title="添加附件" aria-label="添加附件" :disabled="conversationBusy || uploading" @click="fileInput?.click()">
               <LoaderCircle v-if="uploading" :size="18" class="spin" />
               <Paperclip v-else :size="18" />
             </button>
@@ -1398,30 +1537,27 @@ onUnmounted(() => chatStore.cleanup())
                   <component :is="option.icon" :size="16" />
                   <span>{{ option.label }}</span>
                 </label>
-                <p v-if="composerResourceTypes.length" class="resource-picker-hint">输入生成要求后发送，将在同一 Chat 中展示规划、协作、审核和发布过程。</p>
+                <p v-if="composerResourceTypes.length" class="resource-picker-hint">输入你的学习要求后发送，可以在这段对话中查看资源准备进展。</p>
                 <p v-else class="resource-picker-hint">选择一种或多种资源，输入框会显示生成要求模板。</p>
               </div>
             </div>
-            <span class="composer-context" data-testid="chat-composer-context">
-              {{ currentCourseTitle }}<span v-if="currentKnowledgePointId"> · {{ currentKnowledgePointTitle }}</span>
-            </span>
-            <span v-if="sendDisabledReason" class="send-reason">{{ sendDisabledReason }}</span>
+            <span v-if="sendDisabledReason && hasDraftContent && !chatStore.submitting" class="send-reason">{{ sendDisabledReason }}</span>
             <button v-if="chatStore.sending" type="button" class="stop-button" @click="stopResponse">
               <Square :size="16" />停止
             </button>
             <button v-else type="button" class="send-button" :disabled="!canSend" @click="sendMessage()">
-              <Send :size="17" />发送
+              <Send :size="17" />{{ chatStore.submitting ? '发送中…' : '发送' }}
             </button>
           </div>
         </div>
 
-        <div v-if="chatStore.pendingSend" class="composer-recovery" role="alert">
+        <div v-if="chatStore.pendingSend && !chatStore.submitting" class="composer-recovery" role="alert">
           <AlertCircle :size="17" />
-          <span>问题尚未成功提交，内容已保留。</span>
-          <button type="button" class="text-button" @click="retryPendingMessage"><RefreshCw :size="16" />重试发送</button>
+          <span>{{ chatStore._pendingRetry ? '连接恢复后会自动继续准备资源。' : '问题尚未成功提交，内容已保留。' }}</span>
+          <button v-if="!chatStore._pendingRetry" type="button" class="text-button" @click="retryPendingMessage"><RefreshCw :size="16" />重试发送</button>
         </div>
-        <p v-if="localError || chatStore.error || chatStore.attachmentError" class="composer-error" role="alert">
-          <AlertCircle :size="17" />{{ localError || chatStore.attachmentError || chatStore.error }}
+        <p v-if="!chatStore._pendingRetry && (localError || chatStore.error || chatStore.attachmentError)" class="composer-error" role="alert">
+          <AlertCircle :size="17" />{{ userMessage(localError || chatStore.attachmentError || chatStore.error) }}
         </p>
       </footer>
     </section>
@@ -1450,35 +1586,27 @@ onUnmounted(() => chatStore.cleanup())
 
       <template v-if="!evidenceRailCollapsed">
         <nav class="evidence-tabs" aria-label="学习详情标签">
-          <button type="button" :class="{ active: evidenceTab === 'trace' }" data-testid="chat-tab-trace" @click="evidenceTab = 'trace'">回答过程</button>
+          <button type="button" :class="{ active: evidenceTab === 'trace' }" data-testid="chat-tab-trace" @click="evidenceTab = 'trace'">{{ evidenceMessage?.resourceJobId ? '生成过程' : '回答过程' }}</button>
           <button type="button" :class="{ active: evidenceTab === 'course' }" data-testid="chat-tab-course" @click="evidenceTab = 'course'">相关内容</button>
           <button type="button" :class="{ active: evidenceTab === 'attachments' }" data-testid="chat-tab-attachments" @click="evidenceTab = 'attachments'">附件</button>
         </nav>
 
         <template v-if="evidenceTab === 'trace'">
           <section class="evidence-section" data-testid="chat-processing-state">
-            <header><Clock3 :size="17" /><strong>回答状态</strong></header>
+            <header><Clock3 :size="17" /><strong>{{ evidenceMessage?.resourceJobId ? '资源状态' : '回答状态' }}</strong></header>
             <dl v-if="evidenceMessage">
-              <div><dt>状态</dt><dd>{{ statusText(evidenceMessage.status) }}</dd></div>
-              <div><dt>已接收</dt><dd>{{ evidenceMessage.streamCheckpoint?.receivedCharacters || evidenceMessage.content?.length || 0 }} 字</dd></div>
+              <div><dt>状态</dt><dd>{{ statusText(evidenceMessage) }}</dd></div>
+
             </dl>
             <p v-else class="evidence-empty">当前还没有回答记录。</p>
-          </section>
-          <section v-if="evidenceProfileAdaptation" class="evidence-section profile-adaptation-section" data-testid="chat-profile-adaptation">
-            <header><Sparkles :size="17" /><strong>为你调整的学习方式</strong></header>
-            <p v-if="evidenceProfileAdaptationSummary" class="profile-adaptation-summary">{{ evidenceProfileAdaptationSummary }}</p>
-            <dl>
-              <div><dt>难度</dt><dd>{{ evidenceProfileAdaptation.difficulty_label || '自适应' }}</dd></div>
-              <div><dt>支架</dt><dd>{{ evidenceProfileAdaptation.scaffolding_level || '适中' }}</dd></div>
-              <div><dt>表达</dt><dd>{{ evidenceProfileAdaptation.explanation_style || '清楚易懂' }}</dd></div>
-              <div><dt>练习</dt><dd>{{ evidenceProfileAdaptation.practice_strategy || '按掌握度安排' }}</dd></div>
-            </dl>
           </section>
           <section v-if="evidenceAgentAudit || evidenceRunEvents.length || evidenceClaims.length" class="evidence-section evidence-section--agent" data-testid="chat-agent-audit">
             <AgentTimeline
               :audit="evidenceAgentAudit"
               :run-events="evidenceRunEvents"
                :claims="evidenceClaims"
+               :answer-revision="evidenceMessage?.streamCheckpoint?.answerRevision"
+               :answer-revision-history="evidenceMessage?.streamCheckpoint?.answerRevisionHistory || []"
                :source-refs="evidenceSourceRefs"
                :return-to="route.fullPath"
                hide-completed
@@ -1489,7 +1617,7 @@ onUnmounted(() => chatStore.cleanup())
             <header><ListChecks :size="17" /><strong>生成资源</strong></header>
             <div class="source-list">
               <button v-for="link in evidenceResourceLinks" :key="`${link.type}-${link.taskId}`" type="button" @click="openResourceLink(link)">
-                <span><strong>{{ link.title }}</strong><small>{{ link.status }}</small></span>
+                <span><strong>{{ link.title }}</strong><small>{{ displayLabel(link.status) }}</small></span>
                 <ExternalLink :size="15" />
               </button>
             </div>
@@ -1506,7 +1634,7 @@ onUnmounted(() => chatStore.cleanup())
               <div v-for="item in contextRows(evidenceContextRefs)" :key="item.key">
                 <span>{{ item.label }}</span>
                 <strong>{{ item.title }}</strong>
-                <small v-if="item.status">{{ item.status }}</small>
+                <small v-if="item.status">{{ displayLabel(item.status) }}</small>
               </div>
             </div>
             <div v-else class="context-list">
@@ -1517,19 +1645,30 @@ onUnmounted(() => chatStore.cleanup())
           <section class="evidence-section" data-testid="chat-source-list">
             <header><Library :size="17" /><strong>相关学习内容</strong></header>
             <div v-if="evidenceSourceRefs.length" class="source-list">
-              <div v-for="source in evidenceSourceRefs" :key="source.sourceRefId || source.source_ref_id || source.id" class="course-source-entry">
-                <SourceCitation
-                  :source="source"
-                  :return-to="route.fullPath"
-                  compact
-                />
-                <small class="course-source-meta">
-                  {{ source.available === false ? '当前暂时无法打开' : (source.locationLabel || source.location_label || '课程相关章节') }}
-                </small>
-              </div>
+              <section v-for="group in evidenceSourceGroups" :key="group.key" class="course-source-group">
+                <h3 v-if="group.passages.length > 1">{{ learningText(group.title, '课程来源') }}</h3>
+                <div v-for="passage in group.passages" :key="passage.key" class="course-source-entry">
+                  <SourceCitation
+                    :source="passage.source"
+                    :display-title="group.passages.length > 1 ? passagePreview(passage.source) : ''"
+                    :hide-location="group.passages.length > 1"
+                    :return-to="route.fullPath"
+                    compact
+                  />
+                </div>
+              </section>
             </div>
             <p v-else class="evidence-empty">本轮没有附加阅读内容。</p>
           </section>
+          <details v-if="evidenceCandidateSourceRefs.length" class="evidence-section" data-testid="chat-candidate-source-list">
+            <summary>候选但未采用来源</summary>
+            <div class="source-list">
+              <div v-for="source in evidenceCandidateSourceRefs" :key="sourcePassageKey(source)" class="course-source-entry">
+                <SourceCitation :source="source" :return-to="route.fullPath" compact />
+                <small class="course-source-meta">{{ learningText(source.reason || source.reasonMessage || '未作为本轮回答依据') }}</small>
+              </div>
+            </div>
+          </details>
           <button v-if="currentCourseId" type="button" class="return-button" data-testid="chat-open-course-knowledge" @click="openCourseKnowledge">
             <BookOpen :size="16" />打开课程知识库
           </button>
@@ -1564,27 +1703,27 @@ onUnmounted(() => chatStore.cleanup())
 
 <style scoped>
 .chat-workspace {
-  --chat-page: #f1f4f3;
-  --chat-surface: #ffffff;
-  --chat-text: #17242b;
-  --chat-primary: #24485a;
-  --chat-secondary: #526773;
-  --chat-muted: #71818a;
-  --chat-border: #d9e0df;
-  --chat-border-strong: #b7c4c5;
-  --chat-subtle: #edf2f1;
-  --chat-danger: #9a463d;
+  --chat-page: var(--color-page);
+  --chat-surface: var(--color-surface);
+  --chat-text: var(--color-text);
+  --chat-primary: var(--color-accent);
+  --chat-secondary: var(--color-text-secondary);
+  --chat-muted: var(--color-text-muted);
+  --chat-border: var(--color-border);
+  --chat-border-strong: var(--color-border-strong);
+  --chat-subtle: var(--color-accent-soft);
+  --chat-danger: var(--color-danger);
   display: grid;
   width: 100%;
-  height: calc(100vh - var(--topbar-height) - 56px);
+  height: calc(100dvh - var(--topbar-height) - 76px);
   min-width: 0;
-  min-height: 620px;
+  min-height: 560px;
   grid-template-columns: clamp(236px, 15vw, 300px) minmax(0, 1fr) clamp(304px, 20vw, 392px);
-  border: 1px solid var(--chat-border);
-  border-radius: 12px;
+  border: 0;
+  border-radius: var(--radius-panel);
   overflow: hidden;
   color: var(--chat-text);
-  background: var(--chat-page);
+  background: var(--gradient-paper);
   font-family: var(--font-sans);
 }
 
@@ -1607,23 +1746,25 @@ button {
 .answer-workspace {
   min-width: 0;
   min-height: 0;
+
+  background: var(--gradient-paper);
 }
 
 .conversation-rail,
 .evidence-rail {
   display: flex;
   flex-direction: column;
-  background: var(--chat-surface);
+  background: var(--color-surface);
 }
 
 .conversation-rail {
-  border-right: 1px solid var(--chat-border);
+  border-right: 0;
 }
 
 .evidence-rail {
   overflow-y: auto;
-  border-left: 1px solid var(--chat-border);
-  background: #f8faf9;
+  border-left: 0;
+  background: var(--gradient-rail);
 }
 
 .evidence-rail.collapsed {
@@ -1643,7 +1784,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid var(--chat-border);
+  border-bottom: 0;
 }
 
 .rail-heading,
@@ -1654,7 +1795,7 @@ button {
 .rail-heading > div,
 .evidence-heading {
   color: var(--chat-secondary);
-  font-size: 13px;
+  font-size: 14px;
   letter-spacing: .02em;
 }
 
@@ -1678,7 +1819,7 @@ button {
   place-items: center;
   border: 1px solid var(--chat-border);
   border-radius: 6px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
   cursor: pointer;
 }
 
@@ -1776,7 +1917,7 @@ button {
 
 .conversation-copy small {
   color: var(--chat-muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .archive-action {
@@ -1800,59 +1941,23 @@ button {
 
 .archive-action:hover {
   color: var(--chat-text);
-  background: #ffffff;
-}
-
-.rail-footer {
-  display: flex;
-  min-height: 64px;
-  align-items: center;
-  gap: 10px;
-  padding: 0 18px;
-  border-top: 1px solid var(--chat-border);
-  color: var(--chat-secondary);
-  font-size: 14px;
-}
-
-.rail-footer span {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rail-footer small {
-  overflow: hidden;
-  color: var(--chat-muted);
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rail-footer strong {
-  overflow: hidden;
-  color: var(--chat-text);
-  font-size: 14px;
-  font-weight: 620;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: var(--color-surface);
 }
 
 .answer-workspace {
   display: grid;
-  grid-template-rows: 72px minmax(0, 1fr) auto;
-  background: var(--chat-surface);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--gradient-paper);
 }
 
 .answer-heading {
-  padding: 0 clamp(20px, 2.2vw, 36px);
-  background: var(--chat-surface);
+  padding: 10px clamp(20px, 2.2vw, 36px);
+  background: var(--gradient-paper);
 }
 
 .answer-heading > div:first-child {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   gap: 4px;
 }
@@ -1891,8 +1996,8 @@ button {
   border: 1px solid var(--chat-border);
   border-radius: 7px;
   color: var(--chat-secondary);
-  background: var(--chat-surface);
-  font-size: 13px;
+  background: var(--color-surface);
+  font-size: 14px;
 }
 
 .status-dot {
@@ -1925,7 +2030,7 @@ button {
   border: 1px solid var(--chat-border);
   border-radius: 6px;
   padding: 0 10px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
   color: var(--chat-secondary);
   font-size: 14px;
   cursor: pointer;
@@ -1958,7 +2063,7 @@ button {
   border: 1px solid var(--chat-border);
   border-radius: 8px;
   padding: 14px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
   box-shadow: 0 16px 34px rgb(6 20 27 / 14%);
 }
 
@@ -1980,27 +2085,6 @@ button {
   color: var(--chat-muted);
   font-size: 14px;
   line-height: 1.5;
-}
-
-.course-picker__search {
-  display: flex;
-  min-height: 34px;
-  align-items: center;
-  gap: 7px;
-  border: 1px solid var(--chat-border);
-  border-radius: 6px;
-  padding: 0 9px;
-  color: var(--chat-muted);
-}
-
-.course-picker__search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  color: var(--chat-text);
-  background: transparent;
-  font-size: 14px;
 }
 
 .course-picker__group {
@@ -2080,7 +2164,7 @@ button {
 .message-scroller {
   min-height: 0;
   overflow-y: auto;
-  background: #fbfcfb;
+  background: var(--gradient-paper);
   scrollbar-gutter: stable;
 }
 
@@ -2123,7 +2207,7 @@ button {
   border: 1px solid var(--chat-border);
   border-radius: 8px;
   padding: 18px;
-  background: var(--chat-page);
+  background: transparent;
 }
 
 .quiz-context__summary {
@@ -2164,7 +2248,7 @@ button {
   border: 1px solid var(--chat-border-strong);
   border-radius: 8px;
   padding: 0 11px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
   color: var(--chat-primary);
   font-family: inherit;
   font-size: 14px;
@@ -2205,7 +2289,7 @@ button {
   border: 1px solid var(--chat-border);
   border-radius: 8px;
   color: var(--chat-secondary);
-  background: var(--chat-page);
+  background: transparent;
   font-size: 14px;
 }
 
@@ -2235,7 +2319,7 @@ button {
   border: 1px solid var(--chat-border);
   border-radius: 8px;
   color: var(--chat-primary);
-  background: var(--chat-page);
+  background: transparent;
 }
 
 .empty-conversation h2 {
@@ -2375,7 +2459,7 @@ button {
   border: 1px solid var(--chat-border);
   padding: 10px 12px;
   color: var(--chat-danger);
-  background: #fff5f3;
+  background: var(--color-danger-soft);
 }
 
 .message-failure > div {
@@ -2387,7 +2471,7 @@ button {
   margin: 14px 0 0 36px;
   border: 1px solid var(--chat-border);
   border-radius: 8px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
 }
 
 .message-workflow summary {
@@ -2427,7 +2511,7 @@ button {
   border: 1px solid var(--chat-border);
   border-radius: 6px;
   padding: 9px 10px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
   text-align: left;
   cursor: pointer;
 }
@@ -2435,7 +2519,7 @@ button {
 .resource-link-list button:hover,
 .source-list button:hover {
   border-color: var(--chat-border-strong);
-  background: var(--chat-page);
+  background: transparent;
 }
 
 .resource-link-list button > span,
@@ -2485,7 +2569,7 @@ button {
   border: 1px solid var(--chat-border);
   border-radius: 6px;
   padding: 0 10px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
   font-size: 14px;
   cursor: pointer;
 }
@@ -2494,7 +2578,7 @@ button {
 .confirm-button:hover,
 .return-button:hover {
   border-color: var(--chat-border-strong);
-  background: var(--chat-page);
+  background: transparent;
 }
 
 .composer {
@@ -2502,7 +2586,9 @@ button {
   z-index: 5;
   border-top: 1px solid var(--chat-border);
   padding: 14px clamp(20px, 2.2vw, 36px) 18px;
-  background: var(--chat-surface);
+  background: transparent;
+
+  box-shadow: none;
 }
 
 .attachment-queue {
@@ -2510,7 +2596,7 @@ button {
   overflow: hidden;
   border: 1px solid var(--chat-border);
   border-radius: 8px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
 }
 
 .attachment-queue__header {
@@ -2520,7 +2606,7 @@ button {
   gap: 12px;
   min-height: 44px;
   padding: 7px 10px 7px 12px;
-  border-bottom: 1px solid var(--chat-border);
+  border-bottom: 0;
 }
 
 .attachment-queue__summary {
@@ -2548,7 +2634,7 @@ button {
   border: 1px solid var(--chat-border-strong);
   border-radius: 6px;
   color: var(--chat-secondary);
-  background: var(--chat-surface);
+  background: var(--color-surface);
   cursor: pointer;
   font-size: 14px;
 }
@@ -2577,7 +2663,7 @@ button {
   gap: 8px;
   padding: 8px 9px;
   overflow: hidden;
-  border-bottom: 1px solid var(--chat-border);
+  border-bottom: 0;
 }
 
 .attachment-row:last-child {
@@ -2606,7 +2692,7 @@ button {
   border: 1px solid var(--chat-border-strong);
   border-radius: 4px;
   color: transparent;
-  background: var(--chat-surface);
+  background: var(--color-surface);
 }
 
 .attachment-select input:checked + span {
@@ -2673,8 +2759,10 @@ button {
 
 .composer-box {
   border: 1px solid var(--chat-border-strong);
-  border-radius: 8px;
-  background: var(--chat-surface);
+  border-radius: 16px;
+  background: var(--color-surface);
+
+  box-shadow: 0 6px 24px rgb(68 53 52 / 5%);
 }
 
 .composer-box:focus-within {
@@ -2761,7 +2849,7 @@ button {
   padding: 12px;
   border: 1px solid var(--chat-border-strong);
   border-radius: 8px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
   box-shadow: 0 14px 30px rgba(17, 33, 45, .14);
 }
 
@@ -2775,7 +2863,7 @@ button {
 .resource-picker-panel header {
   justify-content: space-between;
   padding-bottom: 4px;
-  border-bottom: 1px solid var(--chat-border);
+  border-bottom: 0;
 }
 
 .resource-picker-panel header span {
@@ -2830,17 +2918,11 @@ button {
   line-height: 1.45;
 }
 
-.composer-context,
 .send-reason {
   overflow: hidden;
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.composer-context {
-  max-width: 210px;
-  color: var(--chat-secondary);
 }
 
 .send-reason {
@@ -2851,10 +2933,16 @@ button {
 .send-button,
 .stop-button {
   min-width: 78px;
+  margin-left: auto;
   border-color: var(--chat-primary);
   color: #ffffff;
   background: var(--chat-primary);
   font-weight: 620;
+}
+
+.send-reason + .send-button,
+.send-reason + .stop-button {
+  margin-left: 0;
 }
 
 .send-button:disabled {
@@ -2881,16 +2969,16 @@ button {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--chat-surface);
+  background: var(--color-surface);
 }
 
 .evidence-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
-  border-bottom: 1px solid var(--chat-border);
+  border-bottom: 0;
   padding: 8px;
-  background: var(--chat-surface);
+  background: var(--color-surface);
 }
 
 .evidence-tabs button {
@@ -2908,11 +2996,11 @@ button {
 .evidence-tabs button.active {
   border-color: var(--chat-border);
   color: var(--chat-text);
-  background: var(--chat-page);
+  background: transparent;
 }
 
 .evidence-section {
-  border-bottom: 1px solid var(--chat-border);
+  border-bottom: 0;
   padding: 16px;
 }
 
@@ -3002,6 +3090,10 @@ button {
   gap: 4px;
   min-width: 0;
 }
+
+.course-source-group { min-width: 0; }
+.course-source-group h3 { margin: 8px 0 5px; font-size: 15px; line-height: 1.5; color: var(--chat-text); }
+.course-source-group .course-source-entry { border-left: 1px solid var(--color-border); padding-left: 10px; }
 
 .course-source-meta {
   padding-left: 2px;
@@ -3108,7 +3200,7 @@ textarea:focus-visible,
 }
 
 .conversation-rail {
-  background: #f8faf9;
+  background: var(--gradient-rail);
 }
 
 .rail-heading > div {
@@ -3146,10 +3238,7 @@ textarea:focus-visible,
   transform: translateY(1px);
 }
 
-.conversation-copy strong,
-.conversation-copy small,
-.rail-footer strong,
-.rail-footer small {
+.conversation-copy strong {
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -3172,27 +3261,30 @@ textarea:focus-visible,
 
 .answer-heading__context,
 .answer-heading__title {
+  min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
   white-space: normal !important;
 }
 
 .answer-heading__context {
+  white-space: nowrap !important;
   color: var(--chat-muted) !important;
-  font-size: 13px !important;
+  font-size: 14px !important;
   line-height: 1.35;
 }
 
 .answer-heading__title {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap !important;
   line-height: 1.3;
 }
 
 .answer-heading__actions {
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -3213,6 +3305,9 @@ textarea:focus-visible,
 }
 
 .empty-conversation h2 {
+  font-family: var(--font-editorial);
+  font-weight: 400;
+  font-size: 32px;
   max-width: 20ch;
   line-height: 1.25;
 }
@@ -3228,7 +3323,7 @@ textarea:focus-visible,
 .user-message {
   max-width: min(78%, 660px);
   padding: 13px 16px;
-  background: #eaf0ef;
+  background: var(--gradient-highlight);
 }
 
 .user-message p {
@@ -3258,7 +3353,7 @@ textarea:focus-visible,
 .assistant-answer :deep(.inc-heading) {
   margin-top: 28px;
   margin-bottom: 12px;
-  color: #1c3947;
+  color: var(--color-text);
 }
 
 .assistant-answer :deep(.inc-heading--1) {
@@ -3287,7 +3382,7 @@ textarea:focus-visible,
   margin-block: 20px;
   border-left-width: 2px;
   padding: 13px 17px;
-  background: #f1f5f4;
+  background: var(--color-surface-subtle);
 }
 
 .assistant-answer :deep(.code-block-wrapper),
@@ -3350,12 +3445,6 @@ textarea:focus-visible,
   row-gap: 6px;
 }
 
-.composer-context {
-  max-width: min(300px, 28%);
-  overflow-wrap: anywhere;
-  white-space: nowrap;
-}
-
 .send-reason {
   max-width: 250px;
   overflow-wrap: anywhere;
@@ -3365,7 +3454,7 @@ textarea:focus-visible,
 
 .evidence-rail.collapsed .evidence-heading button {
   border-color: var(--chat-border-strong);
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .evidence-tabs {

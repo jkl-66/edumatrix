@@ -5,7 +5,7 @@ from fastapi import APIRouter,Depends,HTTPException,status
 from pydantic import Field
 from app.auth import get_current_user
 from app.content_review import ContentReviewError,case_payload,queue,submit_review,transition
-from app.database import DBUser,run_db_op
+from app.database import DBArtifactVersion, DBUser,run_db_op
 from app.m2_contracts import StrictModel
 
 router=APIRouter(prefix="/api/v1/content-review",tags=["content-review"])
@@ -39,7 +39,10 @@ async def get_case(case_id:str,current_user:DBUser=Depends(get_current_user)):
     def operation(db):
         items=[item for item in queue(db,actor=current_user) if item["id"]==case_id]
         if not items:raise ContentReviewError("review_case_unknown","review case does not exist or is not visible")
-        return items[0]
+        detail = items[0]
+        version = db.get(DBArtifactVersion, detail["version"]["id"])
+        detail["version"]["content"] = version.content
+        return detail
     return await run_db_op(_op(operation))
 @router.post("/cases",status_code=201)
 async def post_case(payload:SubmitInput,current_user:DBUser=Depends(get_current_user)):

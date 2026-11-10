@@ -15,6 +15,7 @@ from app.database import (
     DBUser,
 )
 from app.diagnostic_generation import diagnostic_blueprint_payload
+from app.m5_assessment_core import is_diagnostic_abstention, learner_question_content_issue
 
 
 UNDERSTANDING_LEVELS = {"unfamiliar", "partial", "mostly", "clear"}
@@ -81,6 +82,8 @@ def _owned_session(session: Any, *, user: DBUser, session_id: str) -> DBDiagnost
 
 
 def _answer_complete(question_type: str, answer: dict[str, Any]) -> bool:
+    if is_diagnostic_abstention(answer):
+        return True
     if question_type == "single_choice":
         return bool(str(answer.get("choice", "")).strip())
     if question_type == "multiple_choice":
@@ -205,6 +208,13 @@ def submit_diagnostic_session(
     if work.status == "submitted":
         return work
     blueprint = _owned_blueprint(session, user=user, blueprint_id=work.blueprint_id)
+    for version_id in blueprint.question_version_ids or []:
+        version = session.get(DBAssessmentQuestionVersion, version_id)
+        if version is not None:
+            question = session.get(DBAssessmentQuestion, version.question_id)
+            issue = learner_question_content_issue(version, question)
+            if issue:
+                raise DiagnosticSessionError("question_content_incomplete", issue)
     responses = {
         row.question_version_id: row
         for row in session.query(DBDiagnosticResponseDraft).filter_by(session_id=work.id).all()

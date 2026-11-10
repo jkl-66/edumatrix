@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 import asyncio
+import json
 
 import pytest
 from fastapi import HTTPException
@@ -34,7 +35,7 @@ def _session():
             role="student", is_active=True,
         ),
         DBCourse(
-            id="stream-course", version="1", title="Stream course", visibility="public",
+            id="stream-course", version="1", title="Stream course", visibility="public", status="published",
             manifest_version="1",
         ),
         DBSourceDocument(
@@ -115,7 +116,8 @@ def test_verified_tutor_sources_drive_cited_deterministic_answer():
         role="自适应助教",
     )
 
-    assert "[stream-ref]" in answer
+    assert "关键词检索" in answer and "向量检索" in answer
+    # Canonical citations are carried by resources, not raw IDs in prose.
     assert "Recall@K" in answer
     assert resources[0]["citations"][0]["source_ref_id"] == "stream-ref"
     assert resources[0]["content"] == sources[0]["quote"]
@@ -219,6 +221,18 @@ def test_intent_classification_records_invalid_schema_and_safely_allows(monkeypa
     assert (row.status, row.error_code) == ("failed", "structured_output_invalid")
 
 
+@pytest.mark.parametrize("kind", ["lookup", "learner_lookup", "explanation", "practice", "reasoning", "conversation"])
+def test_question_kind_survives_shared_intent_validation(monkeypatch, kind):
+    session, _ = _session()
+    monkeypatch.setattr("app.database.SessionLocal", lambda: session)
+    result = asyncio.run(stream_api._classify_academic_intent(
+        _IntentBackend(json.dumps({"is_academic": True, "reason": "范围已确认", "reply": "", "question_kind": kind})),
+        "课程提问", owner_public_id="stream-owner", course_id="stream-course",
+    ))
+    assert result["question_kind"] == kind
+    assert session.query(DBModelCall).one().status == "completed"
+
+
 class _VisionBackend:
     model = "vision-test-model"
 
@@ -272,7 +286,7 @@ def test_deterministic_ocr_never_fabricates_image_contents():
         AsyncDeterministicEducationLLM(),
     ))
 
-    assert result.startswith("【OCR/多模态图片解析不可用】")
+    assert "无法读取这张图片的内容" in result
     assert "4x4" not in result
     assert "提取成功" not in result
 

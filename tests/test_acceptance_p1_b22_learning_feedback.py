@@ -14,6 +14,7 @@ from app.database import (
     DBKnowledgePoint,
     DBLearningEvent,
     DBLearningEventConsumption,
+    DBSourceDocument,
     DBStudentProfile,
     DBUser,
 )
@@ -60,6 +61,8 @@ def _session():
     session.add_all([
         owner,
         course,
+        DBSourceDocument(id="source-p1-b22", course_id=COURSE, title="课程资料",
+                         filename="source.md", file_format="md", content_hash="a" * 64),
         DBKnowledgePoint(
             id=POINT_A,
             domain_pack="p1-b22",

@@ -71,7 +71,12 @@ def test_wrong_practice_creates_candidate_but_waits_for_learner_decision(monkeyp
         assert session.query(DBLearningEvent).filter_by(
             owner_public_id=learner.public_id, event_type="misconception_decided",
         ).count() == 0
-        assert session.query(DBProfileSnapshot).filter_by(owner_public_id=learner.public_id).count() == snapshot_count
+        # Actual practice updates learning evidence; an unconfirmed explanation does not.
+        assert session.query(DBProfileSnapshot).filter_by(owner_public_id=learner.public_id).count() > snapshot_count
+        assert session.query(DBProfileEvidence).filter_by(
+            owner_public_id=learner.public_id, source_type="misconception_user_statement",
+        ).count() == 0
+        assert session.query(DBLearningEvent).filter_by(owner_public_id=learner.public_id).count() > 0
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         session.close()

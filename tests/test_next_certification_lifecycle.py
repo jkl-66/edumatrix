@@ -26,6 +26,7 @@ def test_learner_scope_and_notification_owner():
  with pytest.raises(CertificationLifecycleError) as exc:mark_read(db,actor=other,notice_id=notice.id)
  assert exc.value.code=='notification_forbidden'
 def test_api_and_immutable_event_trigger(monkeypatch):
+ monkeypatch.setattr("app.certification_lifecycle._now", lambda value=None: value or NOW)
  db,engine,manager,learner,_,cert,_=fixture();identity={'user':manager}
  with engine.begin() as c:c.exec_driver_sql("CREATE TRIGGER IF NOT EXISTS trg_cert_lifecycle_event_no_update BEFORE UPDATE ON certification_lifecycle_events BEGIN SELECT RAISE(ABORT, 'certification lifecycle event is immutable'); END")
  async def fake(op):return op(db)

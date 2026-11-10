@@ -189,7 +189,7 @@ def _assert_layout(page, viewport_name: str, screenshot_dir: Path):
 
 
 def test_profile_web_recommendation_two_desktop_viewports():
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import sync_playwright, expect
 
     screenshot_dir = Path(__file__).resolve().parents[1] / ".agents" / "input" / "acceptance-feedback" / "evidence" / "P1-B27"
     screenshot_dir.mkdir(parents=True, exist_ok=True)
@@ -197,8 +197,8 @@ def test_profile_web_recommendation_two_desktop_viewports():
     with _frontend_server() as base_url, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height, name in ((1440, 900, "1440x900"), (1366, 768, "1366x768")):
-                context = browser.new_context(viewport={"width": width, "height": height})
+            for width, height, name in ((1707, 876, "1707x876"), (1440, 900, "1440x900"), (1366, 768, "1366x768")):
+                context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1.5 if width == 1707 else 1)
                 context.add_init_script(
                     "localStorage.setItem('edumatrix_token', 'browser-token');"
                     "localStorage.setItem('edumatrix_role', 'student');"
@@ -214,8 +214,9 @@ def test_profile_web_recommendation_two_desktop_viewports():
                 page.get_by_test_id("discovery-search-input").fill("请推荐课程资料")
                 page.get_by_test_id("discovery-search-input").press("Enter")
                 page.get_by_test_id("discovery-query-plan").wait_for()
-                assert "deepseek-v4-flash" in page.get_by_test_id("discovery-query-plan").inner_text()
-                assert "卷积" in page.get_by_test_id("discovery-query-plan").inner_text()
+                expect(page.get_by_test_id("discovery-query-plan")).to_contain_text("结合当前学习情况查找")
+                expect(page.get_by_test_id("discovery-query-plan")).not_to_contain_text("reasoning")
+                expect(page.get_by_test_id("discovery-query-plan")).to_contain_text("卷积")
                 with page.expect_response("**/api/knowledge/discovery/candidates") as save_response:
                     page.get_by_role("button", name="保存为候选").first.click()
                 assert save_response.value.status == 200
@@ -224,15 +225,17 @@ def test_profile_web_recommendation_two_desktop_viewports():
                 page.get_by_test_id("discovery-search-input").fill("失败重试")
                 page.get_by_test_id("discovery-search-input").press("Enter")
                 page.get_by_text("联网搜索没有完成").wait_for()
-                page.get_by_role("button", name="使用原搜索词重试").click()
-                page.get_by_test_id("discovery-query-plan").wait_for()
+                with page.expect_response("**/api/knowledge/discovery/search?*") as retry_response:
+                    page.get_by_role("button", name="使用原搜索词重试").click()
+                assert retry_response.value.status == 200
+                expect(page.get_by_test_id("discovery-search-submit")).to_be_enabled()
 
                 page.get_by_test_id("discovery-course-select").select_option("browser-course-reg")
                 page.get_by_test_id("discovery-search-input").fill("专业资料")
                 page.get_by_test_id("discovery-search-input").press("Enter")
                 page.get_by_test_id("discovery-query-plan").wait_for()
-                assert "正则化" in page.get_by_test_id("discovery-query-plan").inner_text()
-                assert "机器学习进阶" in page.get_by_test_id("discovery-query-plan").inner_text()
+                expect(page.get_by_test_id("discovery-query-plan")).to_contain_text("正则化")
+                expect(page.get_by_test_id("discovery-query-plan")).to_contain_text("机器学习进阶")
                 assert not browser_errors, browser_errors
                 layout = _assert_layout(page, name, screenshot_dir)
                 browser_report.append({

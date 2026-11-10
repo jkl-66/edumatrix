@@ -97,6 +97,13 @@ def test_canonical_course_outline_and_source_ref_are_authorized_read_apis():
         assert outline.status_code == 200
         assert len(outline.json()) == 9
         assert outline.json()[0]["knowledge_points"]
+        # The shelf must classify every document before opening its detail.
+        with SessionLocal() as session:
+            for chapter in outline.json():
+                source = session.get(DBSourceDocument, chapter["source_document_id"])
+                assert chapter["source_title"] == source.title
+                assert chapter["source_file_format"] == source.file_format
+                assert chapter["source_processing_status"] == source.processing_status
 
         source_ref_id = outline.json()[0]["source_ref_id"]
         source_ref = client.get(f"/api/v1/source-refs/{source_ref_id}", headers=headers)

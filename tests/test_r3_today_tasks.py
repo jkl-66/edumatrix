@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -63,7 +64,12 @@ def test_today_tasks_are_capped_explainable_and_shared_by_api_and_workspace(monk
         assert [item["node_id"] for item in tasks] == [item["node_id"] for item in api["items"]]
         assert tasks[0]["node_id"] == "demo-task-lzz-read-01"
         assert tasks[0]["task_kind"] == "path"
-        assert tasks[0]["continue_route"] == "/workspace?node_id=demo-task-lzz-read-01"
+        reading = urlsplit(tasks[0]["continue_route"])
+        assert reading.path == "/knowledge/documents/demo-src-04"
+        reading_context = parse_qs(reading.query)
+        assert reading_context["course_id"] == [COURSE_ID]
+        assert reading_context["chapter_id"] == ["demo-ch-07"]
+        assert reading_context["return_to"] == [f"/workspace/path?course_id={COURSE_ID}&node_id=demo-task-lzz-read-01"]
         assert [item["task_kind"] for item in tasks[1:]] == ["review", "review"]
         assert all(item["estimate_minutes"] for item in tasks)
         assert all(item["completion_criteria"] for item in tasks)
@@ -88,7 +94,7 @@ def test_today_tasks_are_capped_explainable_and_shared_by_api_and_workspace(monk
         session.commit()
         advanced = workspace_overview(session, current_user=learner, course_id=COURSE_ID)
         assert advanced["today_tasks"][0]["node_id"] == "demo-task-lzz-lab-01"
-        assert advanced["next_action"]["route"] == "/workspace?node_id=demo-task-lzz-lab-01"
+        assert advanced["next_action"]["route"] == advanced["today_tasks"][0]["continue_route"]
     finally:
         session.close()
         engine.dispose()

@@ -6,7 +6,8 @@ import hashlib
 import json
 import asyncio
 import re
-from typing import Any, Literal
+from datetime import timezone
+from typing import Any, Callable, Literal
 
 from pydantic import Field
 
@@ -18,13 +19,16 @@ from app.database import (
     DBLearningEvent,
     DBProfileSnapshot,
     DBUser,
+    run_db_op,
 )
 from app.m1_repository import add_artifact_version
 from app.m2_contracts import StrictModel
-from app.learner_output import teacher_text
+from app.learner_output import feynman_material_text, teacher_text
+from app.m5_legacy_calls import audited_legacy_text_call
 from app.m5_learning import LearningEventInput, process_path_event, record_learning_event
-from app.m5_resources import canonical_resource_type
+from app.m5_resources import canonical_resource_type, resource_generation_blocker
 from app.schemas import ContextRef
+from app.model_evaluation_rules import MODEL_EVALUATION_INSTRUCTION
 from config import CONFIG
 from llm_client import (
     StructuredModelContentError,
@@ -168,6 +172,8 @@ class FeynmanState(StrictModel):
     session_id: str
     owner_public_id: str
     source_resource_id: str
+    learning_material: str = ""
+    active_requirements: dict[str, Any] | None = None
     source_resource_version_id: str
     source_resource_content_sha256: str
     title: str
@@ -196,14 +202,18 @@ class FeynmanState(StrictModel):
 
 
 def _source_resource(
-    db: Any, resource_id: str, owner: str,
+    db: Any, resource_id: str, owner: str, version_id: str | None = None,
 ) -> tuple[DBArtifact, DBArtifactVersion, dict[str, Any]]:
     artifact = db.get(DBArtifact, resource_id)
     if artifact is None:
         _fail("feynman_source_unknown", "费曼复述资源不存在")
     if artifact.owner_public_id != owner:
         _fail("feynman_source_forbidden", "费曼复述资源属于其他用户")
-    version = db.get(DBArtifactVersion, artifact.current_version_id)
+    version = db.get(DBArtifactVersion, version_id or artifact.current_version_id)
+    if version is None or version.artifact_id != artifact.id:
+        _fail("feynman_source_version_unknown", "这版复述材料暂时无法打开，请从资源历史重新选择。")
+    if reason := resource_generation_blocker(db, artifact, version.id):
+        _fail("resource_generation_incomplete", reason)
     metadata = dict(version.metadata_json or {}) if version else {}
     if version is None or canonical_resource_type(artifact.artifact_type, metadata) != "feynman":
         _fail("feynman_source_type_invalid", "目标资源不是费曼复述资源")
@@ -374,8 +384,9 @@ def _owned_session(
 
 def create_session(
     db: Any, *, owner: str, source_resource_id: str, idempotency_key: str,
+    source_resource_version_id: str | None = None,
 ) -> tuple[DBArtifact, DBArtifactVersion, FeynmanState, bool]:
-    source, source_version, metadata = _source_resource(db, source_resource_id, owner)
+    source, source_version, metadata = _source_resource(db, source_resource_id, owner, source_resource_version_id)
     session_id = _stable_id("feynman", owner, idempotency_key)
     request_hash = _digest({
         "source_resource_id": source.id,
@@ -437,12 +448,18 @@ def create_session(
         }),
     )
     adaptation = _adaptation_note(profile, len(recent), focus_terms, knowledge_title)
+    from app.resource_review_context import requirements_for
+    # Grade the selected immutable resource, never a later revision of its task.
+    # Legacy resources have no requirements snapshot and retain material-based grading.
+    requirements = requirements_for(metadata, ['feynman'])
     state = FeynmanState(
         session_id=session_id,
         owner_public_id=owner,
         source_resource_id=source.id,
         source_resource_version_id=source_version.id,
         source_resource_content_sha256=source_version.content_hash,
+        learning_material=source_version.content,
+        active_requirements=requirements,
         title=f"{knowledge_title} · 费曼复述",
         course_id=source.course_id,
         course_title=course.title if course else "当前课程",
@@ -481,12 +498,10 @@ def create_session(
     return artifact, version, state, True
 
 
-def _submitted_text(value: str | None, *, minimum: int, maximum: int, field: str) -> str:
+def _submitted_text(value: str | None, *, minimum: int, field: str) -> str:
     text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if len(text) < minimum:
         _fail(f"feynman_{field}_too_short", f"{field} 至少需要 {minimum} 个字符")
-    if len(text) > maximum:
-        _fail(f"feynman_{field}_too_long", f"{field} 不能超过 {maximum} 个字符")
     return text
 
 
@@ -513,16 +528,64 @@ def _live_model_backend() -> Any:
     )
 
 
-def _model_json(*, system: str, user: dict[str, Any], role: str) -> dict[str, Any]:
+def _model_json(
+    *, system: str, user: dict[str, Any], role: str, state: FeynmanState,
+    response_parser: Callable[[dict[str, Any]], Any] | None = None,
+) -> Any:
     backend = _live_model_backend()
 
-    async def call() -> dict[str, Any]:
-        raw = await backend.generate(
-            system,
-            json.dumps(user, ensure_ascii=False, sort_keys=True),
+    async def call() -> Any:
+        parsed = None
+        answer_backend = backend
+        if role == "feynman_tutor":
+            from app.m5_intent import classify_academic_intent
+            from llm_client import for_answer_step
+            intent = await classify_academic_intent(
+                backend, str(user.get("question") or "") + "\n学习主题：" + state.knowledge_point_title
+                + "\n选中内容（仅用于理解问题）：" + str(state.learning_material or "")[:1600],
+                owner_public_id=state.owner_public_id, course_id=state.course_id,
+            )
+            answer_backend = for_answer_step(backend, deep_reasoning=intent.get("question_kind", "reasoning") in {"reasoning", "practice"})
+
+        def validate(raw: str) -> None:
+            nonlocal parsed
+            payload = parse_json_object(raw)
+            parsed = response_parser(payload) if response_parser else payload
+
+        from app.learning_generation_jobs import CURRENT_JOB, component_cache, generate_learning_json
+        context = CURRENT_JOB.get()
+        if context:
+            class AuditedBackend:
+                def __getattr__(self, name):
+                    return getattr(answer_backend, name)
+
+                async def generate(self, system, user, *, role):
+                    return await audited_legacy_text_call(answer_backend,
+                        system_prompt=system, user_prompt=user, role=role, operation=role,
+                        capability=role, owner_public_id=state.owner_public_id, course_id=state.course_id,
+                        input_summary={'session_id': state.session_id, 'source_count': len(state.source_refs)},
+                        database_runner=run_db_op)
+
+            with context['session_factory']() as cache_db:
+                completed, save = component_cache(cache_db)
+                payload = await generate_learning_json(AuditedBackend(), system=system, request=user,
+                    role=role, completed=completed, save=save, validate=response_parser)
+            return response_parser(payload) if response_parser else payload
+
+        await audited_legacy_text_call(
+            answer_backend,
+            system_prompt=system,
+            user_prompt=json.dumps(user, ensure_ascii=False, sort_keys=True),
             role=role,
+            operation=role,
+            capability=role,
+            owner_public_id=state.owner_public_id,
+            course_id=state.course_id,
+            input_summary={"session_id": state.session_id, "source_count": len(state.source_refs)},
+            response_validator=validate,
+            database_runner=run_db_op,
         )
-        return parse_json_object(raw)
+        return parsed
 
     try:
         return asyncio.run(call())
@@ -542,7 +605,7 @@ def _model_json(*, system: str, user: dict[str, Any], role: str) -> dict[str, An
             if empty_content
             else "模型返回内容暂时不可用或无法解析"
         )
-        _fail("feynman_model_call_failed", f"真实模型{action_label}失败，请重试：{detail}。")
+        raise FeynmanError("feynman_model_call_failed", f"真实模型{action_label}失败，请重试：{detail}。") from exc
 
 
 def _model_context(state: FeynmanState) -> dict[str, Any]:
@@ -552,6 +615,9 @@ def _model_context(state: FeynmanState) -> dict[str, Any]:
         "course_title": state.course_title,
         "knowledge_point_id": state.knowledge_point_id,
         "knowledge_point_title": state.knowledge_point_title,
+        "learning_material": state.learning_material,
+        "active_requirements": state.active_requirements,
+        "task_prompt": state.task_prompt,
         "profile_focus": list(context.profile_focus) if context else [],
         "recent_event_focus": list(context.recent_event_focus) if context else [],
         "sources": [
@@ -575,15 +641,27 @@ def _live_evaluate(
 ) -> RoundEvaluation:
     system = (
         "你是一位耐心、严格的课程老师。根据提供的学习内容评价学生复述，"
+        "本次评价范围以 learning_material 的练习内容和学习目标为准；章节名只用于定位，"
+        "如有active_requirements，以其中当前生效的要求确定评分范围；旧材料中的已撤销格式不作为扣分项。"
+        "不能要求学生补讲整章或与当前练习无关的知识。逐句核对本轮 student_text，"
+        "已经明确说出的解释不能再次列为遗漏；口头复述不强制要求提供可运行代码。"
+        "按含义而非措辞评分：正确的文字解释可等价于公式，不因没有照写教材符号或逐句重复示例而扣分。"
+        "列出遗漏前须检查学生是否已用同义表达说明；例如已说明某数最低，不必再重复全部大小关系。"
+        "区分必需知识缺口与可选拓展建议，可选拓展不能列为遗漏或扣分理由。"
+        "学生明确区分的额外例子不能仅因教材没有出现就判错或要求删除；"
+        "未提供其计算依据时只能建议核对，不能断言例子错误。"
         "不得编造教材事实。推理完成后必须把最终 JSON 放在公开 content 字段返回，"
         "不能只返回 reasoning_content。只输出 JSON 对象，不要 Markdown、思维链或 reasoning_content。"
         "dimensions 必须是包含五项 key 的 JSON 对象：core_meaning、mechanism、conditions、example、boundary，"
         "每项有 label、score、maximum、evidence；maximum 分别为 25、25、20、15、15，"
         "并输出 score（五项之和）、strengths、gaps、omissions 数组。"
         "这些公开文字要直接告诉学生哪里讲清了、哪里需要补充以及如何改进；"
-        "不要提检索、上下文、来源、证据链、评分规则、运行方式、模型或任何内部编号。"
+        "不要提检索流程、系统上下文、证据链、内部评分规则、运行方式或内部编号；"
+        "课程本身涉及的模型、算法和实验术语正常使用。"
+        "学习材料中的技术断言也要核对；材料有误时准确澄清，不能因学生正确修正了材料而扣分。"
+        + MODEL_EVALUATION_INSTRUCTION
     )
-    payload = _model_json(
+    return _model_json(
         system=system,
         user={
             "round_number": round_number,
@@ -594,7 +672,14 @@ def _live_evaluate(
             "student_retelling": text,
         },
         role="feynman_evaluator",
+        state=state,
+        response_parser=lambda payload: _evaluation_from_payload(payload, text, state, round_number),
     )
+
+
+def _evaluation_from_payload(
+    payload: dict[str, Any], text: str, state: FeynmanState, round_number: Literal[1, 2],
+) -> RoundEvaluation:
     expected = {
         "core_meaning": ("核心含义", 25),
         "mechanism": ("机制与步骤", 25),
@@ -708,10 +793,13 @@ def _live_answer_question(state: FeynmanState, question: str) -> QuestionAnswer:
         "只输出 JSON 对象，包含 answer 字符串；"
         "推理完成后必须把最终 JSON 放在公开 content 字段返回，不能只返回 reasoning_content；"
         "answer 可以使用简洁 Markdown，但不要复述问题凑篇幅。"
+        "本次明确的句数、范围和格式优先，不要额外追加练习或下一步任务。"
         "不要在 answer 中提检索、上下文、来源、课文、依据、约束、确定性、评分规则、运行方式、"
         "prompt、API key、reasoning_content 或任何内部编号。"
+        "学习材料中的技术断言也要核对，不能沿用其中错误的定义或条件。"
+        + MODEL_EVALUATION_INSTRUCTION
     )
-    payload = _model_json(
+    return _model_json(
         system=system,
         user={
             "question": question,
@@ -720,7 +808,12 @@ def _live_answer_question(state: FeynmanState, question: str) -> QuestionAnswer:
             "context": _model_context(state),
         },
         role="feynman_tutor",
+        state=state,
+        response_parser=lambda payload: _answer_from_payload(payload, state, question),
     )
+
+
+def _answer_from_payload(payload: dict[str, Any], state: FeynmanState, question: str) -> QuestionAnswer:
     answer = teacher_text("\n".join(str(payload.get("answer") or "").splitlines()))
     if not answer:
         _fail("feynman_model_output_invalid", "真实模型没有返回有效的疑问回答。")
@@ -731,7 +824,7 @@ def _live_answer_question(state: FeynmanState, question: str) -> QuestionAnswer:
     )
     return QuestionAnswer(
         question=question,
-        answer=answer[:8_000],
+        answer=answer,
         source_ref_ids=source_ids,
         answer_mode="llm_grounded",
         context_fingerprint=context.context_fingerprint if context else None,
@@ -945,13 +1038,22 @@ def session_payload(
             "created_at": item.created_at.isoformat() if item.created_at else None,
         })
     payload = state.model_dump(mode="json")
+    payload["learning_material"] = feynman_material_text(state.learning_material)
     live_evaluation = bool(
         (state.round1_evaluation and state.round1_evaluation.evaluation_mode == "llm")
         or (state.round2_evaluation and state.round2_evaluation.evaluation_mode == "llm")
         or (state.question_answer and state.question_answer.answer_mode == "llm_grounded")
     )
     mode = "llm" if live_evaluation or (state.context_snapshot and state.context_snapshot.generation_mode == "llm") else "deterministic_local"
+    source_version = db.get(DBArtifactVersion, state.source_resource_version_id)
+    source_metadata = dict(source_version.metadata_json or {}) if source_version else {}
+    semantic_context = source_metadata.get("semantic_context")
+    semantic_context = semantic_context if isinstance(semantic_context, dict) else {}
     payload.update(
+        created_at=artifact.created_at.replace(tzinfo=artifact.created_at.tzinfo or timezone.utc).isoformat() if artifact.created_at else None,
+        updated_at=artifact.updated_at.replace(tzinfo=artifact.updated_at.tzinfo or timezone.utc).isoformat() if artifact.updated_at else None,
+        source_resource_version_number=source_version.version_number if source_version else None,
+        profile_adaptation_plan=semantic_context.get("profile_adaptation_plan") or semantic_context.get("profile_context") or {},
         version_id=version.id,
         version_number=version.version_number,
         content_sha256=version.content_hash,
@@ -971,7 +1073,10 @@ def get_session(db: Any, session_id: str, owner: str) -> dict[str, Any]:
     return session_payload(db, *_owned_session(db, session_id, owner))
 
 
-def list_sessions(db: Any, owner: str, source_resource_id: str | None = None) -> list[dict[str, Any]]:
+def list_sessions(
+    db: Any, owner: str, source_resource_id: str | None = None,
+    source_resource_version_id: str | None = None,
+) -> list[dict[str, Any]]:
     query = db.query(DBArtifact).filter_by(owner_public_id=owner, artifact_type=SESSION_TYPE)
     rows = query.order_by(DBArtifact.created_at.desc(), DBArtifact.id.desc()).all()
     output = []
@@ -980,16 +1085,19 @@ def list_sessions(db: Any, owner: str, source_resource_id: str | None = None) ->
         state = FeynmanState.model_validate_json(version.content)
         if source_resource_id and state.source_resource_id != source_resource_id:
             continue
+        if source_resource_version_id and state.source_resource_version_id != source_resource_version_id:
+            continue
         output.append({
             "session_id": state.session_id,
             "source_resource_id": state.source_resource_id,
+            "source_resource_version_id": state.source_resource_version_id,
             "title": state.title,
             "status": state.status,
             "version_number": version.version_number,
             "round1_score": state.round1_evaluation.score if state.round1_evaluation else None,
             "round2_score": state.round2_evaluation.score if state.round2_evaluation else None,
-            "created_at": artifact.created_at.isoformat() if artifact.created_at else None,
-            "updated_at": artifact.updated_at.isoformat() if artifact.updated_at else None,
+            "created_at": artifact.created_at.replace(tzinfo=artifact.created_at.tzinfo or timezone.utc).isoformat() if artifact.created_at else None,
+            "updated_at": artifact.updated_at.replace(tzinfo=artifact.updated_at.tzinfo or timezone.utc).isoformat() if artifact.updated_at else None,
         })
     return output
 
@@ -1059,6 +1167,44 @@ def _apply_learning_event(
     return event, created
 
 
+MODEL_ACTIONS = {'evaluate_round1', 'answer_question', 'evaluate_round2'}
+
+
+def action_task(db, *, session_id, owner, expected_version=None):
+    from app.database import DBGenerationTask
+    from app.learning_generation_jobs import event_payload, task_payload
+    _owned_session(db, session_id, owner)
+    tasks = db.query(DBGenerationTask).filter_by(owner_public_id=owner, capability='feynman.action').order_by(
+        DBGenerationTask.created_at.desc(), DBGenerationTask.id.desc())
+    for task in tasks:
+        request = event_payload(db, task.id, 'learning_generation.request').get('request', {})
+        if request.get('session_id') == session_id and (expected_version is None or request.get('expected_version') == expected_version):
+            return {**task_payload(db, task), 'action': request['action'], 'expected_version': request['expected_version']}
+    return None
+
+
+def queue_action(db, *, session_id, actor, action, text, expected_version, idempotency_key):
+    from app.learning_generation_jobs import queue_task
+    if action not in MODEL_ACTIONS:
+        _fail('feynman_action_unknown', '此操作无需后台准备。')
+    artifact, version, state = _owned_session(db, session_id, actor.public_id)
+    request = dict(session_id=session_id, action=action, text=text, expected_version=expected_version,
+                   idempotency_key=idempotency_key)
+    previous = action_task(db, session_id=session_id, owner=actor.public_id, expected_version=expected_version)
+    if not previous:
+        if version.version_number != expected_version:
+            _fail('feynman_version_conflict', '复述已更新，正在读取最新阶段。')
+        required = {'evaluate_round1': 'round1_submitted', 'answer_question': 'question_pending',
+                    'evaluate_round2': 'round2_submitted'}
+        if state.status != required[action]:
+            _fail('feynman_transition_invalid', '请先完成当前复述步骤。')
+        if action == 'answer_question':
+            _submitted_text(text, minimum=6, field='question')
+    task = queue_task(db, actor, course_id=state.course_id, capability='feynman.action', request=request,
+                      key=f'feynman:{session_id}:{expected_version}')
+    return {**task, 'action': action, 'expected_version': expected_version}
+
+
 def apply_action(
     db: Any,
     *,
@@ -1079,6 +1225,13 @@ def apply_action(
     if existing is not None:
         saved = FeynmanState.model_validate_json(existing.content)
         return session_payload(db, artifact, existing, saved), False
+    from app.learning_generation_jobs import CURRENT_JOB, assert_generation_owner
+    pending = action_task(db, session_id=session_id, owner=actor.public_id, expected_version=expected_version)
+    if pending and pending['status'] not in {'completed', 'cancelled'} and (CURRENT_JOB.get() or {}).get('task_id') != pending['id']:
+        _fail('feynman_action_conflict', '本步骤正在准备反馈。')
+    source = db.get(DBArtifact, state.source_resource_id)
+    if source and (reason := resource_generation_blocker(db, source, state.source_resource_version_id)):
+        _fail("resource_generation_incomplete", reason)
     if version.version_number != expected_version:
         _fail("feynman_version_conflict", "费曼复述会话已经更新，请刷新后继续")
 
@@ -1086,7 +1239,7 @@ def apply_action(
     if action == "submit_round1":
         if state.status != "draft":
             _fail("feynman_transition_invalid", "只有草稿状态可以提交第一轮复述")
-        submitted = _submitted_text(text, minimum=40, maximum=12_000, field="round1")
+        submitted = _submitted_text(text, minimum=40, field="round1")
         data.update(status="round1_submitted", round1_text=submitted, round1_text_sha256=_text_digest(submitted))
     elif action == "evaluate_round1":
         if state.status != "round1_submitted" or not state.round1_text:
@@ -1110,7 +1263,7 @@ def apply_action(
     elif action == "answer_question":
         if state.status != "question_pending":
             _fail("feynman_transition_invalid", "当前不能提交学习疑问")
-        question = _submitted_text(text, minimum=6, maximum=2_000, field="question")
+        question = _submitted_text(text, minimum=6, field="question")
         answer = (
             _answer_question(state, question)
             if state.context_snapshot and state.context_snapshot.generation_mode == "deterministic_local"
@@ -1120,7 +1273,7 @@ def apply_action(
     elif action == "submit_round2":
         if state.status != "question_answered" or state.question_answer is None:
             _fail("feynman_transition_invalid", "必须先提出真实疑问并获得回答")
-        submitted = _submitted_text(text, minimum=40, maximum=12_000, field="round2")
+        submitted = _submitted_text(text, minimum=40, field="round2")
         data.update(status="round2_submitted", round2_text=submitted, round2_text_sha256=_text_digest(submitted))
     elif action == "evaluate_round2":
         if state.status != "round2_submitted" or not state.round2_text or state.round1_evaluation is None:
@@ -1150,6 +1303,11 @@ def apply_action(
         _fail("feynman_action_unknown", "不支持的费曼复述操作")
 
     data["last_action"] = action
+    assert_generation_owner(db)
+    db.refresh(artifact)
+    db.refresh(version)
+    if artifact.current_version_id != version.id:
+        _fail('feynman_version_conflict', '复述已更新，正在读取最新阶段。')
     next_state = FeynmanState.model_validate(data)
     next_version = add_artifact_version(
         db,

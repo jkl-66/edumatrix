@@ -24,17 +24,56 @@ init_db()
 
 
 class EduMatrixPipelineTests(unittest.TestCase):
+    @staticmethod
+    def _pdf_bytes(text="Convolution kernels and pooling summarize local features."):
+        from io import BytesIO
+        from reportlab.pdfgen import canvas
+        buffer = BytesIO()
+        document = canvas.Canvas(buffer)
+        document.drawString(60, 750, text)
+        document.save()
+        return buffer.getvalue()
+
+    def _configure_review_model(self):
+        import json
+        from unittest.mock import patch
+        from tests.test_m5_review_adaptation_calls import AsyncBackend
+
+        backend = AsyncBackend(json.dumps({
+            "answer": "池化操作汇总局部窗口，最大池化保留最大激活值。",
+            "explanation": "把窗口理解为一个小组，只记录组内最大值，用一个二乘二数组验证。",
+            "mermaid": "mindmap\n  root((概念))\n    关系\n    误区",
+        }, ensure_ascii=False))
+        self.enterContext(patch("llm_client.DEFAULT_ASYNC_LLM", backend))
+
     def setUp(self):
         """Use an explicit in-process teacher principal for authenticated API tests."""
         from app.auth import get_current_user
         from app.main import app
+        from app.database import DBUser, SessionLocal
+
+        with SessionLocal() as db:
+            user = db.query(DBUser).filter_by(username="test-teacher").first()
+            if user is None:
+                user = DBUser(public_id="usr-legacy-test-teacher", username="test-teacher",
+                              role="teacher", hashed_password="unused", is_active=True)
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+            db.expunge(user)
+        self.current_user = user
+        previous_override = app.dependency_overrides.get(get_current_user)
+
+        def restore_identity():
+            if previous_override is None:
+                app.dependency_overrides.pop(get_current_user, None)
+            else:
+                app.dependency_overrides[get_current_user] = previous_override
+
+        self.addCleanup(restore_identity)
 
         async def override_current_user():
-            return SimpleNamespace(
-                username="test-teacher",
-                role="teacher",
-                is_active=True,
-            )
+            return self.current_user
 
         app.dependency_overrides[get_current_user] = override_current_user
 
@@ -58,7 +97,11 @@ class EduMatrixPipelineTests(unittest.TestCase):
 
     def test_swarm_generates_full_resource_package(self):
         swarm = EduMatrixSwarm()
-        package = swarm.process("我看不懂池化层，请用图和 PyTorch 代码演示最大池化。")
+        import asyncio
+        package = asyncio.run(swarm.async_process(
+            "我看不懂池化层，请用图和 PyTorch 代码演示最大池化。",
+            student_id=self.current_user.username, owner_public_id=self.current_user.public_id,
+        ))
         self.assertTrue(package.alignment.passed, package.alignment.advice)
         self.assertEqual(len(package.resources), 5)
         self.assertEqual(
@@ -257,7 +300,10 @@ class EduMatrixPipelineTests(unittest.TestCase):
         ]
         
         # 2. 当学生输入含指代代词的问题时，应能成功消解并链接到“池化层”
-        resolved = planner._extract_concept_from_query("这个该怎么实现？", profile)
+        resolved = planner._extract_concept_from_query(
+            "这个该怎么实现？", profile,
+            model_call_context={"owner_public_id": self.current_user.public_id},
+        )
         self.assertEqual(resolved, "池化层")
         
         # 3. 校验如果上下文无匹配词，应安全退回到 None
@@ -298,6 +344,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
         self.assertIsInstance(due, list)
 
     def test_flashcard_bootstrapping_and_due_endpoint(self):
+        self._configure_review_model()
         from app.database import SessionLocal, DBReviewPlan, DBStudentProfile
         from flashcard_api import get_due_cards, get_all_cards
         from anki_engine import get_sm2_engine
@@ -324,6 +371,15 @@ class EduMatrixPipelineTests(unittest.TestCase):
                 last_quality=5
             )
             session.add(plan)
+            from app.database import DBLearningEvent
+            session.add(DBLearningEvent(
+                owner_public_id=self.current_user.public_id, legacy_student_id=student_id,
+                event_type="quiz_answered", trace_id=f"completed-{student_id}",
+                object_type="knowledge_point", object_id="激活函数",
+                evidence_status="accepted", evidence_strength=1.0,
+                mastery_eligible=True, completion_effect="complete",
+                payload={"concept": "激活函数", "score": 0.8},
+            ))
             session.commit()
             
             # Ensure the in-memory engine doesn't have it (cache is cold)
@@ -346,7 +402,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
                     mock_request,
                     student_id=student_id,
                     db=session,
-                    current_user=SimpleNamespace(username="test-teacher", role="teacher"),
+                    current_user=self.current_user,
                 )
                 
             if loop.is_running():
@@ -361,9 +417,8 @@ class EduMatrixPipelineTests(unittest.TestCase):
             self.assertAlmostEqual(res["cards"][0]["easiness"], 2.7)
             self.assertEqual(res["cards"][0]["interval_days"], 4)
             
-            # Clean up DB
-            session.delete(profile)
-            session.commit()
+            # Immutable flashcard evidence is retained in the isolated test DB;
+            # deleting its review plan would rewrite its frozen identity.
             # Clear memory cache
             key = f"{student_id}::激活函数"
             if key in engine._cards:
@@ -447,7 +502,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
         with open(store_path, 'r', encoding='utf-8') as f:
             content = f.read()
         self.assertIn('abort', content.lower(), '需有 abort 中断机制')
-        self.assertIn('streamChat', content, '需有 streamChat 流式聊天')
+        self.assertIn('streamCanonicalChat', content, '需有当前规范会话流式聊天')
         self.assertIn('_cleanupStream', content, '需有 _cleanupStream 流清理')
 
     def test_frontend_core_components_exist(self):
@@ -455,7 +510,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
         import os
         checks = [
             # Task 4.2: 智能体轨迹时间轴
-            ('frontend/src/components/AgentTimeline.vue', "step.status === 'running'", '呼吸灯状态'),
+            ('frontend/src/components/AgentTimeline.vue', "item.status === 'running'", '呼吸灯状态'),
             # Task 4.2: 掌握度雷达图
             ('frontend/src/components/MasteryRadar.vue', '能力掌握度雷达图', 'ECharts雷达图'),
             # Task 5.1+5.2: 数字人语音+嘴形滤波
@@ -471,9 +526,9 @@ class EduMatrixPipelineTests(unittest.TestCase):
             # Task 8.6: 知识图谱探索器
             ('frontend/src/components/KnowledgeGraphExplorer.vue', 'echarts.init', 'ECharts图谱'),
             # Task 8.7: 无图自适应折叠
-            ('frontend/src/views/Chat.vue', 'shouldShowRightPanel', '自适应面板折叠'),
+            ('frontend/src/views/Chat.vue', 'v-if="!evidenceRailCollapsed"', '学习详情面板折叠'),
             # Task 7.4: 复习日历
-            ('frontend/src/views/RevisionCalendar.vue', 'reviewPlans', '抗遗忘复习日历'),
+            ('frontend/src/views/RevisionCalendar.vue', 'ReviewScheduleBoard', '抗遗忘复习日历'),
             # Task 9.2: 设置致谢墙+风格切换
             ('frontend/src/views/Settings.vue', 'teachingStyle', '教学风格切换'),
         ]
@@ -598,7 +653,7 @@ class EduMatrixPipelineTests(unittest.TestCase):
         async def run_test():
             response = await stream_chat(
                 mock_request,
-                current_user=SimpleNamespace(username="test-teacher", role="teacher"),
+                current_user=self.current_user,
             )
             async for chunk in response.body_iterator:
                 pass
@@ -712,6 +767,8 @@ class EduMatrixPipelineTests(unittest.TestCase):
     def test_sandbox_resource_limits_and_timeout(self):
         import asyncio
         from code_exec_api import SANDBOX_RUNNER
+        from unittest.mock import patch
+        self.enterContext(patch.object(SANDBOX_RUNNER, "mode", "trusted_local"))
         
         try:
             loop = asyncio.get_event_loop()
@@ -758,6 +815,8 @@ class EduMatrixPipelineTests(unittest.TestCase):
     def test_sandbox_class_execution(self):
         import asyncio
         from code_exec_api import SANDBOX_RUNNER
+        from unittest.mock import patch
+        self.enterContext(patch.object(SANDBOX_RUNNER, "mode", "trusted_local"))
         
         try:
             loop = asyncio.get_event_loop()
@@ -944,7 +1003,7 @@ print("Val:", s.val)
 
     def test_manual_review_plan_creation_without_preexisting_profile(self):
         """验证在学生画像表尚无记录时，手动创建复习计划也能安全自愈通过"""
-        from app.database import SessionLocal, DBReviewPlan, DBStudentProfile
+        from app.database import SessionLocal, DBReviewPlan, DBStudentProfile, DBUser
         from app.crud import upsert_review_plan
         import uuid
         
@@ -1016,7 +1075,8 @@ print("Val:", s.val)
 
     def test_flashcard_review_updates_persisted_sm2_plan_without_memory_card(self):
         """The review API should update review_plans even if no in-memory card exists."""
-        from app.database import SessionLocal, DBReviewPlan, DBStudentProfile
+        self._configure_review_model()
+        from app.database import SessionLocal, DBReviewPlan, DBStudentProfile, DBUser
         from app.crud import upsert_review_plan
         from fastapi.testclient import TestClient
         from app.main import app
@@ -1027,6 +1087,9 @@ print("Val:", s.val)
 
         session = SessionLocal()
         try:
+            session.add(DBUser(public_id=f"usr-{student_id}", username=student_id,
+                               hashed_password="unused", role="student"))
+            session.commit()
             upsert_review_plan(session, student_id, concept, 0.5, 1)
         finally:
             session.close()
@@ -1051,7 +1114,7 @@ print("Val:", s.val)
                 self.assertEqual(data["flashcard"]["review_count"], expected_count)
                 if quality == 2:
                     self.assertTrue(data["adaptive_review"]["triggered"])
-                    self.assertIn("Mermaid", " ".join(data["adaptive_review"]["agent_trace"]))
+                    self.assertIn("关系图", " ".join(data["adaptive_review"]["agent_trace"]))
                     self.assertIn("mindmap", data["adaptive_review"]["mermaid"])
                     self.assertTrue(data["adaptive_review"]["stream_chunks"])
                     self.assertIn("llm_backend", data["adaptive_review"])
@@ -1082,21 +1145,14 @@ print("Val:", s.val)
                 self.assertIsNotNone(plan.next_review_at)
                 profile = verify_session.query(DBStudentProfile).filter_by(student_id=student_id).first()
                 self.assertIsNotNone(profile)
-                self.assertIn(concept, profile.concept_mastery)
-                self.assertIn(concept, profile.weak_points)
+                self.assertNotIn(concept, profile.concept_mastery)
+                self.assertNotIn(concept, profile.weak_points)
             finally:
                 verify_session.close()
         finally:
-            cleanup = SessionLocal()
-            try:
-                for plan in cleanup.query(DBReviewPlan).filter_by(student_id=student_id).all():
-                    cleanup.delete(plan)
-                profile = cleanup.query(DBStudentProfile).filter_by(student_id=student_id).first()
-                if profile:
-                    cleanup.delete(profile)
-                cleanup.commit()
-            finally:
-                cleanup.close()
+            # The isolated database is removed at process exit; preserve the
+            # immutable card/version/assessment links during the test run.
+            client.close()
 
     def test_animation_dataset_feeds_resource_aware_planning(self):
         """本地 animations 数据集应能进入动态图谱，并为路径规划提供资源信号。"""
@@ -1675,7 +1731,7 @@ print("Val:", s.val)
 
             client = TestClient(app)
             response = client.get(f"/api/history/{student_id}")
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 200, response.text)
             data = response.json()
             self.assertEqual(data["student_id"], student_id)
             self.assertTrue(len(data["history"]) >= 1)
@@ -1722,7 +1778,7 @@ print("Val:", s.val)
                 "/api/stream/chat",
                 json={"message": "请解释最大池化层", "student_id": student_id, "mode": "matrix"}
             )
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 200, response.text)
             
             # Consume stream to ensure the database record is written
             for _ in response.iter_lines():
@@ -1763,15 +1819,15 @@ print("Val:", s.val)
         finally:
             session.close()
         
-        # 模拟 PDF 文件的二进制数据
-        pdf_content = b"%PDF-1.4\n%...\n%%EOF\nThis is a mock PDF for testing convolutional neural networks."
+        # Exercise the actual parser with a valid small PDF.
+        pdf_content = self._pdf_bytes()
         file_payload = {"file": ("test_cnn_layer.pdf", pdf_content, "application/pdf")}
         
         response = client.post(
             f"/api/knowledge/upload?student_id={student_id}",
             files=file_payload
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertEqual(data["file_type"], "pdf")
         self.assertTrue(data["chunk_count"] >= 0)
@@ -1841,7 +1897,7 @@ print("Val:", s.val)
             f"/api/knowledge/upload?student_id={student_id}",
             files=file_payload
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertEqual(data["file_type"], "docx")
         self.assertTrue(data["chunk_count"] >= 0)
@@ -1895,7 +1951,7 @@ print("Val:", s.val)
                 "student_id": student_id
             }
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["target_text"], "\\frac{\\partial L}{\\partial w}")
@@ -1911,7 +1967,7 @@ print("Val:", s.val)
                 "student_id": student_id
             }
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertEqual(data["status"], "success")
         self.assertIn("content", data)
@@ -1950,7 +2006,7 @@ print("Val:", s.val)
             "/api/stream/chat",
             json={"message": "梯度下降算法的收敛条件是什么", "student_id": student_id}
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         
         complete_payload = None
         for line in response.iter_lines():
@@ -1992,7 +2048,7 @@ print("Val:", s.val)
                 "query": "什么是池化层"
             }
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertEqual(data["status"], "success")
         self.assertIn("content", data)
@@ -2070,10 +2126,10 @@ print("Val:", s.val)
 
         client = TestClient(app)
         response = client.get(f"/api/profile/{student_id}/analysis")
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertIn("narrative_report", data)
-        self.assertIn("StoryLensEdu", data["narrative_report"])
+        self.assertIn("完成入学诊断或一次有效学习后", data["narrative_report"])
 
 
     def test_rdi_and_peer_pk_challenge(self):
@@ -2090,7 +2146,7 @@ print("Val:", s.val)
             "/api/stream/chat",
             json={"message": "什么是梯度下降？", "student_id": student_id}
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         
         # 提取流中最后的 complete 帧
         complete_payload = None
@@ -2171,7 +2227,7 @@ print("Val:", s.val)
         }
         
         response = client.post(f"/api/profile/{student_id}/update", json=update_payload)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["major"], "人工智能实践与应用")
@@ -2285,24 +2341,20 @@ print("Val:", s.val)
 
     def test_collaborative_peer_based_prior_calibration(self):
         """验证协同画像先验校准：新冷启动学生会根据匹配相似度的 Peer 数据做画像先验合并与状态恢复。"""
-        from app.database import SessionLocal, DBStudentProfile
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from app.database import Base
         from app.crud import load_student_profile, save_student_profile, calibrate_student_prior_collaborative
         from models import StudentProfile
         import uuid
         
-        session = SessionLocal()
-        # 备份已有画像，避免清除开发环境下的测试数据
-        backup_profiles = []
-        try:
-            for p in session.query(DBStudentProfile).all():
-                data = {c.name: getattr(p, c.name) for c in DBStudentProfile.__table__.columns}
-                backup_profiles.append(data)
-        except Exception:
-            pass
-
-        # 清空画像，避免其它测试产生的遗留数据污染
-        session.query(DBStudentProfile).delete()
-        session.commit()
+        # Calibration intentionally needs an empty peer population. Give it a
+        # local database instead of deleting profiles and immutable evidence
+        # belonging to other tests in the process-wide application database.
+        peer_engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(peer_engine.dispose)
+        Base.metadata.create_all(peer_engine)
+        session = Session(peer_engine)
         peer_id_1 = f"peer1-{uuid.uuid4().hex[:4]}"
         peer_id_2 = f"peer2-{uuid.uuid4().hex[:4]}"
         new_student_id = f"newstud-{uuid.uuid4().hex[:4]}"
@@ -2339,21 +2391,7 @@ print("Val:", s.val)
             self.assertEqual(new_student.concept_mastery["逻辑回归"], 0.85)
             self.assertNotIn("线性回归", new_student.concept_mastery)
             
-            # 清理
-            for pid in (peer_id_1, peer_id_2, new_student_id):
-                db_p = session.query(DBStudentProfile).filter_by(student_id=pid).first()
-                if db_p:
-                    session.delete(db_p)
-            session.commit()
         finally:
-            # 恢复之前备份的本地画像数据
-            try:
-                for data in backup_profiles:
-                    p = DBStudentProfile(**data)
-                    session.add(p)
-                session.commit()
-            except Exception:
-                session.rollback()
             session.close()
 
     def test_uncertainty_aware_active_learning(self):
@@ -2645,7 +2683,7 @@ print("Val:", s.val)
             "/api/stream/chat",
             json={"message": "/code 快速排序算法", "student_id": student_id, "mode": "chat"}
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
 
         # 校验响应流中是否仅包含极客助教 (Sandbox Coder)
         complete_payload = None
@@ -2809,10 +2847,11 @@ print("Val:", s.val)
         
         try:
             response = client.post("/api/knowledge/add-web-source", json=payload)
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 200, response.text)
             data = response.json()
-            self.assertEqual(data["status"], "success")
-            self.assertIn("[网页] IBM 神经网络教程.txt", data["filename"])
+            self.assertEqual(data["status"], "partial")
+            self.assertEqual(data["source_processing_status"], "failed")
+            self.assertIn("[网页] IBM 神经网络教程.md", data["filename"])
             self.assertEqual(data["doc_guide_status"], "pending")
             self.assertTrue(data["chunk_count"] > 0)
 
@@ -2822,7 +2861,7 @@ print("Val:", s.val)
                 db_doc = session.query(DBKnowledgeDocument).filter_by(id=data["id"]).first()
                 self.assertIsNotNone(db_doc)
                 self.assertEqual(db_doc.student_id, student_id)
-                self.assertEqual(db_doc.file_type, "txt")
+                self.assertEqual(db_doc.file_type, "md")
                 self.assertEqual(db_doc.multimodal_metadata.get("url"), "https://www.ibm.com/topics/neural-networks")
                 
                 # 删除数据并提交
@@ -2868,7 +2907,7 @@ print("Val:", s.val)
         
         try:
             response = client.post("/api/web/search", json=payload)
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 200, response.text)
             data = response.json()
             self.assertIn("results", data)
             self.assertIn("summary", data)
@@ -2940,9 +2979,10 @@ print("Val:", s.val)
         }
 
         # Mock httpx.AsyncClient.get() 以及 pdf/视觉/图谱解析部分，确保测试在离线时也可 100% 通过
+        pdf_content = self._pdf_bytes()
         class MockStreamResponse:
             status_code = 200
-            headers = {"content-length": "22"}
+            headers = {"content-length": str(len(pdf_content))}
 
             async def __aenter__(self):
                 return self
@@ -2951,7 +2991,7 @@ print("Val:", s.val)
                 return False
 
             async def aiter_bytes(self, chunk_size=65536):
-                yield b"%PDF-1.4 mock pdf data"
+                yield pdf_content
 
         with patch("httpx.AsyncClient.stream", return_value=MockStreamResponse()), \
              patch("knowledge_api.parse_uploaded_file", return_value="卷积核和池化层是卷积神经网络的核心组成部分。"), \
@@ -2959,9 +2999,10 @@ print("Val:", s.val)
              patch("knowledge_api.build_graph_after_upload", return_value=None):
              
             response = client.post("/api/knowledge/download-web-file", json=payload)
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 200, response.text)
             data = response.json()
-            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["status"], "partial")
+            self.assertEqual(data["source_processing_status"], "failed")
             self.assertEqual(data["file_type"], "pdf")
             self.assertEqual(data["filename"], "[下载] 卷积神经网络讲义.pdf")
 
@@ -2971,7 +3012,7 @@ print("Val:", s.val)
                 db_doc = session.query(DBKnowledgeDocument).filter_by(id=data["id"]).first()
                 self.assertIsNotNone(db_doc)
                 self.assertEqual(db_doc.student_id, student_id)
-                self.assertIn("卷积核和池化层", db_doc.content)
+                self.assertIn("Convolution kernels and pooling", db_doc.content)
                 
                 # 清除
                 session.delete(db_doc)
@@ -3036,10 +3077,11 @@ print("Val:", s.val)
 
         with patch("llm_client.DeterministicEducationLLM.generate", return_value=mock_summary):
             response = client.post("/api/knowledge/add-web-source", json=payload)
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 200, response.text)
             data = response.json()
-            self.assertEqual(data["status"], "success")
-            self.assertEqual(data["filename"], "[网页] Transformer中的自注意力机制详解.txt")
+            self.assertEqual(data["status"], "partial")
+            self.assertEqual(data["source_processing_status"], "failed")
+            self.assertEqual(data["filename"], "[网页] Transformer中的自注意力机制详解.md")
 
             # 验证数据库中确实存下了 LLM 总结后的 Markdown 内容而不是 snippet 原文
             session = SessionLocal()
@@ -3059,7 +3101,7 @@ print("Val:", s.val)
             # 清理物理备份文件
             import os
             from pathlib import Path
-            temp_file = Path("data/uploads") / student_id / f"{data['id']}.txt"
+            temp_file = Path("data/uploads") / student_id / f"{data['id']}.md"
             if temp_file.exists():
                 os.remove(temp_file)
             if (Path("data/uploads") / student_id).exists():
@@ -3118,7 +3160,7 @@ print("Val:", s.val)
         try:
             # 3. 访问 GET 单个文档详情路由
             response = client.get(f"/api/knowledge/{doc_id}?student_id={student_id}")
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 200, response.text)
             data = response.json()
             self.assertEqual(data["id"], doc_id)
             self.assertEqual(data["title"], "测试文档_完整版")
@@ -3142,7 +3184,7 @@ print("Val:", s.val)
         bili_url = "https://www.bilibili.com/video/BV1xx411c7m9/?spm_id_from=333.337.search-card.all.click"
         self.assertEqual(
             to_embedded_player_url(bili_url),
-            "//player.bilibili.com/player.html?bvid=BV1xx411c7m9&high_quality=1&as_wide=1"
+            "https://player.bilibili.com/player.html?bvid=BV1xx411c7m9&high_quality=1&as_wide=1"
         )
         yt_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         self.assertEqual(

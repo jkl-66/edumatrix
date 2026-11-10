@@ -1,7 +1,9 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed } from 'vue'
 import {
-  AlertCircle, BookOpen, Check, Clock3, Database, Download, ExternalLink,
+  AlertCircle, Archive, ArchiveRestore, BookOpen, Check, Clock3, Database, Download, ExternalLink,
   FileQuestion, History, LoaderCircle, Pencil, RefreshCw, Sparkles,
 } from '@lucide/vue'
 
@@ -11,9 +13,10 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   error: { type: String, default: '' },
   downloading: { type: Boolean, default: false },
+  archiving: { type: Boolean, default: false },
 })
 
-defineEmits(['open', 'download', 'retry', 'history', 'complete', 'generate', 'edit'])
+defineEmits(['open', 'download', 'retry', 'history', 'complete', 'generate', 'edit', 'generation', 'archive'])
 
 const sources = computed(() => (
   props.detail?.resource?.source_refs || props.resource?.resource?.source_refs || []
@@ -25,8 +28,10 @@ const currentVersion = computed(() => {
 })
 
 const historyCount = computed(() => props.detail?.history?.items?.length || 0)
-const completionRule = computed(() => String(props.resource?.completion?.rule || '').trim())
+const completionRule = computed(() => String(props.resource?.completion?.display_rule ?? props.resource?.completion?.rule ?? '').trim())
 const completionRecorded = computed(() => props.resource?.completion?.status === 'completed')
+const learningUnavailable = computed(() => props.detail?.resource?.learning_unavailable_reason || props.resource?.resource?.learning_unavailable_reason || '')
+const generationJobId = computed(() => props.detail?.resource?.generation_job_id || props.resource?.resource?.generation_job_id)
 
 function formatDate(value) {
   if (!value) return '未记录'
@@ -48,7 +53,7 @@ function formatDate(value) {
     <div v-else-if="error && resource" class="preview-state preview-error">
       <AlertCircle :size="24" />
       <strong>预览暂时不可用</strong>
-      <span>{{ error }}</span>
+      <span>{{ userMessage(error) }}</span>
       <button type="button" class="secondary-action" @click="$emit('retry')">
         <RefreshCw :size="16" />重新加载
       </button>
@@ -70,7 +75,7 @@ function formatDate(value) {
       </header>
 
       <p class="preview-copy">
-        {{ resource.preview?.text || '该资源暂未提供可展示的内容摘要。' }}
+        {{ learningText(resource.preview?.text, '该资源暂未提供可展示的内容摘要。') }}
       </p>
 
       <dl class="preview-facts">
@@ -107,7 +112,7 @@ function formatDate(value) {
         <div class="section-heading"><h3>学习完成条件</h3><Check v-if="completionRecorded" :size="17" /></div>
         <p v-if="completionRule">{{ completionRule }}</p>
         <p v-else>当前版本没有记录可验证的完成条件，请打开资源查看具体学习动作。</p>
-        <span v-if="completionRecorded" class="completion-recorded">已记录本版本的学习完成事件；掌握度仍由有效证据聚合。</span>
+        <span v-if="completionRecorded" class="completion-recorded">本次学习已记录。掌握情况会结合你的作答与实践结果判断。</span>
       </section>
 
       <details class="source-details">
@@ -118,22 +123,26 @@ function formatDate(value) {
             <span>{{ source.location_label || source.location_kind || '未记录位置' }}</span>
           </div>
         </div>
-        <p v-else>该旧资源没有记录来源，系统不会补造来源信息。</p>
+        <p v-else>此资源未记录来源。</p>
       </details>
 
       <div class="preview-actions">
+        <p v-if="learningUnavailable">{{ learningUnavailable }}</p>
+        <button v-if="learningUnavailable && !resource.archived && generationJobId" type="button" class="primary-action" @click="$emit('generation', generationJobId)">
+          <RefreshCw :size="17" />查看生成结果
+        </button>
         <button
           type="button"
           class="primary-action"
-          :disabled="!resource.route"
-          @click="$emit('open')"
+          :disabled="!resource.route || (Boolean(learningUnavailable) && !resource.archived)"
+          @click="$emit(resource.archived ? 'history' : 'open')"
         >
-          <ExternalLink :size="17" />打开资源
+          <ExternalLink :size="17" />{{ resource.archived ? '查看版本历史' : '打开资源' }}
         </button>
         <button
           type="button"
           class="secondary-action"
-          :disabled="!completionRule || completionRecorded"
+          :disabled="resource.archived || !completionRule || completionRecorded || Boolean(learningUnavailable)"
           @click="$emit('complete')"
         >
           <Check :size="16" />{{ completionRecorded ? '已完成' : '完成学习' }}
@@ -146,6 +155,12 @@ function formatDate(value) {
         </button>
         <button type="button" class="secondary-action" :disabled="resource.archived" @click="$emit('edit')">
           <Pencil :size="16" />编辑另存
+        </button>
+        <button type="button" class="secondary-action" :disabled="archiving || !detail" @click="$emit('archive')">
+          <LoaderCircle v-if="archiving" :size="16" class="spin" />
+          <ArchiveRestore v-else-if="resource.archived" :size="16" />
+          <Archive v-else :size="16" />
+          {{ resource.archived ? '恢复资源' : '归档资源' }}
         </button>
         <button
           type="button"
@@ -169,10 +184,10 @@ function formatDate(value) {
   min-width: 0;
   height: 100%;
   overflow: auto;
-  border: 1px solid #ccd0cf;
+  border: 1px solid var(--color-border-strong);
   border-radius: 8px;
-  background: #fff;
-  color: #06141b;
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 
 .preview-state {
@@ -182,13 +197,13 @@ function formatDate(value) {
   justify-items: center;
   gap: 10px;
   padding: 28px;
-  color: #4a5c6a;
+  color: var(--color-text-secondary);
   text-align: center;
 }
 
-.preview-state strong { color: #06141b; font-size: 16px; }
+.preview-state strong { color: var(--color-text); font-size: 16px; }
 .preview-state span { max-width: 26ch; font-size: 14px; line-height: 1.6; }
-.preview-error { color: #8b3d35; }
+.preview-error { color: var(--color-danger); }
 
 .preview-header {
   display: flex;
@@ -196,44 +211,44 @@ function formatDate(value) {
   justify-content: space-between;
   gap: 14px;
   padding: 20px 20px 16px;
-  border-bottom: 1px solid #dfe4e5;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .preview-header > div { min-width: 0; }
-.resource-kind { color: #4a5c6a; font-size: 14px; font-weight: 650; }
+.resource-kind { color: var(--color-text-secondary); font-size: 14px; font-weight: 650; }
 .preview-header h2 { margin: 7px 0 0; font-size: 20px; line-height: 1.35; overflow-wrap: anywhere; }
-.status-label { flex: 0 0 auto; padding: 5px 8px; border-radius: 6px; background: #eef2f2; color: #253745; font-size: 14px; }
-.preview-copy { margin: 0; padding: 18px 20px; color: #344957; font-size: 15px; line-height: 1.7; }
+.status-label { flex: 0 0 auto; padding: 5px 8px; border-radius: 6px; background: var(--color-surface-subtle); color: var(--color-text); font-size: 14px; }
+.preview-copy { margin: 0; padding: 18px 20px; color: var(--color-text-secondary); font-size: 15px; line-height: 1.7; }
 
-.preview-facts { display: grid; gap: 0; margin: 0; border-block: 1px solid #dfe4e5; }
-.preview-facts div { padding: 13px 20px; border-bottom: 1px solid #eef2f2; }
+.preview-facts { display: grid; gap: 0; margin: 0; border-block: 1px solid var(--color-border); }
+.preview-facts div { padding: 13px 20px; border-bottom: 1px solid var(--color-surface-subtle); }
 .preview-facts div:last-child { border-bottom: 0; }
-.preview-facts dt { display: flex; align-items: center; gap: 7px; color: #60727c; font-size: 14px; }
-.preview-facts dd { margin: 5px 0 0; color: #11212d; font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
-.preview-section { padding: 18px 20px; border-bottom: 1px solid #dfe4e5; }
+.preview-facts dt { display: flex; align-items: center; gap: 7px; color: var(--color-text-muted); font-size: 14px; }
+.preview-facts dd { margin: 5px 0 0; color: var(--color-text); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+.preview-section { padding: 18px 20px; border-bottom: 1px solid var(--color-border); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .section-heading h3 { margin: 0; font-size: 16px; }
-.section-heading span { color: #60727c; font-size: 14px; }
-.metadata-grid { display: grid; gap: 7px; margin-top: 12px; color: #4a5c6a; font-size: 14px; }
+.section-heading span { color: var(--color-text-muted); font-size: 14px; }
+.metadata-grid { display: grid; gap: 7px; margin-top: 12px; color: var(--color-text-secondary); font-size: 14px; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-.tag-list span { padding: 4px 7px; border: 1px solid #ccd0cf; border-radius: 6px; color: #344957; font-size: 14px; }
-.source-details { padding: 14px 20px; border-bottom: 1px solid #dfe4e5; }
-.source-details summary { color: #11212d; font-size: 14px; font-weight: 650; cursor: pointer; }
+.tag-list span { padding: 4px 7px; border: 1px solid var(--color-border-strong); border-radius: 6px; color: var(--color-text-secondary); font-size: 14px; }
+.source-details { padding: 14px 20px; border-bottom: 1px solid var(--color-border); }
+.source-details summary { color: var(--color-text); font-size: 14px; font-weight: 650; cursor: pointer; }
 .source-list { display: grid; gap: 10px; margin-top: 12px; }
-.source-list div { padding-top: 10px; border-top: 1px solid #eef2f2; }
+.source-list div { padding-top: 10px; border-top: 1px solid var(--color-surface-subtle); }
 .source-list strong, .source-list span { display: block; font-size: 14px; line-height: 1.5; }
-.source-list span, .source-details p { color: #60727c; }
+.source-list span, .source-details p { color: var(--color-text-muted); }
 .source-details p { margin: 10px 0 0; font-size: 14px; line-height: 1.6; }
 .preview-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 16px 20px 20px; }
 .primary-action, .secondary-action, .icon-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; border-radius: 8px; font-size: 14px; font-weight: 650; cursor: pointer; }
-.primary-action { border: 1px solid #11212d; background: #11212d; color: #fff; }
-.secondary-action { border: 1px solid #ccd0cf; padding: 0 13px; background: #fff; color: #11212d; }
-.icon-action { border: 1px solid #ccd0cf; background: #fff; color: #11212d; }
-.completion-section { padding: 16px 20px; border-bottom: 1px solid #dfe4e5; }
-.completion-section p { margin: 8px 0 0; color: #4a5c6a; font-size: 14px; line-height: 1.6; }
-.completion-recorded { display: block; margin-top: 8px; color: #60727c; font-size: 14px; line-height: 1.5; }
+.primary-action { border: 1px solid var(--color-text); background: var(--color-text); color: #fff; }
+.secondary-action { border: 1px solid var(--color-border-strong); padding: 0 13px; background: var(--color-surface); color: var(--color-text); }
+.icon-action { border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); }
+.completion-section { padding: 16px 20px; border-bottom: 1px solid var(--color-border); }
+.completion-section p { margin: 8px 0 0; color: var(--color-text-secondary); font-size: 14px; line-height: 1.6; }
+.completion-recorded { display: block; margin-top: 8px; color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
 button:disabled { cursor: default; opacity: .48; }
-button:focus-visible, summary:focus-visible { outline: 2px solid #11212d; outline-offset: 2px; }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 .spin { animation: spin .8s linear infinite; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 @keyframes spin { to { transform: rotate(360deg); } }

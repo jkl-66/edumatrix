@@ -17,6 +17,29 @@ from app.m5_capabilities import RuntimeAvailability
 import app.m5_api as m5_api
 
 
+def test_resource_revision_distinguishes_invalid_content_from_edit_conflict(monkeypatch):
+    from app.m5_capabilities import M5CapabilityError
+
+    failure = "handout_content_incomplete"
+    async def failing_operation(operation):
+        raise M5CapabilityError(failure, "invalid learning content")
+
+    monkeypatch.setattr(m5_api, "run_db_op", failing_operation)
+    app.dependency_overrides[get_current_user] = lambda: DBUser(public_id="owner", username="owner", role="student", is_active=True)
+    try:
+        client = TestClient(app)
+        for code, expected in [("handout_content_incomplete", 422), ("deck_content_invalid", 422), ("resource_version_conflict", 409)]:
+            failure = code
+            response = client.post("/api/v1/m5/resources/test-resource/versions", json={
+                "expected_lock_version": 1, "source_version_id": "test-version",
+                "content": "{}", "content_format": "json",
+            })
+            assert response.status_code == expected
+            assert response.json()["detail"]["code"] == code
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
 def _catalog_session():
     engine = create_engine(
         "sqlite:///:memory:",
@@ -26,9 +49,9 @@ def _catalog_session():
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
     session.add_all([
-        DBCourse(id="public-course", version="1", title="Public", visibility="public", manifest_version="1"),
-        DBCourse(id="member-course", version="1", title="Member", visibility="private", manifest_version="1"),
-        DBCourse(id="hidden-course", version="1", title="Hidden", visibility="private", manifest_version="1"),
+        DBCourse(id="public-course", version="1", title="Public", visibility="public", status="published", manifest_version="1"),
+        DBCourse(id="member-course", version="1", title="Member", visibility="private", status="published", manifest_version="1"),
+        DBCourse(id="hidden-course", version="1", title="Hidden", visibility="private", status="published", manifest_version="1"),
     ])
     session.add_all([
         DBSourceDocument(id="src-public", course_id="public-course", title="P", filename="p.md", file_format="md", content_hash="a" * 64),
@@ -179,7 +202,10 @@ def test_m5_resource_catalog_http_is_owner_scoped_source_filterable_and_read_onl
 
 
 def test_m5_assessment_http_contract_hides_answers_and_requires_confirmed_misconception(monkeypatch):
+    from app.database import DBKnowledgePoint, DBReviewPlan, DBStudentProfile
+
     session = _catalog_session()
+    session.add(DBKnowledgePoint(id="kp-http-retest", domain_pack="test", code="retest", version="1", title="Retest topic"))
     public_course = session.query(DBCourse).filter_by(id="public-course").one()
     public_course.owner_public_id = "teacher"
     session.add(
@@ -207,6 +233,7 @@ def test_m5_assessment_http_contract_hides_answers_and_requires_confirmed_miscon
             "origin": "manual",
             "version": {
                 "prompt": "Which option is correct?",
+                "primary_knowledge_point_id": "kp-http-retest",
                 "options": ["A", "B"],
                 "answer_key": {"choice": "B"},
                 "scoring_rule": {"type": "exact"},
@@ -241,7 +268,7 @@ def test_m5_assessment_http_contract_hides_answers_and_requires_confirmed_miscon
         assert attempt.json()["score"] == 0 and attempt.json()["correct"] is False
         proposed = attempt.json()["misconception_review"]
         assert proposed["status"] == "proposed"
-        assert client.get("/api/v1/m5/review-queue").json()["items"] == []
+        assert not any(item.get("retest_task") for item in client.get("/api/v1/m5/review-queue").json()["items"])
         decision = client.post(
             f"/api/v1/m5/assessment/misconceptions/{proposed['id']}/decision",
             json={"decision": "modify", "category": "knowledge_gap", "note": "learner correction"},
@@ -250,7 +277,7 @@ def test_m5_assessment_http_contract_hides_answers_and_requires_confirmed_miscon
         assert decision.json()["retest_task_created"] is True
         assert decision.json()["retest_task"]["status"] == "scheduled"
         assert decision.json()["retest_task"]["stable_mastery"] is False
-        queue = client.get("/api/v1/m5/review-queue").json()["items"]
+        queue = [item for item in client.get("/api/v1/m5/review-queue").json()["items"] if item.get("retest_task")]
         assert len(queue) == 1 and queue[0]["category"] == "knowledge_gap"
         assert queue[0]["stable_mastery"] is False
         assert queue[0]["retest_task"]["id"] == decision.json()["retest_task"]["id"]
@@ -288,7 +315,23 @@ def test_m5_assessment_http_contract_hides_answers_and_requires_confirmed_miscon
         assert passed.json()["path_evidence"]["event_type"] == "delayed_retest_passed"
         assert session.query(DBPathNode).filter_by(learning_path_id=path.id).one().status == "completed"
         assert session.query(DBLearningEvent).filter_by(event_type="delayed_retest_passed").count() == 1
-        assert client.get("/api/v1/m5/review-queue").json()["items"] == []
+        profile = session.get(DBStudentProfile, "learner")
+        mastery = dict(profile.concept_mastery)
+        assert passed.json()["path_evidence"]["mastery_changed"] is True
+        review_plan = session.query(DBReviewPlan).filter_by(student_id="learner", knowledge_point_id="kp-http-retest").one()
+        assert review_plan.course_id == "public-course"
+        assert review_plan.interval_days == 14
+        assert review_plan.review_count == 1
+        repeated = client.post(f"/api/v1/m5/assessment/retests/{task_id}/attempts", json={
+            "idempotency_key": "http-retest-pass-001", "answer": {"choice": "B"},
+            "confidence": 0.8, "duration_seconds": 15,
+        })
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json()["attempt_created"] is False
+        assert session.query(DBLearningEvent).filter_by(event_type="delayed_retest_passed").count() == 1
+        assert profile.concept_mastery == mastery
+        assert review_plan.review_count == 1
+        assert not any(item.get("retest_task") for item in client.get("/api/v1/m5/review-queue").json()["items"])
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 

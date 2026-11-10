@@ -23,7 +23,7 @@ from tests.test_f6_t03_code_sandbox_resource import _session
 def _fake_web_video_search(monkeypatch):
     async def fake_search(query, max_results=5):
         return [{
-            "title": "课程视频候选",
+            "title": f"{query} · 课程视频候选",
             "url": "https://www.bilibili.com/video/BV1sse123",
             "source": "B站视频",
             "description": "测试用真实网页来源",
@@ -71,15 +71,16 @@ class _SlowResourceBackend:
                 "summary": "B13 审核通过",
                 "findings": [],
                 "rejectedTypes": [],
+                "conditionReview": [{"claimId": claim['id'], "status": "valid",
+                    "reason": "合成内容仅验证任务流与断线恢复。", "fix": ""}
+                    for claim in json.loads(user_prompt).get('condition_claims', [])],
             }, ensure_ascii=False)
-        resource_type = next(
-            (value for value in GENERATION_RESOURCE_TYPES if value in user_prompt),
-            "handout",
-        )
+        resource_type = json.loads(user_prompt)["resource_type"]
         if resource_type in self.fail_types:
             raise RuntimeError(f"B13 provider failure: {resource_type}")
         return json.dumps({
             "summary": f"B13 {resource_type} 候选摘要",
+            "selectedVideoIds": [item['id'] for item in json.loads(user_prompt).get('video_candidates', [])],
             "narrative": f"B13 {resource_type} 模型正文，依据冻结课程来源生成。",
             "learningGoal": "完成 B13 资源目标",
             "starterCode": "print('b13')\n",
@@ -87,8 +88,9 @@ class _SlowResourceBackend:
                 {"id": "stdout", "label": "输出", "kind": "stdout_contains", "expectedText": "b13"},
             ],
             "environment": ["Python 3"],
+            "estimatedMinutes": 35,
             "data": ["B13 课程示例数据"],
-            "parameters": [{"key": "learning_rate", "label": "学习率", "kind": "float", "minimum": 0.0, "maximum": 1.0, "step": 0.1, "default": 0.1, "description": "控制每次参数更新幅度。"}],
+            "parameters": (json.loads(user_prompt).get("interactive_template") or {}).get("parameters", []),
             "constraints": [{"id": "range", "title": "范围约束", "description": "学习率必须大于 0 且不超过 1。"}],
             "dataset": {"id": "b13-dataset", "title": "课程示例数据", "summary": "用于实时资源测试的课程示例数据。", "sampleCount": 1},
             "chart": {"kind": "line", "xAxisLabel": "训练步", "yAxisLabel": "损失", "series": [{"key": "loss", "label": "损失", "unit": "", "higherIsBetter": False}]},
@@ -99,7 +101,8 @@ class _SlowResourceBackend:
                 {"title": "评估", "instruction": "核对结果", "expectedResult": "结论", "errorGuidance": "回查证据"},
             ],
             "quizQuestions": [
-                {"prompt": "B13 题目", "options": ["A", "B", "C", "D"], "answer": "A", "explanation": "B13 解析", "bloom": "remember", "difficulty": 0.3}
+                {"prompt": f"B13 题目 {index}", "options": ["核对输入", "忽略条件", "删除数据", "跳过检查"], "answer": "A", "explanation": "B13 解析", "bloom": "remember", "difficulty": 0.3}
+                for index in range(3)
             ],
             "slides": [
                 {"layout": "title", "title": "B13 课程主题", "subtitle": "实时模型"},
@@ -225,7 +228,8 @@ def test_partial_resource_failure_retries_only_failed_item(monkeypatch) -> None:
         assert all(item["state"] == "succeeded" for item in second["job"]["items"])
         # Planner and already successful resource items are not regenerated.
         assert backend.roles.count("resource_planner") == calls_before_retry.count("resource_planner")
-        assert backend.roles.count("resource_reviewer") == calls_before_retry.count("resource_reviewer") + 1
+        # Each resource is reviewed once, followed by the shared connection check.
+        assert backend.roles.count("resource_reviewer") == calls_before_retry.count("resource_reviewer") + len(second["job"]["items"]) + 1
         assert backend.roles.count("resource_generator") == calls_before_retry.count("resource_generator") + 1
         assert next(item for item in second["job"]["items"] if item["type"] == "video")["attempt_history"][-1]["attempt"] == 2
         assert any(event["eventType"] == "publish.completed" for event in second["run_events"])

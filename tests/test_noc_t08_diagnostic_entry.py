@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.diagnostic_api as diagnostic_api
 from app.auth import get_current_user
-from app.database import Base, DBCourse, DBUser
+from app.database import Base, DBCourse, DBSourceDocument, DBUser
 from app.main import app
 
 
@@ -44,6 +44,7 @@ def test_preflight_accepts_frontend_query_string_and_keeps_invalid_count_blocked
             manifest_version="1",
         ),
     ])
+    db.add(DBSourceDocument(id="source-noc-t08", course_id="course-noc-t08", title="诊断资料", filename="source.md", file_format="md", content_hash="synthetic", processing_status="ready"))
     db.commit()
 
     async def isolated_run_db_op(operation, *args, **kwargs):

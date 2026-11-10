@@ -615,8 +615,11 @@ def _video_content(context: dict[str, Any], source_ref_ids: list[str]) -> tuple[
             "licenseUrl": None,
             "reason": "帮助学生在开始当前模块前理解数据、训练、部署和监控之间的顺序。",
             "segments": [
-                {"id": "overview", "title": "课程工程闭环", "startSeconds": 0, "endSeconds": 12, "learningFocus": "识别数据、训练、量化部署和现场监控四个阶段。"},
-                {"id": "deployment", "title": "设备验证与阈值治理", "startSeconds": 12, "endSeconds": 25, "learningFocus": "关注资源约束、误报漏报和持续监控。"},
+                {"id": "overview", "title": "课程定位", "startSeconds": 0, "endSeconds": 5, "learningFocus": "了解从数据到设备的课程目标和八个模块。"},
+                {"id": "deployment", "title": "工程主线", "startSeconds": 5, "endSeconds": 10, "learningFocus": "认识问题定义、训练评估、量化部署和现场监控的顺序。"},
+                {"id": "scenarios", "title": "核心场景", "startSeconds": 10, "endSeconds": 15, "learningFocus": "了解异常检测、图像分类与目标检测、关键词唤醒三类场景。"},
+                {"id": "study", "title": "学习方式", "startSeconds": 15, "endSeconds": 20, "learningFocus": "阅读课程资料、完成实训检查点，并用学习记录帮助安排下一步。"},
+                {"id": "completion", "title": "课程完成标准", "startSeconds": 20, "endSeconds": 25, "learningFocus": "能解释技术取舍、复现实验结果，并说明失败、风险与下一步。"},
             ],
             "sourceRefIds": source_ref_ids,
             "alternatives": [],

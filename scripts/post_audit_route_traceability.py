@@ -82,7 +82,7 @@ CODE_BY_STAGE = {
     5: ["app/m2_tasks.py", "app/m3_agents.py", "app/m4_executor.py", "app/m5_gateway.py"],
     6: ["app/m2_artifacts.py", "app/m5_resources.py", "document_parser.py"],
     7: ["learning_strategy.py", "app/m5_learning.py", "app/m2_feedback.py"],
-    8: ["app/m5_workspace.py", "app/media_context.py", "frontend/src/views/TutorWorkspace.vue"],
+    8: ["app/m5_workspace.py", "app/media_context.py", "frontend/src/views/LearningWorkspace.vue"],
     9: ["app/m5_assessment_core.py", "app/m5_exam_core.py", "quiz_api.py", "code_exec_api.py"],
     10: ["app/media_ocr.py", "app/offline_speech.py", "app/video_rendering.py", "app/interactive_lab.py"],
     11: ["app/course_governance.py", "app/content_review.py", "app/enterprise_risk.py", "app/certification_lifecycle.py"],

@@ -15,7 +15,7 @@ def test_chat_timeline_hides_completed_items_without_changing_audit_facts() -> N
     assert "const currentEventItems = latestEventItems(eventItems)" in timeline
     assert "props.hideCompleted ? visibleEventItems : eventItems" in timeline
     assert "allItems.filter((item) => item.status !== 'completed')" in timeline
-    assert "stageCount: stageKeys.size || allItems.length" in timeline
+    assert "{{ normalizedAudit.stageCount }}" not in timeline
     assert "resourceProgress" in timeline
     assert chat.count("hide-completed") == 2
 
@@ -23,10 +23,12 @@ def test_chat_timeline_hides_completed_items_without_changing_audit_facts() -> N
 def test_chat_timeline_reconciles_each_logical_step_before_hiding_completed_events() -> None:
     timeline = TIMELINE.read_text(encoding="utf-8")
 
-    assert "function eventStepKey(item)" in timeline
+    presentation = (ROOT / "frontend" / "src" / "utils" / "agentRunPresentation.js").read_text(encoding="utf-8")
+    assert "eventStepKey" in timeline and "agentRunPresentation.js" in timeline
+    assert "function eventStepKey(item)" in presentation
     assert "function latestEventItems(items)" in timeline
-    assert "if (item.eventType.startsWith('run.')) return 'run'" in timeline
-    assert "if (item.resourceType) return `resource:${item.resourceType}`" in timeline
+    assert "if (item.eventType.startsWith('run.')) return 'run'" in presentation
+    assert "if (item.resourceType) return `resource:${item.resourceType}`" in presentation
     assert "stageId.startsWith('resource:')" in timeline
     assert "item.eventType === 'run.failed' && hasResourceFailure" in timeline
     assert "const key = item.resourceType || item.resourceItemId" in timeline

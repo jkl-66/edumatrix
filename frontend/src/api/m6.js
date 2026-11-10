@@ -29,3 +29,9 @@ export function confirmM6TeacherIntervention(pathId, learnerEventId) {
     learner_event_id: learnerEventId,
   }, config()))
 }
+
+export function submitM6InterventionStudy(pathId, minutes) {
+  return request(api.post(`/v1/m6/teacher/interventions/${encodeURIComponent(pathId)}/learner-evidence`, {
+    active_seconds: Math.round(Number(minutes) * 60),
+  }, config()))
+}

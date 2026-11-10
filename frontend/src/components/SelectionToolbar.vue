@@ -60,10 +60,10 @@ const selectedResource = computed({
   align-items: center;
   gap: 3px;
   padding: 4px;
-  color: #06141b;
-  border: 1px solid #ccd0cf;
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-surface);
   box-shadow: 0 16px 40px rgb(6 20 27 / 16%);
 }
 
@@ -73,7 +73,7 @@ const selectedResource = computed({
   gap: 4px;
   padding: 4px 8px;
   color: var(--color-danger);
-  border-right: 1px solid #dce2e3;
+  border-right: 1px solid var(--color-border);
   font-size: 14px;
   line-height: 1.35;
 }
@@ -99,14 +99,14 @@ const selectedResource = computed({
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #344957;
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 
 .selection-toolbar button:hover:not(:disabled),
 .selection-toolbar select:hover:not(:disabled) {
-  color: #06141b;
-  background: #edf1f2;
+  color: var(--color-text);
+  background: var(--color-surface-subtle);
 }
 
 .selection-toolbar button:disabled,
@@ -129,7 +129,7 @@ const selectedResource = computed({
 .selection-toolbar__resource select {
   max-width: 106px;
   padding: 0 25px 0 9px;
-  color: #344957;
+  color: var(--color-text-secondary);
   border: 0;
   cursor: pointer;
 }
@@ -138,7 +138,7 @@ const selectedResource = computed({
   width: 1px;
   height: 22px;
   margin: 0 2px;
-  background: #dce2e3;
+  background: var(--color-border);
 }
 
 .selection-toolbar__spinner {

@@ -12,6 +12,7 @@ from app.competition_demo_seed import seed_competition_demo
 from app.database import (
     Base,
     DBAssessmentAttempt,
+    DBCourse,
     DBAssessmentQuestionVersion,
     DBAssessmentReviewCase,
     DBUser,
@@ -132,6 +133,10 @@ def test_workspace_exercise_requires_course_membership(monkeypatch):
         identity["user"] = DBUser(
             public_id="outside-r3-06", username="outside-r3-06", role="student", is_active=True,
         )
+        response = client.get("/api/v1/m5/workspace/exercises/demo-assessment-lzz-rag-01-q01-v1")
+        assert response.status_code == 200  # Published public courses are readable.
+        session.get(DBCourse, "demo-course-rag-trust-v1").visibility = "private"
+        session.commit()
         response = client.get("/api/v1/m5/workspace/exercises/demo-assessment-lzz-rag-01-q01-v1")
         assert response.status_code == 403
     finally:

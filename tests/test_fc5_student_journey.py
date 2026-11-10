@@ -13,6 +13,7 @@ from app.database import (
  DBAssessmentRetestTask,DBCompetitionJourneyRun,DBCompetitionJourneyVisit,DBCourse,DBLearningPath,
  DBPathNode,DBPlanDraft,DBPlanVersion,DBProfileSnapshot,DBUser,
 )
+from app.database import DBSourceDocument
 from app.main import app
 from app.migrations import apply_registered_migrations
 
@@ -21,7 +22,7 @@ def fixture():
  @event.listens_for(engine,'connect')
  def fk(c,_):c.execute('PRAGMA foreign_keys=ON')
  Base.metadata.create_all(engine);apply_registered_migrations(engine);db=sessionmaker(bind=engine)()
- owner=DBUser(public_id='journey-owner',username='journey-owner',display_name='旅程学习者',hashed_password=get_password_hash('pw'),role='student');other=DBUser(public_id='journey-other',username='journey-other',display_name='其他学习者',hashed_password=get_password_hash('pw'),role='student');course=DBCourse(id='journey-course',version='v1',title='人工智能完整课程',status='published',manifest_version='m1');db.add_all([owner,other,course]);db.commit();return db,owner,other,course
+ owner=DBUser(public_id='journey-owner',username='journey-owner',display_name='旅程学习者',hashed_password=get_password_hash('pw'),role='student');other=DBUser(public_id='journey-other',username='journey-other',display_name='其他学习者',hashed_password=get_password_hash('pw'),role='student');course=DBCourse(id='journey-course',version='v1',title='人工智能完整课程',status='published',manifest_version='m1');db.add_all([owner,other,course]);db.flush();db.add(DBSourceDocument(id=course.id + "-source", course_id=course.id, title="合成课程资料", filename="lesson.md", file_format="md", content_hash="1" * 64, processing_status="ready"));db.commit();return db,owner,other,course
 def client(monkeypatch,db,user):
  async def fake(op):return op(db)
  monkeypatch.setattr(journey_api,'run_db_op',fake);app.dependency_overrides[get_current_user]=lambda:user;return TestClient(app)

@@ -28,6 +28,7 @@ def _manifest() -> dict:
 
 def _payload() -> dict:
     return {
+        "estimatedMinutes": 35,
         "summary": "模型评估的完整学习路线",
         "narrative": "先理解指标含义，再比较适用条件，最后完成一次迁移练习。",
         "learningGoal": "能够解释并选择模型评估指标",
@@ -58,7 +59,8 @@ def test_restored_role_and_strategy_prompts_are_available() -> None:
         manifest=_manifest(),
         source_snapshots=[{"source_ref_id": "src-t22", "title": "指标来源", "location_label": "第 1 章", "quote": "指标定义"}],
     )
-    assert "理论教授" in system
+    assert "完整例子" in system
+    assert "按本次待学能力组织" in system
     assert "通用基础知识补足" in system
     assert "handoutSections" in system
     assert "src-t22" in user
@@ -78,7 +80,12 @@ def test_handout_consumes_model_sections_without_fabricating_source_refs() -> No
     assert any(item["title"] == "项目例子" for item in parsed["examples"])
     misconception = next(item for item in parsed["counterExamples"] if item["title"] == "常见误区")
     assert misconception["sourceRefIds"] == []
-    assert len(parsed["outline"]) >= 8
+    # Preserve every real section in the teaching order; do not require
+    # a synthetic eighth heading after removing duplicated quiz explanations.
+    expected = {item["id"] for group in ("concepts", "examples", "counterExamples", "figures", "codeBlocks", "miniQuiz", "transferTasks") for item in parsed.get(group, [])}
+    actual = [item["id"] for item in parsed["outline"]]
+    assert set(actual) == expected
+    assert len(actual) == len(expected)
 
 
 def test_interactive_model_allows_missing_unit_when_template_unit_is_empty() -> None:

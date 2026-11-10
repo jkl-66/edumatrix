@@ -7,6 +7,7 @@ from typing import Any, Literal
 import uuid
 
 from pydantic import ConfigDict, Field
+from sqlalchemy import and_, true
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.database import DBModelCall, DBModelPriceVersion, DBModelQuotaBucket
@@ -51,11 +52,12 @@ class GatewayPolicy(StrictModel):
     allowed_models: tuple[ModelRef, ...] = Field(min_length=1)
     allowed_capabilities: tuple[Capability, ...] = tuple(Capability)
     allowed_data_regions: tuple[str, ...] = ()
-    daily_user_call_limit: int = Field(default=100, ge=1)
-    daily_user_token_limit: int = Field(default=500000, ge=1)
-    daily_user_cost_limit: float = Field(default=10.0, ge=0)
-    daily_course_call_limit: int = Field(default=1000, ge=1)
-    daily_model_call_limit: int = Field(default=10000, ge=1)
+    # Zero means no project-imposed daily quota. Usage is still recorded.
+    daily_user_call_limit: int = Field(default=0, ge=0)
+    daily_user_token_limit: int = Field(default=0, ge=0)
+    daily_user_cost_limit: float = Field(default=0.0, ge=0)
+    daily_course_call_limit: int = Field(default=0, ge=0)
+    daily_model_call_limit: int = Field(default=0, ge=0)
     per_call_cost_limit: float | None = Field(default=None, ge=0)
 
 
@@ -183,18 +185,18 @@ def enforce_daily_quota(
     )
     user = usage["user"]
     if owner_public_id and (
-        user.call_count + 1 > policy.daily_user_call_limit
-        or user.token_count + estimated_input_tokens > policy.daily_user_token_limit
-        or user.estimated_cost
+        (policy.daily_user_call_limit > 0 and user.call_count + 1 > policy.daily_user_call_limit)
+        or (policy.daily_user_token_limit > 0 and user.token_count + estimated_input_tokens > policy.daily_user_token_limit)
+        or (policy.daily_user_cost_limit > 0 and user.estimated_cost
         + estimated_input_tokens * registration.input_cost_per_million / 1_000_000
-        > policy.daily_user_cost_limit
+        > policy.daily_user_cost_limit)
     ):
         raise M5CapabilityError("user_daily_quota_exceeded", "user daily model quota is exhausted")
     course = usage["course"]
-    if course_id and course.call_count + 1 > policy.daily_course_call_limit:
+    if course_id and policy.daily_course_call_limit > 0 and course.call_count + 1 > policy.daily_course_call_limit:
         raise M5CapabilityError("course_daily_quota_exceeded", "course daily model quota is exhausted")
     model = usage["model"]
-    if model.call_count + 1 > policy.daily_model_call_limit:
+    if policy.daily_model_call_limit > 0 and model.call_count + 1 > policy.daily_model_call_limit:
         raise M5CapabilityError("model_daily_quota_exceeded", "model daily call quota is exhausted")
     return usage
 
@@ -228,15 +230,18 @@ def reserve_daily_quota(
     if course_id:
         scopes.append((
             "course", course_id, policy.daily_course_call_limit,
-            2**63 - 1, float("inf"), "course_daily_quota_exceeded",
+            0, 0, "course_daily_quota_exceeded",
         ))
     scopes.append((
         "model", f"{registration.provider}:{registration.model}",
-        policy.daily_model_call_limit, 2**63 - 1, float("inf"),
+        policy.daily_model_call_limit, 0, 0,
         "model_daily_quota_exceeded",
     ))
 
     for scope_type, scope_key, call_limit, token_limit, cost_limit, error_code in scopes:
+        if (token_limit > 0 and tokens > token_limit) or (cost_limit > 0 and cost > cost_limit):
+            session.rollback()
+            raise M5CapabilityError(error_code, f"{scope_type} daily model quota is exhausted")
         insert = sqlite_insert(DBModelQuotaBucket).values(
             id=f"mqb-{uuid.uuid4().hex}",
             scope_type=scope_type,
@@ -252,14 +257,17 @@ def reserve_daily_quota(
             "reserved_cost": DBModelQuotaBucket.reserved_cost + cost,
             "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
         }
+        conditions = []
+        if call_limit > 0:
+            conditions.append(DBModelQuotaBucket.call_count + 1 <= call_limit)
+        if token_limit > 0:
+            conditions.append(DBModelQuotaBucket.reserved_tokens + tokens <= token_limit)
+        if cost_limit > 0:
+            conditions.append(DBModelQuotaBucket.reserved_cost + cost <= cost_limit)
         statement = insert.on_conflict_do_update(
             index_elements=["scope_type", "scope_key", "utc_day"],
             set_=update,
-            where=(
-                (DBModelQuotaBucket.call_count + 1 <= call_limit)
-                & (DBModelQuotaBucket.reserved_tokens + tokens <= token_limit)
-                & (DBModelQuotaBucket.reserved_cost + cost <= cost_limit)
-            ),
+            where=and_(*conditions) if conditions else true(),
         )
         result = session.execute(statement)
         if result.rowcount != 1:

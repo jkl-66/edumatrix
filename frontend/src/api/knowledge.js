@@ -1,4 +1,5 @@
 import { api, buildHeaders } from './common'
+import { getCanonicalSourceRef } from './m1'
 
 export async function getDatasets() {
   const r = await api.get('/datasets', { headers: buildHeaders() })
@@ -54,12 +55,38 @@ export async function getCourseKnowledgeGraph(courseId) {
   return r.data
 }
 
+export async function getCourseStructure(courseId) {
+  const r = await api.get(`/knowledge/courses/${encodeURIComponent(courseId)}/structure`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function saveCourseStructure(courseId, payload) {
+  const r = await api.put(`/knowledge/courses/${encodeURIComponent(courseId)}/structure`, payload, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function confirmCourseStructure(courseId, revision) {
+  const r = await api.post(`/knowledge/courses/${encodeURIComponent(courseId)}/structure/confirm`, { revision }, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function resetCourseStructure(courseId, revision) {
+  const r = await api.post(`/knowledge/courses/${encodeURIComponent(courseId)}/structure/reset`, { revision }, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function analyzeCourseStructure(courseId, revision) {
+  const r = await api.post(`/knowledge/courses/${encodeURIComponent(courseId)}/structure/analyze`, { revision }, { headers: buildHeaders(), timeout: 300000 })
+  return r.data
+}
+
 export async function discoverKnowledgeMaterials(query, maxResults = 8, context = {}) {
   const r = await api.get('/knowledge/discovery/search', {
     headers: buildHeaders(),
     params: {
       q: query,
       max_results: maxResults,
+      ...(context.courseId !== undefined ? { use_profile: Boolean(context.courseId || context.profileSnapshotId) } : {}),
       ...(context.courseId ? { course_id: context.courseId } : {}),
       ...(context.profileSnapshotId ? { profile_snapshot_id: context.profileSnapshotId } : {}),
     },
@@ -116,11 +143,32 @@ export async function getCanonicalCourseSource(sourceDocumentId) {
   return r.data
 }
 
+export async function retryCourseSourceReading(sourceDocumentId) {
+  const r = await api.post(`/knowledge/sources/${encodeURIComponent(sourceDocumentId)}/retry-reading`, {}, {
+    headers: buildHeaders(),
+  })
+  return r.data
+}
+
 export async function getDocumentReaderDocument(sourceDocumentId) {
   const r = await api.get(`/v1/document-reader/documents/${encodeURIComponent(sourceDocumentId)}`, {
     headers: buildHeaders(),
   })
   return r.data
+}
+
+export async function restoreDocumentReaderReferences(document, referenceIds) {
+  const current = document.source_refs || []
+  const existing = new Set(current.map(item => String(item.id || item.source_ref_id || '')))
+  const missing = [...new Set(referenceIds.filter(Boolean).map(String))].filter(id => !existing.has(id))
+  const resolved = await Promise.all(missing.map(async id => {
+    try {
+      const item = await getCanonicalSourceRef(id)
+      return item.available === true && item.source_document_id === document.source_document_id
+        && item.course_id === document.course?.id && item.document_version === document.document_version ? item : null
+    } catch { return null }
+  }))
+  document.source_refs = [...current, ...resolved.filter(Boolean)]
 }
 
 export async function getDocumentReaderState(sourceDocumentId) {

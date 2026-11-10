@@ -38,8 +38,8 @@ async function openReviewNote(task) {
   <div class="review-page">
     <AggregationStatus class="review-feedback" />
     <ReviewScheduleBoard :note-busy-id="noteBusyId" @note="openReviewNote">
-      <template #tools>
-        <ReviewToolsPanel :student-id="activeStudentId" />
+      <template #tools="{ refresh, courseId }">
+        <ReviewToolsPanel :student-id="activeStudentId" :course-id="courseId" @changed="refresh()" />
       </template>
     </ReviewScheduleBoard>
   </div>

@@ -16,8 +16,20 @@ export function createMulticourseDiagnosticPaths(payload) {
   return request(api.post('/v1/diagnostics/multi-course/paths', payload, authConfig()))
 }
 
+export function getMulticourseGenerationTask(params) {
+  return request(api.get('/v1/diagnostics/multi-course/generation-tasks', authConfig(params)))
+}
+
 export function createDiagnosticBlueprint(payload) {
   return request(api.post('/v1/diagnostics/blueprints', payload, authConfig()))
+}
+
+export function getDiagnosticGenerationTask(taskId) {
+  return request(api.get(`/v1/diagnostics/generation-tasks/${encodeURIComponent(taskId)}`, authConfig()))
+}
+
+export function findDiagnosticGenerationTask(params) {
+  return request(api.get('/v1/diagnostics/generation-tasks', authConfig(params)))
 }
 
 export function getDiagnosticBlueprint(blueprintId) {
@@ -30,6 +42,10 @@ export function startDiagnosticSession(blueprintId) {
 
 export function getDiagnosticSession(sessionId) {
   return request(api.get(`/v1/diagnostics/sessions/${encodeURIComponent(sessionId)}`, authConfig()))
+}
+
+export function getDiagnosticReportTask(sessionId) {
+  return request(api.get(`/v1/diagnostics/sessions/${encodeURIComponent(sessionId)}/report-task`, authConfig()))
 }
 
 export function saveDiagnosticResponse(sessionId, questionVersionId, payload) {

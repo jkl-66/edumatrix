@@ -225,6 +225,12 @@ def append_public_run_event(
     events = [dict(item) for item in (next_checkpoint.get("runEvents") or []) if isinstance(item, dict)]
     normalized_input_refs = list(_input_refs(input_refs))
     normalized_output_refs = list(_input_refs(output_refs))
+    # Repeated delivery within one attempt is idempotent. A later user retry is
+    # a new attempt even though it keeps the same message and run identity.
+    attempt_start = max((index + 1 for index, item in enumerate(events)
+                         if item.get("runId") == stable_run_id
+                         and item.get("eventType") == "run.retry"), default=0)
+    duplicate_candidates = events[-1:] if event_type == "run.retry" else events[attempt_start:]
     duplicate = any(
         item.get("runId") == stable_run_id
         and item.get("eventType") == event_type
@@ -238,7 +244,7 @@ def append_public_run_event(
             )
         )
         and item.get("resourceItemId", "") == _clean_text(resource_item_id)
-        for item in events
+        for item in duplicate_candidates
     )
     if not duplicate:
         events.append(build_public_run_event(
@@ -447,8 +453,8 @@ def build_selection_agent_audit(
                 run_id=f"{audit_id}:analysis",
                 role="analysis",
                 input_refs=input_refs,
-                candidate_summary="服务端已读取当前选区及其冻结来源位置。",
-                validation="选区身份与文档版本已经核对。",
+                candidate_summary="已读过你选中的内容和对应原文。",
+                validation="已确认回答依据来自你正在阅读的这份资料。",
                 decision_summary="仅使用当前选区作为回答依据。",
                 status="completed",
             ),
@@ -458,18 +464,18 @@ def build_selection_agent_audit(
                 input_refs=input_refs,
                 candidate_summary=(
                     "已依据选区原文整理回答。"
-                    if ready else "当前选区没有可验证文字，未生成无依据回答。"
+                    if ready else "暂时无法读清选中区域的文字，还不能据此解答。"
                 ),
-                validation="" if ready else "图片 OCR 未提供可验证文字。",
-                decision_summary="" if ready else "保留选区，等待重试 OCR 或重新框选。",
+                validation="" if ready else "图片中的文字尚未识别清楚。",
+                decision_summary="" if ready else "已保留选区，可以重新识别或换一个清晰区域。",
                 status=generation_status,
             ),
             build_public_agent_run(
                 run_id=f"{audit_id}:validation",
                 role="validation",
                 input_refs=input_refs if ready else (),
-                validation="回答内容被限制在当前选区证据范围内。" if ready else "",
-                decision_summary="来源引用可反向定位到原文。" if ready else "",
+                validation="回答只解释选中内容，没有把资料未说明的内容当作结论。" if ready else "",
+                decision_summary="可以打开参考材料，回看对应原文。" if ready else "",
                 status=later_status,
             ),
             build_public_agent_run(

@@ -1,4 +1,5 @@
 <script setup>
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -134,7 +135,12 @@ function normalizedEvidenceFields() {
 
 function scrollToLatest() {
   nextTick(() => {
-    if (conversation.value) conversation.value.scrollTop = conversation.value.scrollHeight
+    if (!conversation.value) return
+    const editor = conversation.value.querySelector('[data-testid="onboarding-candidate-editor"]')
+    if (editor) {
+      conversation.value.scrollTop = Math.max(0, editor.getBoundingClientRect().top
+        - conversation.value.getBoundingClientRect().top + conversation.value.scrollTop - 16)
+    } else conversation.value.scrollTop = conversation.value.scrollHeight
   })
 }
 
@@ -360,9 +366,8 @@ onMounted(loadSession)
     <section v-if="session?.featureEnabled !== false" class="onboarding-shell">
       <nav class="dimension-progress" aria-label="画像构建进度" data-testid="onboarding-progress">
         <div class="conversation-progress-copy">
-          <span class="eyebrow"><Sparkles :size="14" />边聊边形成你的学习方式</span>
-          <strong>{{ completed ? `已经聊到第 ${completed} 段` : '从你最近的经历开始' }}</strong>
-          <small>你可以随时补充或改口，不需要按栏目填写</small>
+          <strong>从你的经历开始</strong>
+          <span>聊聊想学什么、已有基础和方便的学习时间</span>
         </div>
         <div class="progress-dots" aria-hidden="true">
           <span v-for="item in session?.dimensions || []" :key="item.key" :class="item.status"></span>
@@ -377,7 +382,7 @@ onMounted(loadSession)
             <template v-else>
               <div class="message system-message">
                 <span class="message-avatar"><Sparkles :size="16" /></span>
-                <div><strong>学习伙伴</strong><p>{{ session?.assistantOpening || '我不会让你按表格填资料。你可以从最近在学什么、为什么想学、遇到什么卡点开始说，我会顺着你的话继续了解你。' }}</p></div>
+                <div><strong>学习伙伴</strong><p>{{ session?.assistantOpening || '你想学什么？也可以聊聊目前的基础和最近遇到的困惑。' }}</p></div>
               </div>
 
               <template v-for="turn in session?.turns || []" :key="turn.turnId">
@@ -393,9 +398,9 @@ onMounted(loadSession)
                     <small v-else-if="turn.status === 'submission_failed'" class="message-status is-error">本轮未完成，可保留原话后重试</small>
                   </div>
                 </div>
-                <div v-if="turn.assistantReply" class="message system-message reflection-message">
+                <div v-if="turn.assistantReply && turn.turnId !== candidateTurn?.turnId" class="message system-message reflection-message">
                   <span class="message-avatar"><Sparkles :size="16" /></span>
-                  <div><strong>学习伙伴</strong><p>{{ turn.assistantReply }}</p><small v-if="turn.signalHighlights?.length">{{ turn.signalHighlights[0] }}</small></div>
+                  <div><strong>学习伙伴</strong><p>{{ turn.confirmedSummary || turn.extractedCandidates?.understanding || turn.assistantReply }}</p></div>
                 </div>
               </template>
 
@@ -403,7 +408,7 @@ onMounted(loadSession)
                 <header>
                   <div>
                     <span><Edit3 :size="15" /> 本轮整理结果</span>
-                    <strong>{{ candidateTurn.status === 'conflict' ? '请确认是否更新已有信息' : '确认后才会写入画像' }}</strong>
+                    <strong>{{ candidateTurn.status === 'conflict' ? '请确认是否更新已有信息' : '请确认这些学习信息' }}</strong>
                   </div>
                   <span class="saved-badge"><CheckCircle2 :size="14" />回答已保存</span>
                 </header>
@@ -429,7 +434,7 @@ onMounted(loadSession)
                   </fieldset>
                   <label v-else>
                     <span>{{ field.label }}</span>
-                    <textarea v-if="field.kind === 'list'" v-model="candidateValues[field.key]" rows="2" />
+                    <textarea v-if="field.kind === 'list' || String(field.value || '').length > 72 || String(field.value || '').includes('\n')" v-model="candidateValues[field.key]" :rows="field.kind === 'list' ? 2 : 3" />
                     <input v-else v-model="candidateValues[field.key]" type="text" />
                   </label>
                 </template>
@@ -443,33 +448,32 @@ onMounted(loadSession)
               <div v-if="pendingEvidence" class="evidence-editor" data-testid="onboarding-evidence-editor">
                 <header>
                   <div>
-                    <span><FileText :size="15" /> {{ pendingEvidence.evidenceLabel }}抽取结果</span>
-                    <strong>只采用你确认过的字段</strong>
+                    <span><FileText :size="15" /> {{ pendingEvidence.evidenceLabel }}阅读结果</span>
+                    <strong>请纠正不准确的内容，确认后再用于学习安排</strong>
                   </div>
                   <button type="button" class="icon-action" title="忽略这份资料" :disabled="Boolean(evidenceAction)" @click="discardEvidence(pendingEvidence)"><Trash2 :size="16" /></button>
                 </header>
-                <p class="evidence-source">{{ pendingEvidence.filename }} · 文件仅用于本次画像，不会加入课程知识库</p>
+                <p class="evidence-source">{{ pendingEvidence.filename }} · 用于了解学习经历</p>
                 <label v-for="field in pendingEvidence.candidates" :key="field.key">
-                  <span>{{ field.label }} <small>置信度 {{ Math.round(field.confidence * 100) }}%</small></span>
+                  <span>{{ field.label }}</span>
                   <div v-if="field.conflict" class="field-conflict">
                     <span><strong>当前值</strong>{{ Array.isArray(field.currentValue) ? field.currentValue.join('；') : field.currentValue }}</span>
-                    <small>{{ field.currentSource }} · {{ field.currentSourceRef }}</small>
+                    <small>来自你之前确认的学习情况</small>
                     <span><strong>资料值</strong>{{ Array.isArray(field.value) ? field.value.join('；') : field.value }}</span>
-                    <small>{{ field.sourceRef }}</small>
+                    <small>来自本次上传的{{ pendingEvidence.filename }}</small>
                   </div>
                   <textarea v-if="field.kind === 'list'" v-model="evidenceValues[field.key]" rows="2" />
                   <input v-else v-model="evidenceValues[field.key]" type="text" />
-                  <small>{{ field.sourceRef }}</small>
                 </label>
                 <button type="button" class="secondary-action" :disabled="Boolean(evidenceAction)" @click="confirmEvidence">
                   <LoaderCircle v-if="evidenceAction" class="spin" :size="16" />
-                  <Check v-else :size="16" />确认资料字段
+                  <Check v-else :size="16" />确认资料内容
                 </button>
               </div>
 
               <div v-for="item in failedEvidence" :key="item.evidenceId" class="evidence-failure" data-testid="onboarding-evidence-failure">
                 <AlertCircle :size="16" />
-                <div><strong>{{ item.filename }} 未形成候选字段</strong><p>{{ item.error }} 对话和入学诊断不受影响。</p></div>
+                <div><strong>{{ item.filename }} 暂时没有读懂</strong><p>{{ item.error }} 你仍可以继续对话和入学诊断。</p></div>
                 <button type="button" class="icon-action" title="忽略这份资料" :disabled="Boolean(evidenceAction)" @click="discardEvidence(item)"><Trash2 :size="16" /></button>
               </div>
 
@@ -485,7 +489,7 @@ onMounted(loadSession)
                 <CheckCircle2 :size="24" />
                 <div>
                   <strong>{{ isFinalized ? '初始画像已经建立' : '五轮对话已经完成' }}</strong>
-                  <p>{{ isFinalized ? '下一步通过入学诊断把自述与真实作答证据结合，生成第一版学习路径。' : pendingEvidence ? '请先确认或忽略上方资料字段。' : '确认后生成唯一初始画像快照；自述和资料不会直接当作掌握度。' }}</p>
+                  <p>{{ isFinalized ? '接下来选择课程，做一次入学诊断，找到合适的学习起点。' : pendingEvidence ? '请先确认或忽略上方资料内容。' : '确认后，可以选择课程并开始入学诊断。' }}</p>
                 </div>
                 <button v-if="!isFinalized" type="button" class="primary-action" :disabled="Boolean(pendingEvidence) || confirming" @click="finalizeProfile">
                   <LoaderCircle v-if="confirming" class="spin" :size="16" /><Check v-else :size="16" />确认初始画像
@@ -495,7 +499,7 @@ onMounted(loadSession)
             </template>
           </div>
 
-          <div v-if="error" class="error-banner" role="alert"><AlertCircle :size="16" />{{ error }}<button type="button" title="重新加载" @click="loadSession"><RotateCcw :size="15" /></button></div>
+          <div v-if="error" class="error-banner" role="alert"><AlertCircle :size="16" />{{ userMessage(error) }}<button type="button" title="重新加载" @click="loadSession"><RotateCcw :size="15" /></button></div>
 
           <form class="answer-composer" @submit.prevent="sendAnswer">
             <label for="onboarding-answer">你的回答</label>
@@ -522,7 +526,7 @@ onMounted(loadSession)
                 <LoaderCircle v-if="uploading" class="spin" :size="16" /><Paperclip v-else :size="16" />可选个人资料
               </button>
               <input ref="evidenceInput" class="visually-hidden" type="file" accept=".pdf,.docx,.txt,.md" @change="uploadEvidence" />
-              <span>不需要上传课程材料，系统直接使用团队预置并已解析的课程知识库。</span>
+              <span>这些资料可帮助补充学习基础与时间安排。课程可以稍后选择，也可以用自己的资料创建。</span>
             </div>
           </form>
         </section>
@@ -533,7 +537,7 @@ onMounted(loadSession)
 
     <section v-else class="legacy-onboarding" data-testid="legacy-onboarding">
       <header><BookOpen :size="22" /><div><span>兼容初始化</span><h1>先填写最基本的学习信息</h1></div></header>
-      <p>自然语言画像引导当前已关闭。此前保存的对话不会删除，你仍可通过这份简表进入原有学习空间。</p>
+      <p>填写学习信息后进入学习空间。</p>
       <div class="legacy-grid">
         <label><span>专业方向</span><input v-model="legacyForm.major" /></label>
         <label><span>学习目标</span><input v-model="legacyForm.goal" /></label>
@@ -541,7 +545,7 @@ onMounted(loadSession)
         <label><span>主要困难</span><input v-model="legacyForm.difficulty" /></label>
         <label><span>学习偏好</span><input v-model="legacyForm.preference" /></label>
       </div>
-      <div v-if="error" class="error-banner" role="alert"><AlertCircle :size="16" />{{ error }}</div>
+      <div v-if="error" class="error-banner" role="alert"><AlertCircle :size="16" />{{ userMessage(error) }}</div>
       <button type="button" class="primary-action" :disabled="confirming" @click="finishLegacy">进入原有学习空间<ArrowRight :size="16" /></button>
     </section>
   </main>
@@ -551,7 +555,7 @@ onMounted(loadSession)
 .onboarding-page {
   min-height: 100vh;
   color: var(--color-text);
-  background: #f3f6f6;
+  background: var(--gradient-workspace);
   font-family: var(--font-sans);
 }
 
@@ -561,8 +565,8 @@ onMounted(loadSession)
   align-items: center;
   gap: 13px;
   padding: 0 28px;
-  border-bottom: 1px solid var(--color-border);
-  background: #ffffff;
+  border-bottom: 0;
+  background: rgb(255 255 255 / 45%);
 }
 
 .brand-mark {
@@ -572,7 +576,7 @@ onMounted(loadSession)
   place-items: center;
   color: #ffffff;
   border-radius: 7px;
-  background: #06141b;
+  background: var(--color-text);
   font-family: var(--font-display);
   font-size: 19px;
   font-weight: 700;
@@ -614,14 +618,14 @@ onMounted(loadSession)
 .dimension-progress {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto 84px;
-  height: 62px;
+  min-height: 62px;
   align-items: center;
   gap: 10px;
   margin-bottom: 14px;
-  padding: 0 16px;
+  padding: 10px 16px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-panel);
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .conversation-progress-copy {
@@ -631,12 +635,11 @@ onMounted(loadSession)
   line-height: 1.2;
 }
 
-.conversation-progress-copy .eyebrow { color: var(--color-accent); font-size: 13px; font-weight: 700; }
 .conversation-progress-copy strong { font-size: 15px; }
-.conversation-progress-copy small { color: var(--color-text-muted); font-size: 12px; }
+.conversation-progress-copy > span { color: var(--color-text-secondary); font-size: 14px; line-height: 1.4; }
 
 .progress-dots { display: flex; align-items: center; gap: 7px; padding: 0 18px; }
-.progress-dots span { width: 9px; height: 9px; border: 1px solid var(--color-border-strong); border-radius: 50%; background: #fff; transition: background .2s ease, transform .2s ease; }
+.progress-dots span { width: 9px; height: 9px; border: 1px solid var(--color-border-strong); border-radius: 50%; background: var(--color-surface); transition: background .2s ease, transform .2s ease; }
 .progress-dots span.current { border-color: var(--color-accent); background: var(--color-accent); transform: scale(1.25); }
 .progress-dots span.confirmed { border-color: var(--color-accent); background: var(--color-accent-soft); }
 
@@ -657,7 +660,7 @@ onMounted(loadSession)
   place-items: center;
   border: 1px solid var(--color-border-strong);
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--color-surface);
   font-weight: 700;
 }
 
@@ -674,7 +677,7 @@ onMounted(loadSession)
 
 .dimension-step.confirmed > span {
   color: var(--color-accent);
-  border-color: #ccd0cf;
+  border-color: var(--color-border-strong);
   background: var(--color-accent-soft);
 }
 
@@ -710,7 +713,7 @@ onMounted(loadSession)
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-panel);
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .conversation-scroll {
@@ -768,8 +771,8 @@ onMounted(loadSession)
 
 .user-message > div {
   color: #ffffff;
-  border-color: #11212d;
-  background: #11212d;
+  border-color: var(--color-text);
+  background: var(--color-text);
 }
 
 .compact-message { margin-bottom: 10px; }
@@ -783,9 +786,9 @@ onMounted(loadSession)
 .completion-panel {
   margin: 6px 0 22px 44px;
   padding: 18px;
-  border: 1px solid #ccd0cf;
+  border: 1px solid var(--color-border-strong);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .candidate-editor > header,
@@ -831,9 +834,9 @@ onMounted(loadSession)
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 4px 12px;
   padding: 10px 12px;
-  border: 1px solid #ccd0cf;
+  border: 1px solid var(--color-border-strong);
   border-radius: 6px;
-  background: #f1f4f4;
+  background: var(--color-surface-subtle);
 }
 .field-conflict span { min-width: 0; color: var(--color-text); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .field-conflict span strong { margin-right: 7px; color: var(--color-accent); }
@@ -850,7 +853,7 @@ onMounted(loadSession)
   border: 1px solid var(--color-border-strong);
   border-radius: 6px;
   outline: none;
-  background: #ffffff;
+  background: var(--color-surface);
   font-size: 15px;
   line-height: 1.55;
   resize: vertical;
@@ -925,7 +928,7 @@ onMounted(loadSession)
   color: var(--color-text-secondary);
   border: 1px solid var(--color-border);
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--color-surface);
   cursor: pointer;
 }
 
@@ -940,7 +943,7 @@ onMounted(loadSession)
   color: var(--color-accent);
   border: 1px solid var(--color-border-strong);
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--color-surface);
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
@@ -959,9 +962,9 @@ onMounted(loadSession)
   gap: 8px;
   padding: 0 16px;
   color: #ffffff;
-  border: 1px solid #11212d;
+  border: 1px solid var(--color-text);
   border-radius: 6px;
-  background: #11212d;
+  background: var(--color-text);
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
@@ -1002,7 +1005,7 @@ onMounted(loadSession)
   gap: 7px;
   padding: 15px 20px 17px;
   border-top: 1px solid var(--color-border);
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .answer-composer > label { font-size: 14px; font-weight: 700; }
@@ -1057,13 +1060,13 @@ onMounted(loadSession)
   padding: 0 10px;
   color: var(--color-text-secondary);
   border: 0;
-  background: #ffffff;
+  background: var(--color-surface);
   font-size: 14px;
   cursor: pointer;
 }
 
 .evidence-type button + button { border-left: 1px solid var(--color-border); }
-.evidence-type button.active { color: #ffffff; background: #11212d; }
+.evidence-type button.active { color: #ffffff; background: var(--color-text); }
 
 .visually-hidden {
   position: absolute;
@@ -1079,9 +1082,9 @@ onMounted(loadSession)
   display: grid;
   place-items: center;
   color: #ffffff;
-  border: 1px solid #11212d;
+  border: 1px solid var(--color-text);
   border-radius: 6px;
-  background: #11212d;
+  background: var(--color-text);
   cursor: pointer;
 }
 
@@ -1093,7 +1096,7 @@ onMounted(loadSession)
   padding: 30px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .legacy-onboarding > header { display: flex; align-items: center; gap: 12px; }
@@ -1108,7 +1111,7 @@ onMounted(loadSession)
 
 @media (max-height: 800px) {
   .onboarding-shell { padding-top: 12px; }
-  .dimension-progress { height: 56px; margin-bottom: 10px; }
+  .dimension-progress { min-height: 56px; margin-bottom: 10px; }
   .onboarding-body { height: calc(100vh - 154px); min-height: 560px; }
   .conversation-scroll { padding-top: 18px; padding-bottom: 18px; }
   .message { margin-bottom: 13px; }

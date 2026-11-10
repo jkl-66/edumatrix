@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
+import weakref
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -18,9 +20,12 @@ from app.auth import get_current_user
 from app.agent_audit import append_public_run_event, build_chat_agent_audit
 from app.authorization import require_course_access
 from app.database import (
+    DBArtifact,
+    DBArtifactVersion,
     DBChatAttachment,
     DBChatConversation,
     DBChatMessage,
+    DBGenerationTask,
     DBCourse,
     DBKnowledgePoint,
     DBLearningPath,
@@ -41,11 +46,16 @@ from app.resource_bundles import (
     execute_generation_job,
     execute_generation_job_demo,
     generation_job_payload,
+    resource_completion_rule,
 )
 from app.schemas import ContextRef
-from app.source_refs import chat_source_ref, project_source_ref
-from app.profile_adaptation import build_profile_adaptation, profile_has_signal, profile_prompt_context
+from app.source_refs import chat_source_ref, project_source_ref, source_ref_teaching_text
+from app.profile_adaptation import (
+    build_profile_adaptation, complete_learning_snapshot, profile_has_signal,
+    profile_prompt_context, with_current_learning_evidence,
+)
 from app.profile_onboarding import latest_profile_snapshot_for_course
+from app.learner_output import resource_failure_feedback
 from config import CONFIG
 from document_parser import DocumentParseError, parse_document
 
@@ -63,6 +73,17 @@ PERMANENT_PARSE_ERRORS = {
     "document_text_empty",
     "image_invalid",
 }
+
+# A browser reconnect may resume the same resource message while its previous
+# SSE worker is still running.  Keep one in-process executor for each job so a
+# reconnect waits for the first run and then re-reads its persisted state.
+_RESOURCE_EXECUTION_LOCKS = weakref.WeakValueDictionary()
+_RESOURCE_EXECUTION_LOCKS_GUARD = threading.Lock()
+
+
+def _resource_execution_lock(message_id: str) -> threading.Lock:
+    with _RESOURCE_EXECUTION_LOCKS_GUARD:
+        return _RESOURCE_EXECUTION_LOCKS.setdefault(str(message_id), threading.Lock())
 
 
 class ConversationInput(StrictModel):
@@ -82,11 +103,13 @@ class AttachmentActionInput(StrictModel):
 class MessageInput(StrictModel):
     content: str = Field(default="", max_length=50000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=8)
-    context_refs: list[ContextRef] = Field(default_factory=list, max_length=8)
+    context_refs: list[ContextRef] = Field(default_factory=list)
     idempotency_key: str = Field(min_length=8, max_length=128)
     intent: Literal["chat", "general_qa", "course_qa", "image_qa", "code_qa", "resource_generation", "path_bundle"] = "chat"
     resource_types: list[str] = Field(default_factory=list, max_length=9)
     context_snapshot_id: str = Field(default="", max_length=128)
+    source_message_id: str = Field(default="", max_length=128)
+    retrieval_mode: Literal["hybrid", "hipporag2"] | None = None
     return_to: str = Field(default="", max_length=2048)
 
 
@@ -151,6 +174,12 @@ def _message_resource_types(payload: MessageInput) -> list[str]:
     if payload.intent in {"resource_generation", "path_bundle"} and not values:
         _fail(422, "chat_resource_types_required", "资源生成消息至少需要一种资源类型")
     return values
+
+
+def _utc_text(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return (value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value).isoformat()
 
 
 def _course(db: Any, actor: DBUser, course_id: str | None) -> DBCourse | None:
@@ -312,8 +341,8 @@ def attachment_payload(row: DBChatAttachment) -> dict[str, Any]:
         "partialConfirmed": bool(row.partial_confirmed),
         "canSend": row.status == "ready" or (row.status == "partial_failed" and row.partial_confirmed),
         "lockVersion": row.lock_version,
-        "createdAt": row.created_at.isoformat() if row.created_at else "",
-        "updatedAt": row.updated_at.isoformat() if row.updated_at else "",
+        "createdAt": _utc_text(row.created_at),
+        "updatedAt": _utc_text(row.updated_at),
     }
 
 
@@ -326,6 +355,9 @@ def _message_source_refs(
 ) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     for frozen in list(row.source_refs or []):
+        if frozen.get("kind") == "resource_version":
+            refs.append({key: value for key, value in frozen.items() if key != "quote"})
+            continue
         source_ref_id = frozen.get("sourceRefId") or frozen.get("source_ref_id")
         if frozen.get("kind") != "canonical_source" or not source_ref_id or db is None or actor is None:
             refs.append(dict(frozen))
@@ -378,7 +410,7 @@ def _historical_answer(db: Any, row: DBChatMessage) -> dict[str, Any] | None:
     return {
         "label": "历史已完成回答（非本次结果）",
         "messageId": previous.id,
-        "completedAt": previous.completed_at.isoformat() if previous.completed_at else "",
+        "completedAt": _utc_text(previous.completed_at),
         "preview": " ".join(str(previous.content or "").split())[:180],
         "route": f"/learn?conversation_id={row.conversation_id}&message_id={previous.id}",
     }
@@ -490,6 +522,9 @@ def record_chat_orchestration_metadata(
     course_grounding: str,
     agent_roles: list[str] | None = None,
     claims: list[dict[str, Any]] | None = None,
+    claim_review_history: list[dict[str, Any]] | None = None,
+    answer_revision: dict[str, Any] | None = None,
+    learning_task_plan: dict[str, Any] | None = None,
 ) -> DBChatMessage:
     """Persist public, replayable orchestration facts beside the message."""
     row = _owned_message(db, actor, assistant_message_id)
@@ -502,8 +537,20 @@ def record_chat_orchestration_metadata(
         "agentRoles": [str(item)[:80] for item in (agent_roles or [])[:16]],
     }
     checkpoint["claims"] = [
-        dict(item) for item in (claims or [])[:32] if isinstance(item, dict)
+        dict(item) for item in (claims or []) if isinstance(item, dict)
     ]
+    if learning_task_plan is not None:
+        # Public exercise specification, not private reasoning. Reuse it when
+        # an interrupted answer continues so the learner's task cannot change.
+        checkpoint["learningTaskPlan"] = dict(learning_task_plan)
+    if claim_review_history:
+        checkpoint['claimReviewHistory'] = claim_review_history
+    else:
+        checkpoint.pop('claimReviewHistory', None)
+    if answer_revision:
+        checkpoint['answerRevision'] = answer_revision
+    else:
+        checkpoint.pop('answerRevision', None)
     row.stream_checkpoint = checkpoint
     _set_message_agent_audit(row, row.status)
     row.lock_version += 1
@@ -520,25 +567,69 @@ def message_payload(
     course_id: str | None = None,
 ) -> dict[str, Any]:
     checkpoint = dict(row.stream_checkpoint or {})
+    content, status = row.content, row.status
+    resource_links = list(row.resource_links or [])
+    updated_at, completed_at = row.updated_at, row.completed_at
+    if checkpoint.get("intent") in {"resource_generation", "path_bundle"}:
+        checkpoint["runEvents"] = [
+            {**event, "summary": resource_failure_feedback(event.get("summary"))}
+            for event in checkpoint.get("runEvents") or []
+        ]
+        # Correct the old zero-success display without rewriting saved history.
+        if re.match(r"^资源生成已完成：成功\s*0\s*项，失败\s*[1-9]\d*\s*项", content or ""):
+            content = "本次学习资源还没有准备好。请查看需要调整的地方，再重试未完成的内容。"
+            status = "failed"
+            checkpoint["resourceStatus"] = "failed"
+            checkpoint["agentAudit"] = {**(checkpoint.get("agentAudit") or {}), "status": "failed"}
+        # A retry made on the resource page can finish after this chat message.
+        # Project its current result while keeping the original failure record intact.
+        task_id = checkpoint.get("resourceJobId")
+        if db is not None and actor is not None and row.role == "assistant" and task_id and checkpoint.get("resourceStatus") not in {"succeeded", "completed"}:
+            task = db.get(DBGenerationTask, task_id)
+            if task and task.owner_public_id == actor.public_id and task.automation_state:
+                job = generation_job_payload(db, actor, task_id)
+                checkpoint = _project_resource_events({**checkpoint, "runEvents": []}, job=job)
+                resource_links = _resource_links_from_job(job)
+                content = job["automation"]["message"]
+                status = "completed" if task.automation_state != "needs_attention" else "failed"
+            if task and task.owner_public_id == actor.public_id and task.status == "completed":
+                job = generation_job_payload(db, actor, task_id)
+                if job.get("publish_gate", {}).get("status") == "completed":
+                    checkpoint = _project_resource_events({**checkpoint, "runEvents": []}, job=job)
+                    resource_links = _resource_links_from_job(job)
+                    status = "completed"
+                    content = f"已准备好 {len(resource_links)} 项学习资源，可以打开学习。"
+                    checkpoint.pop("resourceFailure", None)
+                    checkpoint["agentAudit"] = build_chat_agent_audit(
+                        message_id=row.id, status=status, input_refs=_audit_input_refs(row),
+                        source_count=sum(item.get("kind") == "canonical_source" and item.get("available", True) for item in row.source_refs or []),
+                        source_unavailable_count=sum(item.get("kind") == "canonical_source" and item.get("available") is False for item in row.source_refs or []),
+                        attachment_count=len(row.attachment_ids or []),
+                        received_characters=len(content), answer_has_inline_citations=False,
+                        execution_mode=str(checkpoint.get("modelState") or ""),
+                        run_events=checkpoint.get("runEvents") or (),
+                    )
+                    updated_at, completed_at = task.updated_at, task.completed_at
     return {
         "id": row.id,
         "conversationId": row.conversation_id,
         "replyToMessageId": row.reply_to_message_id,
         "sequence": row.sequence,
         "role": row.role,
-        "status": row.status,
-        "content": row.content,
+        "status": status,
+        "content": content,
         "contextRefs": list(row.context_refs or []),
         "attachmentIds": list(row.attachment_ids or []),
         "idempotencyKey": row.idempotency_key,
         "sourceRefs": _message_source_refs(row, db=db, actor=actor, course_id=course_id),
-        "resourceLinks": list(row.resource_links or []),
+        "resourceLinks": resource_links,
         "streamCheckpoint": checkpoint,
         "contextSnapshot": checkpoint.get("contextSnapshot"),
         "intent": checkpoint.get("intent", "chat"),
         "resourceTypes": list(checkpoint.get("resourceTypes") or []),
         "resourceJobId": checkpoint.get("resourceJobId", ""),
         "resourceStatus": checkpoint.get("resourceStatus", ""),
+        "resourceAutomation": checkpoint.get("resourceAutomation", {}),
         "resourceManifest": dict(checkpoint.get("resourceManifest") or {}),
         "contextSnapshotId": checkpoint.get("requestedContextSnapshotId") or (
             checkpoint.get("contextSnapshot") or {}
@@ -550,12 +641,12 @@ def message_payload(
         "agentAudit": checkpoint.get("agentAudit"),
         "failure": {
             "code": row.error_code,
-            "message": row.error_message,
-        } if row.status == "failed" else None,
+            "message": row.error_message or "本次学习资源还没有准备好，可以重试未完成的内容。",
+        } if status == "failed" else None,
         "lockVersion": row.lock_version,
-        "createdAt": row.created_at.isoformat() if row.created_at else "",
-        "updatedAt": row.updated_at.isoformat() if row.updated_at else "",
-        "completedAt": row.completed_at.isoformat() if row.completed_at else "",
+        "createdAt": _utc_text(row.created_at),
+        "updatedAt": _utc_text(updated_at),
+        "completedAt": _utc_text(completed_at),
     }
 
 
@@ -567,17 +658,26 @@ def conversation_payload(
     include_messages: bool = True,
 ) -> dict[str, Any]:
     courses = _conversation_courses(db, row)
+    title = row.title
+    if title in {'新对话', '通用对话', '学习材料问答'} or any(title == f"{course['title']}对话" for course in courses):
+        first_question = db.query(DBChatMessage.content).filter_by(
+            conversation_id=row.id, owner_public_id=row.owner_public_id, role='user',
+        ).order_by(DBChatMessage.sequence).first()
+        if first_question and first_question[0].strip():
+            # A readable excerpt needs no extra model call. Keep the original
+            # question and explicitly named conversations unchanged.
+            title = ' '.join(first_question[0].split())[:64]
     payload = {
         "id": row.id,
         "courseId": row.course_id,
         "courseIds": [item["id"] for item in courses],
         "courses": courses,
         "contextMode": "course" if courses else "general",
-        "title": row.title,
+        "title": title,
         "status": row.status,
         "lockVersion": row.lock_version,
-        "createdAt": row.created_at.isoformat() if row.created_at else "",
-        "updatedAt": row.updated_at.isoformat() if row.updated_at else "",
+        "createdAt": _utc_text(row.created_at),
+        "updatedAt": _utc_text(row.updated_at),
     }
     if include_messages:
         messages = db.query(DBChatMessage).filter_by(
@@ -627,7 +727,7 @@ def _parse_image(raw: bytes, filename: str, source_sha256: str) -> dict[str, Any
     adapter = RapidOCROfflineAdapter()
     available, engine_version = adapter.runtime()
     if not available:
-        warnings.append("本地 OCR 未安装；图片仍可发送，但文字识别依赖当前多模态模型能力。")
+        warnings.append("图片文字尚未单独提取，可以尝试发送原图继续理解。")
         return {
             "status": "ready",
             "text": text,
@@ -657,7 +757,7 @@ def _parse_image(raw: bytes, filename: str, source_sha256: str) -> dict[str, Any
             "metadata": {"regionId": region.region_id, "regionType": region.region_type, "confidence": region.confidence},
         } for index, region in enumerate(regions, 1))
         if not text:
-            warnings.append("图片中未识别到可提取文字；回答将依赖当前多模态模型能力。")
+            warnings.append("图片中暂未识别到文字，可以尝试结合原图提问。")
         parser_version = "edumatrix-image-ocr-v1"
         return {
             "status": "ready",
@@ -668,7 +768,7 @@ def _parse_image(raw: bytes, filename: str, source_sha256: str) -> dict[str, Any
             "warnings": warnings,
         }
     except Exception:
-        warnings.append("图片已读取，但本地 OCR 失败；确认后仍可按原图发送。")
+        warnings.append("图片已读取，但文字暂未识别成功；确认后仍可按原图发送。")
         return {
             "status": "partial_failed",
             "text": text,
@@ -713,8 +813,117 @@ def _resolve_contexts(db: Any, actor: DBUser, conversation: DBChatConversation, 
         course = payload.get("course") or {}
         if str(course.get("status") or "") in {"archived", "withdrawn"}:
             _fail(409, "chat_course_unavailable", "课程已归档或不可用，不能用于新的对话上下文")
+        if ref.resource_id:
+            version_id = ref.resource_version_id or (payload.get("resource") or {}).get("version")
+            version = db.get(DBArtifactVersion, version_id)
+            if version is None or version.artifact_id != ref.resource_id:
+                _fail(409, "chat_resource_version_unavailable", "所选学习材料版本不可用，请重新选择。")
+            payload["resource"]["version"] = version.id
         resolved.append(payload)
     return resolved
+
+
+def _video_teaching_text(value: Any) -> str:
+    """Use the saved video descriptions as readable evidence, not protocol JSON."""
+    if not isinstance(value, dict):
+        return ''
+    lines = []
+    for key, label in [('title', '标题'), ('summary', '学习说明'), ('author', '作者'),
+                       ('language', '语言'), ('reason', '推荐理由'), ('learningFocus', '学习重点'),
+                       ('learningGoal', '学习目标'), ('adaptationSummary', '学习建议')]:
+        if value.get(key):
+            lines.append(f'{label}：{value[key]}')
+    if 'startSeconds' in value and 'endSeconds' in value:
+        lines.append(f"时间：{value['startSeconds']}–{value['endSeconds']}秒")
+    for key, label in [('learningObjectives', '学习目标'), ('studySuggestions', '学习建议')]:
+        for entry in value.get(key) or []:
+            lines.append(f'{label}：{entry}')
+    for key, label in [('recommendations', '推荐视频'), ('segments', '分段'), ('alternatives', '替代来源')]:
+        for index, entry in enumerate(value.get(key) or [], start=1):
+            lines.append(f'{label}{index}：\n{_video_teaching_text(entry)}')
+    return '\n'.join(lines)
+
+
+def _resource_source_refs(db: Any, contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Freeze the actual learner-visible material, including a selected slide/node."""
+    from app.m1_repository import learner_safe_artifact_content
+    from app.m5_resources import canonical_resource_type, resource_route
+    from urllib.parse import urlencode
+
+    materials = []
+    for item in contexts:
+        resource = item.get("resource") or {}
+        if not resource.get("id"):
+            continue
+        artifact = db.get(DBArtifact, resource["id"])
+        version = db.get(DBArtifactVersion, resource["version"])
+        content = learner_safe_artifact_content(artifact.artifact_type, version.content)
+        part_id = (item.get("context") or {}).get("resourcePartId")
+        segment_id = (item.get("context") or {}).get("resourceSegmentId")
+        resource_type = canonical_resource_type(artifact.artifact_type, version.metadata_json)
+        def teaching_content(value):
+            return _video_teaching_text(value) if resource_type == 'video' else json.dumps(value, ensure_ascii=False)
+        focus = ""
+        part = None
+        video_parent = None
+        if part_id:
+            try:
+                parsed = json.loads(content)
+            except ValueError:
+                parsed = {}
+            def find_part(value):
+                if isinstance(value, dict):
+                    if str(value.get("id") or value.get("node_id") or value.get("nodeId") or "") == part_id:
+                        return value
+                    for child in value.values():
+                        found = find_part(child)
+                        if found is not None:
+                            return found
+                elif isinstance(value, list):
+                    for child in value:
+                        found = find_part(child)
+                        if found is not None:
+                            return found
+                return None
+            if resource_type == 'video':
+                video_parent = next((entry for entry in parsed.get('recommendations', [])
+                    if entry.get('id') == part_id or any(alt.get('id') == part_id for alt in entry.get('alternatives', []))), None)
+                part = find_part(video_parent) if video_parent else None
+            else:
+                part = find_part(parsed)
+            if part is None:
+                _fail(409, "chat_resource_part_unavailable", "所选页面或节点不属于这个材料版本，请重新打开后提问。")
+            focus = "当前选中内容（优先回答此处）：\n" + teaching_content(part) + "\n\n"
+        route = resource_route(resource_type, artifact.id)
+        route_query = {'course_id': artifact.course_id, 'version_id': version.id}
+        if resource_type == 'video':
+            if part_id:
+                route_query['recommendation_id'] = video_parent['id']
+                if part_id != video_parent['id']:
+                    route_query['alternative_id'] = part_id
+            if segment_id:
+                segment = next((value for value in (part or {}).get('segments', []) if value.get('id') == segment_id), None)
+                if segment is None:
+                    _fail(409, "chat_resource_part_unavailable", "当前视频里找不到这个分段，请重新选择后提问。")
+                focus = "当前选中分段（用标题和时间称呼）：\n" + teaching_content(segment) + "\n\n" + focus
+                route_query['segment_id'] = segment_id
+            try:
+                content = teaching_content(json.loads(content))
+            except ValueError:
+                pass
+            focus += ('视频材料只提供已登记的推荐信息和分段说明；没有提供实际画面或完整字幕。'
+                      '回答可依据这些信息与课程材料，不要声称看过视频或编造未提供的画面、时间点与讲述。\n\n')
+        materials.append({
+            "kind": "resource_version", "sourceRefId": f"resource:{version.id}",
+            "resourceId": artifact.id, "versionId": version.id, "resourcePartId": part_id,
+            "resourceSegmentId": segment_id,
+            "courseId": artifact.course_id, "title": artifact.title,
+            "locationLabel": "当前选中学习材料", "selection": "selected", "available": True,
+            "contentHash": version.content_hash,
+            "quote": focus + "本次材料全文：\n" + content,
+            "route": f"{route}?{urlencode(route_query)}" if route else "",
+        })
+    return materials
 
 
 def _sendable_attachments(
@@ -750,17 +959,66 @@ def _attachment_source_ref(row: DBChatAttachment) -> dict[str, Any]:
     }
 
 
+def _ranked_source_projections(ranked: dict[str, Any]) -> list[dict[str, Any]]:
+    if ranked.get('low_confidence'):
+        return []
+    return [
+        {**result['source_ref'], 'quote': result['evidence'].content,
+         'char_start': result['evidence'].metadata['char_start'],
+         'char_end': result['evidence'].metadata['char_end'],
+         'retrieval_evidence': {'ranking': result.get('ranking', {}),
+             'assembly': (ranked.get('retrieval') or {}).get('task_evidence', {}),
+             **({'hipporag2': ranked['retrieval']['hipporag2']} if (ranked.get('retrieval') or {}).get('hipporag2') else {})}}
+        for result in ranked.get('items', []) if result.get('relevant', True)
+    ]
+
+
 def _context_source_refs(
     db: Any,
     actor: DBUser,
     conversation: DBChatConversation,
     contexts: list[dict[str, Any]],
+    *,
+    question: str = "",
+    retrieval_mode: str | None = None,
 ) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     explicit_source_ids: set[str] = set()
+    source_contexts = list(contexts)
     for item in contexts:
+        resource = item.get("resource") or {}
+        if resource.get("version"):
+            version = db.get(DBArtifactVersion, resource["version"])
+            for source_id in (version.metadata_json or {}).get("source_ref_ids", []) if version else []:
+                source_contexts.append({"sourceRef": {"id": source_id, "courseId": resource.get("courseId")}})
+    if retrieval_mode is not None and question.strip():
+        # An explicit collection is one retrieval scope. Its source identities
+        # are validated before graph construction, then projected as usual.
+        selected_by_course: dict[str, list[str]] = {}
+        for item in source_contexts:
+            source = item.get("sourceRef") or {}
+            if source.get("id"):
+                projection = project_source_ref(db, str(source["id"]), actor=actor,
+                    expected_course_id=source.get("courseId") or source.get("course_id") or conversation.course_id)
+                if not projection["available"]:
+                    _fail(409, "chat_source_unavailable", projection["reason"] or "当前来源不可用")
+                selected_by_course.setdefault(projection["course_id"], []).append(str(source["id"]))
+        if selected_by_course:
+            from app.canonical_retrieval import retrieve_canonical_sources
+            for course_id, selected_ids in selected_by_course.items():
+                ranked = retrieve_canonical_sources(db, course_id=course_id, query=question, actor=actor,
+                    source_ref_ids=selected_ids, top_k=8, retrieval_mode=retrieval_mode, assemble_for_task=True)
+                for projection in _ranked_source_projections(ranked):
+                    frozen = chat_source_ref(projection)
+                    frozen['retrieval_evidence'] = projection['retrieval_evidence']
+                    frozen['selection'] = 'selected'
+                    refs.append(frozen)
+            return refs
+    for item in source_contexts:
         source = item.get("sourceRef") or {}
         if source.get("id"):
+            if str(source["id"]) in explicit_source_ids:
+                continue
             explicit_source_ids.add(str(source["id"]))
             projection = project_source_ref(
                 db,
@@ -785,14 +1043,37 @@ def _context_source_refs(
                     "source_unavailable",
                 }:
                     _fail(409, "chat_source_unavailable", projection["reason"] or "当前来源不可用")
-            frozen = chat_source_ref(projection)
-            frozen["selection"] = "selected"
-            refs.append(frozen)
+            selected_projections = [projection]
+            if projection['available']:
+                ref = db.get(DBSourceRef, str(source['id']))
+                full_text = source_ref_teaching_text(db, ref, max_chars=None) if ref else ''
+                if full_text:
+                    from app.task_evidence import estimated_tokens
+                    if question.strip() and ref.location_kind == 'chapter' and estimated_tokens(full_text) > 6000:
+                        from app.canonical_retrieval import retrieve_canonical_sources
+                        ranked = retrieve_canonical_sources(
+                            db, course_id=projection['course_id'], query=question, actor=actor,
+                            source_ref_ids=[str(source['id'])], top_k=8, assemble_for_task=True,
+                        )
+                        selected_projections = _ranked_source_projections(ranked)
+                        if not selected_projections:
+                            # Preserve the chosen identity without presenting
+                            # its short citation preview as an answer passage.
+                            selected_projections = [{**projection, 'quote': '',
+                                'retrieval_evidence': {'low_confidence': True}}]
+                    else:
+                        selected_projections = [{**projection, 'quote': full_text}]
+            for selected_projection in selected_projections:
+                frozen = chat_source_ref(selected_projection)
+                if selected_projection.get('retrieval_evidence'):
+                    frozen['retrieval_evidence'] = selected_projection['retrieval_evidence']
+                frozen["selection"] = "selected"
+                refs.append(frozen)
 
     # Selecting a course is sufficient to enter the course-grounded branch.
     # When the caller did not choose a specific source, read the course's
     # canonical source refs under the existing source/permission contract.
-    if not explicit_source_ids:
+    if not explicit_source_ids and not any(item.get("resource") for item in contexts):
         course_ids: list[str] = []
         chapter_ids: set[str] = set()
         for item in contexts:
@@ -806,7 +1087,7 @@ def _context_source_refs(
                 chapter_ids.add(chapter_id)
         if conversation.course_id and conversation.course_id not in course_ids:
             course_ids.insert(0, str(conversation.course_id))
-        from app.canonical_retrieval import list_canonical_source_refs
+        from app.canonical_retrieval import list_canonical_source_refs, retrieve_canonical_sources
         for course_id in course_ids:
             projections = list_canonical_source_refs(
                 db,
@@ -814,6 +1095,15 @@ def _context_source_refs(
                 actor=actor,
                 chapter_ids=sorted(chapter_ids) if chapter_ids else None,
             )
+            overview = re.search(r'课程.*(?:概览|概括|主要内容|大纲)|(?:概览|概括|总结).*(?:全课|课程)', question)
+            if question.strip() and not overview:
+                ranked = retrieve_canonical_sources(db, course_id=course_id, query=question, actor=actor,
+                                                     chapter_ids=sorted(chapter_ids) if chapter_ids else None, top_k=8,
+                                                     assemble_for_task=True, retrieval_mode=retrieval_mode or "hybrid")
+                passages = _ranked_source_projections(ranked)
+                # Keep stale source facts so the answer can explain a real
+                # version conflict; do not replace no-match with whole courses.
+                projections = passages + [projection for projection in projections if not projection.get('available')]
             for projection in projections:
                 source_ref_id = str(projection.get("source_ref_id") or "")
                 if source_ref_id in explicit_source_ids:
@@ -829,6 +1119,8 @@ def _context_source_refs(
                     # automatically discovered sources.
                     continue
                 frozen = chat_source_ref(projection)
+                if projection.get('retrieval_evidence'):
+                    frozen['retrieval_evidence'] = projection['retrieval_evidence']
                 frozen["selection"] = "adopted" if projection["available"] else "candidate"
                 refs.append(frozen)
     return refs
@@ -889,11 +1181,15 @@ def _context_snapshot(
     ))
     profile = _latest_profile_snapshot_for_course(db, actor, course_id)
     profile_snapshot_id = profile.id if profile is not None else None
-    profile_body = profile.snapshot if profile is not None and isinstance(profile.snapshot, dict) else {}
+    profile_body = complete_learning_snapshot(db, profile) if profile is not None else {}
     profile_row = db.get(DBStudentProfile, actor.username)
     point = db.get(DBKnowledgePoint, knowledge_scope[0]) if knowledge_scope else None
+    if point is not None and course_id:
+        profile_body = with_current_learning_evidence(
+            db, profile_body, actor=actor, course_id=course_id, knowledge_point_id=point.id,
+        )
     adaptation = build_profile_adaptation(
-        profile,
+        profile_body,
         profile=profile_row,
         knowledge_point=(
             {"id": point.id, "title": point.title, "code": point.code}
@@ -902,7 +1198,7 @@ def _context_snapshot(
     ) if profile_has_signal(profile, profile_row) else {}
     has_mastery = any(
         profile_body.get(key)
-        for key in ("concept_mastery", "mastery", "knowledge_traces", "mastery_evidence")
+        for key in ("concept_mastery", "mastery", "knowledge_traces", "mastery_evidence", "current_learning_evidence")
     )
     mastery_snapshot_id = profile_snapshot_id if has_mastery else None
     source_material = [
@@ -934,12 +1230,20 @@ def _context_snapshot(
         "attachment_ids": [row.id for row in attachments],
         "profile_snapshot_id": profile_snapshot_id,
         "mastery_snapshot_id": mastery_snapshot_id,
+        "current_learning_evidence": profile_body.get("current_learning_evidence", {}),
         "profile_context": profile_prompt_context(adaptation) if adaptation else {},
         "profile_adaptation_plan": profile_prompt_context(adaptation) if adaptation else {},
         "profile_adaptation_summary": str(adaptation.get("summary") or "") if adaptation else "",
         "conversation_message_ids": list(dict.fromkeys(conversation_message_ids)),
         "source_snapshot_hash": _canonical_hash(source_material),
+        "resource_versions": [
+            {"resource_id": item["resourceId"], "version_id": item["versionId"],
+             "part_id": item.get("resourcePartId"), "content_hash": item["contentHash"]}
+            for item in source_refs if item.get("kind") == "resource_version"
+        ],
     }
+    from app.next_core_memory import attach_memory_projection
+    snapshot = attach_memory_projection(db, owner_public_id=actor.public_id, snapshot=snapshot)
     snapshot["context_snapshot_id"] = "ctx-" + _canonical_hash(snapshot)[:32]
     return snapshot
 
@@ -975,6 +1279,9 @@ def _stream_source_materials(
 ) -> list[dict[str, Any]]:
     materials: list[dict[str, Any]] = []
     for frozen in source_refs:
+        if frozen.get("kind") == "resource_version":
+            materials.append(dict(frozen))
+            continue
         source_ref_id = frozen.get("sourceRefId") or frozen.get("source_ref_id")
         if frozen.get("kind") != "canonical_source" or not source_ref_id:
             continue
@@ -991,6 +1298,21 @@ def _stream_source_materials(
             permission_as_unavailable=True,
         )
         material = chat_source_ref(projection)
+        ref = db.get(DBSourceRef, str(source_ref_id))
+        if (
+            material["available"] and ref is not None and ref.location_kind == "chapter"
+            and material["locationKind"] == "chapter"
+            and material["charStart"] == ref.char_start and material["charEnd"] == ref.char_end
+            and material["quote"] == str(ref.quote or "")
+        ):
+            # Citation previews may contain only a title or provenance. Reuse
+            # the version-checked chapter reader without expanding selections.
+            body = source_ref_teaching_text(db, ref, max_chars=8000)
+            if body:
+                material["quote"] = body
+            else:
+                material.update(available=False, reasonCode="source_unavailable",
+                                reason="当前课程正文与引用版本不一致，请重新打开资料后提问。")
         if frozen.get("selection"):
             material["selection"] = frozen["selection"]
         materials.append(material)
@@ -1078,9 +1400,11 @@ def _resource_links_from_job(job: dict[str, Any]) -> list[dict[str, Any]]:
         if not resource_type:
             continue
         resource = item.get("resource") or {}
-        published = item.get("state") == "succeeded" and bool(resource.get("resource_id"))
+        published = (job.get("publish_gate", {}).get("status") == "completed"
+                     and item.get("state") == "succeeded" and bool(resource.get("resource_id")))
         route = str(resource.get("route") or "") if published else f"/workspace/resources/bundles/{job_id}"
-        state = "completed" if published else "failed" if item.get("state") == "failed" else "generating"
+        automatic_pending = (job.get("automation") or {}).get("state") in {"queued", "running", "retry_wait", "waiting_configuration"}
+        state = "completed" if published else "generating" if automatic_pending else "failed" if item.get("state") == "failed" or job_status in {"failed", "partial_success"} else "generating"
         links.append({
             "kind": "generation_job",
             "type": resource_type,
@@ -1147,11 +1471,28 @@ def _project_resource_events(
         )
     next_checkpoint["resourceJobId"] = job_id
     next_checkpoint["resourceStatus"] = str(job.get("status") or "")
+    next_checkpoint["resourceAutomation"] = dict(job.get("automation") or {})
     next_checkpoint["resourceManifest"] = dict(job.get("manifest") or {})
     return next_checkpoint
 
 
 def execute_resource_chat_run(
+    db: Any,
+    actor: DBUser,
+    assistant_message_id: str,
+    *,
+    event_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Resume a message without starting another worker for the same request."""
+    _owned_message(db, actor, assistant_message_id)
+    # Release any SQLite transaction before waiting for the active worker.
+    db.commit()
+    with _resource_execution_lock(assistant_message_id):
+        db.expire_all()
+        return _execute_resource_chat_run(db, actor, assistant_message_id, event_callback=event_callback)
+
+
+def _execute_resource_chat_run(
     db: Any,
     actor: DBUser,
     assistant_message_id: str,
@@ -1188,13 +1529,17 @@ def execute_resource_chat_run(
     if task_id:
         job = generation_job_payload(db, actor, task_id)
     else:
-        base_title = str(row.content or "当前课程资源").strip()[:120]
+        request_message = _owned_message(db, actor, row.reply_to_message_id)
+        instruction = str(request_message.content or "").strip()
+        point = db.get(DBKnowledgePoint, context_values["knowledge_point_id"]) if context_values["knowledge_point_id"] else None
+        course = db.get(DBCourse, context_values["course_id"])
+        base_title = str((point.title if point else "") or (course.title if course else "") or "当前课程资源")
         labels = [(_RESOURCE_LABELS.get(item, item), item) for item in resource_types]
         items = [{
             "type": resource_type,
             "title": f"{label} · {base_title}"[:256],
             "source_ref_ids": context_values["source_ref_ids"],
-            "completion_rule": f"完成{label}并做一次简短回顾。",
+            "completion_rule": resource_completion_rule(resource_type),
         } for label, resource_type in labels]
         try:
             job = create_generation_job(
@@ -1208,11 +1553,12 @@ def execute_resource_chat_run(
                 scope=scope,
                 path_id=context_values["path_id"] or None,
                 task_id=context_values["task_id"] or None,
-                learning_goal=base_title,
+                learning_goal=instruction or base_title,
                 conversation_id=conversation.id,
                 message_id=row.id,
                 resource_intent=str(checkpoint.get("intent") or "resource_generation"),
-                user_instruction=row.content or "",
+                user_instruction=instruction,
+                conversation_source=checkpoint.get("conversationSource"),
                 context_snapshot_id=context_values["context_snapshot_id"] or None,
                 selected_resource_types=resource_types,
             )
@@ -1233,23 +1579,31 @@ def execute_resource_chat_run(
         ):
             job = execute_generation_job_demo(db, actor, task_id)
         else:
-            job = execute_generation_job(db, actor, task_id, event_callback=event_callback)
+            from app.generation_dispatch import submit_resource_job
+            job = submit_resource_job(db, actor, task_id)
     checkpoint = _project_resource_events(checkpoint, job=job)
     resource_links = _resource_links_from_job(job)
     job_status = str(job.get("status") or "")
-    if job_status in {"succeeded", "completed", "partial_success"}:
+    if job_status in {"succeeded", "completed"} and job.get("publish_gate", {}).get("status") == "completed":
         row.status = "completed"
         row.error_code = ""
         row.error_message = ""
         row.content = (
-            f"资源生成已完成：成功 {len(job.get('checkpoint', {}).get('succeeded_types') or [])} 项，"
-            f"失败 {len(job.get('checkpoint', {}).get('failed_types') or [])} 项。\n\n"
+            f"已准备好 {len(job.get('checkpoint', {}).get('succeeded_types') or [])} 项学习资源，可以打开学习。\n\n"
             f"{_resource_chat_adaptation_note(context_values['snapshot'])}"
         )
+    elif (job.get("automation") or {}).get("state") in {"queued", "running", "retry_wait", "waiting_configuration"}:
+        row.status = "completed"
+        row.error_code = ""
+        row.error_message = ""
+        row.content = "正在准备学习资源，可以离开对话，稍后从资源入口继续。"
+        checkpoint.pop("resourceFailure", None)
     else:
         row.status = "failed"
         row.error_code = str(job.get("failure_code") or "chat_resource_generation_failed")[:64]
-        row.error_message = str(job.get("failure_reason") or "资源生成失败，可重试失败资源项。")[:1000]
+        row.error_message = "本次学习资源还没有准备好。请查看需要调整的地方，再重试未完成的内容。"
+        prepared = len(job.get("checkpoint", {}).get("succeeded_types") or [])
+        row.content = (f"已有 {prepared} 项内容生成，仍需与其他资源一起核对。" if prepared else "本次学习资源还没有准备好。") + "请查看需要调整的地方，再重试未完成的内容。"
         checkpoint["resourceFailure"] = {"code": row.error_code, "message": row.error_message}
     row.content_sha256 = _sha256_text(row.content or "")
     row.resource_links = resource_links
@@ -1267,6 +1621,24 @@ def execute_resource_chat_run(
     }
 
 
+def _resource_answer_source(db: Any, actor: DBUser, conversation_id: str, message_id: str) -> dict[str, Any]:
+    answer = _owned_message(db, actor, message_id)
+    if answer.conversation_id != conversation_id:
+        _fail(422, "chat_resource_conversation_conflict", "请选择当前对话中的回答")
+    if answer.role != "assistant" or answer.status != "completed" or not answer.content.strip():
+        _fail(409, "chat_resource_answer_incomplete", "回答完成后才能生成学习资源")
+    question = _owned_message(db, actor, answer.reply_to_message_id)
+    return {
+        "question_id": question.id,
+        "answer_id": answer.id,
+        "question": question.content,
+        "answer": answer.content,
+        "answer_hash": _sha256_text(answer.content),
+        "context_refs": list(answer.context_refs or question.context_refs or []),
+        "source_refs": list(answer.source_refs or question.source_refs or []),
+    }
+
+
 def create_message_pair(db: Any, actor: DBUser, conversation_id: str, payload: MessageInput) -> dict[str, Any]:
     conversation = _owned_conversation(db, actor, conversation_id)
     if conversation.status != "active":
@@ -1279,9 +1651,21 @@ def create_message_pair(db: Any, actor: DBUser, conversation_id: str, payload: M
     attachments = _sendable_attachments(db, actor, conversation, payload.attachment_ids)
     if not content and not attachments:
         _fail(422, "chat_message_empty", "请输入问题或添加可发送附件")
-    contexts = _resolve_contexts(db, actor, conversation, payload.context_refs)
+    selected_answer_id = payload.source_message_id.strip()
+    conversation_source = None
+    if selected_answer_id:
+        if intent != "resource_generation":
+            _fail(422, "chat_resource_intent_required", "请选择要生成的学习资源")
+        conversation_source = _resource_answer_source(db, actor, conversation.id, selected_answer_id)
+    contexts = (conversation_source["context_refs"] if conversation_source else
+                _resolve_contexts(db, actor, conversation, payload.context_refs))
     frozen_attachments = [_attachment_source_ref(row) for row in attachments]
-    source_refs = _context_source_refs(db, actor, conversation, contexts) + frozen_attachments
+    source_refs = (conversation_source["source_refs"] if conversation_source else
+                  _resource_source_refs(db, contexts) + _context_source_refs(
+        db, actor, conversation, contexts,
+        question=content if intent in {"chat", "general_qa"} else "",
+        retrieval_mode=payload.retrieval_mode,
+    )) + frozen_attachments
     fingerprint = _canonical_hash({
         "conversationId": conversation.id,
         "content": content,
@@ -1291,6 +1675,8 @@ def create_message_pair(db: Any, actor: DBUser, conversation_id: str, payload: M
         "resourceTypes": resource_types,
         "contextSnapshotId": requested_context_snapshot_id,
         "returnTo": return_to,
+        **({"sourceMessageId": selected_answer_id} if selected_answer_id else {}),
+        **({"retrievalMode": payload.retrieval_mode} if payload.retrieval_mode is not None else {}),
     })
     existing = db.query(DBChatMessage).filter_by(
         owner_public_id=actor.public_id,
@@ -1309,6 +1695,7 @@ def create_message_pair(db: Any, actor: DBUser, conversation_id: str, payload: M
             _fail(409, "chat_message_pair_incomplete", "消息状态不完整，请刷新后重试")
         return {
             "created": False,
+            "conversation": conversation_payload(db, conversation, actor=actor, include_messages=False),
             "userMessage": message_payload(existing, db=db, actor=actor, course_id=conversation.course_id),
             "assistantMessage": message_payload(assistant, db=db, actor=actor, course_id=conversation.course_id),
         }
@@ -1359,6 +1746,7 @@ def create_message_pair(db: Any, actor: DBUser, conversation_id: str, payload: M
         "resourceTypes": resource_types,
         "requestedContextSnapshotId": requested_context_snapshot_id,
         "contextSnapshot": context_snapshot,
+        **({"conversationSource": conversation_source} if conversation_source else {}),
     }
     assistant_key = "assistant-" + _sha256_text(f"{actor.public_id}:{user_message.id}")[:40]
     assistant_message = DBChatMessage(
@@ -1382,6 +1770,7 @@ def create_message_pair(db: Any, actor: DBUser, conversation_id: str, payload: M
             "resourceTypes": resource_types,
             "requestedContextSnapshotId": requested_context_snapshot_id,
             "contextSnapshot": context_snapshot,
+            **({"conversationSource": conversation_source} if conversation_source else {}),
         },
     )
     db.add(assistant_message)
@@ -1434,6 +1823,7 @@ def create_message_pair(db: Any, actor: DBUser, conversation_id: str, payload: M
     db.commit()
     return {
         "created": True,
+        "conversation": conversation_payload(db, conversation, actor=actor, include_messages=False),
         "userMessage": message_payload(user_message, db=db, actor=actor, course_id=conversation.course_id),
         "assistantMessage": message_payload(assistant_message, db=db, actor=actor, course_id=conversation.course_id),
     }
@@ -1518,7 +1908,7 @@ def begin_stream_message(db: Any, actor: DBUser, assistant_message_id: str) -> D
             stage_id="answer_generation",
             public_status="running",
             owner="Answer Agent",
-            summary="正在根据已冻结的上下文生成回答。",
+            summary="正在结合本次问题和学习资料准备讲解。",
             input_refs=[f"chat:{row.reply_to_message_id or row.id}"],
             progress=0.1,
             retryable=True,
@@ -1625,13 +2015,13 @@ def fail_stream_message(db: Any, actor: DBUser, assistant_message_id: str, code:
         checkpoint,
         run_id=run_id,
         event_type="stage.failed",
-        stage_id="synthesizer" if professional else "answer_generation",
+        stage_id="professional_chain" if professional else "answer_generation",
         public_status="failed",
-        owner="Synthesizer" if professional else "Answer Agent",
+        owner="Chat Orchestrator" if professional else "Answer Agent",
         summary=(
-            "课程综合回答模型失败，已保留当前内容。"
+            "这次讲解尚未核对完成，已保留当前内容，可以重试。"
             if professional
-            else "真实模型回答失败，已保留当前内容。"
+            else "这次讲解暂未完成，已保留当前内容，可以重试。"
         ),
         input_refs=[f"chat:{row.reply_to_message_id or row.id}"],
         progress=None,
@@ -1643,7 +2033,7 @@ def fail_stream_message(db: Any, actor: DBUser, assistant_message_id: str, code:
         event_type="run.failed",
         public_status="failed",
         owner="Chat Orchestrator",
-        summary="本次运行失败，可从保留的内容继续或重试。",
+        summary="这次回答已中断，可以继续回答。",
         input_refs=[f"chat:{row.reply_to_message_id or row.id}"],
         progress=None,
         retryable=True,
@@ -1750,8 +2140,8 @@ async def upload_attachment(
     file: UploadFile = File(...),
     current_user: DBUser = Depends(get_current_user),
 ):
-    raw = await file.read(CONFIG.max_upload_bytes + 1)
-    if len(raw) > CONFIG.max_upload_bytes:
+    raw = await file.read(CONFIG.max_upload_bytes + 1) if CONFIG.max_upload_bytes > 0 else await file.read()
+    if CONFIG.max_upload_bytes > 0 and len(raw) > CONFIG.max_upload_bytes:
         _fail(413, "chat_attachment_too_large", "附件超过允许大小")
     filename = Path(file.filename or "").name[:256]
     file_format = Path(filename).suffix.lower().lstrip(".")
@@ -1890,13 +2280,23 @@ async def remove_attachment(
     return await run_db_op(operation)
 
 
+def submit_message_request(db: Any, actor: DBUser, conversation_id: str, payload: MessageInput) -> dict[str, Any]:
+    pair = create_message_pair(db, actor, conversation_id, payload)
+    if payload.intent in {"resource_generation", "path_bundle"}:
+        # Persist and dispatch before acknowledging the POST. A disconnected
+        # browser must not be required to open a second SSE request to start it.
+        result = execute_resource_chat_run(db, actor, pair["assistantMessage"]["id"])
+        pair["assistantMessage"] = result["message"]
+    return pair
+
+
 @router.post("/conversations/{conversation_id}/messages", status_code=201)
 async def create_message(
     conversation_id: str,
     payload: MessageInput,
     current_user: DBUser = Depends(get_current_user),
 ):
-    return await run_db_op(create_message_pair, current_user, conversation_id, payload)
+    return await run_db_op(submit_message_request, current_user, conversation_id, payload)
 
 
 @router.post("/messages/{message_id}/stop")
@@ -1954,6 +2354,16 @@ async def continue_message(
         row.error_code = ""
         row.error_message = ""
         checkpoint = dict(row.stream_checkpoint or {})
+        revision = checkpoint.get("answerRevision")
+        if isinstance(revision, dict) and revision.get("before") and revision.get("after"):
+            history = list(checkpoint.get("answerRevisionHistory") or [])
+            attempt = 1 + sum(event.get("eventType") == "run.retry"
+                              for event in checkpoint.get("runEvents") or [])
+            history.append({"attempt": attempt, "revision": dict(revision),
+                            "reviewHistory": list(checkpoint.get("claimReviewHistory") or [])})
+            checkpoint["answerRevisionHistory"] = history
+            checkpoint.pop("answerRevision", None)
+            checkpoint.pop("claimReviewHistory", None)
         checkpoint.update({"status": "queued", "receivedCharacters": len(row.content or "")})
         checkpoint = append_public_run_event(
             checkpoint,
@@ -2012,6 +2422,7 @@ async def create_message_resource_action(
             job = create_generation_job(
                 db,
                 current_user,
+                auto_start=True,
                 course_id=conversation.course_id,
                 knowledge_point_id=point_id,
                 profile_snapshot_id=profile.id,
@@ -2023,7 +2434,8 @@ async def create_message_resource_action(
                     "completion_rule": completion_rule,
                 }],
                 scope="single",
-                learning_goal=(row.content or "围绕当前问答继续学习")[:512],
+                learning_goal="围绕当前问答继续学习",
+                conversation_source=_resource_answer_source(db, current_user, conversation.id, row.id),
             )
         except ResourceBundleError as exc:
             status_code = 404 if exc.code.endswith("unknown") else 403 if "forbidden" in exc.code else 409 if "conflict" in exc.code else 422

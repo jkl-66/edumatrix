@@ -14,6 +14,7 @@ from app.database import (
     DBCourse,
     DBCourseMembership,
     DBLearningEvent,
+    DBGenerationTask,
     DBKnowledgePoint,
     DBProfileSnapshot,
     DBSourceDocument,
@@ -159,6 +160,10 @@ def test_nine_type_job_idempotency_partial_retry_and_owner_boundary():
         job = created.json()
         assert job["created"] is True
         assert job["status"] == "queued"
+        with SessionLocal() as db:
+            prepared = db.get(DBGenerationTask,job["job_id"])
+            assert prepared.status == "queued"
+            assert prepared.started_at is None
         assert [item["type"] for item in job["items"]] == list(GENERATION_RESOURCE_TYPES)
         assert len({item["idempotency_key"] for item in job["items"]}) == 9
 
@@ -195,7 +200,7 @@ def test_nine_type_job_idempotency_partial_retry_and_owner_boundary():
         assert second["status"] == "partial_success"
         handout = next(item for item in second["items"] if item["type"] == "handout")
         failed = next(item for item in second["items"] if item["type"] == "mind_map")
-        assert handout["resource"]["status"] == "available"
+        assert handout["resource"]["status"] == "generation_pending"
         assert handout["resource"]["generation_state"] == "succeeded"
         assert handout["resource"]["source_refs"][0]["source_ref_id"] == seed["source_ref_id"]
         assert handout["resource"]["profile_snapshot_id"] == seed["profile_snapshot_id"]
@@ -414,6 +419,10 @@ def test_resource_completion_requires_current_version_and_server_rule_without_ma
                 "handout",
                 content="# Completion handout",
             )
+            # Preparing one candidate is not permission to learn it. Complete
+            # the remaining synthetic bundle through the demo executor first.
+            result = execute_generation_job_demo(db, owner, created["job_id"])
+            assert result["status"] == "succeeded"
             db.commit()
             handout = next(item for item in result["items"] if item["type"] == "handout")
             resource_id = handout["resource"]["resource_id"]
@@ -605,6 +614,8 @@ def test_source_withdrawal_preserves_resource_and_marks_it_unavailable():
                 "handout",
                 content="# 来源撤回测试",
             )
+            result = execute_generation_job_demo(db, owner, created["job_id"])
+            assert result["status"] == "succeeded"
             resource_id = next(item for item in result["items"] if item["type"] == "handout")["resource"]["resource_id"]
             source = db.get(DBSourceDocument, seed["source_document_id"])
             source.processing_status = "failed"

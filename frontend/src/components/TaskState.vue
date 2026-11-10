@@ -1,4 +1,6 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { AlertTriangle, CheckCircle2, Clock3, Info, LoaderCircle, RotateCcw } from '@lucide/vue'
 
 const props = defineProps({
@@ -25,8 +27,8 @@ const icons = {
   <div class="task-state" :class="`task-state--${state}`" role="status">
     <component :is="icons[props.state] || Info" :size="18" :class="{ 'task-state__spin': state === 'loading' }" />
     <div class="task-state__copy">
-      <strong>{{ title }}</strong>
-      <span v-if="message">{{ message }}</span>
+      <strong>{{ learningText(title) }}</strong>
+      <span v-if="message">{{ state === 'error' ? userMessage(message) : learningText(message) }}</span>
     </div>
     <button v-if="actionLabel" type="button" class="task-state__action" @click="$emit('action')">
       {{ actionLabel }}

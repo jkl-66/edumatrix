@@ -46,6 +46,35 @@ def _user():
     return SimpleNamespace(public_id="connection-owner-public")
 
 
+@pytest.mark.parametrize('fails', [False, True])
+def test_audited_visual_text_is_collected_before_validation_without_storing_pixels(monkeypatch, fails):
+    from app.m5_legacy_calls import audited_legacy_text_call
+    session = _database_fixture(monkeypatch)
+    images = ['data:image/png;base64,synthetic-pixels']
+    class Backend(VisionBackend):
+        async def generate_stream(self, system_prompt, user_prompt, *, role, images):
+            assert images == ['data:image/png;base64,synthetic-pixels']
+            async for chunk in super().generate_stream(system_prompt, user_prompt, role=role, images=images):
+                yield chunk
+    backend = Backend(['已读', RuntimeError('connection interrupted') if fails else '图片'])
+    validated = []
+    run = audited_legacy_text_call(backend, system_prompt='核对图示', user_prompt='说明当前图片',
+        role='Evidence Verifier', operation='visual_review_test', capability='answer',
+        owner_public_id=_user().public_id, input_summary={}, images=images,
+        response_validator=validated.append, database_runner=main_module.run_db_op)
+    if fails:
+        with pytest.raises(RuntimeError, match='interrupted'):
+            asyncio.run(run)
+        assert validated == []
+    else:
+        assert asyncio.run(run) == '已读图片'
+        assert validated == ['已读图片']
+    row = session.query(DBModelCall).one()
+    assert row.status == ('failed' if fails else 'completed')
+    assert row.input_summary['image_count'] == 1
+    assert 'synthetic-pixels' not in str(row.input_summary)
+
+
 def test_text_connection_endpoint_passes_authenticated_owner(monkeypatch):
     captured = {}
 
@@ -103,7 +132,7 @@ def test_vision_connection_partial_failure_is_audited_without_error_leak(monkeyp
 
     assert result == {
         "status": "error",
-        "message": "视觉模型调用失败",
+        "message": "图片理解暂时不可用，请稍后重试或请管理员检查连接。",
         "llm_type": "SimpleNamespace",
     }
     assert (row.status, row.error_code) == (

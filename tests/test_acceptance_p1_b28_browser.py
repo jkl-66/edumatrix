@@ -79,6 +79,9 @@ def _install_api_mocks(page):
         "src-docx": {"id": "src-docx", "title": "语义章节讲义", "file_type": "docx", "content": "这是 DOCX 资源预览正文。", "source_processing_status": "ready"},
         "src-pptx": {"id": "src-pptx", "title": "模型演示课件", "file_type": "pptx", "content": "这是 PPTX 资源预览正文。", "source_processing_status": "ready"},
     }
+    for chapter in outline:
+        source = sources[chapter["source_document_id"]]
+        chapter.update(source_title=source["title"], source_file_format=source["file_type"], source_processing_status="ready")
 
     def respond(route, payload, status=200):
         route.fulfill(status=status, content_type="application/json", body=json.dumps(payload, ensure_ascii=False))
@@ -94,6 +97,14 @@ def _install_api_mocks(page):
             respond(route, {"schema_version": "edumatrix.knowledge-course-shelf.v1", "shelf": courses, "recommendations": []})
         elif path.endswith(f"/api/v1/courses/{course_id}/outline"):
             respond(route, outline)
+        elif path.endswith("/api/knowledge/upload-batch"):
+            respond(route, {"succeeded": 1, "failed": 2, "results": [
+                {"filename": "lesson.md", "status": "ready"},
+                {"filename": "broken.pdf", "status": "failed", "http_status": 422,
+                 "error": {"code": "document_parse_failed", "message": "资料解析失败，原文件已保留，请重试。"}},
+                {"filename": "unsupported.html", "status": "failed", "http_status": 400,
+                 "error": {"message": "不支持的文件类型: .html，支持 .md, .txt, .pdf"}},
+            ]})
         elif "/api/knowledge/sources/" in path:
             source_id = path.rsplit("/", 1)[-1]
             respond(route, sources.get(source_id, {}), 200 if source_id in sources else 404)
@@ -143,8 +154,8 @@ def test_course_resource_shelf_two_desktop_viewports():
     with _frontend_server() as base_url, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 900), (1366, 768)):
-                context = browser.new_context(viewport={"width": width, "height": height})
+            for width, height in ((1707, 876), (1440, 900), (1366, 768)):
+                context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1.5 if width == 1707 else 1)
                 context.add_init_script(
                     "localStorage.setItem('edumatrix_token', 'browser-token');"
                     "localStorage.setItem('edumatrix_role', 'student');"
@@ -160,7 +171,9 @@ def test_course_resource_shelf_two_desktop_viewports():
                 assert page.get_by_test_id("selected-resource-detail").is_visible()
                 assert page.get_by_test_id("open-course-structure").is_visible()
                 page.get_by_test_id("resource-card-src-pptx").wait_for()
-                page.get_by_role("button", name="演示").click()
+                # The type filter must be available before opening this source.
+                assert "演示" in page.get_by_test_id("resource-card-src-pptx").inner_text()
+                page.get_by_test_id("resource-filters").get_by_role("button", name="演示").click()
                 page.get_by_role("heading", name="模型演示课件").wait_for()
                 assert page.get_by_role("heading", name="模型演示课件").is_visible()
                 page.get_by_test_id("resource-card-src-pptx").click()
@@ -169,6 +182,12 @@ def test_course_resource_shelf_two_desktop_viewports():
                 page.get_by_role("button", name="全部资源").click()
                 assert page.get_by_test_id("resource-card-src-docx").is_visible()
                 assert page.get_by_test_id("resource-card-src-pptx").is_visible()
+                if width == 1707:
+                    page.locator('input[type="file"]').set_input_files({"name": "broken.pdf", "mimeType": "application/pdf", "buffer": b"synthetic failure fixture"})
+                    from playwright.sync_api import expect
+                    expect(page.get_by_role("alert")).to_contain_text("broken.pdf：资料解析失败")
+                    expect(page.get_by_role("alert")).to_contain_text("unsupported.html：不支持的文件类型")
+                    expect(page.get_by_role("alert")).to_contain_text("已成功的资料可以继续阅读")
                 page.get_by_test_id("open-course-structure").press("Enter")
                 assert not browser_errors, browser_errors
                 reports.append({"viewport": {"width": width, "height": height}, "layout": _assert_layout(page, width, height, screenshot_dir), "resource_filter_verified": True, "resource_detail_verified": True, "page_errors": browser_errors})

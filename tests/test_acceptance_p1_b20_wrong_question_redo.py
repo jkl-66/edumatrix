@@ -149,7 +149,8 @@ def test_prepare_legacy_choice_redo_returns_single_choice_schema():
         owner_public_id=owner.public_id,
     )
     assert prepared["question"]["type"] == "single_choice"
-    assert prepared["question"]["options"] == ["A. 只计算前向值", "B. 逐层传递导数"]
+    # The canonical contract returns option text; the view supplies A/B labels.
+    assert prepared["question"]["options"] == ["只计算前向值", "逐层传递导数"]
     assert prepared["question"]["response_spec"]["input_kind"] == "single_choice"
 
 

@@ -127,14 +127,22 @@ def update_artifact_title(
 def set_artifact_archived(
     session: Any, *, artifact: DBArtifact, actor_public_id: str, archived: bool
 ) -> None:
+    previous_status = artifact.status
+    restored_status = "draft"
+    if not archived:
+        last_archive = session.query(DBAuditLog).filter_by(
+            object_type="artifact", object_id=artifact.id, action="artifact.archive",
+        ).order_by(DBAuditLog.created_at.desc()).first()
+        if last_archive:
+            restored_status = ((last_archive.metadata_json or {}).get("context") or {}).get("previous_status") or "draft"
     artifact.archived_at = utcnow() if archived else None
-    artifact.status = "archived" if archived else "draft"
+    artifact.status = "archived" if archived else restored_status
     artifact.lock_version += 1
     record_audit(
         session, actor_public_id=actor_public_id,
         action="artifact.archive" if archived else "artifact.restore",
         object_type="artifact", object_id=artifact.id,
-        metadata={"archived": archived}
+        metadata={"archived": archived, "previous_status": previous_status}
     )
 
 

@@ -75,14 +75,18 @@ def test_profile_edges_deemphasize_long_cross_group_relationships_without_removi
     explorer = _source(EXPLORER)
     edge_function = explorer.split("function profileEdgeData", 1)[1].split("function compactNodeLabel", 1)[0]
 
-    assert "const crossGroup = sourceGroup && targetGroup && sourceGroup.role !== targetGroup.role" in edge_function
-    assert "const longEdge = horizontalDistance >= 450" in edge_function
-    assert "color: longEdge ? '#c8beb4' : '#a99a8c'" in edge_function
-    assert "opacity: longEdge ? 0.42 : 0.68" in edge_function
-    assert "const stableBias = ((String(edge.id || `${edge.source}-${edge.target}-${index}`).length % 3) - 1) * 0.025" in edge_function
-    assert "const sameColumn = horizontalDistance < 40 && Math.abs(verticalDelta) > 40" in edge_function
-    assert "(verticalDelta > 0 ? 1 : -1) * (0.5 + stableBias)" in edge_function
-    assert "return edges.map((edge, index) =>" in edge_function
+    for marker in (
+        "return edges.map((edge) =>",
+        "...edge",
+        "const longEdge = horizontalDistance >= 450",
+        "sourceGroup?.role === 'independent'",
+        "targetGroup?.role === 'independent'",
+        "color: longEdge ? profileEditorialTokens.inkSoft : profileEditorialTokens.inkMedium",
+        "opacity: longEdge ? 0.42 : 0.68",
+        "type: longEdge ? 'dashed' : 'solid'",
+        "curveness: 0",
+    ):
+        assert marker in edge_function
 
 
 def test_knowledge_graph_independent_views_keep_their_existing_interaction_contract() -> None:

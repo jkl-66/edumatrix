@@ -12,8 +12,8 @@ def read(relative: str) -> str:
 
 def test_entry_diagnostic_never_uses_object_to_string_for_errors() -> None:
     view = read("frontend/src/views/EntryDiagnostic.vue")
-    assert "Object.values(detail)" in view
-    assert "message !== '[object Object]'" in view
+    assert "errorMessageText(detail, errorMessageText(fallback," in view
+    assert "return translateError({ detail: visit(value) }, fallback).message" in read("frontend/src/api/common.js")
     assert "诊断服务暂不可用，请稍后重试。" in view
     assert 'data-testid="diagnostic-error-retry"' in view
 

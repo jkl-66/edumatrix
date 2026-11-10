@@ -12,7 +12,7 @@ from app.database import (
     DBOrganizationMembership, DBStudentProfile, DBTrainingAssignment, DBUser,
 )
 from app.identity import normalize_role
-from app.m6_enterprise import bootstrap_competition_training_demo
+from app.m6_enterprise import bootstrap_competition_training_demo, training_demo_course
 from app.marketplace import submit_listing
 
 
@@ -58,7 +58,7 @@ def _role_payload(user: DBUser, label: str, *, include_password: bool = False) -
 
 def showcase_workspace(db: Any, *, actor: DBUser, include_passwords: bool = False) -> dict[str, Any]:
     _require_admin(actor)
-    course = db.get(DBCourse, COURSE_ID)
+    course = training_demo_course(db)
     teacher = db.query(DBUser).filter_by(username=_stable_username("teacher", actor)).first()
     learner = db.query(DBUser).filter_by(username=_stable_username("learner", actor)).first()
     memberships = db.query(DBOrganizationMembership).filter_by(user_public_id=actor.public_id, status="active").all()
@@ -110,9 +110,9 @@ def showcase_workspace(db: Any, *, actor: DBUser, include_passwords: bool = Fals
 
 def initialize_showcase(db: Any, *, actor: DBUser) -> dict[str, Any]:
     _require_admin(actor)
-    course = db.get(DBCourse, COURSE_ID)
+    course = training_demo_course(db)
     if course is None or course.status != "published":
-        raise HTTPException(status_code=409, detail="统一演示课程尚未由正式课程目录完成发布，请先完成应用启动")
+        raise HTTPException(status_code=409, detail="当前没有已发布且有可用资料的演示课程，请先完成课程加载")
     teacher_name = _stable_username("teacher", actor)
     teacher = db.query(DBUser).filter_by(username=teacher_name).first()
     if teacher is None:
@@ -135,7 +135,7 @@ def initialize_showcase(db: Any, *, actor: DBUser) -> dict[str, Any]:
         profile = DBStudentProfile(student_id=learner.username)
         db.add(profile)
     profile.target_course = course.title
-    listing = submit_listing(db, actor=teacher, course_id=course.id, title="RAG 工程可信训练演示课程", summary="来源、许可、版本和学习证据可追溯的冻结合成比赛演示课程。", category="人工智能", tags=["RAG", "可信训练", "合成演示"])
+    listing = submit_listing(db, actor=teacher, course_id=course.id, title=f"{course.title} · 比赛演示", summary="来源、许可、版本和学习证据可追溯的冻结合成比赛演示课程。", category="人工智能", tags=["可信训练", "合成演示"])
     db.commit()
     result = showcase_workspace(db, actor=actor, include_passwords=True)
     result["bootstrap_status"] = enterprise["status"]

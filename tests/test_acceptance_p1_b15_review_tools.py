@@ -38,7 +38,11 @@ def test_review_schedule_exposes_resource_then_intelligent_assessment_without_wr
         task = next(item for item in payload["tasks"] if item["source_type"] == "sm2_review_plan")
 
         assert task["method"] == "先回顾当前知识点的授权资源，再完成一次智能组卷并提交作答。"
-        assert task["completion_rule"] == "完成资源回顾并提交一次服务端判分的智能组卷作答。"
+        assert task["completion_rule"] == "回顾本知识点的资料，再完成一次测评并查看评分。"
+        assert task["exam_gate"]["unlocked"] is True
+        assert task["exam_gate"]["reason"] == "review_task"
+        unclassified = next(item for item in payload["tasks"] if item["source_type"] == "sm2_review_plan" and not item["course_id"])
+        assert unclassified["exam_gate"]["unlocked"] is False
         assert task["review_flow"]["sequence"] == ["resource_review", "intelligent_assessment", "submit"]
         assert task["review_flow"]["resource_review"]["source_ref_ids"] == ["f8-ref"]
         assert task["review_flow"]["assessment"]["status"] == "pending"
@@ -141,6 +145,12 @@ def test_review_completion_accepts_only_a_graded_matching_assessment_for_new_flo
         assert event.payload["assessment_attempt_id"] == graded.id
         assert event.payload["assessment_score"] == 0.75
         assert event.payload["recall_score"] == 0.75
+        replay = complete_review_task(session, actor=learner, task_id=f"review-plan:{plans[0].id}",
+            idempotency_key="b15-reopened-page", recall_score=0.1, duration_minutes=10,
+            assessment_attempt_id=graded.id)
+        assert replay["created"] is False
+        assert replay["event"]["id"] == result["event"]["id"]
+        assert event.payload["duration_minutes"] == 12
     finally:
         session.close()
         engine.dispose()
@@ -161,7 +171,7 @@ def test_today_new_learning_is_followed_by_the_real_review_flow_without_writes()
         assert items and items[0]["task_kind"] == "path"
         review = next(item for item in items[1:] if item["task_kind"] == "review")
         assert items.index(review) == 1
-        assert review["completion_criteria"] == "先回顾该知识点的授权资源，再完成一次智能组卷并提交服务端判分结果。"
+        assert review["completion_criteria"] == "先回顾这个知识点的资料，再完成一次测评并查看评分。"
         assert review["continue_route"].startswith("/workspace/review?review_task=review-plan:")
         assert review["review_flow"]["sequence"] == ["resource_review", "intelligent_assessment", "submit"]
         assert review["review_flow"]["completion_requires_assessment"] is True

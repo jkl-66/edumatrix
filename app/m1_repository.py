@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import func
+from app.source_refs import current_source_clause, current_chapter_clause
 
 from app.database import (
     DBChapter,
@@ -26,6 +27,9 @@ from app.database import (
 
 
 def learner_safe_artifact_content(artifact_type: str, content: str) -> str:
+    if artifact_type == "feynman":
+        from app.learner_output import feynman_material_text
+        return feynman_material_text(content)
     if artifact_type != "tiered_quiz":
         return content
     try:
@@ -71,14 +75,25 @@ class M1Repository:
 
     def course_outline(self, course_id: str) -> list[dict[str, Any]]:
         chapters = (
-            self.session.query(DBChapter).filter_by(course_id=course_id)
+            self.session.query(DBChapter)
+            .join(DBSourceDocument, DBChapter.source_document_id == DBSourceDocument.id)
+            .filter(DBChapter.course_id == course_id, current_source_clause(), current_chapter_clause())
             .order_by(DBChapter.position, DBChapter.id).all()
         )
+        sources = {
+            source.id: source
+            for source in self.session.query(DBSourceDocument).filter_by(course_id=course_id).all()
+        }
         output = []
         for chapter in chapters:
+            source = sources.get(chapter.source_document_id)
             source_ref = (
                 self.session.query(DBSourceRef).filter_by(chapter_id=chapter.id)
-                .order_by(DBSourceRef.created_at.desc()).first()
+                .order_by(
+                    (DBSourceRef.parser_version == source.parser_version).desc() if source else DBSourceRef.created_at.desc(),
+                    (DBSourceRef.location_kind == 'chapter').desc(), DBSourceRef.char_start,
+                    DBSourceRef.created_at.desc(), DBSourceRef.id,
+                ).first()
             )
             points = (
                 self.session.query(DBKnowledgePoint)
@@ -89,6 +104,9 @@ class M1Repository:
             output.append({
                 "id": chapter.id, "title": chapter.title, "position": chapter.position,
                 "parent_id": chapter.parent_id, "source_document_id": chapter.source_document_id,
+                "source_title": source.title if source else "",
+                "source_file_format": source.file_format if source else "",
+                "source_processing_status": source.processing_status if source else "missing",
                 "source_ref_id": source_ref.id if source_ref else "",
                 "knowledge_points": [{"id": point.id, "code": point.code, "title": point.title}
                                      for point in points],
@@ -107,6 +125,9 @@ class M1Repository:
         return self.session.query(DBGenerationTask).filter_by(id=task_id).first()
 
     def task_payload(self, task: DBGenerationTask) -> dict[str, Any]:
+        from app.learning_generation_jobs import CAPABILITIES
+        private_preparation = task.capability in CAPABILITIES
+        from app.generation_dispatch import public_automation
         steps = self.session.query(DBTaskStep).filter_by(task_id=task.id).order_by(
             DBTaskStep.sequence, DBTaskStep.attempt
         ).all()
@@ -117,7 +138,7 @@ class M1Repository:
             "id": task.id, "trace_id": task.trace_id, "course_id": task.course_id,
             "capability": task.capability, "model": task.model, "status": task.status,
             "progress": task.progress, "failure_code": task.failure_code,
-            "failure_reason": task.failure_reason,
+            "failure_reason": public_automation(task)['message'] if private_preparation else task.failure_reason,
             "estimated_cost": task.estimated_cost, "actual_cost": task.actual_cost,
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "steps": [{"id": step.id, "sequence": step.sequence, "attempt": step.attempt,
@@ -128,7 +149,12 @@ class M1Repository:
                         "event_type": event.event_type, "schema_version": event.schema_version,
                         "payload": event.payload or {},
                         "created_at": event.created_at.isoformat() if event.created_at else None}
-                       for event in events],
+                       # Diagnostic recovery stores unpublished answers and
+                       # review notes. The learner task API exposes progress,
+                       # never the private preparation payload.
+                       for event in events if event.event_type != "diagnostic.work_saved"
+                       and (not private_preparation or event.event_type in {'learning_generation.completed', 'generation_task.admin_cancelled',
+                            'diagnostic.stage', 'diagnostic.completed', 'path.progress', 'path.completed'})],
         }
 
     def list_tasks(self, *, owner_public_id: str, status: str | None = None,

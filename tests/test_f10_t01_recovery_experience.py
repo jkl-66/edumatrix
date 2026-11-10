@@ -67,7 +67,7 @@ def test_recovery_copy_explains_every_disabled_route_reason_in_business_language
         "此入口已停止使用",
         "没有找到这个页面",
         "你的课程和学习记录没有发生变化",
-        "没有创建空对象，也没有修改现有学习记录",
+        "已保存的课程和学习记录保持不变",
     ):
         assert visible_copy in source
 
@@ -148,21 +148,23 @@ def test_recovery_page_uses_the_approved_light_visual_tokens():
 
 def test_knowledge_search_destination_is_visually_integrated_without_losing_behavior():
     source = _source(KNOWLEDGE)
-    section = source.split("<!-- 成员 3: 跨模态搜索 -->", 1)[1].split("<!-- 文档和标签的派生关联视图 -->", 1)[0]
+    shelf = _source(ROOT / "frontend/src/components/KnowledgeCourseShelf.vue")
+    section = shelf.split('<section class="course-search course-search--shelf"', 1)[1].split('<section class="resource-shelf-layout"', 1)[0]
+    assert '@open-search-result="openCourseSearchResult"' in source
+    assert "source_ref_id: canonicalSourceRefId" in source
 
     for forbidden in ("backdrop-blur", "bg-gradient", "rounded-xl", "text-xs", "text-["):
         assert forbidden not in section
     for required in (
-        "rounded-lg border border-slate-200 bg-white p-5",
-        "bg-[#11212d]",
-        'v-model="crossModalQuery"',
-        '@keyup.enter="doCrossModalSearch"',
-        'v-model="crossModalMode"',
-        ':disabled="crossModalLoading"',
-        'v-if="crossModalLoading"',
-        'v-else-if="crossModalError"',
-        'v-else-if="crossModalResults.length > 0"',
-        "r.matched_modality",
+        "SearchField",
+        'v-model="searchQuery"',
+        '@submit.prevent="runCourseSearch"',
+        "searchStatus === 'loading'",
+        "searchStatus === 'failed'",
+        "searchStatus === 'empty'",
+        "searchStatus === 'ready'",
+        ':disabled="!item.locatable"',
+        '@click="openSearchResult(item)"',
     ):
         assert required in section
 
@@ -178,7 +180,8 @@ def test_dashboard_route_uses_the_original_body_as_one_static_entry():
     assert not DASHBOARD_ROUTE.exists()
     assert "getCompetitionDemoContext" not in dashboard
     assert "demoContext" not in dashboard
-    assert "localStorage.getItem('edumatrix_course_id')" in dashboard
+    assert "courseContext.course?.id" in dashboard
+    assert "courseContext.contextRef?.courseId" in dashboard
     assert "getM5WorkspaceOverview(courseId)" in dashboard
     assert "getM5DashboardSummary(courseId)" in dashboard
 
@@ -199,7 +202,7 @@ def test_legacy_interactive_model_sentinel_keeps_course_guard_without_fake_resou
         "to.name === 'InteractiveModelResource'",
         "String(to.params?.resourceId || '') === 'legacy'",
         "return isLegacyInteractiveModel ? { resourceId: null } : null",
-        "restoreFromRoute(to, courseContextOverride(to))",
+        "restoreFromRoute(to, await courseContextOverride(to))",
     ):
         assert fragment in router
     for fragment in (
@@ -220,25 +223,29 @@ def test_chat_quiz_context_converges_on_the_formal_resource_workspace():
 
     for required in (
         'data-testid="chat-quiz-context"',
-        "quizQuestion.prompt",
+        ':question="quizQuestion"',
         "quizSourceTitle",
         "openQuizSource",
         "quizResourceLocation",
         "question_version_id",
         "course_id",
         "进入测验题资源作答",
-        "作答、提交、判分和历史记录统一在测验题资源中完成",
+        "作答、判分、解析和历史记录会保留在这道题的学习记录中",
         "quiz_follow_up",
         "attempt_id",
         "createIfEmpty: !quizResourceId.value",
     ):
         assert required in chat
-    for forbidden in (
+    # PR02 restored inline answering through the same canonical card.
+    for required in (
         "InlineQuizCard",
         "handleQuizSubmitted",
         "handleQuizFollowUp",
+    ):
+        assert required in chat
+    for forbidden in (
         "submitM5AssessmentAttempt",
-        'data-testid="chat-inline-quiz-context"',
+        "record_attempt",
     ):
         assert forbidden not in chat
 

@@ -39,8 +39,8 @@ def test_completed_message_resource_action_returns_to_composer_instead_of_legacy
     assert "startResourceFromMessage" in source
     assert "createResourceFromMessage" not in source
     assert "resource-menu" not in source
-    assert "规划、协作、审核和发布过程" in source
-    assert "data-testid=\"chat-composer-context\"" in source
+    assert "输入你的学习要求后发送，可以在这段对话中查看资源准备进展。" in source
+    assert "data-testid=\"chat-current-course-label\"" in source
 
 
 def test_course_picker_and_level_d_general_answer_action_are_exposed():

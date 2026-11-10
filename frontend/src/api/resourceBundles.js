@@ -27,6 +27,12 @@ export async function createGenerationJob(payload) {
   })).data
 }
 
+export async function createQuizPractice(payload) {
+  return (await api.post('/v1/resource-bundles/generation-jobs/from-quiz', payload, {
+    headers: buildHeaders(),
+  })).data
+}
+
 export async function executeGenerationJobDemo(taskId) {
   return (await api.post(
     `/v1/resource-bundles/generation-jobs/${encodeURIComponent(taskId)}/execute-demo`,
@@ -65,4 +71,9 @@ export async function recoverGenerationJob(taskId) {
     {},
     { headers: buildHeaders() },
   )).data
+}
+
+export async function reviseGenerationJob(taskId, payload) {
+  return (await api.post(`/v1/resource-bundles/generation-jobs/${encodeURIComponent(taskId)}/revise`,
+    payload, { headers: buildHeaders() })).data
 }

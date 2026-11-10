@@ -90,7 +90,13 @@ def test_total_path_has_cross_course_bridges_and_valid_schedule():
     assert set(validation["course_ids"]) == {MASTER_COURSE_ID, SECONDARY_COURSE_ID}
     assert len(report["bridge_edges"]) == 3
     assert validation["issues"] == []
-    assert len(validation["days"]) == 33
+    # Course material changes may alter the number of study days. Verify
+    # the actual contract: every task appears once, within the shared budget.
+    expected = {node["id"] for path in report["subject_paths"] for node in path["nodes"]}
+    scheduled = [task["id"] for day in validation["days"] for task in day["tasks"]]
+    assert set(scheduled) == expected
+    assert len(scheduled) == len(expected)
+    assert all(day["total_minutes"] <= day["budget_minutes"] for day in validation["days"])
     assert validation["scheduled_minutes"] == validation["total_minutes"]
 
 

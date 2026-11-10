@@ -28,9 +28,14 @@ class InMemoryVectorIndex:
     _vectors: dict[str, tuple[float, ...]] = field(default_factory=dict)
 
     def upsert(self, items: tuple[Evidence, ...]) -> None:
-        for item in items:
+        texts = [evidence_to_text(item) for item in items]
+        embed_many = getattr(self.embedding_backend, 'embed_many', None)
+        vectors = embed_many(texts) if embed_many else [self.embedding_backend.embed(text) for text in texts]
+        if len(vectors) != len(items):
+            raise ValueError('embedding_batch_incomplete')
+        for item, vector in zip(items, vectors):
             self._items[item.id] = item
-            self._vectors[item.id] = self.embedding_backend.embed(evidence_to_text(item))
+            self._vectors[item.id] = vector
 
     def remove_by_source(self, source: str) -> int:
         ids_to_delete = [eid for eid, item in self._items.items() if item.source == source]

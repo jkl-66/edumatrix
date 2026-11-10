@@ -96,13 +96,21 @@ def test_second_domain_projects_through_canonical_course_path():
         session.close()
 
 
-def test_second_domain_frozen_retrieval_evaluation_passes():
+def test_second_domain_frozen_retrieval_preserves_missing_explanation_failure():
     report = evaluate_course_retrieval(
         MANIFEST_PATH.with_name("retrieval_evaluation.json"), MANIFEST_PATH
     )
-    assert report["answerable_passed"] == 8
+    # The frozen README bundle lists this as a learning objective, but does not
+    # explain WHY the datasets are separated. Keep the original evaluation case
+    # and its failed result; neither finding its keywords nor reading its goals
+    # establishes answer evidence. This is a recorded material gap, not 8/8.
+    assert report["answerable_passed"] == 7
     assert report["no_evidence_passed"] == 2
-    assert report["passed"] is True
+    assert report["passed"] is False
+    failures = [item for item in report["answerable_results"] if not item["passed"]]
+    assert [item["id"] for item in failures] == ["EDGERET-002"]
+    assert failures[0]["low_confidence"] is True
+    assert failures[0]["allowed_answer_term_hits"] == []
 
 
 def test_second_domain_http_exposes_eight_chapters_and_full_provenance():

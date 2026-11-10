@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import Field, model_validator
 from sqlalchemy.exc import IntegrityError
 
@@ -55,6 +55,8 @@ class DiagnosticGenerateRequest(StrictModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
     question_count: Literal[15, 20, 25] = 15
     self_rating: Literal["foundation", "advanced", "mastered"] = "foundation"
+    background: bool = False
+    stage_id: str | None = None
 
 
 class DiagnosticResponseSaveRequest(StrictModel):
@@ -67,37 +69,34 @@ class DiagnosticResponseSaveRequest(StrictModel):
     idempotencyKey: str = Field(min_length=8, max_length=128)
     resumeQuestionVersionId: str | None = Field(default=None, min_length=3, max_length=64)
 
-    @model_validator(mode="after")
-    def answer_size(self) -> "DiagnosticResponseSaveRequest":
-        if len(str(self.answer).encode("utf-8")) > 50000:
-            raise ValueError("answer exceeds the diagnostic draft limit")
-        return self
-
-
 class DiagnosticSubmitRequest(StrictModel):
     idempotencyKey: str = Field(min_length=8, max_length=128)
 
 
 class DiagnosticReportRequest(StrictModel):
     idempotencyKey: str = Field(min_length=8, max_length=128)
+    background: bool = False
 
 
 class DiagnosticPathRequest(StrictModel):
     idempotencyKey: str = Field(min_length=8, max_length=128)
-    timeBudgetMinutes: int = Field(default=90, ge=30, le=480)
+    timeBudgetMinutes: int | None = Field(default=None, ge=15, le=480)
+    background: bool = False
 
 
 class MultiCourseDiagnosticGenerateRequest(StrictModel):
-    courseIds: tuple[str, ...] = Field(min_length=1, max_length=8)
+    courseIds: tuple[str, ...] = Field(min_length=1)
     idempotencyKey: str = Field(min_length=8, max_length=128)
     questionCount: Literal[15, 20, 25] = 15
     selfRating: Literal["foundation", "advanced", "mastered"] = "foundation"
+    background: bool = False
 
 
 class MultiCoursePathGenerateRequest(StrictModel):
-    reportIds: tuple[str, ...] = Field(min_length=1, max_length=8)
+    reportIds: tuple[str, ...] = Field(min_length=1)
     idempotencyKey: str = Field(min_length=8, max_length=128)
-    timeBudgetMinutes: int = Field(default=90, ge=30, le=480)
+    timeBudgetMinutes: int | None = Field(default=None, ge=15, le=480)
+    background: bool = False
 
 
 def _error(exc: DiagnosticGenerationError) -> HTTPException:
@@ -143,6 +142,7 @@ async def get_diagnostic_preflight(
     course_id: str,
     question_count: int = Query(default=15),
     self_rating: Literal["foundation", "advanced", "mastered"] = Query(default="foundation"),
+    stage_id: str | None = None,
     current_user: DBUser = Depends(get_current_user),
 ):
     if current_user.role != "student":
@@ -158,6 +158,7 @@ async def get_diagnostic_preflight(
             course_id=course_id,
             question_count=question_count,
             self_rating=self_rating,
+            stage_id=stage_id,
         )
 
     try:
@@ -187,6 +188,9 @@ async def create_multicourse_diagnostic_blueprints(
             status_code=403,
             detail={"code": "diagnostic_student_required", "message": "仅学生可以开始入学诊断。"},
         )
+
+    if payload.background:
+        return await _queue_multicourse(payload, current_user, 'multicourse_diagnostic.prepare')
 
     def operation(session):
         try:
@@ -225,6 +229,9 @@ async def create_multicourse_diagnostic_paths(
             detail={"code": "diagnostic_student_required", "message": "仅学生可以生成入学路径。"},
         )
 
+    if payload.background:
+        return await _queue_multicourse(payload, current_user, 'multicourse_path.prepare')
+
     def operation(session):
         try:
             result = generate_multicourse_paths(
@@ -249,16 +256,95 @@ async def create_multicourse_diagnostic_paths(
         raise _multicourse_error(exc) from exc
 
 
+async def _queue_multicourse(payload, user, capability):
+    from app.multicourse_diagnostic import _unique_ids
+    from app.learning_generation_jobs import queue_task, LearningGenerationError
+    from app.diagnostic_generation import _readable_course
+    def operation(session):
+        request = payload.model_dump(mode='json', exclude={'background'})
+        if capability == 'multicourse_diagnostic.prepare':
+            ids = _unique_ids(payload.courseIds, field='courseIds')
+            for course_id in ids:
+                preflight = diagnostic_preflight(session, user=user, course_id=course_id,
+                    question_count=payload.questionCount, self_rating=payload.selfRating)
+                if not preflight.get('canGenerate'):
+                    raise DiagnosticGenerationError('diagnostic_not_ready', '请先完成所选课程的学习起点确认，并检查资料。')
+            course_id = ids[0]
+        else:
+            ids = _unique_ids(payload.reportIds, field='reportIds')
+            courses = []
+            for report_id in ids:
+                report = session.get(DBDiagnosticReport, report_id)
+                if report is None or report.owner_public_id != user.public_id:
+                    raise DiagnosticReportError('diagnostic_report_unknown', '没有找到可用的诊断报告。', status_code=404)
+                _readable_course(session, course_id=report.course_id, user=user)
+                courses.append(report.course_id)
+            if len(set(courses)) != len(courses):
+                raise MultiCourseDiagnosticError('multicourse_selection_duplicate', '每门课程请选择一份诊断报告。', status_code=422)
+            course_id = courses[0]
+        return {'task': queue_task(session, user, course_id=course_id, capability=capability,
+            request=request, key=_multicourse_task_key(capability, payload.idempotencyKey))}
+    try:
+        return await run_db_op(operation)
+    except DiagnosticGenerationError as exc:
+        raise _error(exc) from exc
+    except DiagnosticReportError as exc:
+        raise _report_error(exc) from exc
+    except MultiCourseDiagnosticError as exc:
+        raise _multicourse_error(exc) from exc
+    except LearningGenerationError as exc:
+        raise HTTPException(status_code=409, detail={'code': exc.code, 'message': str(exc)}) from exc
+
+
+def _multicourse_task_key(capability, key):
+    import hashlib
+    return capability + ':' + hashlib.sha256(key.encode()).hexdigest()
+
+
+@router.get('/multi-course/generation-tasks')
+async def get_multicourse_generation_task(
+    kind: Literal['blueprints', 'paths'], idempotency_key: str,
+    current_user: DBUser = Depends(get_current_user),
+):
+    from app.database import DBGenerationTask
+    from app.learning_generation_jobs import task_payload
+    capability = 'multicourse_diagnostic.prepare' if kind == 'blueprints' else 'multicourse_path.prepare'
+    def operation(session):
+        task = session.query(DBGenerationTask).filter_by(owner_public_id=current_user.public_id,
+            capability=capability, idempotency_key=_multicourse_task_key(capability, idempotency_key)).first()
+        return {'task': task_payload(session, task) if task else None}
+    return await run_db_op(operation)
+
+
 @router.post("/blueprints", status_code=201)
 async def create_diagnostic_blueprint(
     payload: DiagnosticGenerateRequest,
     current_user: DBUser = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
 ):
     if current_user.role != "student":
         raise HTTPException(
             status_code=403,
             detail={"code": "diagnostic_student_required", "message": "仅学生可以开始入学诊断。"},
         )
+
+    if payload.background:
+        from app.diagnostic_tasks import queue_diagnostic_task
+        def queue(session):
+            request = DiagnosticBlueprintRequest(course_id=payload.course_id,
+                idempotency_key=payload.idempotency_key, question_count=payload.question_count,
+                self_rating=payload.self_rating,
+                stage_id=payload.stage_id)
+            try:
+                return queue_diagnostic_task(session, user=current_user, request=request)
+            except IntegrityError:
+                session.rollback()
+                return queue_diagnostic_task(session, user=current_user, request=request)
+        try:
+            task = await run_db_op(queue)
+        except DiagnosticGenerationError as exc:
+            raise _error(exc) from exc
+        return {"task": task, "blueprint": task["blueprint"]}
 
     def operation(session):
         llm = build_diagnostic_llm()
@@ -267,6 +353,7 @@ async def create_diagnostic_blueprint(
             idempotency_key=payload.idempotency_key,
             question_count=payload.question_count,
             self_rating=payload.self_rating,
+            stage_id=payload.stage_id,
         )
         try:
             row, created = generate_diagnostic_blueprint(
@@ -293,6 +380,33 @@ async def create_diagnostic_blueprint(
 
     try:
         return await run_db_op(operation)
+    except DiagnosticGenerationError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/generation-tasks")
+async def latest_diagnostic_task(
+    course_id: str, question_count: int = Query(15),
+    self_rating: Literal["foundation", "advanced", "mastered"] = "foundation",
+    stage_id: str | None = None,
+    current_user: DBUser = Depends(get_current_user),
+):
+    from app.diagnostic_tasks import find_diagnostic_task
+    try:
+        from app.diagnostic_generation import _question_count
+        _question_count(question_count)
+        task = await run_db_op(lambda session: find_diagnostic_task(session, user=current_user,
+            course_id=course_id, question_count=question_count, self_rating=self_rating, stage_id=stage_id))
+        return {"task": task}
+    except DiagnosticGenerationError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/generation-tasks/{task_id}")
+async def diagnostic_task_status(task_id: str, current_user: DBUser = Depends(get_current_user)):
+    from app.diagnostic_tasks import get_diagnostic_task
+    try:
+        return {"task": await run_db_op(lambda session: get_diagnostic_task(session, task_id=task_id, user=current_user))}
     except DiagnosticGenerationError as exc:
         raise _error(exc) from exc
 
@@ -448,6 +562,17 @@ async def create_diagnostic_report(
 ):
     def operation(session):
         try:
+            if payload.background:
+                from app.diagnostic_report import _owned_session, _report_for_session
+                from app.learning_generation_jobs import queue_task
+                work = _owned_session(session, user=current_user, session_id=session_id)
+                existing = _report_for_session(session, user=current_user, session_id=session_id)
+                if existing:
+                    return {'created': False, 'report': diagnostic_report_payload(session, user=current_user, row=existing)}
+                blueprint = session.get(DBDiagnosticBlueprint, work.blueprint_id)
+                return {'task': queue_task(session, current_user, course_id=blueprint.course_id,
+                    capability='diagnostic.report', request={'session_id': session_id},
+                    key=f'diagnostic-report:{session_id}')}
             llm = build_diagnostic_llm()
             row, created = generate_diagnostic_report(
                 session,
@@ -485,17 +610,42 @@ async def get_diagnostic_report(
         raise _report_error(exc) from exc
 
 
+@router.get('/sessions/{session_id}/report-task')
+async def get_diagnostic_report_task(session_id: str, current_user: DBUser = Depends(get_current_user)):
+    def operation(session):
+        from app.database import DBGenerationTask
+        from app.diagnostic_report import _owned_session
+        from app.learning_generation_jobs import task_payload
+        _owned_session(session, user=current_user, session_id=session_id)
+        task = session.query(DBGenerationTask).filter_by(owner_public_id=current_user.public_id,
+            capability='diagnostic.report', idempotency_key=f'diagnostic-report:{session_id}').first()
+        return {'task': task_payload(session, task) if task else None}
+    try:
+        return await run_db_op(operation)
+    except DiagnosticReportError as exc:
+        raise _report_error(exc) from exc
+
+
 @router.post("/sessions/{session_id}/report/path")
 async def generate_diagnostic_report_path(
     session_id: str,
     payload: DiagnosticPathRequest,
     current_user: DBUser = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
 ):
     def operation(session):
         row = session.query(DBDiagnosticReport).filter_by(session_id=session_id).first()
         if row is None:
             raise DiagnosticReportError("diagnostic_report_unknown", "请先生成诊断报告。", status_code=404)
         try:
+            if row.owner_public_id != current_user.public_id:
+                raise DiagnosticReportError("diagnostic_report_forbidden", "无权生成该诊断的路径。", status_code=403)
+            if payload.background:
+                from app.path_tasks import queue_path_task
+                return {"task": queue_path_task(session, user=current_user, course_id=row.course_id,
+                    time_budget_minutes=payload.timeBudgetMinutes, full_coverage=True,
+                    profile_snapshot_id=row.profile_snapshot_id, report_id=row.id,
+                    idempotency_key=payload.idempotencyKey)}
             path = generate_report_path(
                 session,
                 user=current_user,
@@ -513,7 +663,8 @@ async def generate_diagnostic_report_path(
             raise DiagnosticReportError(exc.code, str(exc)) from exc
 
     try:
-        return await run_db_op(operation)
+        result = await run_db_op(operation)
+        return result
     except DiagnosticReportError as exc:
         raise _report_error(exc) from exc
 

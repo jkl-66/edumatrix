@@ -60,15 +60,15 @@ def test_knowledge_shelf_uses_requested_discovery_button_copy() -> None:
 
 def test_agent_timeline_translates_public_owners_and_event_labels() -> None:
     component = read("frontend/src/components/AgentTimeline.vue")
-    for label in ("对话编排智能体", "上下文构建智能体", "反驳检查智能体", "证据核验智能体"):
+    for label in ("问题梳理", "相关知识整理", "边界检查", "内容核对"):
         assert label in component
     assert "协作 Agent" not in component
     assert "Resource Planner" in component
-    assert "资源规划智能体" in component
-    for label in ("阶段开始", "阶段完成", "结论已核验", "处理完成"):
+    assert "资源安排" in component
+    for label in ("阶段开始", "阶段完成", "结论已检查", "处理完成"):
         assert label in component
-    assert "<dt>反驳检查</dt>" in component
-    assert "<dt>证据核验</dt>" in component
+    assert "['需要留意', item.disagreement]" in component
+    assert "['检查结果', item.validation]" in component
 
 
 def test_onboarding_echoes_answer_before_model_response() -> None:
@@ -173,8 +173,8 @@ def test_empty_profile_api_paths_do_not_restore_legacy_machine_learning_defaults
     assert '"target_course": getattr(profile, "target_course", "机器学习导论")' not in api
     assert 'target_course: session.value?.courseContext?.title || \'机器学习导论\'' not in onboarding
     assert "awaiting_learning_evidence" in api
-    assert "等待有效学习证据，暂不评分" in view
-    assert "profileAwaitingEvidence ? '待评估'" in view
+    assert "等待有效学习记录，暂不评分" in view
+    assert "avgMastery == null ? '待评估'" in view
 
 
 def test_new_onboarding_context_does_not_invent_a_course_id() -> None:

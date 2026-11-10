@@ -15,6 +15,7 @@ from app.database import (
     DBPlanVersion, DBTeachingAnalyticsReport, DBTeachingClass, DBTeachingGroup,
     DBTeachingTask, DBUser,
 )
+from app.database import DBSourceDocument
 from app.main import app
 from app.migrations import apply_registered_migrations
 
@@ -33,6 +34,8 @@ def fixture():
     course = DBCourse(id="teacher-course", version="frozen-v1", title="教师旅程课程（冻结合成）", status="published", owner_public_id=teacher.public_id, manifest_version="m1", manifest_data={"data_class": "synthetic_fixture"})
     db.add_all([teacher, other, learner]); db.flush()
     db.add(course); db.flush()
+    db.add(DBSourceDocument(id=course.id + "-source", course_id=course.id, title="合成课程资料", filename="lesson.md", file_format="md", content_hash="1" * 64, processing_status="ready"))
+    db.flush()
     db.add_all([
         DBCourseMembership(course_id=course.id, user_public_id=teacher.public_id, role="teacher", status="active"),
         DBCourseMembership(course_id=course.id, user_public_id=learner.public_id, role="student", status="active"),

@@ -1,10 +1,14 @@
 <script setup>
+import { projectedTaskStatus, pathProgress as summarizePath, progressLabel, estimatedPathMinutes } from '../utils/pathProgress.js'
+import { learningText, displayLabel } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
+import PathGenerationStatus from '../components/PathGenerationStatus.vue'
+import { usePathGeneration } from '../composables/usePathGeneration.js'
 import { ref, onMounted, computed, nextTick, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   confirmM5Plan,
   generateM5TextbookPathDraft,
-  getCompetitionDemoContext,
   getLearningPath,
   getM5TextbookPathDraft,
   getM5Plan,
@@ -27,6 +31,7 @@ import {
 import VideoRenderPanel from '../components/VideoRenderPanel.vue'
 import PathTaskList from '../components/PathTaskList.vue'
 import AggregationStatus from '../components/AggregationStatus.vue'
+import { submitM6InterventionStudy } from '../api/m6'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,15 +48,56 @@ const regenerating = ref(false)
 const textbookDraft = ref(null)
 const textbookDraftLoading = ref(false)
 const textbookDraftError = ref('')
-const pathViewMode = ref(route.query.view === 'subject' ? 'subject' : 'total')
-const selectedSubjectId = ref(route.query.subject_id || '')
+const requestedDraftId = ref(String(route.query.draft_id || ''))
+const { task: pathTask, busy: pathTaskBusy, connectionError: pathConnectionError,
+  accept: acceptPathTask, restore: restorePathTask, refresh: refreshPathTask,
+  reset: resetPathTask } = usePathGeneration({
+  onComplete: async (task, stillCurrent) => {
+    if (requestedDraftId.value && task.result?.planId && task.result.planId !== requestedDraftId.value) return
+    const draft = await getM5TextbookPathDraft(task.courseId, task.result?.planId || requestedDraftId.value)
+    if (!stillCurrent() || currentCourseId.value !== task.courseId) return
+    textbookDraft.value = draft
+    generationNotice.value = task.result?.changed === false
+      ? '学习情况没有变化，继续使用已有安排。补充诊断或更新画像后，可以再次生成。'
+      : '新的学习安排已保存为草稿，查看后确认即可使用。'
+  },
+  onError: (message) => { textbookDraftError.value = message },
+})
+const pathViewMode = ref(route.query.view === 'total' ? 'total' : route.query.view === 'subject' || route.query.course_id ? 'subject' : 'total')
+const selectedSubjectId = ref(route.query.subject_id || route.query.course_id || '')
+const pathAdjustment = ref(route.query.adjustment || '')
 const m5Path = ref(null)
 const m5Paths = ref([])
+const interventionMinutes = ref({})
+const interventionBusy = ref('')
+const interventionNotice = ref('')
+const interventions = computed(() => m5Paths.value.filter(path => path.intervention
+  && (!route.query.course_id || path.course_id === route.query.course_id)))
+
+async function submitIntervention(path) {
+  interventionBusy.value = path.id
+  interventionNotice.value = ''
+  try {
+    await submitM6InterventionStudy(path.id, interventionMinutes.value[path.id])
+    m5Paths.value = (await listM5Paths()).items || []
+    interventionNotice.value = '学习情况已提交，等待教师确认。'
+  } catch (value) {
+    interventionNotice.value = userMessage(value)
+  } finally {
+    interventionBusy.value = ''
+  }
+}
+
+function openInterventionReading(path) {
+  const url = new URL(path.intervention.reading_route, window.location.origin)
+  url.searchParams.set('return_to', route.fullPath)
+  router.push(url.pathname + url.search)
+}
 const todayWork = ref([])
 const schedule = ref(null)
 const scheduleLoading = ref(false)
 const scheduleError = ref('')
-const selectedScheduleDay = ref(1)
+const selectedScheduleDay = ref(Math.max(1, Number(route.query.schedule_day) || 1))
 const generationJobs = ref([])
 const selectedTodayTask = ref(null)
 const generationJob = ref(null)
@@ -164,17 +210,20 @@ const crossGraph = computed(() => pathData.value?.cross_domain_micro_graph || nu
 const crossDomainSupports = computed(() => adaptiveRoute.value?.cross_domain_supports || [])
 const semanticLog = computed(() => crossGraph.value?.metadata?.similarity_log || [])
 const todayPlan = computed(() => adaptiveRoute.value?.session_plan || {})
-const visibleEstimatedMinutes = computed(() => todayPlan.value?.today_minutes || adaptiveRoute.value?.estimated_minutes || 0)
+const visibleEstimatedMinutes = computed(() => estimatedPathMinutes(visiblePathTasks.value.filter(task => (
+  pathViewMode.value === 'subject' || subjects.value.find(subject => subject.id === task.subject_id)?.status !== 'paused'
+))))
 const plannerReview = computed(() => adaptiveRoute.value?.planner_review || {})
 const textbookDraftNodes = computed(() => textbookDraft.value?.nodes || [])
 const textbookDraftReady = computed(() => textbookDraft.value?.state === 'draft_ready')
 const textbookGeneration = computed(() => textbookDraft.value?.generation || { status: 'not_started' })
 const textbookGenerationLabel = computed(() => ({
-  not_started: '尚未调用模型',
-  running: '模型定制中',
-  completed: '模型草稿已完成，等待确定性校验/确认',
-  failed: '模型定制失败，可重试',
-  legacy: '已有版本（未记录新模型调用）',
+  not_started: '尚未生成学习安排',
+  running: '正在安排学习内容',
+  completed: '学习安排已生成，请查看并确认',
+  partial: '已有部分安排，继续准备完整路径',
+  failed: '学习安排未生成，可以重试',
+  legacy: '已有学习安排',
 }[textbookGeneration.value.status] || '路径状态待确认'))
 const aggregatePlanId = computed(() => String(route.query.aggregate_plan_id || ''))
 const aggregatePlanVersion = computed(() => {
@@ -194,6 +243,7 @@ const aggregatePlanMinutes = computed(() => aggregatePlanNodes.value.reduce(
 ))
 const currentCourseId = computed(() => (
   (isPersonalPath.value ? m5Path.value?.course_id : '')
+  || (pathViewMode.value === 'subject' ? selectedSubjectId.value : '')
   || route.query.course_id
   || demoContext.value?.course?.id
   || m5Path.value?.course_id
@@ -202,7 +252,7 @@ const currentCourseId = computed(() => (
 const pathRecords = computed(() => {
   const byCourse = new Map()
   for (const path of m5Paths.value) {
-    if (!path?.course_id) continue
+    if (!path?.course_id || path.intervention) continue
     const previous = byCourse.get(path.course_id)
     const shouldReplace = !previous
       || (path.status === 'active' && previous.status !== 'active')
@@ -222,29 +272,27 @@ const subjects = computed(() => {
   const course = demoContext.value?.course || {}
   const records = pathRecords.value.length ? pathRecords.value : (m5Path.value ? [m5Path.value] : [])
   if (!records.length) {
-    const completed = canonicalNodes.value.filter(item => item.status === 'completed' || item.status === '已完成').length
+    const summary = summarizePath(canonicalNodes.value)
     return [{
       id: currentCourseId.value || 'current-course',
       path_id: m5Path.value?.id || '',
       lock_version: m5Path.value?.lock_version,
       title: course.title || pathData.value?.course_title || pathData.value?.course?.title || '当前课程',
-      completed,
-      total: canonicalNodes.value.length,
-      progress: canonicalNodes.value.length ? Math.round(completed / canonicalNodes.value.length * 100) : 0,
+      ...summary,
+      progress: summary.percentage,
       status: m5Path.value?.status || 'active',
     }]
   }
   return records.map(item => {
-    const completed = (item.nodes || []).filter(node => node.status === 'completed' || node.status === '已完成').length
-    const total = (item.nodes || []).length
+    const scheduleCourse = schedule.value?.courses?.find(course => course.path_id === item.id)
+    const summary = summarizePath((item.nodes || []).map(node => ({ ...node, status: projectedTaskStatus(node, scheduleCourse?.nodes?.find(candidate => candidate.id === node.id)) })))
     return {
       id: item.course_id,
       path_id: item.id,
       lock_version: item.lock_version,
       title: item.course?.title || (item.course_id === course.id ? course.title : '') || item.course_id || '当前课程',
-      completed,
-      total,
-      progress: total ? Math.round(completed / total * 100) : 0,
+      ...summary,
+      progress: summary.percentage,
       status: item.status || 'active',
     }
   })
@@ -283,12 +331,13 @@ const allPathTasks = computed(() => pathRecords.value.flatMap(path => {
       resource_type: item.node_type,
       estimate_minutes: item.estimate_minutes || [item.estimate_min_minutes, item.estimate_max_minutes],
       completion_criteria: item.completion_criteria,
+      teaching_goal: scheduleNode?.teaching_goal || item.teaching_goal || '',
       resources: scheduleNode?.resources || item.resources || [],
       generation_context: scheduleNode?.generation_context || item.generation_context || null,
       knowledge_point_id: scheduleNode?.knowledge_point_id || item.knowledge_point_id || '',
       knowledge_point_title: scheduleNode?.knowledge_point_title || item.knowledge_point_title || '',
       continue_route: item.continue_route || `/workspace?course_id=${encodeURIComponent(path.course_id || '')}&node_id=${encodeURIComponent(key)}`,
-      status: scheduleNode?.status === 'skipped' ? 'completed' : (item.status || scheduleNode?.status || 'pending'),
+      status: projectedTaskStatus(item, scheduleNode),
     }
   })
 }))
@@ -355,10 +404,7 @@ const generationStatusLabel = computed(() => {
 })
 const futureTasks = computed(() => visiblePathTasks.value.filter(item => !todayTaskIds.value.includes(item.id)))
 const pathProgress = computed(() => {
-  const source = visiblePathTasks.value
-  const total = source.length
-  const completed = source.filter(item => item.status === 'completed' || item.status === '已完成').length
-  return { total, completed, percentage: total ? Math.round(completed / total * 100) : 0 }
+  return summarizePath(visiblePathTasks.value)
 })
 const pathState = computed(() => {
   if (pathLoadError.value || error.value) return 'failed'
@@ -578,7 +624,7 @@ async function loadData() {
   aggregatePlan.value = null
   try {
     const [context, recs] = await Promise.all([
-      isPersonalPath.value ? Promise.resolve(null) : getCompetitionDemoContext().catch(() => null),
+      Promise.resolve(null),
       getRecommendations(studentId.value).catch(() => []),
     ])
     demoContext.value = context
@@ -600,12 +646,13 @@ async function loadData() {
       ? m5Paths.value.find(item => String(item.id) === requestedPathId)
       : null
     if (requestedPathId && !requestedPath) throw new Error('这条个人学习路径不存在或不属于当前账号。')
-    const courseId = requestedPath?.course_id || route.query.course_id || context?.course?.id || ''
+    const courseId = requestedPath?.course_id || selectedSubjectId.value || route.query.course_id || context?.course?.id || pathRecords.value[0]?.course_id || ''
     if (isLearner.value && !isPersonalPath.value && courseId) {
-      textbookDraft.value = await getM5TextbookPathDraft(courseId).catch((draftError) => {
+      textbookDraft.value = await getM5TextbookPathDraft(courseId, requestedDraftId.value).catch((draftError) => {
         textbookDraftError.value = message(draftError)
         return null
       })
+      await restorePathTask({ course_id: courseId })
     }
     m5Path.value = requestedPath
       || pathRecords.value.find(item => item.course_id === courseId)
@@ -617,8 +664,7 @@ async function loadData() {
     try {
       // A course-scoped path must keep Today work in that course.  The total
       // view is multi-course only when the route itself has no course scope.
-      const scheduleCourseId = route.query.course_id
-        || (pathViewMode.value === 'subject' ? activeSubjectId.value : '')
+      const scheduleCourseId = pathViewMode.value === 'subject' ? activeSubjectId.value : ''
       schedule.value = await getM5Schedule(selectedScheduleDay.value, scheduleCourseId)
       selectedScheduleDay.value = Number(schedule.value?.selected_day || selectedScheduleDay.value || 1)
       todayWork.value = scheduleTasks.value
@@ -676,10 +722,10 @@ async function selectScheduleDay(day) {
   scheduleLoading.value = true
   scheduleError.value = ''
   try {
-    const scheduleCourseId = route.query.course_id
-      || (pathViewMode.value === 'subject' ? activeSubjectId.value : '')
+    const scheduleCourseId = pathViewMode.value === 'subject' ? activeSubjectId.value : ''
     schedule.value = await getM5Schedule(nextDay, scheduleCourseId)
     selectedScheduleDay.value = Number(schedule.value?.selected_day || nextDay)
+    rememberPathSelection()
     todayWork.value = scheduleTasks.value
     selectedTodayTask.value = null
     generationJob.value = null
@@ -697,7 +743,9 @@ function findGenerationJob(task) {
   return generationJobs.value.find(job => (
     job.course_id === task.course_id
     && job.knowledge_point_id === context.knowledge_point_id
-    && (!expectedIdempotencyKey || job.idempotency_key === expectedIdempotencyKey)
+    && (job.idempotency_key === expectedIdempotencyKey
+      || (job.manifest?.task_id === (task.node_id || task.id)
+        && job.manifest?.path_id === task.path_id))
   )) || null
 }
 
@@ -713,26 +761,27 @@ function selectTodayKnowledgePoint(task) {
   generationJob.value = findGenerationJob(task)
   generationError.value = ''
   generationNotice.value = generationJob.value
-    ? '已恢复这个知识点上次的资源包生成记录。'
-    : '已选择知识点。确认学习内容和当前学习情况后，可以一次生成九类资源。'
+    ? '已恢复这项学习任务的资源包。'
+    : ''
 }
 
 function taskKnowledgePointTitle(task) {
-  return task?.generation_context?.knowledge_point_title
+  return task?.generation_context?.teaching_title
+    || task?.generation_context?.knowledge_point_title
     || task?.knowledge_point_title
     || task?.title
     || '当前知识点'
 }
 
 function taskParentChapterTitle(task) {
-  const chapterTitle = String(task?.title || '').trim()
+  const chapterTitle = String(task?.generation_context?.chapter_title || '').trim()
   return chapterTitle && chapterTitle !== taskKnowledgePointTitle(task) ? chapterTitle : ''
 }
 
 function generationPayload(task) {
   const context = task?.generation_context || {}
   const knowledgePointId = context.knowledge_point_id || task?.knowledge_point_id
-  const title = context.knowledge_point_title || task?.knowledge_point_title || task?.title || '今日知识点'
+  const title = taskKnowledgePointTitle(task)
   const sourceRefIds = context.source_ref_ids || []
   const profileSnapshotId = context.profile_snapshot_id
   return {
@@ -760,7 +809,9 @@ function generationIdempotencyKey(task) {
   const knowledgePointId = context.knowledge_point_id || task?.knowledge_point_id || ''
   const pathVersionId = context.path_version_id || task?.path_version_id || 'current'
   const localDate = new Intl.DateTimeFormat('en-CA').format(new Date())
-  return `${studentId.value}:${task?.course_id || currentCourseId.value}:${knowledgePointId}:${pathVersionId}:${localDate}`
+  // Task and frozen version already identify the owner/course. Leave room for
+  // Chat's conversation suffix within the shared 128-character request key.
+  return `path:${task?.node_id || task?.id || knowledgePointId}:${pathVersionId}:${localDate}`
 }
 
 async function generateSelectedResourceBundle() {
@@ -787,7 +838,9 @@ async function generateSelectedResourceBundle() {
 async function openResourceGenerationChat(task, resourceTypes = generationResources.map(item => item.type)) {
   const context = task?.generation_context || {}
   const knowledgePointId = context.knowledge_point_id || task?.knowledge_point_id || ''
-  const title = context.knowledge_point_title || task?.knowledge_point_title || task?.title || '今日知识点'
+  const title = context.teaching_title || context.knowledge_point_title || task?.knowledge_point_title || task?.title || '今日知识点'
+  const scope = context.teaching_title
+    ? `本单元包括${(context.knowledge_point_titles || []).join('、')}。${context.teaching_goal || ''}` : ''
   const sourceRefIds = [...new Set((context.source_ref_ids || []).map(item => String(item || '').trim()).filter(Boolean))]
   await router.push({
     path: '/chat',
@@ -802,7 +855,7 @@ async function openResourceGenerationChat(task, resourceTypes = generationResour
       resource_types: resourceTypes.join(','),
       request_id: generationIdempotencyKey(task),
       return_to: route.fullPath,
-      prompt: `请帮我一键生成“${title}”的完整资源包（${resourceTypes.map(type => generationResources.find(item => item.type === type)?.label || type).join('、')}）。请结合当前课程资料、学习路径和我的学习情况生成，并在过程中展示协作步骤。`,
+      prompt: `请帮我生成“${title}”的学习资源（${resourceTypes.map(type => generationResources.find(item => item.type === type)?.label || type).join('、')}）。${scope}请结合课程资料与我的学习情况安排讲解和任务。`,
     },
   })
 }
@@ -852,9 +905,49 @@ function openGeneratedResource(item) {
   router.push(item.resource.route)
 }
 
+function rememberPathSelection() {
+  const url = new URL(window.location.href)
+  url.searchParams.set('view', pathViewMode.value)
+  url.searchParams.set('schedule_day', String(selectedScheduleDay.value))
+  for (const key of ['subject_id', 'course_id']) {
+    if (pathViewMode.value === 'subject' && selectedSubjectId.value) url.searchParams.set(key, selectedSubjectId.value)
+    else url.searchParams.delete(key)
+  }
+  if (pathAdjustment.value) url.searchParams.set('adjustment', pathAdjustment.value)
+  else url.searchParams.delete('adjustment')
+  if (requestedDraftId.value) url.searchParams.set('draft_id', requestedDraftId.value)
+  else url.searchParams.delete('draft_id')
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
+}
+
+async function selectSubject(subject) {
+  if (!subject?.id || textbookDraftLoading.value) return
+  requestedDraftId.value = ''
+  selectedSubjectId.value = subject.id
+  pathViewMode.value = 'subject'
+  m5Path.value = pathRecords.value.find(item => item.course_id === subject.id) || null
+  textbookDraft.value = null
+  textbookDraftError.value = ''
+  resetPathTask()
+  rememberPathSelection()
+  const selectedId = subject.id
+  await Promise.all([
+    restorePathTask({ course_id: selectedId }),
+    selectScheduleDay(selectedScheduleDay.value),
+    getM5TextbookPathDraft(selectedId).then(value => {
+      if (selectedSubjectId.value === selectedId) textbookDraft.value = value
+    }).catch(err => {
+      if (selectedSubjectId.value === selectedId) textbookDraftError.value = message(err)
+    }),
+  ])
+}
+
 function selectPathView(mode) {
+  if (textbookDraftLoading.value) return
   pathViewMode.value = mode
-  if (mode === 'total') selectedSubjectId.value = ''
+  pathAdjustment.value = ''
+  if (mode === 'subject') return selectSubject(subjects.value.find(item => item.id === activeSubjectId.value))
+  rememberPathSelection()
   selectScheduleDay(selectedScheduleDay.value)
 }
 
@@ -874,13 +967,12 @@ async function toggleSubjectPath(subject) {
 }
 
 async function prepareSubjectAdjustment(subject, action) {
-  if (!subject?.id) return
-  selectedSubjectId.value = subject.id
-  pathViewMode.value = 'subject'
+  if (!subject?.id || textbookDraftLoading.value) return
+  pathAdjustment.value = action
+  await selectSubject(subject)
   generationNotice.value = action === 'supplement'
-    ? '已选择补充该科目路径；下方草稿区可继续补充诊断证据。'
-    : '已选择重新编排该科目路径；下方草稿区会保留当前版本并等待新的确认。'
-  await selectScheduleDay(selectedScheduleDay.value)
+    ? '可先补充本课程的诊断，再调整完整课程安排；确认前保留原路径。'
+    : '将根据最新学习情况重新安排本课程；确认前保留原路径。'
   await nextTick()
   document.querySelector('[data-testid="textbook-path-draft"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
@@ -891,12 +983,23 @@ function openPathTask(task) {
 }
 
 async function generateTextbookDraft() {
-  const courseId = route.query.course_id || demoContext.value?.course?.id || ''
-  if (isPersonalPath.value || !courseId || textbookDraftLoading.value) return
+  const courseId = currentCourseId.value
+  if (isPersonalPath.value || !courseId || textbookDraftLoading.value || pathTaskBusy.value) return
+  requestedDraftId.value = ''
+  const url = new URL(window.location.href)
+  url.searchParams.delete('draft_id')
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
   textbookDraftLoading.value = true
   textbookDraftError.value = ''
   try {
-    textbookDraft.value = await generateM5TextbookPathDraft(courseId)
+    const result = await generateM5TextbookPathDraft(courseId, undefined, pathAdjustment.value === 'supplement', true)
+    if (result.task) await acceptPathTask(result.task)
+    else {
+      textbookDraft.value = result
+      generationNotice.value = result.changed === false
+        ? '学习情况没有变化，继续使用已有安排。补充诊断或更新画像后，可以再次生成。'
+        : '新的学习安排已保存为草稿，查看后确认即可使用。'
+    }
   } catch (draftError) {
     textbookDraftError.value = message(draftError)
   } finally {
@@ -906,7 +1009,7 @@ async function generateTextbookDraft() {
 
 async function confirmTextbookDraft() {
   const plan = textbookDraft.value?.plan
-  if (!plan?.id || !textbookDraftReady.value || textbookDraftLoading.value) return
+  if (!plan?.id || !textbookDraftReady.value || textbookDraftLoading.value || pathTaskBusy.value) return
   textbookDraftLoading.value = true
   textbookDraftError.value = ''
   try {
@@ -1198,7 +1301,7 @@ onUnmounted(() => {
   </div>
   <div v-else-if="error" class="path-page path-page--error" data-testid="path-error">
     <h1>学习路径暂时无法打开</h1>
-    <p>{{ error }}</p>
+    <p>{{ userMessage(error) }}</p>
     <button type="button" class="path-primary-action" @click="loadData">重新读取</button>
   </div>
   <div v-else class="path-page">
@@ -1214,12 +1317,12 @@ onUnmounted(() => {
         <div>
           <p class="path-page__eyebrow">学习空间 / 路径</p>
           <h1>学习路径</h1>
-          <p>先完成今日任务，再继续下一阶段。</p>
+          <p v-if="pathState !== 'empty'">先完成今日任务，再继续下一阶段。</p>
         </div>
       </div>
-      <div class="path-progress-summary">
+      <div v-if="pathState !== 'empty'" class="path-progress-summary">
         <strong>{{ pathProgress.percentage }}%</strong>
-        <span>{{ pathProgress.completed }}/{{ pathProgress.total || 0 }} 项完成</span>
+        <span>{{ progressLabel(pathProgress) }}</span>
       </div>
     </header>
 
@@ -1237,10 +1340,10 @@ onUnmounted(() => {
           <h2 id="aggregate-plan-title">总路径草稿</h2>
           <p>这份草稿保留每门课程的边界，并按课程先修关系统一编排。</p>
         </div>
-        <span class="aggregate-plan-panel__status">{{ aggregatePlan.status === 'draft' ? '等待确认' : aggregatePlan.status }}</span>
+        <span class="aggregate-plan-panel__status">{{ aggregatePlan.status === 'draft' ? '等待确认' : displayLabel(aggregatePlan.status) }}</span>
       </div>
       <p v-if="aggregatePlanLoading" class="aggregate-plan-panel__message">正在读取总路径草稿…</p>
-      <p v-else-if="aggregatePlanError" class="aggregate-plan-panel__message aggregate-plan-panel__message--error" role="alert">{{ aggregatePlanError }}</p>
+      <p v-else-if="aggregatePlanError" class="aggregate-plan-panel__message aggregate-plan-panel__message--error" role="alert">{{ userMessage(aggregatePlanError) }}</p>
       <div v-else class="aggregate-plan-panel__meta">
         <span>版本 {{ aggregatePlanVersion?.number || '当前' }}</span>
         <span>课程 {{ aggregatePlanCourseIds.length }} 门</span>
@@ -1261,7 +1364,7 @@ onUnmounted(() => {
       <div v-if="aggregatePlanContent.assumptions?.length" class="aggregate-plan-panel__assumptions">
         <strong>计划说明</strong>
         <ul>
-          <li v-for="assumption in aggregatePlanContent.assumptions" :key="assumption">{{ assumption }}</li>
+          <li v-for="assumption in aggregatePlanContent.assumptions" :key="assumption">{{ assumption.startsWith('参与统筹的课程：') ? `本次统筹 ${aggregatePlanCourseIds.length} 门课程，各科分别保留自己的学习依据。` : learningText(assumption) }}</li>
         </ul>
       </div>
     </section>
@@ -1288,7 +1391,7 @@ onUnmounted(() => {
           <p class="path-section-label">学习日历</p>
           <strong>{{ scheduleLoading ? '正在调整日程…' : `D${selectedSchedule?.day || selectedScheduleDay}` }}</strong>
         </div>
-        <span>{{ schedule?.total_days || 0 }} 天 · {{ selectedSchedule?.date || '日期待加载' }}</span>
+        <span>{{ schedule?.total_days || 0 }} 次安排 · {{ selectedSchedule?.date || '日期待加载' }}</span>
       </div>
       <div v-if="scheduleDays.length" class="path-day-strip__days" role="list">
         <button
@@ -1303,18 +1406,18 @@ onUnmounted(() => {
           @click="selectScheduleDay(item.day)"
         >D{{ item.day }}</button>
       </div>
-      <p v-else class="path-day-strip__empty">当前还没有可投影的跨课程日程。</p>
-      <p v-if="scheduleError" class="path-day-strip__error" role="alert">{{ scheduleError }}</p>
+      <p v-else class="path-day-strip__empty">当前还没有学习日程。</p>
+      <p v-if="scheduleError" class="path-day-strip__error" role="alert">{{ userMessage(scheduleError) }}</p>
     </section>
 
-    <div v-if="pathState === 'empty' && !aggregatePlan" class="path-empty-state" data-testid="path-empty">
+    <div v-if="pathState === 'empty' && !aggregatePlan && !textbookDraftReady && !pathTask" class="path-empty-state" data-testid="path-empty">
       <Target :size="22" />
       <h2>还没有正式学习路径</h2>
-      <p>完成入学诊断后，系统会根据你的课程和学习目标生成路径。</p>
-      <button type="button" class="path-primary-action" @click="router.push('/workspace/assessment/entry')">进入入学诊断</button>
+      <p>补充当前基础后，可以按你的课程和学习目标安排下一步。</p>
+      <button type="button" class="path-primary-action" @click="router.push({ path: '/workspace/assessment/entry', query: currentCourseId ? { course_id: currentCourseId } : {} })">进入入学诊断</button>
     </div>
 
-    <section v-else class="path-layout" data-testid="path-overview">
+    <section v-else-if="pathState !== 'empty' || aggregatePlan" class="path-layout" data-testid="path-overview">
       <main class="path-main-column">
         <section v-if="completedReturnTask" class="path-completion-receipt" data-testid="path-completion-receipt">
           <CheckCircle2 :size="22" />
@@ -1328,33 +1431,30 @@ onUnmounted(() => {
         <section class="path-focus-band">
           <div>
             <p class="path-section-label">D{{ selectedSchedule?.day || selectedScheduleDay }} · {{ pathViewMode === 'total' ? '总路径' : '科目路径' }}</p>
-            <h2>{{ todayTasks.length ? '进行中 · 今天学什么' : '今天没有必做任务' }}</h2>
+            <h2>{{ todayTasks.length ? '本次学习' : '这一天没有必做任务' }}</h2>
             <p>{{ todayTasks.length ? `${todayTasks[0]?.course_title || subjects.find(item => item.id === activeSubjectId)?.title || '当前课程'} · ${taskKnowledgePointTitle(todayTasks[0])}${taskParentChapterTitle(todayTasks[0]) ? ` · 所属章节 ${taskParentChapterTitle(todayTasks[0])}` : ''}` : '可以查看接下来的路径，或调整学习计划。' }}</p>
           </div>
           <div class="path-focus-band__count">
             <strong>{{ todayTasks.length }}</strong>
-            <span>项今日任务 · {{ selectedSchedule?.progress?.completed || 0 }}/{{ selectedSchedule?.progress?.total || todayTasks.length }} 完成</span>
+            <span>项任务 · {{ selectedSchedule?.progress?.completed || 0 }}/{{ selectedSchedule?.progress?.total || todayTasks.length }} 完成</span>
           </div>
         </section>
 
         <section v-if="todayTasks[0]" class="path-current-day-summary" data-testid="current-day-summary">
           <div><span>预计时长</span><strong>{{ formatMinutes(selectedSchedule?.total_minutes || todayTasks.reduce((sum, item) => sum + Number(item.estimate_minutes || 0), 0)) }}</strong></div>
-          <div><span>今日进度</span><strong>{{ selectedSchedule?.progress?.completed || 0 }}/{{ selectedSchedule?.progress?.total || todayTasks.length }}</strong></div>
-          <div><span>完成标准</span><strong>{{ todayTasks[0]?.completion_criteria || '完成学习并留下可追溯证据' }}</strong></div>
+          <div><span>完成进度</span><strong>{{ selectedSchedule?.progress?.completed || 0 }}/{{ selectedSchedule?.progress?.total || todayTasks.length }}</strong></div>
         </section>
+        <p v-if="selectedSchedule?.budget_note" class="path-supporting-text" role="status">{{ selectedSchedule.budget_note }}</p>
 
-        <PathTaskList :tasks="todayTasks" :today-task-ids="todayTaskIds" empty-label="今天暂无必做任务。" @open="openPathTask" />
+        <PathTaskList :tasks="todayTasks" :today-task-ids="todayTaskIds" empty-label="可在上方选择下一次学习安排。" @open="openPathTask" />
 
         <section class="generation-panel path-section" data-testid="today-resource-generation">
           <div class="path-section__heading">
             <div>
-              <p class="path-section-label">今日知识点</p>
               <h2>生成完整资源包</h2>
             </div>
             <span v-if="generationJob" class="generation-panel__status">{{ generationStatusLabel }}</span>
           </div>
-          <p class="generation-panel__intro">先选择一个今日任务，系统会结合课程内容、你的学习情况和最近学习表现生成九类资源，并分别归档到对应空间。</p>
-
           <div class="generation-task-picker" data-testid="today-knowledge-points">
             <button
               v-for="task in todayTasks"
@@ -1366,27 +1466,22 @@ onUnmounted(() => {
             >
               <span>
                 <strong>{{ taskKnowledgePointTitle(task) }}</strong>
-                <span class="path-supporting-text">{{ taskParentChapterTitle(task) ? `所属章节 ${taskParentChapterTitle(task)} · ` : '' }}{{ task.required === false ? '可选拓展' : '今日必做' }} · {{ formatMinutes(Array.isArray(task.estimate_minutes) ? task.estimate_minutes[0] : task.estimate_minutes) }}</span>
+                <span class="path-supporting-text">{{ taskParentChapterTitle(task) ? `所属章节 ${taskParentChapterTitle(task)} · ` : '' }}{{ task.required === false ? '可选拓展' : '本次安排' }} · {{ formatMinutes(Array.isArray(task.estimate_minutes) ? task.estimate_minutes[0] : task.estimate_minutes) }}</span>
               </span>
-              <CheckCircle2 v-if="generationJob?.knowledge_point_id === (task.knowledge_point_id || task.generation_context?.knowledge_point_id)" :size="17" />
+              <CheckCircle2 v-if="findGenerationJob(task)" :size="17" />
               <ArrowRight v-else :size="17" />
             </button>
-            <p v-if="!todayTasks.length" class="generation-panel__empty">今天没有可生成资源包的必做知识点。</p>
+            <p v-if="!todayTasks.length" class="generation-panel__empty">选定学习安排后，可以在这里准备资源。</p>
           </div>
 
           <div v-if="selectedTodayTask" class="generation-panel__selected" data-testid="selected-knowledge-point">
             <div class="generation-panel__selected-copy">
-              <strong>{{ taskKnowledgePointTitle(selectedTodayTask) }}</strong>
-              <span>{{ taskParentChapterTitle(selectedTodayTask) ? `所属章节 ${taskParentChapterTitle(selectedTodayTask)} · ` : '' }}{{ selectedTodayTask.required === false ? '可选拓展' : '今日必做' }} · 完成条件：{{ selectedTodayTask.completion_criteria || '完成学习并留下可追溯证据' }}</span>
+              <strong v-if="selectedGenerationContext?.teaching_goal">{{ selectedGenerationContext.teaching_goal }}</strong>
+              <span v-if="selectedGenerationContext?.teaching_title">{{ selectedGenerationContext.knowledge_point_titles?.join('、') }}</span>
             </div>
-            <div class="generation-panel__context">
-              <span>参考材料 {{ selectedGenerationContext?.source_ref_ids?.length || 0 }} 条</span>
-              <span>学习情况 {{ selectedGenerationContext?.profile_snapshot_id ? '已就绪' : '缺失' }}</span>
-              <span>{{ generationStatusLabel }}</span>
-            </div>
-            <p v-if="generationError" class="generation-panel__feedback generation-panel__feedback--error" role="alert">{{ generationError }}</p>
+            <p v-if="generationError" class="generation-panel__feedback generation-panel__feedback--error" role="alert">{{ userMessage(generationError) }}</p>
             <p v-else-if="generationNotice" class="generation-panel__feedback" role="status">{{ generationNotice }}</p>
-            <p v-if="selectedGenerationContext && !selectedGenerationContext.ready" class="generation-panel__blocker">{{ selectedGenerationContext.block_reason }}</p>
+            <p v-if="selectedGenerationContext && !selectedGenerationContext.ready" class="generation-panel__blocker">{{ learningText(selectedGenerationContext.block_reason) }}</p>
             <button
               type="button"
               class="path-primary-action generation-panel__generate"
@@ -1424,7 +1519,7 @@ onUnmounted(() => {
           </div>
         </section>
 
-        <details class="path-section path-section--future" open>
+        <details class="path-section path-section--future">
           <summary>
             <span><strong>接下来</strong><span class="path-supporting-text">按前置关系排列的后续任务</span></span>
             <span>{{ futureTasks.length }} 项</span>
@@ -1432,7 +1527,24 @@ onUnmounted(() => {
           <PathTaskList :tasks="futureTasks" :today-task-ids="todayTaskIds" empty-label="完成今天的任务后，下一项会出现在这里。" @open="openPathTask" />
         </details>
 
-        <section class="path-section" data-testid="all-course-paths">
+        <section v-if="interventions.length" class="path-section" data-testid="teacher-study-tasks">
+          <div class="path-section__heading"><h2>教师布置的补充学习</h2></div>
+          <article v-for="path in interventions" :key="path.id" class="path-course-path" :data-path-id="path.id">
+            <h3>{{ path.intervention.title }}</h3>
+            <p class="path-supporting-text">{{ path.course?.title }} · {{ path.intervention.teacher_confirmed ? '教师已确认完成' : path.intervention.learner_event_id ? '已提交，等待教师确认' : '阅读指定章节后，提交你的学习情况' }}</p>
+            <div class="intervention-actions">
+              <button v-if="path.intervention.reading_route" type="button" class="path-secondary-action" @click="openInterventionReading(path)">阅读指定章节</button>
+              <template v-if="!path.intervention.learner_event_id">
+                <label>本次学习用时（分钟）<input v-model="interventionMinutes[path.id]" aria-label="本次学习用时（分钟）" type="number" min="1" max="1440" /></label>
+                <button type="button" class="path-secondary-action" :disabled="interventionBusy === path.id || !(Number(interventionMinutes[path.id]) >= 1 && Number(interventionMinutes[path.id]) <= 1440)" @click="submitIntervention(path)">提交学习情况</button>
+              </template>
+            </div>
+          </article>
+          <p v-if="interventionNotice" role="status">{{ interventionNotice }}</p>
+          <p class="path-section__note">提交阅读情况后，等待教师确认。</p>
+        </section>
+
+        <section v-if="pathViewMode === 'total'" class="path-section" data-testid="all-course-paths">
           <div class="path-section__heading">
             <div>
               <p class="path-section-label">全部课程路径</p>
@@ -1445,7 +1557,7 @@ onUnmounted(() => {
               <header class="path-course-path__heading">
                 <div>
                   <h3>{{ subject.title }}</h3>
-                  <span>{{ subject.completed }}/{{ subject.total }} 项完成 · {{ subject.status === 'paused' ? '已暂停' : '可继续学习' }}</span>
+                  <span>{{ progressLabel(subject) }} · {{ subject.status === 'paused' ? '已暂停' : '可继续学习' }}</span>
                 </div>
                 <strong>{{ subject.progress }}%</strong>
               </header>
@@ -1455,7 +1567,7 @@ onUnmounted(() => {
               <PathTaskList :tasks="coursePathTasks(subject.id)" :today-task-ids="todayTaskIds" :empty-label="`${subject.title} 暂无可展示任务。`" @open="openPathTask" />
             </article>
           </div>
-          <p class="path-section__note">路径会根据有证据的学习行为更新；普通浏览不会改变掌握度。</p>
+          
         </section>
       </main>
 
@@ -1474,17 +1586,17 @@ onUnmounted(() => {
             class="path-subject"
             :class="{ 'path-subject--active': pathViewMode === 'subject' && activeSubjectId === subject.id }"
           >
-            <button type="button" class="path-subject__select" @click="selectedSubjectId = subject.id; pathViewMode = 'subject'; selectScheduleDay(selectedScheduleDay)">
+            <button type="button" class="path-subject__select" :disabled="textbookDraftLoading" @click="pathAdjustment = ''; selectSubject(subject)">
               <span class="path-subject__title">{{ subject.title }}</span>
             </button>
-            <span class="path-subject__meta">{{ subject.status === 'paused' ? '已暂停' : subject.status === 'completed' ? '已完成' : '已启用' }} · {{ subject.completed }}/{{ subject.total }} 项完成</span>
+            <span class="path-subject__meta">{{ subject.status === 'paused' ? '已暂停' : subject.status === 'completed' ? '已完成' : '已启用' }} · {{ progressLabel(subject) }}</span>
             <span class="path-subject__track"><i :style="{ width: `${subject.progress}%` }" /></span>
             <span class="path-subject__actions" @click.stop>
               <button type="button" class="path-subject__action" :data-testid="`subject-toggle-${subject.id}`" @click="toggleSubjectPath(subject)">
                 {{ subject.status === 'paused' ? '启用' : '暂停' }}
               </button>
-              <button type="button" class="path-subject__action" @click="prepareSubjectAdjustment(subject, 'supplement')">补充</button>
-              <button type="button" class="path-subject__action" @click="prepareSubjectAdjustment(subject, 'replan')">重新编排</button>
+              <button type="button" class="path-subject__action" :disabled="textbookDraftLoading" @click="prepareSubjectAdjustment(subject, 'supplement')">补充</button>
+              <button type="button" class="path-subject__action" :disabled="textbookDraftLoading" @click="prepareSubjectAdjustment(subject, 'replan')">重新编排</button>
             </span>
           </article>
         </section>
@@ -1521,8 +1633,9 @@ onUnmounted(() => {
               data-draft-label="教材锚定路径草稿"
               data-draft-policy="用户确认前仅为草稿"
               data-version-label="版本变化"
-            >诊断定制路径草稿（教材锚定范围）</h2>
+            >{{ textbookDraft?.course?.title || subjects.find(item => item.id === currentCourseId)?.title || '当前课程' }} · 学习安排草稿</h2>
             <span
+              v-if="!pathTaskBusy"
               data-testid="textbook-path-model-status"
               data-failure-policy="模型失败不会改用模板"
               class="rounded px-2 py-0.5 text-sm font-semibold"
@@ -1533,17 +1646,19 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="flex flex-wrap items-end gap-2">
+          <button v-if="pathAdjustment === 'supplement'" type="button" class="h-9 rounded border border-teal-700 px-3 text-sm font-semibold text-teal-700" :disabled="textbookDraftLoading" @click="router.push({ path: '/workspace/assessment/entry', query: { course_id: currentCourseId } })">补充本课程诊断</button>
           <button
+            v-if="!pathTaskBusy"
             data-testid="generate-textbook-path-draft"
             type="button"
             class="h-9 rounded bg-teal-700 px-3 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
-            :disabled="textbookDraftLoading"
+            :disabled="textbookDraftLoading || pathTaskBusy || Boolean(pathConnectionError)"
             @click="generateTextbookDraft"
           >
-            {{ textbookDraftLoading ? '模型处理中' : textbookDraftReady ? '重新生成路径草稿' : '生成诊断定制草稿' }}
+            {{ textbookDraftLoading ? '正在安排学习内容' : pathTask?.status === 'failed' ? '继续准备学习路径' : textbookDraftReady ? '重新生成路径草稿' : '生成诊断定制草稿' }}
           </button>
           <button
-            v-if="textbookDraftReady"
+            v-if="textbookDraftReady && !pathTaskBusy"
             data-testid="confirm-textbook-path-draft"
             type="button"
             class="h-9 rounded border border-emerald-600 px-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
@@ -1555,12 +1670,22 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <p v-if="textbookDraftError" class="mt-3 text-sm text-rose-600">{{ textbookDraftError }}</p>
+      <p v-if="textbookDraftError" class="mt-3 text-sm text-rose-600">{{ userMessage(textbookDraftError) }}</p>
+      <PathGenerationStatus :task="pathTask" :connection-error="pathConnectionError" @refresh="refreshPathTask" />
+      <p v-if="generationNotice" class="mt-3 text-sm text-slate-600" role="status">{{ generationNotice }}</p>
+      <p v-if="textbookDraft?.diff?.summary" class="mt-3 text-sm text-slate-600">{{ textbookDraft.diff.summary }}</p>
       <div v-if="textbookDraft?.plan" class="mt-4 grid gap-3">
         <div class="min-w-0">
+          <p v-if="textbookDraft.plan.goal" class="mb-3 text-base font-medium leading-relaxed text-slate-800">{{ textbookDraft.plan.goal }}</p>
           <div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500">
-            <span>预计 {{ textbookDraft.plan.total_minutes }} 分钟</span>
+            <span>全程预计 {{ textbookDraft.plan.total_min_minutes && textbookDraft.plan.total_min_minutes !== textbookDraft.plan.total_minutes ? `${formatMinutes(textbookDraft.plan.total_min_minutes)}–` : '' }}{{ formatMinutes(textbookDraft.plan.total_minutes) }}</span>
           </div>
+          <details v-if="textbookDraft.plan.assumptions?.length" class="mb-4 text-sm leading-relaxed text-slate-700">
+            <summary class="cursor-pointer font-medium text-teal-800">学习节奏与阶段成果</summary>
+            <ul class="mt-2 list-disc space-y-2 pl-5">
+              <li v-for="(note, index) in textbookDraft.plan.assumptions" :key="index">{{ note }}</li>
+            </ul>
+          </details>
           <ol class="grid gap-2 sm:grid-cols-2">
             <li
               v-for="(node, index) in textbookDraftNodes"
@@ -1574,7 +1699,10 @@ onUnmounted(() => {
                 </div>
                 <span class="shrink-0 text-sm text-slate-500">{{ node.estimate_max_minutes }} 分钟</span>
               </div>
-              <div class="mt-2 flex flex-wrap gap-1">
+              <p v-if="node.teaching_goal" class="mt-2 text-sm leading-relaxed text-slate-700">{{ node.teaching_goal }}</p>
+              <details v-if="node.knowledge_points?.length" class="mt-2 text-sm text-slate-600">
+                <summary class="cursor-pointer">知识范围</summary>
+                <div class="mt-2 flex flex-wrap gap-1">
                 <span
                   v-for="kp in node.knowledge_points"
                   :key="kp.id"
@@ -1582,7 +1710,8 @@ onUnmounted(() => {
                 >
                   {{ kp.title }}{{ kp.is_weak ? ' · 薄弱点' : '' }}
                 </span>
-              </div>
+                </div>
+              </details>
               <button
                 type="button"
                 class="mt-2 inline-flex max-w-full items-center gap-1 text-sm font-semibold text-teal-700 hover:text-teal-900"
@@ -1610,6 +1739,9 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.intervention-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 12px; }
+.intervention-actions label { display: grid; gap: 6px; font-size: 14px; }
+.intervention-actions input { width: 120px; padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); color: var(--color-text); }
 .path-page {
   width: min(100%, 1320px);
   margin: 0 auto;

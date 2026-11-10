@@ -10,7 +10,7 @@ def read(relative: str) -> str:
 
 def test_initial_profile_accepts_and_projects_motivation() -> None:
     source = read("app/profile_onboarding.py")
-    assert '"goal": {"learning_goals", "motivation_type", "goal_context"}' in source
+    assert '"goal": {"learning_goals", "motivation_type", "goal_context", "target_course"}' in source
     assert 'profile.motivation_type = str(fields["motivation_type"]).strip()' in source
     assert '"motivation_type": profile.motivation_type if profile else ""' in source
 
@@ -57,13 +57,15 @@ def test_reader_exposes_original_pdf_without_replacing_indexed_content() -> None
     assert "getDocumentReaderExport" in view
     assert "const isPdfDocument = computed" in view
     assert "data-testid=\"original-pdf-preview\"" in view
-    assert "解析页图与来源定位" in view
+    assert "原始 PDF" in view
+    assert "原始页面暂时无法预览" in view
+    assert '@action="loadReader"' in view
     assert "application/pdf" in view
 
 
 def test_agent_timeline_translates_stage_and_resource_keys() -> None:
     component = read("frontend/src/components/AgentTimeline.vue")
-    for label in ("问题理解", "课程检索", "学科专家起草", "答案综合", "个性化讲义", "代码沙盒"):
+    for label in ("问题理解", "内容查找", "学科讲解", "回答整理", "个性化讲义", "代码沙盒"):
         assert label in component
     assert "resourceTypeLabels[resourceType]" in component
     assert "stageLabels[stageId]" in component
@@ -75,7 +77,7 @@ def test_chat_errors_are_serialized_and_failed_send_remains_visible() -> None:
     store = read("frontend/src/stores/chat.js")
     stream = read("frontend/src/api/stream.js")
     assert "export function errorMessageText" in common
-    assert "super(errorMessageText(detail" in common
+    assert "super(translateError({ status, detail }).message)" in common
     assert "const optimisticId = `optimistic-${request.idempotency_key}`" in store
     assert "failureMessage = errorMessageText(data.message" in store
     assert "response.text().then" in stream

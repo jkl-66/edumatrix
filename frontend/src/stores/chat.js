@@ -24,6 +24,28 @@ function operationKey(prefix) {
   return `${prefix}-${suffix}`
 }
 
+function isResourceRequest(request) {
+  return ['resource_generation', 'path_bundle'].includes(request?.intent)
+}
+
+function pendingResourceRequest(conversationId, value = undefined) {
+  try {
+    const storage = globalThis.localStorage
+    const user = storage?.getItem('edumatrix_username')
+    if (!user || !conversationId) return null
+    const key = `edumatrix:chat-resource:${user}:${conversationId}`
+    if (value === undefined) return JSON.parse(storage.getItem(key) || 'null')
+    if (value === null) storage.removeItem(key)
+    else storage.setItem(key, JSON.stringify(value))
+  } catch { /* The in-memory request still supports retry if storage is full. */ }
+  return null
+}
+
+function transientSendFailure(error) {
+  const status = Number(error?.response?.status || error?.status || 0)
+  return !status || status === 408 || status === 429 || status >= 500
+}
+
 function errorMessage(error, fallback) {
   return errorMessageText(
     error?.response?.data?.detail ?? error?.detail ?? error?.message,
@@ -85,6 +107,7 @@ export const useChatStore = defineStore('chat', {
     loading: false,
     creatingConversation: false,
     sending: false,
+    submitting: false,
     streamingProgress: 0,
     streamingStatus: '',
     streamingAgents: {},
@@ -100,6 +123,8 @@ export const useChatStore = defineStore('chat', {
     error: '',
     attachmentError: '',
     _cleanupStream: null,
+    _pendingRetry: null,
+    _pendingFailures: 0,
   }),
 
   getters: {
@@ -123,6 +148,10 @@ export const useChatStore = defineStore('chat', {
 
   actions: {
     cleanup() {
+      clearTimeout(this._pendingRetry)
+      this._pendingRetry = null
+      clearTimeout(this._resourcePoll)
+      this._resourcePoll = null
       this._cleanupStream?.()
       this._cleanupStream = null
       this.sending = false
@@ -139,6 +168,7 @@ export const useChatStore = defineStore('chat', {
       this.attachments = []
       this.selectedAttachmentIds = []
       this.pendingSend = null
+      this._pendingFailures = 0
       this.error = ''
       this.attachmentError = ''
     },
@@ -167,6 +197,25 @@ export const useChatStore = defineStore('chat', {
       if (index >= 0) this.conversations.splice(index, 1, summary)
       else this.conversations.unshift(summary)
       this.selectedCourseIds = [...(conversation.courseIds || (conversation.courseId ? [conversation.courseId] : []))]
+      this.scheduleResourcePoll()
+    },
+
+    scheduleResourcePoll() {
+      clearTimeout(this._resourcePoll)
+      const pending = this.messages.some(message => ['queued', 'running', 'retry_wait', 'waiting_configuration'].includes(
+        message.resourceAutomation?.state || message.streamCheckpoint?.resourceAutomation?.state))
+      if (!pending || !this.activeConversationId) return
+      const conversationId = this.activeConversationId
+      this._resourcePoll = setTimeout(async () => {
+        if (this.activeConversationId !== conversationId) return
+        if (this.sending) { this.scheduleResourcePoll(); return }
+        try {
+          const conversation = await getChatConversation(conversationId)
+          if (this.activeConversationId === conversationId && !this.sending) this.syncConversation(conversation)
+        } catch {
+          if (this.activeConversationId === conversationId) this.scheduleResourcePoll()
+        }
+      }, 2500)
     },
 
     upsertMessage(message) {
@@ -175,6 +224,16 @@ export const useChatStore = defineStore('chat', {
       if (index >= 0) this.messages.splice(index, 1, { ...this.messages[index], ...message })
       else this.messages.push(message)
       this.messages = sortMessages(this.messages)
+    },
+
+    updateConversationSummary(summary) {
+      if (!summary?.id) return
+      if (summary.id === this.activeConversationId) {
+        this.activeConversation = { ...this.activeConversation, ...summary }
+      }
+      const index = this.conversations.findIndex((item) => item.id === summary.id)
+      if (index >= 0) this.conversations.splice(index, 1, { ...this.conversations[index], ...summary })
+      else this.conversations.unshift(summary)
     },
 
     upsertAttachment(attachment) {
@@ -276,9 +335,12 @@ export const useChatStore = defineStore('chat', {
         const conversation = await getChatConversation(conversationId)
         this.resetConversationState()
         this.syncConversation(conversation)
+        const saved = pendingResourceRequest(conversationId)
+        this.pendingSend = saved?.request || null
         const assistant = [...this.messages].reverse().find((message) =>
           message.role === 'assistant' && ['queued', 'streaming'].includes(message.status))
-        if (resume && assistant?.replyToMessageId) this.startStream(assistant.replyToMessageId, assistant.id)
+        if (resume && this.pendingSend && !saved.paused) this.schedulePendingResourceRetry()
+        else if (resume && assistant?.replyToMessageId && !this.pendingSend) this.startStream(assistant.replyToMessageId, assistant.id)
         return conversation
       } catch (error) {
         this.error = errorMessage(error, '打开对话失败')
@@ -445,76 +507,111 @@ export const useChatStore = defineStore('chat', {
       intent = 'chat',
       resourceTypes = [],
       contextSnapshotId = '',
+      sourceMessageId = '',
       idempotencyKey = '',
     } = {}) {
-      if (this.sending) return null
-      if (!this.activeConversationId) await this.createConversation()
-      const selectedIds = attachmentIds || [...this.selectedAttachmentIds]
-      const selected = this.attachments.filter((item) => selectedIds.includes(item.id) && item.status !== 'removed')
-      const blocked = selected.find((item) => !item.canSend)
-      if (blocked) throw new Error(this.attachmentBlockReason || `“${blocked.filename}”尚不可发送`)
-      if (!content.trim() && selected.length === 0) throw new Error('请输入问题或添加可发送附件')
-
-      const request = {
-        content: content.trim(),
-        attachment_ids: selected.map((item) => item.id),
-        context_refs: contextRefs,
-        idempotency_key: idempotencyKey || operationKey('message'),
-        intent,
-        resource_types: [...new Set((resourceTypes || []).map((item) => String(item).trim()).filter(Boolean))],
-        context_snapshot_id: contextSnapshotId || '',
-        return_to: returnTo,
-      }
-      this.pendingSend = request
-      this.error = ''
-      const optimisticId = `optimistic-${request.idempotency_key}`
-      this.upsertMessage({
-        id: optimisticId,
-        role: 'user',
-        content: request.content,
-        status: 'queued',
-        sequence: Math.max(...this.messages.map((item) => Number(item.sequence || 0)), 0) + 1,
-        attachmentIds: request.attachment_ids,
-        contextRefs: request.context_refs,
-        intent: request.intent,
-        idempotencyKey: request.idempotency_key,
-        createdAt: new Date().toISOString(),
-      })
+      if (this.sending || this.submitting || isResourceRequest(this.pendingSend)) return null
+      this.submitting = true
       try {
-        const pair = await createChatMessage(this.activeConversationId, request)
-        this.messages = this.messages.filter((item) => item.id !== optimisticId)
-        this.upsertMessage(pair.userMessage)
-        this.upsertMessage(pair.assistantMessage)
-        this.pendingSend = null
-        this.selectedAttachmentIds = []
-        this.startStream(pair.userMessage.id, pair.assistantMessage.id)
-        return pair
-      } catch (error) {
-        this.error = errorMessage(error, '发送失败，问题已保留')
+        if (!this.activeConversationId) await this.createConversation()
+        const selectedIds = attachmentIds || [...this.selectedAttachmentIds]
+        const selected = this.attachments.filter((item) => selectedIds.includes(item.id) && item.status !== 'removed')
+        const blocked = selected.find((item) => !item.canSend)
+        if (blocked) throw new Error(this.attachmentBlockReason || `“${blocked.filename}”尚不可发送`)
+        if (!content.trim() && selected.length === 0) throw new Error('请输入问题或添加可发送附件')
+
+        const request = {
+          content: content.trim(),
+          attachment_ids: selected.map((item) => item.id),
+          context_refs: contextRefs,
+          idempotency_key: idempotencyKey || operationKey('message'),
+          intent,
+          resource_types: [...new Set((resourceTypes || []).map((item) => String(item).trim()).filter(Boolean))],
+          context_snapshot_id: contextSnapshotId || '',
+          source_message_id: sourceMessageId || '',
+          return_to: returnTo,
+        }
+        this.pendingSend = request
+        if (isResourceRequest(request)) pendingResourceRequest(this.activeConversationId, { request, paused: false })
+        this.error = ''
+        const optimisticId = `optimistic-${request.idempotency_key}`
         this.upsertMessage({
           id: optimisticId,
-          status: 'failed',
-          failure: {
-            code: error?.code || 'chat_send_failed',
-            message: this.error,
-          },
+          role: 'user',
+          content: request.content,
+          status: 'queued',
+          sequence: Math.max(...this.messages.map((item) => Number(item.sequence || 0)), 0) + 1,
+          attachmentIds: request.attachment_ids,
+          contextRefs: request.context_refs,
+          intent: request.intent,
+          idempotencyKey: request.idempotency_key,
+          createdAt: new Date().toISOString(),
         })
-        throw error
+        try {
+          const pair = await createChatMessage(this.activeConversationId, request)
+          this.updateConversationSummary(pair.conversation)
+          this.messages = this.messages.filter((item) => item.id !== optimisticId)
+          this.upsertMessage(pair.userMessage)
+          this.upsertMessage(pair.assistantMessage)
+          this.pendingSend = null
+          pendingResourceRequest(this.activeConversationId, null)
+          this.selectedAttachmentIds = []
+          if (pair.assistantMessage.resourceJobId) this.scheduleResourcePoll()
+          else this.startStream(pair.userMessage.id, pair.assistantMessage.id)
+          return pair
+        } catch (error) {
+          this.error = errorMessage(error, '发送失败，问题已保留')
+          this.upsertMessage({
+            id: optimisticId,
+            status: 'failed',
+            failure: {
+              code: error?.code || 'chat_send_failed',
+              message: this.error,
+            },
+          })
+          if (isResourceRequest(request)) {
+            pendingResourceRequest(this.activeConversationId, { request, paused: !transientSendFailure(error) })
+            if (transientSendFailure(error)) this.schedulePendingResourceRetry()
+          }
+          throw error
+        }
+      } finally {
+        this.submitting = false
       }
     },
 
+    schedulePendingResourceRetry() {
+      if (!isResourceRequest(this.pendingSend)) return
+      clearTimeout(this._pendingRetry)
+      const conversationId = this.activeConversationId
+      this._pendingFailures += 1
+      this.error = '连接恢复后会继续准备资源。'
+      this._pendingRetry = setTimeout(async () => {
+        if (this.activeConversationId !== conversationId || !this.pendingSend) return
+        if (this.submitting || this.sending) { this.schedulePendingResourceRetry(); return }
+        try { await this.retryPendingMessage() } catch { /* Retry policy is applied by retryPendingMessage. */ }
+      }, Math.min(30000, 2000 * this._pendingFailures))
+    },
+
     async retryPendingMessage() {
-      if (!this.pendingSend || !this.activeConversationId || this.sending) return null
+      if (!this.pendingSend || !this.activeConversationId || this.sending || this.submitting) return null
+      this.submitting = true
       this.error = ''
       try {
         const pair = await createChatMessage(this.activeConversationId, this.pendingSend)
+        this.updateConversationSummary(pair.conversation)
         const optimisticId = `optimistic-${this.pendingSend.idempotency_key}`
         this.messages = this.messages.filter((item) => item.id !== optimisticId)
         this.upsertMessage(pair.userMessage)
         this.upsertMessage(pair.assistantMessage)
         this.pendingSend = null
+        clearTimeout(this._pendingRetry)
+        this._pendingRetry = null
+        pendingResourceRequest(this.activeConversationId, null)
+        this._pendingFailures = 0
         this.selectedAttachmentIds = []
-        this.startStream(pair.userMessage.id, pair.assistantMessage.id)
+        if (pair.assistantMessage.resourceJobId) this.scheduleResourcePoll()
+        else this.startStream(pair.userMessage.id, pair.assistantMessage.id)
         return pair
       } catch (error) {
         this.error = errorMessage(error, '重试发送失败')
@@ -524,7 +621,13 @@ export const useChatStore = defineStore('chat', {
           status: 'failed',
           failure: { code: error?.code || 'chat_retry_failed', message: this.error },
         })
+        if (isResourceRequest(this.pendingSend)) {
+          pendingResourceRequest(this.activeConversationId, { request: this.pendingSend, paused: !transientSendFailure(error) })
+          if (transientSendFailure(error)) this.schedulePendingResourceRetry()
+        }
         throw error
+      } finally {
+        this.submitting = false
       }
     },
 
@@ -625,6 +728,15 @@ export const useChatStore = defineStore('chat', {
               resourceLinks: data.resource_links || message?.resourceLinks || [],
               agentAudit: eventAgentAudit(data, message),
             }
+            if (!String(completed.content || '').trim()) {
+              this.upsertMessage({
+                ...completed,
+                status: 'failed',
+                failure: { code: 'chat_empty_answer', message: '这次没有形成完整回答，可以重新尝试。' },
+              })
+              this.finishStream('回答暂时中断')
+              return
+            }
             this.upsertMessage(completed)
             this.latestMetrics = data.metrics || null
             this.sessionTotalTokens += Number(data.metrics?.tokens_used || 0)
@@ -676,6 +788,7 @@ export const useChatStore = defineStore('chat', {
       this.streamingStatus = status
       this.streamingContent = ''
       this.rawStreamingContent = ''
+      this.scheduleResourcePoll()
     },
 
     async stopActiveResponse() {

@@ -64,13 +64,15 @@ class EduMatrixConfig:
     embedding_api_key: str = os.getenv("EDUMATRIX_EMBEDDING_API_KEY", "")
     embedding_model: str = os.getenv("EDUMATRIX_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
     embedding_dim: int = int(os.getenv("EDUMATRIX_EMBEDDING_DIM", "384"))
+    embedding_cpu_threads: int = int(os.getenv('EDUMATRIX_EMBEDDING_CPU_THREADS', '4'))
 
     use_faiss: bool = os.getenv("EDUMATRIX_USE_FAISS", "0") == "1"
     faiss_index_dir: str = os.getenv("EDUMATRIX_FAISS_DIR", "data/faiss_indexes")
 
     max_concurrent_llm: int = int(os.getenv("EDUMATRIX_MAX_CONCURRENT_LLM", "8"))
-    llm_rate_limit_rpm: int = int(os.getenv("EDUMATRIX_LLM_RATE_LIMIT_RPM", "120"))
-    llm_rate_limit_tpm: int = int(os.getenv("EDUMATRIX_LLM_RATE_LIMIT_TPM", "100000"))
+    # Zero disables project-imposed request/token quotas; concurrency still queues work.
+    llm_rate_limit_rpm: int = int(os.getenv("EDUMATRIX_LLM_RATE_LIMIT_RPM", "0"))
+    llm_rate_limit_tpm: int = int(os.getenv("EDUMATRIX_LLM_RATE_LIMIT_TPM", "0"))
     llm_circuit_breaker_threshold: int = int(os.getenv("EDUMATRIX_CIRCUIT_BREAKER_THRESHOLD", "5"))
     llm_circuit_breaker_window: int = int(os.getenv("EDUMATRIX_CIRCUIT_BREAKER_WINDOW", "60"))
     llm_retry_max_attempts: int = int(os.getenv("EDUMATRIX_RETRY_MAX_ATTEMPTS", "3"))
@@ -82,13 +84,13 @@ class EduMatrixConfig:
     cache_ttl_seconds: float = float(os.getenv("EDUMATRIX_CACHE_TTL_SECONDS", "900"))
     search_cache_max_entries: int = int(os.getenv("EDUMATRIX_SEARCH_CACHE_MAX_ENTRIES", "128"))
 
-    # Document safety limits. Raw upload size is enforced separately; these
-    # limits also protect parser/ZIP/PDF work from resource exhaustion.
-    max_document_pages: int = int(os.getenv("EDUMATRIX_MAX_DOCUMENT_PAGES", "200"))
-    max_archive_members: int = int(os.getenv("EDUMATRIX_MAX_ARCHIVE_MEMBERS", "2000"))
-    max_archive_uncompressed_bytes: int = int(os.getenv("EDUMATRIX_MAX_ARCHIVE_UNCOMPRESSED_BYTES", str(100 * 1024 * 1024)))
+    # 0 means no project-imposed material limit. Long content is processed in
+    # batches rather than being rejected or silently truncated.
+    max_document_pages: int = int(os.getenv("EDUMATRIX_MAX_DOCUMENT_PAGES", "0"))
+    max_archive_members: int = int(os.getenv("EDUMATRIX_MAX_ARCHIVE_MEMBERS", "0"))
+    max_archive_uncompressed_bytes: int = int(os.getenv("EDUMATRIX_MAX_ARCHIVE_UNCOMPRESSED_BYTES", "0"))
     document_parse_timeout: float = float(os.getenv("EDUMATRIX_DOCUMENT_PARSE_TIMEOUT", "45"))
-    max_web_content_chars: int = int(os.getenv("EDUMATRIX_MAX_WEB_CONTENT_CHARS", "200000"))
+    max_web_content_chars: int = int(os.getenv("EDUMATRIX_MAX_WEB_CONTENT_CHARS", "0"))
 
     # Neo4j Graph Database
     neo4j_uri: str = os.getenv("EDUMATRIX_NEO4J_URI", "")
@@ -112,10 +114,10 @@ class EduMatrixConfig:
     # Sandbox Settings. trusted_local is a research/demo mode: it uses a
     # restricted child process but does not provide container isolation.
     sandbox_mode: str = os.getenv("EDUMATRIX_SANDBOX_MODE", "disabled").strip().lower()
-    sandbox_timeout: float = float(os.getenv("EDUMATRIX_SANDBOX_TIMEOUT", "10.0"))
+    sandbox_timeout: float = float(os.getenv("EDUMATRIX_SANDBOX_TIMEOUT", "60.0"))
     sandbox_max_output_bytes: int = int(os.getenv("EDUMATRIX_SANDBOX_MAX_OUTPUT_BYTES", "100000"))
     sandbox_max_visual_bytes: int = int(os.getenv("EDUMATRIX_SANDBOX_MAX_VISUAL_BYTES", "5000000"))
-    max_upload_bytes: int = int(os.getenv("EDUMATRIX_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+    max_upload_bytes: int = int(os.getenv("EDUMATRIX_MAX_UPLOAD_BYTES", "0"))
 
 
 

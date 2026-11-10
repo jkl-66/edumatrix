@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import uuid
 from typing import Any
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from app.database import run_db_op
 from app.auth import enforce_student_access, get_current_user
 from app.crud import load_student_profile, save_student_profile
+from app.profile_adaptation import current_learning_state, build_profile_adaptation, profile_prompt_context
 from app.m5_gateway import StreamingModelCallLifecycle
 from app.legacy_migration_governance import (
     IdentityProfileHistoryCanonicalReader,
@@ -192,6 +194,18 @@ def _empty_profile_analysis(profile: Any, display_name: str) -> dict[str, Any]:
 
 def _build_dimension_analysis(dimension_key: str, state) -> dict[str, Any]:
     """构建单个维度的分析文本"""
+    evidence_fragments = state.evidence_fragments[:3] if state and hasattr(state, 'evidence_fragments') else []
+    interventions = state.recommended_interventions[:3] if state and hasattr(state, 'recommended_interventions') else []
+    if state and getattr(state, "qualitative", False):
+        return {"key": dimension_key, "label": state.label, "score": None, "level": "qualitative",
+                "diagnosis": state.self_report, "evidence": evidence_fragments, "suggestions": interventions}
+    if not state or not (getattr(state, "evidence_count", 0) or evidence_fragments):
+        return {
+            "key": dimension_key, "label": state.label if state else dimension_key,
+            "score": None, "level": "pending",
+            "diagnosis": "这一方面还缺少充分依据，可以在后续学习或画像对话中继续补充。",
+            "evidence": evidence_fragments, "suggestions": interventions,
+        }
     score = state.score if state else 0.5
     if score >= 0.66:
         level = "high"
@@ -200,11 +214,8 @@ def _build_dimension_analysis(dimension_key: str, state) -> dict[str, Any]:
     else:
         level = "low"
 
-    diagnosis = DIMENSION_DIAGNOSIS.get(dimension_key, {}).get(level, "状态待评估")
+    diagnosis = state.status or DIMENSION_DIAGNOSIS.get(dimension_key, {}).get(level, "状态待评估")
     label = state.label if state else dimension_key
-
-    evidence_fragments = state.evidence_fragments[:3] if state and hasattr(state, 'evidence_fragments') else []
-    interventions = state.recommended_interventions[:3] if state and hasattr(state, 'recommended_interventions') else []
 
     return {
         "key": dimension_key,
@@ -588,6 +599,7 @@ async def get_profile(
         "profile_snapshot_id": snapshot_context["id"],
         "profile_version": snapshot_context["version"],
         "profile_influence": snapshot_context["influence"],
+        "learning_state": current_learning_state(profile),
         "display_name": display_name,
         "major": getattr(profile, "major", ""),
         "target_course": getattr(profile, "target_course", ""),
@@ -604,7 +616,7 @@ async def get_profile(
             for k, v in (getattr(profile, "bkt_states", {}) or {}).items()
         },
         "dimensions": {
-            k: {"score": round(v.score, 2), "status": v.status, "label": v.label}
+            k: {**_build_dimension_analysis(k, v), "status": v.status}
             for k, v in (getattr(profile, "dimension_states", {}) or {}).items()
         },
         "causes": {
@@ -691,23 +703,40 @@ class NarrativeReportGenerator:
         trace_id = trace_id or f"m5-profile-analysis-{uuid.uuid4().hex}"
         # Step 1: 模拟 数据分析师 (Data Analyst Agent) 抽取核心指标
         mastery_summary = ", ".join(f"{c}: {round(m * 100)}%" for c, m in list(profile.concept_mastery.items())[:6])
-        causes_summary = ", ".join(f"{c.label}: {round(c.percentage)}%" for c in list(profile.learning_state_causes.values())[:3])
-        cognitive_load = getattr(profile, "cognitive_load", 0.5)
-        frustration = getattr(profile, "frustration_index", 0.0)
+        learning_state = current_learning_state(profile)
+        superseded_causes = {
+            cause for cause, field in (("cognitive_load", "cognitive_load"), ("affective_barrier", "frustration_index"))
+            if learning_state[field]["description"]
+        }
+        causes_summary = ", ".join(
+            f"{c.label}: {round(c.percentage)}%"
+            for key, c in profile.learning_state_causes.items() if key not in superseded_causes
+        )
+        state_summary = "；".join(
+            f"{label}：{item['description']}" if item['description'] else
+            f"{label}参考估计：{item['value']}" if item['value'] is not None else f"{label}：尚未了解"
+            for key, label in (("cognitive_load", "理解与专注情况"), ("frustration_index", "学习感受"))
+            for item in [learning_state[key]]
+        )
+        teaching_context = profile_prompt_context(build_profile_adaptation({}, profile=profile))
         
         analyst_prompt = (
             f"数据分析师日志：\n"
-            f"- 目标课程：{profile.target_course}\n"
+            f"- 个人学习目标课程：{profile.target_course}\n"
+            "- 以下是跨课程的综合学习记录，不代表浏览器当前所选课程。只评价已有记录，不推断未提供的成绩或努力程度。\n"
             f"- 部分掌握度：{mastery_summary if mastery_summary else '无数据'}\n"
             f"- 障碍原因分配：{causes_summary if causes_summary else '无数据'}\n"
-            f"- 认知负荷：{cognitive_load:.2f} | 挫败感指数：{frustration:.2f}\n"
+            f"- 当前已确认的学习状态：{state_summary}\n"
+            f"- 已确认的背景、目标、条件和学习方式：{json.dumps({key: teaching_context[key] for key in ('learning_requirements', 'registration_profile', 'dimensions')}, ensure_ascii=False)}\n"
+            "- 学习负荷与受挫感受是根据学习记录形成的参考估计，不是直接测量或心理诊断；0不代表确认没有焦虑。\n"
         )
 
         # Step 2: 模拟 教师评估师 (Tutor Agent) 进行教育学解释与改进建议
         tutor_system = (
-            "你是一个教育心理学与自适应教学专家。你的任务是解读数据分析师报告中学生的数据指标，"
-            "从教育学和认知科学（如ZPD、认知负荷理论）角度进行专业评估并输出改进路线（不要包含学生名字）。\n"
-            "格式要求：简短列出 2-3 条基于认知特征的突破性学习建议。"
+            "你是学习者的教学顾问。结合已确认的目标、基础、学习方式、语言、设备与时间，"
+            "给出一两条能立即开始的学习建议。已有作答用于判断掌握，自述用于理解条件和感受；"
+            "当前明确的自述优先于旧状态推测。没有作答时不要编造进步、困难原因或认知特征。"
+            "建议应能够独立完成，不假定存在同学、教师或未提供的设备。"
         )
         try:
             tutor_advice = await self._generate_agent(
@@ -722,30 +751,30 @@ class NarrativeReportGenerator:
         except asyncio.CancelledError:
             raise
         except Exception:
-            tutor_advice = "建议专注于前置概念复习，利用图示与代码实操结合，逐步缓解当前较高的认知负荷。"
+            tutor_advice = "先选择一个已有练习记录的知识点，回看解题过程，再决定需要补充哪一步。"
 
         # Step 3: 故事讲述者 (Storyteller Agent) 将数据与建议融合成温暖鼓励的个人叙事成长信笺
         storyteller_system = (
             "你是一个温和体贴、擅长鼓励的教育故事讲述者（Storyteller）。\n"
             "你的任务是根据数据分析师的数据和教师评估师的建议，为该学生定制一封温和、充满正能量的个性化成长信件。\n\n"
             "信件大纲规则：\n"
-            "1) 开启：用温和的语气肯定学生的努力与当前进度，并将掌握度百分比以比喻的形式（如‘种子的萌发’、‘关卡的解锁’）轻柔道出。\n"
-            "2) 经过：用故事性的语言化解其不会的成因和挫败感（例如将‘前置极小值’比作‘地基的加固’，将‘认知负荷’比作‘背包过重需要精简行李’）。\n"
-            "3) 收尾：融入教师评估师的建议，指出具体的下一步探索方向，结尾给予充满信心和正能量的结语。\n"
-            "4) ⚠️核心守则：禁止出现冷冰冰的纯代码变量名，必须使用优美、生动、有温度的中文 Markdown 叙事，字数在 250-300 字左右。"
+            "1) 从学习者想做成的具体事情写起，有记录时再肯定已经完成的行动；没有作答不能虚构努力、进步或掌握。\n"
+            "2) 按当前已确认的感受回应，不把知识困难说成紧张、焦虑或能力不足，不用固定比喻替代具体理解。\n"
+            "3) 给出符合当前语言、设备、可用时间和学习方式的下一步；只需一两个能立即开始的动作。\n"
+            "4) 用自然的学习语言写成简洁的信，不展示内部字段或强制填满篇幅；尊重明确的讲解语言。"
         )
 
         # Step 4: 仪表盘分析师 (Dashboard Agent) 将数据与建议融合成详细、理性、干净的学情评估 (严肃正经口吻，供仪表盘使用)
         dashboard_system = (
             "你是一个专业、理性的自适应教育学情分析与决策引擎。\n"
-            "你的任务是根据数据分析师提供的指标和教师建议，为学生输出一份定量化、逻辑严密、详尽具体的仪表盘全局学情诊断报告。\n\n"
+            "你的任务是根据已有学习记录、确认的自述和教师建议，给出具体、可执行的全局学习回顾。定性自述用文字表达，不能强行量化。\n\n"
             "⚠️核心格式守则：\n"
             "1) 绝对禁止任何感性、温情化或抒情比喻（杜绝如‘种子萌发’、‘关卡解锁’、‘土地松软肥沃’、‘溪流愉快奔腾’、‘行李背包’等修辞），使用专业、中立、客观的学术诊断口吻。\n"
             "2) 保持充足的信息量和细致程度，字数在 250-350 字左右，与常规学情诊断信件的详细程度完全一致。\n"
             "3) 🚫严禁包含任何奇怪的特殊符号（如 📬、💡、📊、🚀、⚠️、→ 等图标符号），不需要任何冗余的标题，严禁多余的段落空行。只输出最核心的诊断和具体学习策略段落，格式必须好看、清爽。\n"
             "4) 输出结构应逻辑清晰地分为以下几个核心层面进行详尽分析：\n"
             "   - 学情现状诊断：客观评估当前学术表现，指出掌握度最高的领域与面临的核心知识瓶颈；\n"
-            "   - 归因与推断逻辑：详细解释该学情状态背后的成因与推导过程，分析障碍是由于前置数学不足、概念理解偏差，还是解题实操缺乏引起的；\n"
+            "   - 已知困难与条件：区分用户明确说出的困难和仍需通过练习了解的部分，不为缺少数据的情况编造原因；\n"
             "   - 学习策略建议：提出具体的学习干预策略，并结合教育学或认知科学原理（如最近发展区、工作记忆卸载）解释为何采取该策略。"
         )
 
@@ -780,18 +809,8 @@ class NarrativeReportGenerator:
         if isinstance(dashboard_result, asyncio.CancelledError):
             raise dashboard_result
 
-        fallback_narrative = (
-            "亲爱的同学：\n\n"
-            "看到你在机器学习世界里的探索，系统能感受到你对未知的渴望。目前你在知识图谱中的多个核心概念上已经开始了旅程，"
-            "遇到一时的不理解或高负荷是知识建构过程中的必经风景，如同登山时背包需要稍微整理。建议你在接下来的日子里，"
-            "先从前置概念的基础小册和代码实操着手，我们会一直在右侧的画板和沙箱中陪伴你，一步步走向熟练。加油！"
-        )
-        fallback_dashboard = (
-            "根据当前的学情监测数据，您的机器学习核心概念体系构建已初具规模（部分核心节点掌握度达90%以上），但在局部节点存在认知负荷过载倾向（当前心智负荷监测值高于0.6）。\n"
-            "通过关联分析与最近答题记录，推断此学习障碍并非由于概念本身的抽象度导致，而是前置数学知识点（如微积分中偏导数求导与线性代数中的矩阵相乘逻辑）的掌握不够稳固，因而在算法推导时产生了冗余的解译开销，引发了工作记忆过载。\n"
-            "建议您在后续学习中采取以下具体干预策略：\n"
-            "首先，回溯学习相关的数学前置讲义以消除依赖阻塞，实现认知对齐；其次，利用系统右侧的隔离代码沙箱（Sandbox）执行算法逻辑验证，通过具象的控制台输出来分担抽象推导压力，从而有效降低即时工作记忆负荷，优化知识重构效率。"
-        )
+        fallback_narrative = "成长信笺暂时没有写好。已有学习结果已保存，可以先回看练习过程，稍后再试。"
+        fallback_dashboard = "学习摘要暂时没有生成。请先查看课程图谱和已保存的练习结果，再选择需要巩固的知识点。"
         narrative = fallback_narrative if isinstance(narrative_result, Exception) else narrative_result
         dashboard = fallback_dashboard if isinstance(dashboard_result, Exception) else dashboard_result
         dashboard = re.sub(r'[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]', '', dashboard)
@@ -953,7 +972,11 @@ async def get_profile_analysis(
         "learning_goals": profile.learning_goals[:5] if profile.learning_goals else [],
         "learning_preferences": profile.interaction_preferences[:5] if profile.interaction_preferences else [],
         "motivation_type": profile.motivation_type or "未诊断",
-        "frustration_index": round(profile.frustration_index, 2),
+        "frustration_index": (
+            None if (profile.dimension_states.get("affect_resilience")
+                     and profile.dimension_states["affect_resilience"].qualitative)
+            else round(profile.frustration_index, 2)
+        ),
         "engagement_level": round(profile.engagement_level, 2),
     }
 
@@ -1002,7 +1025,7 @@ async def get_profile_analysis(
                 summary_suggestions.append(f"  → {s}")
 
     if not summary_suggestions:
-        summary_suggestions.append("🟢 当前各维度状态非常优秀，建议继续保持现有的学习节奏与策略。")
+        summary_suggestions.append("继续完成当前课程的练习，并在画像对话中补充学习感受和安排。")
 
     # 6. 读取仪表盘全局学情分析报告与叙事报告
     narrative_report = getattr(profile, "narrative_report", "")
@@ -1010,171 +1033,21 @@ async def get_profile_analysis(
     has_cache = bool(narrative_report and dashboard_report)
     
     if not narrative_report:
-        narrative_report = (
-            "### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n"
-            "亲爱的同学：\n\n"
-            "看到你在机器学习世界里的探索，系统能感受到你对未知的渴望。目前你在知识图谱中的多个核心概念上已经开始了旅程，"
-            "遇到一时的不理解或高负荷是知识建构过程中的必经风景，如同登山时背包需要稍微整理。建议你在接下来的日子里，"
-            "先从前置概念的基础小册和代码实操着手，我们会一直在右侧的画板和沙箱中陪伴你，一步步走向熟练。加油！"
-        )
+        narrative_report = "成长信笺尚未生成。可以先查看本页保存的学习记录和建议。"
     if not dashboard_report:
-        dashboard_report = (
-            "根据当前的学情监测数据，您的机器学习核心概念体系构建已初具规模（部分核心节点掌握度达90%以上），但在局部节点存在认知负荷过载倾向（当前心智负荷监测值高于0.6）。\n"
-            "通过关联分析与最近答题记录，推断此学习障碍并非由于概念本身的抽象度导致，而是前置数学知识点（如微积分中偏导数求导与线性代数中的矩阵相乘逻辑）的掌握不够稳固，因而在算法推导时产生了冗余的解译开销，引发了工作记忆过载。\n"
-            "建议您在后续学习中采取以下具体干预策略：\n"
-            "首先，回溯学习相关的数学前置讲义以消除依赖阻塞，实现认知对齐；其次，利用系统右侧的隔离代码沙箱（Sandbox）执行算法逻辑验证，通过具象的控制台输出来分担抽象推导压力，从而有效降低即时工作记忆负荷，优化知识重构效率。"
-        )
+        dashboard_report = "学习摘要尚未生成，请先参考本课程已有的练习结果和掌握情况。"
 
-    # === 任务：卡尔曼滤波防抖与时序心智负荷展示数据处理 ===
-    # 物理数据库历史重构：从 SQLite 中捞取该学生所有真实的答题记录，用于修复由于老系统序列化漏洞缺失的 BKT 答题历史
-    from app.database import SessionLocal
-    session = SessionLocal()
-    concept_histories = {}
-    try:
-        from app.legacy_repositories import LegacyReadRepository
-        records = LegacyReadRepository(session).quiz_history(student_id)
-        observe_legacy_shadow_read(
-            session, chain_id="identity-profile-history", legacy_result=records,
-            canonical_loader=lambda: IdentityProfileHistoryCanonicalReader(session).quiz_history(student_id),
-            legacy_projector=project_model_rows,
-        )
-        for r in records:
-            c = r.target_concept
-            if c:
-                concept_histories.setdefault(c, []).append(r.accuracy_score >= 0.6)
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"Error loading quiz records for history reconstruction: {e}")
-    finally:
-        session.close()
-
-    # 优先选择有真实答题历史（history 长度 >= 3）的概念作为卡尔曼去噪大盘的展示对象
-    active_concept = None
-    for concept, snap in (profile.bkt_states or {}).items():
-        hist = snap.get("history") or concept_histories.get(concept, [])
-        if hist and len(hist) >= 3:
-            active_concept = concept
-            break
-            
-    if not active_concept:
-        # 其次选择有任意答题历史的概念
-        for concept, snap in (profile.bkt_states or {}).items():
-            hist = snap.get("history") or concept_histories.get(concept, [])
-            if hist:
-                active_concept = concept
-                break
-                
-    if not active_concept:
-        # 最后兜底使用掌握度列表中的第一个或者固定值
-        if profile.concept_mastery:
-            active_concept = list(profile.concept_mastery.keys())[0]
-        else:
-            active_concept = "池化层"
-
-    bkt_snap = (profile.bkt_states or {}).get(active_concept, {})
-    raw_history = bkt_snap.get("history") or concept_histories.get(active_concept, [])
-    
-    from bkt_engine import KalmanFilter
-    kf = KalmanFilter(x_init=0.3, p_init=1.0)
-    
-    steps = []
-    # 答题冷启动优化：如果真实答题历史少于 3 次，将 baseline 模拟步骤与当前学生的真实答卷进行平滑拼接，保证即时答题能立刻呈现在曲线上
-    base_steps = [
-        {"correct": True, "load": 0.4, "frustration": 0.1, "label": "07-05 09:15"},
-        {"correct": True, "load": 0.45, "frustration": 0.15, "label": "07-05 09:20"},
-        {"correct": True, "load": 0.48, "frustration": 0.2, "label": "07-06 10:12"},
-        {"correct": False, "load": 0.75, "frustration": 0.8, "label": "07-06 10:15"},
-        {"correct": True, "load": 0.5, "frustration": 0.3, "label": "07-07 14:32"},
-        {"correct": True, "load": 0.45, "frustration": 0.15, "label": "07-07 14:40"}
-    ]
-    
-    if len(raw_history) == 0:
-        steps = base_steps
-    elif len(raw_history) < 3:
-        # 混合拼接：取 base_steps 的前 (6 - len(raw_history)) 个元素，并把学生的真实答题结果拼在后面
-        steps = base_steps[:-len(raw_history)]
-        import datetime
-        for i, corr in enumerate(raw_history):
-            # 以 5 分钟为间隔生成最新的交互标签
-            time_label = (datetime.datetime.now() - datetime.timedelta(minutes=(len(raw_history) - i - 1) * 5)).strftime("%m-%d %H:%M")
-            steps.append({
-                "correct": corr,
-                "load": getattr(profile, "cognitive_load", 0.45) if i == len(raw_history) - 1 else (0.4 + (0.1 if not corr else 0)),
-                "frustration": getattr(profile, "frustration_index", 0.0) if i == len(raw_history) - 1 else (0.2 + (0.4 if not corr else 0)),
-                "label": time_label
-            })
-    else:
-        # 拥有 >= 3 次的完全真实答题历史
-        for i, corr in enumerate(raw_history):
-            import datetime
-            base_time = datetime.datetime.now() - datetime.timedelta(days=len(raw_history) - i)
-            time_str = base_time.strftime("%m-%d %H:%M")
-            steps.append({
-                "correct": corr,
-                "load": 0.4 + (0.1 if not corr else 0),
-                "frustration": 0.2 + (0.4 if not corr else 0),
-                "label": time_str
-            })
-            
-    simulated_steps = []
-    x_val = 0.3
-    p_val = 1.0
-    
-    simulated_steps.append({
-        "time": "初始",
-        "raw": round(x_val * 100, 1),
-        "smoothed": round(x_val * 100, 1),
-        "gain": 0.0,
-        "q": 0.01,
-        "r": 0.1,
-        "p": round(p_val, 3)
-    })
-    
-    p_mastered = 0.3
-    p_learn = 0.15
-    p_slip = 0.1
-    p_guess = 0.2
-    
-    for step in steps:
-        correct = step["correct"]
-        load = step["load"]
-        frustration = step["frustration"]
-        
-        p_t = p_mastered
-        if correct:
-            p_correct = p_t * (1.0 - p_slip) + (1.0 - p_t) * p_guess
-            p_mastered_given_obs = (p_t * (1.0 - p_slip)) / max(p_correct, 1e-10)
-        else:
-            p_wrong = p_t * p_slip + (1.0 - p_t) * (1.0 - p_guess)
-            p_mastered_given_obs = (p_t * p_slip) / max(p_wrong, 1e-10)
-
-        raw_bkt_mastery = p_mastered_given_obs + (1.0 - p_mastered_given_obs) * p_learn
-        raw_bkt_mastery = max(0.0, min(1.0, raw_bkt_mastery))
-        p_mastered = raw_bkt_mastery
-        
-        q_base = 0.01
-        q_penalty = max(0.0, load - 0.5) * 0.05 + max(0.0, frustration - 0.3) * 0.03
-        q = q_base + q_penalty
-
-        r_base = 0.1
-        r_penalty = max(0.0, frustration - 0.5) * 0.08
-        r = r_base + r_penalty
-        
-        x_val, k_gain = kf.step(raw_bkt_mastery, q, r)
-        p_val = kf.p
-        
-        simulated_steps.append({
-            "time": step["label"],
-            "raw": round(raw_bkt_mastery * 100, 1),
-            "smoothed": round(x_val * 100, 1),
-            "gain": round(k_gain, 3),
-            "q": round(q, 4),
-            "r": round(r, 3),
-            "p": round(p_val, 3)
-        })
+    from app.profile_summary import build_concept_learning_history
+    learning_history = await run_db_op(
+        build_concept_learning_history,
+        student_id=student_id,
+        course_id=course_scope["course_id"],
+        points=course_scope["points"],
+    )
 
     return {
         "background": background,
+        "learning_state": current_learning_state(profile),
         "dimensions": dimensions,
         "causes": causes,
         "weak_analysis": weak_analysis,
@@ -1182,8 +1055,9 @@ async def get_profile_analysis(
         "narrative_report": narrative_report,
         "dashboard_report": dashboard_report,
         "has_narrative_cache": has_cache,
-        "kalman_concept": active_concept,
-        "kalman_history": simulated_steps,
+        "kalman_concept": learning_history["concept"],
+        "kalman_history": learning_history["history"],
+        "memory_retention": learning_history["memory_retention"],
         "mental_state_history": getattr(profile, "mental_state_history", []) or [],
     }
 

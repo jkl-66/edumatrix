@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -86,12 +87,36 @@ def _create_manual(session, owner, *, key="manual-note-create-0001"):
     return note, created
 
 
+def test_note_edit_and_reload_keep_complete_knowledge_point_names():
+    session, owner, _ = _session()
+    note, _ = _create_manual(session, owner)
+    concepts = ["scikit-learn 训练与推理接口", "求和与均值", "概率和统计"]
+    updated, changed = update_note_record(
+        session, note_id=note.id, student_id=owner.username, actor=owner,
+        content="# 接口职责\n创建、训练、推理和评分各有作用。", tags=[],
+        concepts=concepts + ["  概率和统计  "], expected_version=note.lock_version,
+        idempotency_key="complete-concept-names",
+    )
+    session.commit()
+    assert changed
+    session.expire_all()
+    restored = session.query(DBNote).filter_by(id=updated.id).one()
+    assert note_payload(session, actor=owner, note=restored)["concepts"] == concepts
+    versions = note_versions_payload(session, actor=owner, note=restored)
+    assert versions[0]["concepts"] == concepts
+
+
 def test_note_versions_conflicts_ai_suggestion_and_restore_are_non_mastery():
     session, owner, _ = _session()
     note, created = _create_manual(session, owner)
     assert created is True
     assert note.lock_version == 1
     assert session.query(DBNoteVersion).filter_by(note_id=note.id).count() == 1
+    payload = note_payload(session, actor=owner, note=note)
+    assert datetime.fromisoformat(payload["created_at"]) == note.created_at.replace(tzinfo=timezone.utc)
+    assert datetime.fromisoformat(payload["updated_at"]).utcoffset().total_seconds() == 0
+    history = note_versions_payload(session, actor=owner, note=note)
+    assert datetime.fromisoformat(history[0]["created_at"]).utcoffset().total_seconds() == 0
     first_event = session.query(DBLearningEvent).filter_by(object_id=note.id).one()
     assert (first_event.mastery_eligible, first_event.completion_effect) == (False, "none")
 
@@ -260,6 +285,7 @@ def test_resource_source_projection_survives_withdrawal_and_reads_are_side_effec
     assert session.query(DBLearningEvent).count() == events_before
     assert payload["source_context"]["available"] is True
     assert payload["source_context"]["resource_version_id"] == version.id
+    assert payload["source_context"]["resource_version_number"] == version.version_number
     assert payload["source_context"]["route"].startswith(f"/workspace/resources/handouts/{artifact.id}")
     assert version.content not in json.dumps(payload["source_context"], ensure_ascii=False)
 

@@ -14,8 +14,10 @@ class Backend:
 
     def __init__(self, outputs):
         self.outputs = outputs
+        self.prompts = {}
 
     async def generate(self, system_prompt, user_prompt, *, role):
+        self.prompts[role] = user_prompt
         value = self.outputs[role]
         if isinstance(value, BaseException):
             raise value
@@ -89,6 +91,9 @@ def test_profile_report_single_parallel_failure_keeps_sibling_output():
 
     assert "surviving narrative" in narrative
     assert "dashboard unavailable" not in dashboard
+    assert "暂时没有生成" in dashboard
+    assert "90%" not in dashboard
+    assert "过载" not in dashboard
     assert by_operation["narrative"].status == "completed"
     failed = by_operation["dashboard_diagnosis"]
     assert (failed.status, failed.error_code) == (
@@ -113,3 +118,43 @@ def test_profile_report_cancellation_is_terminal_and_propagates():
     row = session.query(DBModelCall).one()
     assert (row.status, row.error_code) == ("failed", "client_disconnected")
     assert "private profile body" not in str(row.input_summary)
+
+
+def test_dimension_defaults_do_not_become_confident_learner_diagnoses():
+    from models import DimensionState
+    from profile_api import _build_dimension_analysis
+    state = DimensionState(key="learning_strategy", label="学习方法", score=.53, confidence=.5,
+                           status="策略证据仍需丰富")
+    assert _build_dimension_analysis(state.key, state)["score"] is None
+    state.evidence_count = 1
+    state.evidence_fragments = ["完成了两种实践任务"]
+    result = _build_dimension_analysis(state.key, state)
+    assert result["score"] == .53
+    assert result["diagnosis"] == "策略证据仍需丰富"
+    assert "依赖看答案" not in result["diagnosis"]
+
+
+def test_reports_use_confirmed_state_and_equipment_without_superseded_inferred_causes():
+    from models import DimensionState
+    session, generator, profile = _fixture({
+        "教师评估": "尝试两张照片比较", "叙事故事生成": "学习建议", "仪表盘诊断生成": "学习回顾",
+    })
+    profile.frustration_index = .72
+    profile.dimension_states = {
+        "affect_resilience": DimensionState(key="affect_resilience", label="感受", score=.28, confidence=.9,
+            status="当前自述", qualitative=True,
+            self_report="我并不紧张，愿意自己试", confirmed_state_scores={"frustration_index": None}),
+        "learning_context": {"confirmed_fields": {
+            "available_tools": "安卓手机，无专业模式，无电脑", "study_schedule": "晚上20分钟",
+        }},
+    }
+    profile.learning_state_causes["affective_barrier"] = CauseBreakdown(
+        key="affective_barrier", label="旧焦虑推测", percentage=72, confidence=.5, evidence_count=1,
+    )
+    asyncio.run(generator.generate_report(profile, owner_public_id="profile-owner"))
+    for prompt in generator.llm.prompts.values():
+        assert "我并不紧张，愿意自己试" in prompt
+        assert "安卓手机，无专业模式，无电脑" in prompt
+        assert "晚上20分钟" in prompt
+        assert "旧焦虑推测" not in prompt
+    session.close()

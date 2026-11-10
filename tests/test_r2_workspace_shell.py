@@ -37,8 +37,8 @@ def test_workspace_keeps_existing_plan_actions_and_user_facing_title():
         "saveDraft",
         "confirmPlan",
         "transitionPath",
-        "recordNodeEvent",
     ):
         assert action in workspace
-    assert "'/workspace': '学习空间'" in app
+    assert "{ path: '/workspace', label: '学习空间'" in app
+    assert "recordNodeEvent" not in workspace
     assert "'/workspace': '计划工作台'" not in app

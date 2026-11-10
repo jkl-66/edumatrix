@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import json
+import pytest
 
 import scripts.create_competition_packages as packages
 
@@ -58,16 +60,16 @@ def test_frontend_dist_allowlist_contains_every_local_index_resource():
 def test_evaluator_runtime_uses_trusted_local_but_source_default_stays_disabled():
     source_env = (ROOT / ".env.example").read_text(encoding="utf-8")
     runtime_env = (ROOT / "packaging" / ".env.runtime.template").read_text(encoding="utf-8")
-    launcher = (ROOT / "packaging" / "install_and_run.bat").read_text(encoding="utf-8")
+    launcher = (ROOT / "packaging" / "launch.ps1").read_text(encoding="utf-8")
     evaluator_readme = (ROOT / "packaging" / "README_作品运行说明.txt").read_text(encoding="utf-8")
 
     assert "EDUMATRIX_SANDBOX_MODE=disabled" in source_env
     assert "EDUMATRIX_SANDBOX_MODE=trusted_local" in runtime_env
-    assert 'set "EDUMATRIX_SANDBOX_MODE=trusted_local"' in launcher
-    assert "不具备 Docker 容器" in evaluator_readme
-    assert "lzz / 404404aA" in evaluator_readme
-    assert "teacher / admin123" in evaluator_readme
-    assert "demo-admin / EduMatrix-Demo-2026" in evaluator_readme
+    assert "$env:EDUMATRIX_SANDBOX_MODE = 'trusted_local'" in launcher
+    assert "不要求 Docker" in evaluator_readme
+    for alias, _ in packages.DEMO_ACCOUNTS.values():
+        assert alias in evaluator_readme
+    assert packages.DEMO_PASSWORD in evaluator_readme
 
 
 def test_launcher_never_prints_api_key_fragments_or_browser_key_instructions():
@@ -127,3 +129,52 @@ def test_sanitized_evaluator_database_keeps_documented_demo_identities_and_learn
     assert events == {"lzz", "public", "demo-student", "stu-01"}
     assert documents == {"lzz", "public"}
     assert integrity == "ok"
+
+
+def test_current_seed_keeps_published_outputs_and_migrates_demo_accounts_only_in_copy(tmp_path):
+    source = tmp_path/'acceptance.sqlite3'
+    target = tmp_path/'package'/'edumatrix.db'
+    with sqlite3.connect(source) as db:
+        db.executescript('''
+            create table users(username text, public_id text primary key, display_name text, hashed_password text, is_active integer);
+            create table generation_tasks(id text primary key,status text,automation_state text);
+            create table task_events(task_id text,event_type text,payload JSON,sequence integer);
+            create table artifacts(id text primary key,owner_public_id text,status text,archived_at text);
+            create table courses(id text primary key,status text);
+            create table course_memberships(user_public_id text,course_id text);
+            create table student_profiles(student_id text primary key,data JSON);
+            create table model_quota_buckets(id text);
+            create table worker_leases(id text);
+            create table audit_logs(id text);
+            create table learning_paths(id text);
+            create table assessment_attempts(id text);
+        ''')
+        for i, old in enumerate(packages.DEMO_ACCOUNTS):
+            db.execute('insert into users values (?,?,?,?,?)',(old,f'usr-{i}','old','old-hash',1))
+            db.execute('insert into student_profiles values (?,?)',(old,json.dumps({'student_id':old,'access_token':'private-token','mastery':.8})))
+        db.execute('insert into users values (?,?,?,?,?)',('validation_unused','old-user','old','old-hash',1))
+        for i, task_id in enumerate(packages.CURRENT_TASKS):
+            db.execute('insert into generation_tasks values (?,?,?)',(task_id,'completed','completed'))
+            db.execute('insert into task_events values (?,?,?,?)',(task_id,'publish.completed',json.dumps({'output_refs':[f'art-{i}:av-{i}']}),1))
+            db.execute('insert into artifacts values (?,?,?,?)',(f'art-{i}','usr-0','published',None))
+        db.execute('insert into artifacts values (?,?,?,?)',('old-draft','usr-0','draft',None))
+        db.execute('insert into courses values (?,?)',('course-ai-deep-learning-agents-v1','published'))
+        db.execute('insert into courses values (?,?)',('course-test','published'))
+        db.execute('''create trigger profile_frozen before update of data on student_profiles
+                      begin select raise(abort, 'profile evidence is immutable'); end''')
+        db.commit()
+    report = packages.build_current_seed(source,target)
+    assert not report['source_modified']
+    with sqlite3.connect(target) as db:
+        assert {r[0] for r in db.execute('select username from users where is_active=1')} == {v[0] for v in packages.DEMO_ACCOUNTS.values()}
+        assert db.execute("select status from artifacts where id='old-draft'").fetchone()[0]=='archived'
+        assert db.execute("select count(*) from artifacts where status='published'").fetchone()[0]==len(packages.CURRENT_TASKS)
+        profile=json.loads(db.execute("select data from student_profiles where student_id='learner'").fetchone()[0])
+        assert profile=={'student_id':'learner','mastery':.8}
+        with pytest.raises(sqlite3.IntegrityError, match='immutable'):
+            db.execute("update student_profiles set data='{}' where student_id='learner'")
+    with sqlite3.connect(source) as db:
+        assert db.execute("select hashed_password from users limit 1").fetchone()[0]=='old-hash'
+        assert db.execute("select status from artifacts where id='old-draft'").fetchone()[0]=='draft'
+        with pytest.raises(sqlite3.IntegrityError, match='immutable'):
+            db.execute("update student_profiles set data='{}'")

@@ -80,15 +80,10 @@ def _card_content(
         }
     else:
         accuracy = float(record.accuracy_score or 0.0)
-        if accuracy < 0.3:
-            front = f"【深度剖析】请详细拆解并阐释「{concept}」的底层计算步骤与核心原理，并指出它的一个常见误区。"
-        elif accuracy < 0.6:
-            front = f"【对比辨析】请说明「{concept}」与其最邻近前置概念的区别，并用一个实际例子说明它的应用。"
-        else:
-            front = f"【应用实践】如何在真实的机器学习系统中设计并调用「{concept}」？请写出核心步骤与关键公式。"
+        front = f"回顾这道题：{record.question}\n先说出判断步骤，再解释自己最容易漏掉的条件。"
         source_snapshot = {
-            "source_type": "quiz_record",
-            "quiz_record_id": str(record.id),
+            "source_type": "assessment_question" if getattr(record, "question_version", None) else "quiz_record",
+            "question_version_id" if getattr(record, "question_version", None) else "quiz_record_id": str(record.id),
             "concept": concept,
             "accuracy": accuracy,
             "truth_boundary": "model_generated_review_answer",
@@ -102,9 +97,15 @@ def _ensure_card(
     review_plan: DBReviewPlan, source_quiz_id: str = "", record: DBQuizRecord | None = None,
     generated_answer: str | None = None,
     generation_metadata: dict[str, Any] | None = None,
+    regenerate: bool = False,
 ) -> tuple[DBFlashcard, DBFlashcardVersion]:
     identity_hash = _identity_hash(owner_public_id, student_id, concept, source_quiz_id)
     card = db.query(DBFlashcard).filter_by(identity_hash=identity_hash).first()
+    if not source_quiz_id and card is not None and card.review_plan_id != review_plan.id:
+        # Same-named topics in different courses have distinct review plans.
+        # Preserve the existing card/version; bind the other plan separately.
+        identity_hash = _identity_hash(owner_public_id, student_id, concept, f"review-plan:{review_plan.id}")
+        card = db.query(DBFlashcard).filter_by(identity_hash=identity_hash).first()
     created = card is None
     if card is None:
         card = DBFlashcard(
@@ -114,7 +115,7 @@ def _ensure_card(
         db.add(card)
         db.flush()
     current = db.get(DBFlashcardVersion, card.current_version_id) if card.current_version_id else None
-    if current is not None:
+    if current is not None and not regenerate:
         return card, current
     if not generated_answer:
         raise ReviewModelError("review_flashcard_answer_missing", "闪卡回答尚未由真实模型生成。")
@@ -143,7 +144,9 @@ def _card_dict(card: DBFlashcard, version: DBFlashcardVersion, plan: DBReviewPla
         "id": card.id, "version_id": version.id, "version_number": version.version_number,
         "content_hash": version.content_hash, "concept": card.concept,
         "front": version.front, "back": version.back, "source_snapshot": version.source_snapshot or {},
+        "adaptive_review": (version.source_snapshot or {}).get("adaptive_review"),
         "source_quiz_id": card.source_quiz_id, "student_id": card.student_id,
+        "course_id": plan.course_id,
         "easiness": round(plan.easiness_factor or 2.5, 2),
         "interval_days": plan.interval_days or 1, "review_count": plan.review_count or 0,
         "last_quality": plan.last_quality or 0, "next_review_at": _iso_utc(plan.next_review_at),
@@ -163,24 +166,28 @@ async def _generate_flashcard_answer(
     system_prompt = (
         "你是 EduMatrix 的记忆闪卡 Answer Agent。只输出 JSON，不要 Markdown 围栏；"
         "JSON 必须包含 answer 和 explanation 字段；回答必须是基于给定知识点的真实中文解释，并明确一个适用边界或例子；"
-        "explanation 必须把知识点降维成学习者能复述的直觉、类比或最小例子，不得使用空泛的鼓励话。"
+        "explanation 用学习者能复述的直觉、类比或最小例子讲清原因，不得使用空泛的鼓励话。"
+        "逐项核算数字、索引和代码示例；不要把第几项与从0开始的下标混淆，也不要将内部术语写进学习反馈。"
     )
     user_prompt = f"知识点：{concept}\n"
     if record is not None:
-        difficulty = "困难知识点：必须先给出真实降维解释，再给出严谨回答。" if float(record.accuracy_score or 0.0) < 0.6 else "请同时给出严谨回答和简明降维解释。"
+        difficulty = "学习者暂时有困难：先用日常类比或最小例子解释，再给出严谨回答。" if float(record.accuracy_score or 0.0) < 0.6 else "请同时给出严谨回答和容易复述的解释。"
         user_prompt += (
+            f"题目：{record.question or ''}\n选项：{json.dumps(record.options or [], ensure_ascii=False)}\n"
             f"该知识点的作答记录：正确答案={record.correct_answer or '未提供'}，"
             f"学习者答案={record.student_answer or '未提供'}。{difficulty}\n"
+            f"已有讲解：{record.feedback or ''}\n"
         )
     else:
-        user_prompt += "请按初学者可理解的方式生成回答，并在 explanation 中给出真实降维解释。\n"
+        user_prompt += "请按初学者可理解的方式生成回答，并在 explanation 中用当前知识点的简单例子降低理解门槛，保持原理准确。\n"
     user_prompt += "请生成可直接展示在闪卡背面的完整回答，不要声称引用了不存在的资料。"
 
     def validate(raw: str) -> dict:
-        parsed = json.loads(raw.strip())
+        from llm_client import parse_json_object
+        parsed = parse_json_object(raw)
         answer = str(parsed.get("answer") or "").strip()
         explanation = str(parsed.get("explanation") or "").strip()
-        if len(answer) < 12 or len(explanation) < 12:
+        if not answer or len(explanation) < 12:
             raise ValueError("flashcard answer is unusable")
         return {"answer": answer, "explanation": explanation}
 
@@ -195,10 +202,20 @@ async def _generate_flashcard_answer(
         response_validator=validate,
         model_call_context=model_call_context,
     )
+    if record is not None:
+        generated, _, _ = await generate_review_model_json(
+            operation="review_flashcard_check",
+            system_prompt=("你是学习内容核对老师。核对原题、已公布答案和待展示闪卡。独立重算每个数字，"
+                           "检查所有例子的长度、下标和代码结果，包括额外添加的类比。保留正确结论，修正错误或无根据的补充；"
+                           "若小例子没有帮助就删去。只输出核对后的 JSON，包含 answer 和 explanation，使用自然的学习语言。"),
+            user_prompt=user_prompt + "\n待核对闪卡：\n" + json.dumps(generated, ensure_ascii=False),
+            role="闪卡内容核对老师", owner_public_id=owner_public_id, course_id=course_id,
+            response_validator=validate, model_call_context=model_call_context,
+        )
     answer = str(generated["answer"]).strip()
     explanation = str(generated.get("explanation") or "").strip()
     if explanation:
-        answer = f"{answer}\n\n降维解释：{explanation}"
+        answer = f"{answer}\n\n理解要点：{explanation}"
     return answer, {
         "model": model,
         "provider": provider,
@@ -210,7 +227,7 @@ async def _generate_flashcard_answer(
 
 
 def _has_completed_learning_evidence(
-    db: Session, *, owner_public_id: str, concept: str,
+    db: Session, *, owner_public_id: str, concept: str, course_id: str | None = None,
 ) -> bool:
     """Only accepted, mastery-eligible completion evidence can unlock auto-card creation."""
     normalized = str(concept or "").strip().casefold()
@@ -231,6 +248,8 @@ def _has_completed_learning_evidence(
         completion_effect="complete",
     ).order_by(DBLearningEvent.occurred_at.desc(), DBLearningEvent.id.desc()).all()
     for event in events:
+        if course_id and event.course_id != course_id:
+            continue
         context = event.context_ref or {}
         payload = event.payload or {}
         values = {
@@ -241,6 +260,12 @@ def _has_completed_learning_evidence(
             str(payload.get("concept") or "").casefold(),
         }
         if accepted_values.intersection(values):
+            return True
+        # Assessment events refer to frozen questions, not directly to their
+        # concept. Use the same projection as mastery/review scheduling.
+        from app.learning_aggregation import _event_observations
+        if any(accepted_values.intersection({str(point_id).casefold(), title.casefold()})
+               for point_id, title, _ in _event_observations(db, event)):
             return True
     return False
 
@@ -254,12 +279,13 @@ async def _cards_for_plan(
     ).order_by(DBFlashcard.created_at.asc(), DBFlashcard.id.asc()).all()
     if not cards:
         if not _has_completed_learning_evidence(
-            db, owner_public_id=owner_public_id, concept=plan.concept,
+            db, owner_public_id=owner_public_id, concept=plan.concept, course_id=plan.course_id,
         ):
             return []
         answer, generation_metadata = await _generate_flashcard_answer(
             concept=plan.concept,
             owner_public_id=owner_public_id,
+            course_id=plan.course_id,
         )
         return [_ensure_card(
             db, owner_public_id=owner_public_id, student_id=student_id,
@@ -286,11 +312,18 @@ async def generate_flashcard(
     payload = await request.json()
     student_id = enforce_student_access(payload.get("student_id"), current_user)
     quiz_id = str(payload.get("quiz_id", "")).strip()
+    question_version_id = str(payload.get("question_version_id", "")).strip()
+    regenerate = payload.get("regenerate") is True
 
     concept = ""
     record = None
 
-    if quiz_id:
+    if question_version_id:
+        from app.wrong_question_read_model import canonical_review_source
+        record = canonical_review_source(db, owner_public_id=current_user.public_id, student_id=student_id, version_id=question_version_id)
+        quiz_id = question_version_id
+        concept = record.target_concept
+    elif quiz_id:
         record = LegacyReadRepository(db).quiz_record(quiz_id, student_id)
         if record:
             concept = record.target_concept or "General Concept"
@@ -309,7 +342,7 @@ async def generate_flashcard(
         if existing_card is not None and existing_card.current_version_id else None
     )
     if existing_version is None and not _has_completed_learning_evidence(
-        db, owner_public_id=current_user.public_id, concept=concept,
+        db, owner_public_id=current_user.public_id, concept=concept, course_id=getattr(record, "course_id", None),
     ):
         raise HTTPException(
             status_code=409,
@@ -320,7 +353,9 @@ async def generate_flashcard(
             },
         )
 
-    existing = LegacyReadRepository(db).review_plan(student_id, concept)
+    existing = (db.query(DBReviewPlan).filter_by(student_id=student_id, concept=concept,
+                course_id=record.course_id).first() if getattr(record, "question_version", None)
+                else LegacyReadRepository(db).review_plan(student_id, concept))
 
     if existing:
         existing.easiness_factor = existing.easiness_factor or 2.5
@@ -351,6 +386,8 @@ async def generate_flashcard(
 
         plan = DBReviewPlan(
             student_id=student_id,
+            course_id=getattr(record, "course_id", None),
+            knowledge_point_id=getattr(getattr(record, "question_version", None), "primary_knowledge_point_id", None),
             concept=concept,
             interval_days=interval_days,
             next_review_at=_utcnow_naive(),
@@ -370,11 +407,12 @@ async def generate_flashcard(
     )
     generated_answer = None
     generation_metadata = None
-    if current_version is None:
+    if current_version is None or regenerate:
         try:
             generated_answer, generation_metadata = await _generate_flashcard_answer(
                 concept=concept,
                 owner_public_id=current_user.public_id,
+                course_id=getattr(record, "course_id", None),
                 record=record,
             )
         except ReviewModelError as exc:
@@ -387,6 +425,7 @@ async def generate_flashcard(
         review_plan=plan, source_quiz_id=quiz_id, record=record,
         generated_answer=generated_answer,
         generation_metadata=generation_metadata,
+        regenerate=regenerate,
     )
     db.commit()
     card_dict = _card_dict(card, version, plan)
@@ -404,6 +443,14 @@ async def review_flashcard(
     student_id = enforce_student_access(payload.get("student_id"), current_user)
     concept = str(payload.get("concept", "")).strip()
     card_id = str(payload.get("card_id", "")).strip()
+    requested_plan = None
+    if payload.get("plan_id") is not None:
+        try:
+            requested_plan = db.get(DBReviewPlan, int(payload["plan_id"]))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="请选择要复习的学习安排。")
+        if not requested_plan or requested_plan.student_id != student_id or requested_plan.concept != concept:
+            raise HTTPException(status_code=404, detail="这项复习安排当前不可用，请重新打开复习页。")
     try:
         quality = int(payload.get("quality", 4))
     except (TypeError, ValueError):
@@ -424,17 +471,35 @@ async def review_flashcard(
             raise HTTPException(status_code=403, detail="flashcard access denied")
         if card.concept != concept:
             raise HTTPException(status_code=409, detail="flashcard concept changed")
+        if requested_plan and card.review_plan_id != requested_plan.id:
+            raise HTTPException(status_code=409, detail="这张闪卡不属于所选复习安排。")
 
-    existing_plan = db.query(DBReviewPlan).filter_by(
-        student_id=student_id, concept=concept,
-    ).first()
+    if card is None:
+        cards = db.query(DBFlashcard).filter_by(
+            owner_public_id=current_user.public_id, student_id=student_id,
+            concept=concept, status="active",
+        )
+        if requested_plan:
+            cards = cards.filter_by(review_plan_id=requested_plan.id)
+        card = cards.order_by(DBFlashcard.updated_at.desc()).first()
+    existing_plan = requested_plan or (db.get(DBReviewPlan, card.review_plan_id) if card else
+                     db.query(DBReviewPlan).filter_by(student_id=student_id, concept=concept).first())
+    generated_answer = None
+    generation_metadata = None
+    current_version = db.get(DBFlashcardVersion, card.current_version_id) if card else None
     try:
         adaptation = await build_review_adaptation_payload(
             concept,
             quality,
             existing_plan.mastery if existing_plan is not None else 0.3,
             owner_public_id=current_user.public_id,
+            card_context={"question": current_version.front, "answer": current_version.back} if current_version else None,
         )
+        if card is None:
+            generated_answer, generation_metadata = await _generate_flashcard_answer(
+                concept=concept, owner_public_id=current_user.public_id,
+                course_id=existing_plan.course_id if existing_plan else None,
+            )
     except ReviewModelError as exc:
         raise HTTPException(
             status_code=502,
@@ -442,7 +507,7 @@ async def review_flashcard(
         ) from exc
 
     try:
-        plan = apply_review_feedback(db, student_id, concept, quality)
+        plan = apply_review_feedback(db, student_id, concept, quality, plan_id=existing_plan.id if existing_plan else None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     evidence = AssessmentEvidenceInput(
@@ -458,19 +523,36 @@ async def review_flashcard(
     db.commit()
     
     if card is None:
-        card = db.query(DBFlashcard).filter_by(
-            owner_public_id=current_user.public_id, student_id=student_id,
-            concept=concept, status="active",
-        ).order_by(DBFlashcard.updated_at.desc()).first()
-    if card is None:
         card, version = _ensure_card(
             db, owner_public_id=current_user.public_id, student_id=student_id,
             concept=concept, review_plan=plan,
+            generated_answer=generated_answer, generation_metadata=generation_metadata,
         )
     else:
         version = db.get(DBFlashcardVersion, card.current_version_id)
         if version is None:
             raise HTTPException(status_code=409, detail="flashcard current version is missing")
+    if adaptation.get("triggered"):
+        source = {
+            **dict(version.source_snapshot or {}),
+            "adaptive_review": {
+                "title": "换个容易理解的说法",
+                "simplified_explanation": adaptation["simplified_explanation"],
+                "mermaid": adaptation.get("mermaid") or "",
+            },
+        }
+        back = adaptation["simplified_explanation"]
+        replacement = DBFlashcardVersion(
+            flashcard_id=card.id, version_number=version.version_number + 1,
+            front=version.front, back=back, source_snapshot=source,
+            content_hash=_content_hash(version.front, back, source),
+            created_by_public_id=current_user.public_id,
+        )
+        db.add(replacement)
+        db.flush()
+        card.current_version_id = replacement.id
+        card.lock_version = int(card.lock_version or 1) + 1
+        version = replacement
     card_dict = _card_dict(card, version, plan)
     db.commit()
 
@@ -481,7 +563,7 @@ async def review_flashcard(
         "easiness_new": round(plan.easiness_factor or 2.5, 2),
         "interval_new": plan.interval_days,
         "next_review_at": _iso_utc(plan.next_review_at),
-        "message": f"Review recorded. Next review interval: {plan.interval_days} days.",
+        "message": f"本次复习已记录，下次安排在 {plan.interval_days} 天后。",
         "canonical_evidence": canonical_evidence,
     }
 
@@ -501,25 +583,12 @@ async def get_due_cards(
         student_id, now=now, limit=max_count
     )
     
-    due_cards = []
-    try:
-        for plan in plans:
-            due_cards.extend(
-                _card_dict(card, version, plan)
-                for card, version in await _cards_for_plan(
-                    db, owner_public_id=current_user.public_id, student_id=student_id, plan=plan,
-                )
-            )
-    except ReviewModelError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={"code": exc.code, "message": str(exc), "retryable": True},
-        ) from exc
-    db.commit()
+    due_cards, failures = await _collect_plan_cards(db, current_user.public_id, student_id, plans)
 
     return {
         "due_count": len(due_cards),
         "cards": due_cards,
+        "failures": failures,
     }
 
 
@@ -527,30 +596,36 @@ async def get_due_cards(
 async def get_all_cards(
     request: Request,
     student_id: str = "default",
+    course_id: str = "",
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return all cards directly from DB."""
     student_id = enforce_student_access(student_id, current_user)
     plans = LegacyReadRepository(db).all_review_plans(student_id)
+    if course_id and course_id != "all":
+        plans = [plan for plan in plans if (not plan.course_id if course_id == "unclassified" else plan.course_id == course_id)]
     
-    cards = []
-    try:
-        for plan in plans:
-            cards.extend(
-                _card_dict(card, version, plan)
-                for card, version in await _cards_for_plan(
-                    db, owner_public_id=current_user.public_id, student_id=student_id, plan=plan,
-                )
-            )
-    except ReviewModelError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={"code": exc.code, "message": str(exc), "retryable": True},
-        ) from exc
-    db.commit()
+    cards, failures = await _collect_plan_cards(db, current_user.public_id, student_id, plans)
         
     return {
         "total": len(cards),
         "cards": cards,
+        "failures": failures,
     }
+
+
+async def _collect_plan_cards(db, owner_public_id, student_id, plans):
+    cards, failures = [], []
+    for plan in plans:
+        try:
+            pairs = await _cards_for_plan(
+                db, owner_public_id=owner_public_id, student_id=student_id, plan=plan,
+            )
+            cards.extend(_card_dict(card, version, plan) for card, version in pairs)
+            # Preserve each completed card before another slow model request.
+            db.commit()
+        except ReviewModelError as exc:
+            failures.append({"concept": plan.concept, "code": exc.code,
+                             "message": "这项闪卡暂时没有准备好，请稍后重试。", "retryable": True})
+    return cards, failures

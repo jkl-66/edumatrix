@@ -53,7 +53,7 @@ def _runtime():
 
 
 def _experiment_task(session, learner, *, key: str, model: str = "deterministic"):
-    workspace = workspace_overview(session, current_user=learner)
+    workspace = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
     item = next(value for value in workspace["learning_objects"] if value["object_type"] == "document")
     context, _ = create_tutor_context(
         session,

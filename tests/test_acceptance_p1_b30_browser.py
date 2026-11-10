@@ -104,8 +104,13 @@ def _report(course: dict, *, with_path: bool = False) -> dict:
                 "score": 0.82,
                 "prompt": f"{title}中，哪一项最能描述本课程的核心概念？",
                 "answer": {"choice": "A"},
-                "judgmentBasis": "答案与课程来源相符",
-                "explanation": "服务端判分结果已绑定课程证据。",
+                "judgmentBasis": "correct=true；grading_status=graded。答案与课程来源相符。",
+                "explanation": (
+                    "本题回答正确，可继续尝试应用练习。trace_id=trace-internal-12345678\n\n"
+                    "证据不足不能说明原假设为假。计算值123456789012345678901234。\n\n"
+                    "```python\nif True:\n    shape = (3, 4)\n    print(shape)\n```\n\n"
+                    "平方和写为 $a^2+b^2$。"
+                ),
                 "evaluation": {"confidence": 0.94, "status": "supported", "claim": "课程资料支持该判断"},
                 "sources": [{"id": f"{course_id}-source-1", "title": f"{title}课程讲义", "locationLabel": "第 1 章 / 第 2 页", "source_document_id": f"{course_id}-document-1"}],
             }
@@ -255,7 +260,10 @@ def _assert_layout(page, root_selector: str, width: int) -> dict:
         """(rootSelector) => {
           const root = document.querySelector(rootSelector);
           const visible = root ? [...root.querySelectorAll('*')].filter((el) => el.getClientRects().length) : [];
-          const smallText = visible.filter((el) => el.children.length === 0 && el.textContent.trim() && Number.parseFloat(getComputedStyle(el).fontSize) < 14).map((el) => el.textContent.trim().slice(0, 80));
+          // Math scripts are intentionally smaller than their base (e.g. x²).
+          // Check the formula base and all ordinary text, not KaTeX's internal
+          // script/layout spans, which are not independent body copy.
+          const smallText = visible.filter((el) => (el.matches('.katex') || (el.children.length === 0 && !el.closest('.katex'))) && el.textContent.trim() && Number.parseFloat(getComputedStyle(el).fontSize) < 14).map((el) => el.textContent.trim().slice(0, 80));
           const controls = visible.filter((el) => ['BUTTON', 'SELECT', 'TEXTAREA', 'INPUT'].includes(el.tagName)).map((el) => ({tag: el.tagName, text: (el.innerText || el.getAttribute('aria-label') || '').trim(), rect: el.getBoundingClientRect().toJSON()})).filter((item) => item.rect.width > 1 && item.rect.height > 1);
           let collision = null;
           for (let i = 0; i < controls.length && !collision; i += 1) for (let j = i + 1; j < controls.length; j += 1) {
@@ -284,8 +292,8 @@ def test_multicourse_diagnostic_journey_two_desktop_viewports():
     with _frontend_server() as base_url, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 900), (1366, 768)):
-                context = browser.new_context(viewport={"width": width, "height": height})
+            for width, height in ((1707, 876), (1440, 900), (1366, 768)):
+                context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1.5 if width == 1707 else 1)
                 context.add_init_script(
                     "localStorage.setItem('edumatrix_token', 'browser-token');"
                     "localStorage.setItem('edumatrix_role', 'student');"
@@ -306,7 +314,8 @@ def test_multicourse_diagnostic_journey_two_desktop_viewports():
                 assert page.get_by_role("checkbox", name="选择课程 机器学习基础").is_checked()
                 assert not page.get_by_role("checkbox", name="选择课程 数据结构与算法").is_checked()
                 page.get_by_role("checkbox", name="选择课程 数据结构与算法").check()
-                page.get_by_text("已选择 2 门课程：机器学习基础、数据结构与算法").wait_for()
+                assert page.get_by_role("checkbox", name="选择课程 数据结构与算法").is_checked()
+                assert page.get_by_role("checkbox", name="选择课程 机器学习基础").is_checked()
                 page.screenshot(path=str(EVIDENCE / f"entry-selected-{width}x{height}.png"), full_page=True)
                 page.get_by_test_id("generate-diagnostic").click()
                 page.get_by_test_id("multicourse-diagnostic-ready").wait_for()
@@ -318,15 +327,34 @@ def test_multicourse_diagnostic_journey_two_desktop_viewports():
                 page.screenshot(path=str(EVIDENCE / f"blueprints-ready-{width}x{height}.png"), full_page=True)
                 _assert_layout(page, '[data-testid="entry-diagnostic"]', width)
 
+                # A finished generation must release the entry controls.
+                # Rechecking and replaying the same run must stay usable.
+                with page.expect_response(lambda response: "/diagnostics/preflight?" in response.url):
+                    page.get_by_role("button", name="重新核对课程", exact=True).click()
+                page.get_by_test_id("diagnostic-overview").wait_for()
+                page.get_by_test_id("generate-diagnostic").click()
+                page.get_by_test_id("multicourse-diagnostic-ready").wait_for()
+
                 page.get_by_role("button", name="开始这门课程").first.click()
                 page.get_by_test_id("diagnostic-session").wait_for()
                 page.locator('.option-list label').first.click()
                 page.locator('.understanding-control label').filter(has_text="基本理解").click()
                 page.get_by_role("button", name="提交本次诊断").click()
-                page.get_by_test_id("report-next-step").wait_for()
-                assert page.get_by_text("判断依据").is_visible()
+                page.get_by_test_id("report-knowledge-progress").wait_for()
                 page.get_by_test_id("report-evidence-toggle").click()
                 page.locator('[data-testid="report-evidence-drawer"] .evidence-list > article > button').first.click()
+                assert page.get_by_text("本次作答", exact=True).is_visible()
+                assert page.get_by_text("详细解析", exact=True).is_visible()
+                report_text = page.get_by_test_id("report-evidence-drawer").inner_text()
+                assert "本题回答正确" in report_text
+                assert "课程资料支持该判断" in report_text
+                assert "82%" in report_text
+                for internal in ("correct=true", "grading_status", "trace_id", "trace-internal"):
+                    assert internal not in report_text
+                assert "证据不足不能说明原假设为假" in report_text
+                assert "123456789012345678901234" in report_text
+                assert "    shape = (3, 4)" in page.locator('.evidence-detail pre').inner_text()
+                assert page.locator('.evidence-detail .katex').count() > 0
                 citation = page.get_by_test_id("canonical-source-citation")
                 assert citation.is_visible()
                 assert "机器学习基础课程讲义" in citation.inner_text()
@@ -335,17 +363,26 @@ def test_multicourse_diagnostic_journey_two_desktop_viewports():
                 page.screenshot(path=str(EVIDENCE / f"subject-report-a-{width}x{height}.png"), full_page=True)
                 _assert_layout(page, '[data-testid="diagnostic-session"]', width)
 
+                report_url = page.url
+                saved_reports = page.evaluate("JSON.parse(sessionStorage.getItem('edumatrix-multicourse-run:b30-run-browser')).reports")
+                assert len(saved_reports) == 1
+                page.goto(f"{base_url}/workspace/assessment/entry?course_ids=b30-course-a,b30-course-b", wait_until="networkidle")
+                page.get_by_test_id("generate-diagnostic").click()
+                page.get_by_test_id("multicourse-diagnostic-ready").wait_for()
+                assert page.evaluate("JSON.parse(sessionStorage.getItem('edumatrix-multicourse-run:b30-run-browser')).reports") == saved_reports
+                page.goto(report_url, wait_until="networkidle")
+
                 page.get_by_role("button", name="继续下一门课程").click()
                 page.get_by_test_id("diagnostic-session").get_by_text("数据结构与算法", exact=True).wait_for()
                 page.locator('.option-list label').first.click()
                 page.locator('.understanding-control label').filter(has_text="基本理解").click()
                 page.get_by_role("button", name="提交本次诊断").click()
-                page.get_by_test_id("report-next-step").wait_for()
+                page.get_by_test_id("report-knowledge-progress").wait_for()
                 page.get_by_role("button", name="生成初始学习路径").click()
                 page.get_by_role("button", name="生成并验证多科总路径").wait_for()
                 page.get_by_role("button", name="生成并验证多科总路径").click()
                 page.get_by_test_id("multicourse-total-path-result").wait_for()
-                assert page.get_by_text("总路径统筹：valid").is_visible()
+                assert page.get_by_text("总路径统筹：安排合理").is_visible()
                 assert page.get_by_text("已合并 2 门课程").is_visible()
                 page.screenshot(path=str(EVIDENCE / f"aggregate-result-{width}x{height}.png"), full_page=True)
                 _assert_layout(page, '[data-testid="diagnostic-session"]', width)

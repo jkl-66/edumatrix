@@ -73,8 +73,8 @@ async def upload(
     asset_id: str = Form(default="", max_length=64), expected_lock_version: int | None = Form(default=None, ge=1),
     current_user: DBUser = Depends(get_current_user),
 ):
-    video_raw = await video.read(CONFIG.max_upload_bytes + 1)
-    if len(video_raw) > CONFIG.max_upload_bytes:
+    video_raw = await video.read(CONFIG.max_upload_bytes + 1) if CONFIG.max_upload_bytes > 0 else await video.read()
+    if CONFIG.max_upload_bytes > 0 and len(video_raw) > CONFIG.max_upload_bytes:
         raise HTTPException(413, detail={"code": "video_import.video_too_large", "message": f"视频超过 {CONFIG.max_upload_bytes} bytes"})
     subtitle_raw = await subtitle.read(SUBTITLE_MAX_BYTES + 1) if subtitle else b""
     if len(subtitle_raw) > SUBTITLE_MAX_BYTES:

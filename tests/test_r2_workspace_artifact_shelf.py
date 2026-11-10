@@ -34,7 +34,7 @@ def test_workspace_artifact_shelf_projects_version_status_and_source():
     engine, session = _session()
     try:
         learner = session.query(DBUser).filter_by(username="lzz").one()
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
 
         assert len(payload["recent_artifacts"]) == 3
         assert all(item["current_version"]["number"] == 1 for item in payload["recent_artifacts"])
@@ -92,7 +92,7 @@ def test_new_generation_artifact_appears_in_workspace_without_a_second_sync_step
         artifact.current_version_id = version.id
         session.commit()
 
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         projected = next(item for item in payload["recent_artifacts"] if item["id"] == artifact.id)
         assert projected["creating_task_id"] == task.id
         assert projected["current_version"]["number"] == 1
@@ -125,7 +125,7 @@ def test_workspace_resource_revision_creates_new_version_and_rejects_stale_edito
         assert [item["version_number"] for item in detail["versions"]] == [1, 2]
         assert detail["versions"][-1]["metadata"]["revision_origin"] == "learning_workspace"
         assert detail["versions"][-1]["metadata"]["revised_from_version_id"] == source_version_id
-        refreshed = workspace_overview(session, current_user=learner)
+        refreshed = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         revised_shelf_item = next(item for item in refreshed["recent_artifacts"] if item["id"] == artifact.id)
         assert revised_shelf_item["source"]["kind"] == "chapter"
         assert revised_shelf_item["source"]["learning_object"]["id"].startswith("workspace-document:")

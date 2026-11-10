@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 import numpy as np
 from pydantic import Field
@@ -321,22 +322,28 @@ class CouncilDecisionEngine:
         for resource in resources:
             content = getattr(resource, "content", "") or ""
             fact_score = 1.0
-            if ("maxpool" in content.lower() or "最大池化" in content) and (
-                "avgpool" in content.lower() or "平均池化" in content
-            ):
+            # Mentioning both operations is normal when teaching their
+            # differences. Only reject an explicit assertion of equivalence.
+            pooling_conflict = any(
+                re.search(r"最大池化|max\s*pool", sentence, re.I)
+                and re.search(r"平均池化|avg\s*pool|average\s*pool", sentence, re.I)
+                and re.search(r"(?<!不)(?<!并非)(?:是一回事|是一样的|完全相同|没有区别|等价于)", sentence)
+                for sentence in re.split(r"[。！？\n]", content)
+            )
+            if pooling_conflict:
                 fact_score = 0.65
             verdicts.append({
                 "resource_type": getattr(resource, "agent", ""),
                 "factuality_score": fact_score,
                 "relevance_score": 0.80,
                 "passed": fact_score >= 0.70,
-                "suggestion": "自动兜底通过",
+                "suggestion": "最大池化与平均池化不能等同，请核对定义。" if pooling_conflict else "未发现规则覆盖的显式矛盾；未执行模型事实审核。",
             })
         count = len(resources)
         mean_fact = sum(item["factuality_score"] for item in verdicts) / max(count, 1)
         passed_count = sum(1 for item in verdicts if item["passed"])
         return {
-            "overall_passed": (mean_fact >= 0.65) and (passed_count >= count * 0.5),
+            "overall_passed": passed_count == count,
             "mean_factuality_score": round(mean_fact, 3),
             "mean_relevance_score": 0.8,
             "verdicts": verdicts,

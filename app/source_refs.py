@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import HTTPException
+from sqlalchemy import and_, or_, select
 
 from app.authorization import ObjectAccess, active_course_role, require_object_access
-from app.database import DBChapter, DBCourse, DBDocumentSelection, DBSourceDocument, DBSourceRef, DBUser
+from app.database import DBChapter, DBCourse, DBCourseDocument, DBDocumentSelection, DBKnowledgeDocument, DBSourceDocument, DBSourceRef, DBUser
 from app.identity import normalize_role
 
 
@@ -25,6 +28,62 @@ UNAVAILABLE_REASONS = {
 }
 
 
+def document_original_location(source_url: str, source_path: str, content: str = "") -> dict[str, Any]:
+    """Resolve bundled files from recorded repository/revision and source boundaries.
+
+    Older bundles put semicolon-separated paths into one blob URL. Project a
+    valid repository/file link without rewriting source text or frozen citations.
+    Ordinary web URLs (including valid semicolons) are left unchanged.
+    """
+    result = {"url": str(source_url or ""), "parts": []}
+    provenance = re.fullmatch(r"[^@]+@([0-9a-fA-F]{40}):(.+)", str(source_path or ""))
+    if not provenance:
+        return result
+    revision, raw_paths = provenance.groups()
+    split = urlsplit(result["url"])
+    repository = re.fullmatch(r"/([^/]+/[^/]+)/(?:blob|tree)/" + re.escape(revision) + r"(?:/.*)?", split.path)
+    if split.scheme != "https" or split.netloc != "github.com" or not repository:
+        return result
+    base = f"https://github.com/{repository[1]}"
+    paths = list(dict.fromkeys(path.strip() for path in raw_paths.split(";") if path.strip()))
+    markers = list(re.finditer(r"^<!-- 上游文件:\s*(.+?)\s*-->\s*$", content, re.MULTILINE))
+    for path in paths:
+        ranges = [(marker.start(), markers[index + 1].start() if index + 1 < len(markers) else len(content))
+                  for index, marker in enumerate(markers) if marker[1] == path]
+        start, end = ranges[0] if len(ranges) == 1 else (0, len(content)) if len(paths) == 1 else (None, None)
+        heading = re.search(r"^#{1,6}\s+(.+?)\s*$", content[start:end], re.MULTILINE) if start is not None else None
+        result["parts"].append({"url": f"{base}/blob/{revision}/{quote(path, safe='/')}",
+                                "title": heading[1] if heading else path.rsplit('/', 1)[-1],
+                                "char_start": start, "char_end": end})
+    if result["parts"]:
+        result["url"] = result["parts"][0]["url"] if len(paths) == 1 else f"{base}/tree/{revision}"
+    return result
+
+
+def current_source_clause():
+    """Browse/search the latest reading; keep old citations directly readable."""
+    replacement = DBSourceDocument.parser_metadata["replaced_by_source_id"].as_string()
+    retired = DBSourceDocument.parser_metadata["retired_from_catalog"].as_boolean()
+    return and_(or_(replacement.is_(None), replacement == ""), or_(retired.is_(None), retired.is_(False)))
+
+
+def current_chapter_clause():
+    """Structure revisions keep historical chapter IDs readable by explicit links."""
+    return ~DBChapter.stable_key.startswith('structure-history:')
+
+
+def current_structure_ref_clause():
+    """Retain page anchors; use only the current parser's active chapters."""
+    history = select(DBChapter.id).where(~current_chapter_clause())
+    current_parser = select(DBSourceDocument.id).where(
+        DBSourceDocument.id == DBSourceRef.source_document_id,
+        DBSourceDocument.parser_version == DBSourceRef.parser_version,
+    ).correlate(DBSourceRef).exists()
+    return and_(DBSourceRef.location_kind.not_in(('selection', 'reader_document')),
+        or_(DBSourceRef.location_kind != 'chapter', and_(current_parser,
+            or_(DBSourceRef.chapter_id.is_(None), DBSourceRef.chapter_id.not_in(history)))))
+
+
 def _value(data: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         value = data.get(key)
@@ -37,6 +96,44 @@ def _document_version(source: DBSourceDocument | None) -> str:
     if source is None:
         return ""
     return str(source.processed_sha256 or source.content_hash or "")
+
+
+def source_ref_teaching_text(db: Any, ref: DBSourceRef, *, max_chars: int | None = 12000) -> str:
+    """Read a chapter's version-bound text, not its short citation preview.
+
+    Fragment/image references keep their recorded quote. Never expand them to
+    unrelated document text or silently substitute a changed document version.
+    """
+    source = db.get(DBSourceDocument, ref.source_document_id)
+    if source is None or source.processing_status != "ready":
+        return ""
+    quote = str(ref.quote or "")
+    if ref.location_kind in {"selection", "reader_document"} and ref.content_hash != _document_version(source):
+        return ""
+    if ref.location_kind != "chapter" or not source.legacy_document_id:
+        return quote[:max_chars]
+    document = db.get(DBCourseDocument, source.legacy_document_id)
+    if document is not None and document.course_id != source.course_id:
+        return ""
+    if document is None:
+        document = db.get(DBKnowledgeDocument, source.legacy_document_id)
+    if document is None:
+        return quote[:max_chars]
+    content = str(document.content or "")
+    version = _document_version(source)
+    if hashlib.sha256(content.encode("utf-8")).hexdigest() != version:
+        return ""
+    if ref.content_hash != version or ref.parser_version != source.parser_version:
+        return ""
+    start, end = ref.char_start, ref.char_end
+    if start is None or end is None or not 0 <= start < end <= len(content):
+        return ""
+    text = content[start:end]
+    # Curated chapters retain provenance in the source, outside teaching text.
+    marker = "## 精选教材内容"
+    if marker in text:
+        text = text.split(marker, 1)[1].lstrip()
+    return text[:max_chars]
 
 
 def _snapshot_value(snapshot: dict[str, Any], *keys: str, fallback: Any = None) -> Any:
@@ -111,22 +208,38 @@ def project_source_ref(
         or (source.course_id if source is not None else expected_course_id or "")
     )
     course = db.get(DBCourse, course_id) if course_id else None
-    chapter_id = str(
+    raw_chapter_id = (
         _value(snapshot, "chapter_id", "chapterId", "section_id", "sectionId")
-        or (source_ref.chapter_id if source_ref is not None else "")
-    ) or None
+        or (source_ref.chapter_id if source_ref is not None else None)
+    )
+    chapter_id = str(raw_chapter_id) if raw_chapter_id not in (None, "", "None") else None
     chapter = db.get(DBChapter, chapter_id) if chapter_id else None
     current_document_version = _document_version(source)
     frozen_parser_version = str(_value(snapshot, "parser_version", "parserVersion", "version") or "")
     frozen_content_hash = str(_value(snapshot, "content_hash", "contentHash") or "")
     frozen_document_version = str(_value(snapshot, "document_version", "documentVersion") or "")
+    # A recovered original may have a new storage ID. Resolve only its recorded
+    # predecessor and exact version; never redirect a frozen citation to new text.
+    metadata = dict(source.parser_metadata or {}) if source is not None else {}
+    frozen_versions = [v for v in (frozen_content_hash, frozen_document_version) if v]
+    restored_original = bool(
+        source is not None and source_ref is not None and frozen_document_id
+        and frozen_document_id == metadata.get("restored_from_source_id")
+        and frozen_versions and all(v == current_document_version for v in frozen_versions)
+        and source_ref.content_hash == current_document_version
+        and source_ref.parser_version == source.parser_version
+        and (not frozen_parser_version or frozen_parser_version == source.parser_version)
+    )
+    if restored_original:
+        chapter_id = (metadata.get("restored_chapter_ids") or {}).get(chapter_id, chapter_id)
+        chapter = db.get(DBChapter, chapter_id) if chapter_id else None
     projection = {
         "schema_version": "edumatrix.source-ref.v1",
         "kind": "canonical_source",
         "source_ref_id": str(source_ref_id or _value(snapshot, "source_ref_id", "sourceRefId", "id") or ""),
         "course_id": course_id,
         "source_document_id": str(
-            frozen_document_id or (source.id if source is not None else "")
+            source.id if restored_original else frozen_document_id or (source.id if source is not None else "")
         ),
         "document_version": frozen_document_version or current_document_version,
         "chapter_id": chapter_id,
@@ -158,7 +271,7 @@ def project_source_ref(
         _unavailable(projection, "course_missing")
     elif expected_course_id and course.id != expected_course_id:
         _unavailable(projection, "course_conflict")
-    if source is not None and frozen_document_id and frozen_document_id != source.id:
+    if source is not None and frozen_document_id and frozen_document_id != source.id and not restored_original:
         _unavailable(projection, "source_document_changed")
     if source is not None and course_id and source.course_id != course_id:
         _unavailable(projection, "course_conflict")
@@ -171,6 +284,12 @@ def project_source_ref(
             _unavailable(projection, "permission_changed")
     if source is not None and source.processing_status != "ready":
         _unavailable(projection, "source_unavailable")
+    if source is not None and source_ref is not None and source_ref.location_kind == 'chapter' and source_ref.parser_version != source.parser_version:
+        _unavailable(projection, "source_ref_version_changed")
+    if source is not None and source_ref is not None and source_ref.location_kind == 'chapter' and source_ref.content_hash != current_document_version:
+        _unavailable(projection, "source_ref_content_changed")
+    if source is not None and source_ref is not None and source_ref.location_kind in {'selection', 'reader_document'} and source_ref.content_hash != current_document_version:
+        _unavailable(projection, "document_version_changed")
     if source_ref is not None and frozen_parser_version and frozen_parser_version != source_ref.parser_version:
         _unavailable(projection, "source_ref_version_changed")
     if source_ref is not None and frozen_content_hash and frozen_content_hash != source_ref.content_hash:

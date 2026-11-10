@@ -47,8 +47,9 @@ export async function getQuizHistory(studentId) {
 }
 
 // === 任务 7.4: 错题与复习打卡 API ===
-export async function getWrongQuestions(studentId, concept = '') {
+export async function getWrongQuestions(studentId, concept = '', courseId = '') {
   const params = concept ? { concept } : {}
+  if (courseId) params.course_id = courseId
   const r = await api.get(`/quiz/wrong-questions/${studentId}`, { params, headers: buildHeaders() })
   return r.data
 }
@@ -68,19 +69,22 @@ export async function getWrongConcepts(studentId) {
 }
 
 // --- Anki Flashcard API ---
-export async function generateFlashcard(studentId, quizId = '') {
+export async function generateFlashcard(studentId, quizId = '', questionVersionId = '', regenerate = false) {
   const r = await api.post('/flashcard/generate', {
     student_id: studentId,
     quiz_id: quizId,
+    ...(questionVersionId ? { question_version_id: questionVersionId } : {}),
+    regenerate,
   }, { headers: buildHeaders() })
   return r.data
 }
 
 // --- Similar Quiz API ---
-export async function generateSimilarQuiz(studentId, sourceQuizId, concept = '') {
+export async function generateSimilarQuiz(studentId, sourceQuizId, concept = '', questionVersionId = '') {
   const r = await api.post('/quiz/similar', {
     student_id: studentId,
     source_quiz_id: sourceQuizId,
+    ...(questionVersionId ? { question_version_id: questionVersionId } : {}),
     concept,
   }, { headers: buildHeaders() })
   return r.data

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import pytest
 from pathlib import Path
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -45,8 +46,8 @@ def test_server_role_landing_contract_and_competition_student_membership():
             "lzz": "/",
             "teacher": "/teacher/overview",
             "demo-admin": "/admin/system",
-            "demo-assistant": "/landing",
-            "demo-visitor": "/landing",
+            "demo-assistant": None,
+            "demo-visitor": None,
         }
         for username, path in expected.items():
             user = session.query(DBUser).filter_by(username=username).one()
@@ -77,8 +78,6 @@ def test_login_response_uses_real_role_credentials_and_landing(monkeypatch):
             ("lzz", "404404aA", "student", "/"),
             ("teacher", "admin123", "teacher", "/teacher/overview"),
             ("demo-admin", "EduMatrix-Demo-2026", "admin", "/admin/system"),
-            ("demo-assistant", "EduMatrix-Demo-2026", "assistant", "/landing"),
-            ("demo-visitor", "EduMatrix-Demo-2026", "visitor", "/landing"),
         ]
         for username, password, role, landing in cases:
             response = asyncio.run(main_module.login_for_access_token(_request(), _form(username, password)))
@@ -86,6 +85,12 @@ def test_login_response_uses_real_role_credentials_and_landing(monkeypatch):
             assert response["role"] == role
             assert response["landing_path"] == landing
             assert response["access_token"]
+        for legacy_username in ("demo-assistant", "demo-visitor"):
+            with pytest.raises(HTTPException) as rejected:
+                asyncio.run(main_module.login_for_access_token(
+                    _request(), _form(legacy_username, "EduMatrix-Demo-2026"),
+                ))
+            assert rejected.value.status_code == 401
     finally:
         session.close()
         engine.dispose()

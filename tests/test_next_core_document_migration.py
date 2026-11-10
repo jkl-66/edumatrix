@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
+from types import SimpleNamespace
+import json
 
 import nbformat
 import pytest
@@ -123,6 +126,23 @@ def test_batch_upload_isolates_failure_and_persists_authorized_canonical_source(
 
     monkeypatch.setattr(knowledge_api, "_generate_doc_guide_for_document", no_guide)
 
+    class StructureModel:
+        provider = "openai"
+        model = "deepseek-v4-flash"
+        thinking_mode = "enabled"
+        reasoning_effort = "max"
+
+        async def generate(self, system_prompt, user_prompt, *, role):
+            content = json.loads(user_prompt)
+            return json.dumps({"chapters": [{
+                "title": Path(content["filename"]).stem,
+                "start_block": content["blocks"][0]["id"], "end_block": content["blocks"][-1]["id"],
+                "knowledge_points": [],
+            }]})
+
+    monkeypatch.setattr(knowledge_api, "build_swarm_from_headers", lambda headers: SimpleNamespace(llm=StructureModel()))
+
+
     with TestClient(app) as client:
         owner_headers = auth_headers(client, "nc_core_05_owner")
         other_headers = auth_headers(client, "nc_core_05_other")
@@ -136,7 +156,7 @@ def test_batch_upload_isolates_failure_and_persists_authorized_canonical_source(
         )
         assert response.status_code == 200
         payload = response.json()
-        assert (payload["total"], payload["succeeded"], payload["failed"]) == (2, 1, 1)
+        assert (payload["total"], payload["succeeded"], payload["failed"]) == (2, 1, 1), json.dumps(payload, ensure_ascii=False)
         assert [item["status"] for item in payload["results"]] == ["ready", "failed"]
         document_id = payload["results"][0]["document"]["id"]
         source_document_id = payload["results"][0]["document"]["source_document_id"]
@@ -167,7 +187,7 @@ def test_batch_upload_isolates_failure_and_persists_authorized_canonical_source(
             assert canonical is not None
             assert canonical.processing_status == "ready"
             assert session.query(DBSourceRef).filter_by(source_document_id=source_document_id).count() == 2
-            assert session.query(DBChapter).filter_by(source_document_id=source_document_id).count() == 2
+            assert session.query(DBChapter).filter_by(source_document_id=source_document_id).count() == 1  # One semantic chapter, two cell locators.
             assert session.query(DBSourceDocument).filter_by(filename="broken.pdf").count() == 0
 
         deleted = client.delete(

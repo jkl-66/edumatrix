@@ -100,7 +100,7 @@ def list_classes(db: Any, actor: DBUser, course_id: str | None = None) -> list[d
     if course_id:
         course = _course(db, course_id)
         from course_catalog import course_is_selectable
-        if not course_is_selectable(db, course):
+        if not course_is_selectable(db, course) and course.status != 'withdrawn':
             _fail("governance_course_unavailable", "course is not currently available for selection")
     query = db.query(DBTeachingClass)
     if course_id: query = query.filter_by(course_id=course_id)
@@ -118,7 +118,7 @@ def governance_catalog(db: Any, actor: DBUser) -> dict[str, Any]:
     role = normalize_role(actor.role)
     courses = [
         item for item in db.query(DBCourse).order_by(DBCourse.title).all()
-        if course_is_selectable(db, item)
+        if course_is_selectable(db, item) or item.status == 'withdrawn'
     ]
     if role != "admin":
         courses = [item for item in courses if _course_role(db, item.id, actor) in {"owner", "teacher", "assistant"}]
@@ -168,6 +168,7 @@ def create_group(db: Any, *, actor: DBUser, class_id: str, name: str, descriptio
 def upsert_member(db: Any, *, actor: DBUser, class_id: str, user_public_id: str, role: str,
                   group_id: str | None, expected_version: int | None) -> dict[str, Any]:
     classroom = _class(db, class_id); require_manager(db, classroom.course_id, actor)
+    if classroom.status != 'active': _fail('governance_class_inactive', '课程已停止教学，不能再调整成员或分组。')
     user = db.query(DBUser).filter_by(public_id=user_public_id).first()
     if user is None: _fail("governance_user_unknown", "user does not exist")
     if group_id:

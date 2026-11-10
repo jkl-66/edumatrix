@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import asyncio
 import json
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from typing import Any, Literal
 
 from pydantic import Field
+from app.learner_output import LEARNER_FEEDBACK_INSTRUCTION, teacher_text, teaching_text
+from app.profile_adaptation import grading_learning_needs
 
 from app.database import (
     DBAssessmentAttempt,
@@ -38,6 +41,7 @@ from app.m5_assessment_core import (
     persist_ai_grading,
     persist_failed_ai_grading,
     record_attempt,
+    is_diagnostic_abstention,
     learner_safe_explanation,
     learner_safe_prompt,
 )
@@ -196,6 +200,7 @@ def _grade_diagnostic_subjective_answers(
     user: DBUser,
     course_id: str,
     attempts: list[DBAssessmentAttempt],
+    frozen_refs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Grade diagnostic subjective attempts before report/profile projection.
 
@@ -207,11 +212,24 @@ def _grade_diagnostic_subjective_answers(
     _require_explanation_model(llm)
     graded: dict[str, Any] = {}
     for attempt in attempts:
+        if is_diagnostic_abstention(attempt.answer):
+            continue
         version = session.get(DBAssessmentQuestionVersion, attempt.question_version_id)
         question = session.get(DBAssessmentQuestion, version.question_id) if version else None
         if version is None or question is None or question.question_type not in {"short_answer", "open_task"}:
             continue
         system_prompt, user_prompt, rubric_version, rubric = ai_grading_prompt(version, attempt.answer or {})
+        previous = session.query(DBAssessmentGradingResult).filter_by(
+            attempt_id=attempt.id, grader_type="ai",
+        ).order_by(DBAssessmentGradingResult.created_at.desc(), DBAssessmentGradingResult.id.desc()).first()
+        # A report retry must not score the same immutable submission again or
+        # update ability twice. Failed/unfinished grades still take the normal
+        # retry path; only the matching completed rubric can be reused.
+        if (previous is not None and previous.status == "completed"
+                and (previous.rubric_snapshot or {}).get("criteria") == rubric["criteria"]
+                and (previous.evidence or {}).get("answer_hash") == _hash(attempt.answer)):
+            graded[attempt.id] = previous
+            continue
         prior_count = session.query(DBAssessmentGradingResult).filter(
             DBAssessmentGradingResult.attempt_id == attempt.id,
             DBAssessmentGradingResult.grader_type == "ai",
@@ -222,7 +240,7 @@ def _grade_diagnostic_subjective_answers(
             else f"{rubric_version}:retry-{prior_count}"
         )
         user_payload = json.loads(user_prompt)
-        user_payload["course_sources"] = _source_payload(session, version)
+        user_payload["course_sources"] = _source_payload(session, version, frozen_refs=frozen_refs)
         user_prompt = _canonical(user_payload)
         try:
             result = _run_async(execute_registered_structured_call(
@@ -251,6 +269,8 @@ def _grade_diagnostic_subjective_answers(
                     status_code=503,
                 )
             output = AIGradingOutput.model_validate(result.structured_output)
+            from app.learning_generation_jobs import CURRENT_JOB, assert_generation_owner
+            assert_generation_owner(session)
             grading, _ = persist_ai_grading(
                 session,
                 attempt_id=attempt.id,
@@ -260,6 +280,8 @@ def _grade_diagnostic_subjective_answers(
                 rubric_version_override=grading_rubric_version,
             )
             graded[attempt.id] = grading
+            if CURRENT_JOB.get():
+                session.commit()
         except DiagnosticReportError:
             raise
         except Exception as exc:
@@ -291,27 +313,58 @@ async def _generate_explanations(
     course_id: str,
     report_id: str,
     evidence: list[dict[str, Any]],
+    learning_context: dict[str, Any] | None = None,
 ) -> tuple[DiagnosticExplanationBundle, dict[str, Any]]:
     _require_explanation_model(llm)
     schema = _canonical(DiagnosticExplanationBundle.model_json_schema())
     system_prompt = (
         "你是 EduMatrix 入学诊断逐题评估专家。只输出符合 JSON Schema 的原始 JSON 对象，不要 Markdown。"
         "必须针对给定题目、学习者本次作答、评分状态、理解程度和授权课程来源生成判断依据与系统解析，不能使用固定模板。"
+        "选择题必须按本题冻结的选项解释字母，不能根据选项位置或其他题的标签猜测作答含义。"
+        "结合参考答案、原解析与逐项评分解释本次表现，保留已确定的评分事实；"
+        "原题解析将直接展示，不需要重新写一遍算式或标准解答；explanation只写与本次回答有关的补强建议。"
+        "已完整答对时简短确认即可；没有实际缺口就不安排重复练习，也不要求改写正确的等价表达。"
+        "总分达标不代表每个评分项都掌握，具体误解仍要清楚指出。"
+        "区分实际回答能支持的误解与尚无法确定的原因，不能凭错误选项臆测学习者的思考过程。"
+        "部分正确要指出具体已会和未会内容，不把方向正确夸成已经理解关键机制。"
+        "下一步建议遵守已确认的工具、基础与时间条件；解释统计或模型评价时保留必要适用条件，"
+        "数值编码可用于分类和概率预测，不能把类别不是连续数量说成禁止数值建模。"
         "只能引用输入中提供的 source_ref_id；证据不足时使用 insufficient_evidence 并明确限制结论。"
+        "answer.response_status为not_yet表示学习者主动选择暂时不会；将其作为下一步学习起点。"
+        "这类题只从具体数据或概念给出简短讲解和一个可执行的入门动作；没有作答就不推断其思考过程。"
         "如果个别题暂时无法完成，只返回已完成题并把 bundle status 设为 partial；系统会仅重试缺失题。"
         "不要输出 prompt、思维链、reasoning_content、密钥或内部日志。"
-        f" JSON Schema: {schema}"
+        + LEARNER_FEEDBACK_INSTRUCTION + f" JSON Schema: {schema}"
     )
-    pending = list(evidence)
-    completed: dict[str, DiagnosticExplanationItem] = {}
-    call_ids: list[str] = []
-    model = ""
+    from app.learning_generation_jobs import component_cache
+    cache, save = component_cache(session)
+    cache_key = 'diagnostic-explanations:' + _hash([system_prompt, evidence, learning_context])
+    saved = cache.get(cache_key) or {}
+    completed = {key: DiagnosticExplanationItem.model_validate(value) for key, value in saved.get('items', {}).items()}
+    pending = [item for item in evidence if item['questionVersionId'] not in completed]
+    call_ids = list(saved.get('call_ids') or [])
+    model = saved.get('model', '')
+    # Labels alone (for example choice=B) cannot explain a shuffled option.
+    # Load the immutable question version, never a later replacement question.
+    question_context = {}
+    for item in evidence:
+        version = session.get(DBAssessmentQuestionVersion, item["questionVersionId"])
+        question_context[item["questionVersionId"]] = {
+            "question_type": item.get("questionType"),
+            "options": deepcopy(version.options or []) if version else [],
+            "reference_answer": deepcopy(version.answer_key or {}) if version else {},
+            "reference_explanation": version.explanation if version else "",
+            "grading": deepcopy(item.get("grading")),
+        }
     for pass_index in range(2):
+        if not pending:
+            break
         public_items = [
             {
                 "question_version_id": item["questionVersionId"],
                 "attempt_id": item["attemptId"],
                 "question": item["prompt"],
+                **question_context[item["questionVersionId"]],
                 "answer": item["answer"],
                 "score": item["score"],
                 "correct": item["correct"],
@@ -329,6 +382,7 @@ async def _generate_explanations(
             "task": "diagnostic_item_explanations" if pass_index == 0 else "diagnostic_item_explanations_retry",
             "report_id": report_id,
             "course_id": course_id,
+            "learning_context": learning_context or {},
             "items": public_items,
         })
         try:
@@ -372,6 +426,8 @@ async def _generate_explanations(
         completed.update({item.question_version_id: item for item in bundle.items})
         call_ids.append(result.call_id)
         model = result.model
+        save(cache_key, {'items': {key: value.model_dump(mode='json') for key, value in completed.items()},
+                         'call_ids': call_ids, 'model': model})
         pending = [item for item in pending if item["questionVersionId"] not in completed]
         if not pending:
             break
@@ -397,7 +453,9 @@ def _attach_explanations(
     for item in report_data["evidence"]:
         evaluation = by_question[item["questionVersionId"]]
         item["judgmentBasis"] = evaluation.judgment_basis
-        item["explanation"] = evaluation.explanation
+        # Keep the reviewed solution; personalized commentary must not replace
+        # its calculations with an independently paraphrased second solution.
+        item["learningFeedback"] = evaluation.explanation
         item["errorType"] = {**item["errorType"], "basis": evaluation.judgment_basis}
         item["evaluation"] = {
             "status": evaluation.status,
@@ -439,7 +497,7 @@ def _source_payload(
                 "title": frozen.get("title") or "课程来源",
                 "location": location,
                 "locationLabel": location,
-                "quote": frozen.get("quote") or "",
+                "quote": (frozen.get("knowledgePointQuotes") or {}).get(version.primary_knowledge_point_id) or frozen.get("quote") or "",
                 "contentHash": frozen.get("contentHash") or "",
                 "documentContentHash": frozen.get("documentContentHash") or "",
             })
@@ -493,6 +551,60 @@ def _mastery_label(score: float | None) -> str:
 def _difficulty_band(value: float | None) -> str:
     difficulty = float(value or 0.5)
     return "foundation" if difficulty < 0.35 else "standard" if difficulty < 0.65 else "stretch"
+
+
+def _apply_learning_focus(report: dict[str, Any]) -> dict[str, Any]:
+    """Derive learning priorities from scored parts without changing scores."""
+    needs_by_point: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    unassessed_points = set()
+    for item in report.get("evidence", []):
+        point_id = (item.get("knowledgePoint") or {}).get("id")
+        if is_diagnostic_abstention(item.get("answer")):
+            unassessed_points.add(point_id)
+            continue
+        needs = grading_learning_needs(item.get("grading"), explanation=str(item.get("explanation") or "")) if item.get("masteryEligible") else []
+        item["learningNeeds"] = needs
+        if not needs:
+            continue
+        needs_by_point[point_id].extend(needs)
+        if item.get("correct"):
+            confident_gap = needs[0]["score"] < 0.6 and item.get("understandingLevel") in {"mostly", "clear"}
+            item["errorType"] = {
+                "code": "confident_misunderstanding" if confident_gap else "partial_understanding",
+                "label": "仍有关键误解" if confident_gap else "部分理解",
+                "basis": needs[0]["basis"],
+            }
+    if not needs_by_point and not unassessed_points:
+        return report
+    for point in report.get("mastery", []):
+        point_id = point.get("knowledgePointId")
+        point["learningNeeds"] = needs_by_point.get(point_id, [])
+        if point["learningNeeds"]:
+            point["label"] = "仍有待补齐环节"
+        elif point_id in unassessed_points and point.get("score") is not None:
+            point["label"] = "部分已测"
+    report["strengths"] = [point for point in report.get("mastery", [])
+        if point.get("score") is not None and point["score"] >= 0.7
+        and not point.get("learningNeeds") and point.get("knowledgePointId") not in unassessed_points]
+    report["weaknesses"] = sorted([point for point in report.get("mastery", [])
+        if point.get("score") is not None and (point["score"] < 0.6 or point.get("learningNeeds"))],
+        key=lambda point: (point["score"], min([point["score"], *[need["score"] for need in point.get("learningNeeds", [])]])))
+    report["blindSpots"] = [item for item in report.get("evidence", [])
+        if (item.get("errorType") or {}).get("code") == "confident_misunderstanding"]
+    summary = report.get("summary", {})
+    summary["strongest"] = report["strengths"][0]["title"] if report["strengths"] else "继续通过练习确认"
+    if report["weaknesses"]:
+        priority = report["weaknesses"][0]
+        summary["weakest"] = priority["title"]
+        # A binary answer check records a wrong choice but does not diagnose
+        # its cause. Prefer the actual rubric gap when both address this point.
+        steps = sorted((need for need in priority.get("learningNeeds", []) if need.get("next_step", "").strip()),
+                       key=lambda need: (need.get("criterion_id") == "answer_correctness", need["score"]))
+        action = steps[0]["next_step"] if steps else "结合原题解析，完成一个新的独立练习。"
+        summary["coreAdvice"] = f"先补齐“{priority['title']}”：{action}"
+        if (summary.get("score") or 0) >= 0.8:
+            summary["scoreLabel"] = "基础较稳，仍需补齐"
+    return report
 
 
 def _build_report_data(
@@ -570,6 +682,10 @@ def _build_report_data(
         # it is not accepted diagnostic evidence and must not feed mastery.
         evidence_eligible = score is not None and bool(sources)
         error_type = _error_type(correct if evidence_eligible else None, response.understanding_level)
+        abstained = is_diagnostic_abstention(response.answer)
+        if abstained:
+            grading_status = "unassessed"
+            error_type = {"code": "not_yet_learned", "label": "暂时不会", "basis": "你选择了暂时不会，可从这里开始学习；掌握程度待后续任务确认。"}
         item = {
             "questionVersionId": version.id,
             "attemptId": attempt.id,
@@ -579,8 +695,8 @@ def _build_report_data(
             "answer": dict(response.answer or {}),
             "score": score,
             "correct": correct,
-            "gradingStatus": grading_status if grading_status in {"completed", "failed", "needs_review", "pending", "graded"} else "unknown",
-            "evidenceStatus": "accepted" if evidence_eligible else "insufficient_evidence",
+            "gradingStatus": grading_status if grading_status in {"completed", "failed", "needs_review", "pending", "graded", "unassessed"} else "unknown",
+            "evidenceStatus": "self_reported_not_yet" if abstained else "accepted" if evidence_eligible else "insufficient_evidence",
             "masteryEligible": evidence_eligible,
             "understandingLevel": response.understanding_level,
             "understandingLabel": UNDERSTANDING_LABELS.get(response.understanding_level, "未标记"),
@@ -653,6 +769,10 @@ def _build_report_data(
         f"先回到课程来源补齐“{weakest}”，完成短练习后再进入相邻章节。"
         if weaknesses else "沿当前教材顺序继续学习，并通过后续任务积累更充分证据。"
     )
+    learning_starts = [item for item in evidence if is_diagnostic_abstention(item["answer"])]
+    if not weaknesses and learning_starts:
+        weakest = learning_starts[0]["knowledgePoint"]["title"]
+        advice = f"从“{weakest}”的入门任务开始，再逐步学习你标记为暂时不会的内容。"
     return {
         "schemaVersion": REPORT_VERSION,
         "sessionId": work.id,
@@ -663,6 +783,7 @@ def _build_report_data(
             "score": overall_score,
             "scoredCount": len(scored_evidence),
             "questionCount": len(evidence),
+            "notYetCount": len(learning_starts),
             "scoreLabel": _mastery_label(overall_score),
             "strongest": strongest,
             "weakest": weakest,
@@ -680,12 +801,14 @@ def _build_report_data(
             ),
         },
         "strengths": strengths,
+        "learningStarts": [{"knowledgePointId": item["knowledgePoint"]["id"], "title": item["knowledgePoint"]["title"],
+                            "questionVersionId": item["questionVersionId"]} for item in learning_starts],
         "weaknesses": weaknesses,
         "blindSpots": blind_spots,
         "mastery": mastery,
         "coverageContract": {
             **coverage_contract,
-            "observedKnowledgePointCount": len(mastery),
+            "observedKnowledgePointCount": sum(item["score"] is not None for item in mastery),
             "observedCrossEvidencePointIds": [
                 item["knowledgePointId"] for item in mastery if item["crossEvidence"]
             ],
@@ -722,32 +845,46 @@ def _create_profile_snapshot(
     previous = session.get(DBProfileSnapshot, blueprint.profile_snapshot_id) if blueprint.profile_snapshot_id else None
     snapshot = dict(previous.snapshot or {}) if previous else {}
     mastery = report_data["mastery"]
+    # A stage report only replaces observations made in that stage. Untested
+    # concepts retain real earlier evidence; never turn later chapters into 0.
+    old_course_id = snapshot.get("course_id") or (snapshot.get("course_context") or {}).get("courseId")
+    combined = dict(snapshot.get("mastery_by_knowledge_point") or {}) if old_course_id == blueprint.course_id else {}
+    assessment_scope = (report_data.get("contextSnapshot") or {}).get("assessmentScope") or {}
+    for point in assessment_scope.get("courseKnowledgePoints", []):
+        combined.setdefault(point['id'], {'title': point['title'], 'score': None, 'status': 'unknown',
+            'attempt_ids': [], 'source_ref_ids': [], 'question_version_ids': [],
+            'evidence_item_count': 0, 'cross_evidence': False, 'coverage_status': 'not_assessed'})
+    for item in mastery:
+        earlier = combined.get(item['knowledgePointId']) or {}
+        if item['score'] is None and earlier.get('score') is not None:
+            continue
+        combined[item['knowledgePointId']] = {
+            'title': item['title'], 'score': item['score'], 'status': item['status'],
+            'attempt_ids': item['attemptIds'], 'source_ref_ids': item['sourceRefIds'],
+            'question_version_ids': item['questionVersionIds'], 'evidence_item_count': item['evidenceItemCount'],
+            'cross_evidence': item['crossEvidence'], 'coverage_status': item['coverageStatus'],
+            'learning_needs': deepcopy(item.get('learningNeeds') or []),
+        }
     snapshot.update({
         "kind": "diagnostic_evidence_snapshot",
         "course_id": blueprint.course_id,
         "source_diagnostic_report_id": report_id,
         "source_diagnostic_session_id": report_data["sessionId"],
         "mastery_status": "initial_evidence_snapshot",
-        "mastery_by_knowledge_point": {
-            item["knowledgePointId"]: {
-                "title": item["title"], "score": item["score"], "status": item["status"],
-                "attempt_ids": item["attemptIds"], "source_ref_ids": item["sourceRefIds"],
-                "question_version_ids": item["questionVersionIds"],
-                "evidence_item_count": item["evidenceItemCount"],
-                "cross_evidence": item["crossEvidence"],
-                "coverage_status": item["coverageStatus"],
-            }
-            for item in mastery
-        },
+        "mastery_by_knowledge_point": combined,
+        "diagnostic_stage": assessment_scope.get('selected'),
         "mastered_knowledge_point_ids": [
-            item["knowledgePointId"] for item in mastery if item["score"] is not None and item["score"] >= 0.7
+            key for key, item in combined.items() if item.get("score") is not None and item["score"] >= 0.7
+            and not item.get("learning_needs")
         ],
         "weak_knowledge_point_ids": [
-            item["knowledgePointId"] for item in mastery if item["score"] is not None and item["score"] < 0.6
+            key for key, item in combined.items() if item.get("score") is not None
+            and (item["score"] < 0.6 or item.get("learning_needs"))
         ],
         "unknown_knowledge_point_ids": [
-            item["knowledgePointId"] for item in mastery if item["score"] is None
+            key for key, item in combined.items() if item.get("score") is None
         ],
+        "self_reported_learning_start_points": report_data.get("learningStarts", []),
         "difficulty_target": report_data["difficultyFit"]["target"],
         "diagnostic_evidence": {
             "attempt_ids": [item["attemptId"] for item in report_data["evidence"]],
@@ -761,6 +898,7 @@ def _create_profile_snapshot(
                     "attempt_id": item["attemptId"],
                     "question_version_id": item["questionVersionId"],
                     "knowledge_point_id": (item.get("knowledgePoint") or {}).get("id"),
+                    "explanation": item.get("explanation") or "",
                     "grading": item["grading"],
                 }
                 for item in report_data["evidence"]
@@ -796,6 +934,12 @@ def generate_diagnostic_report(
     blueprint = session.get(DBDiagnosticBlueprint, work.blueprint_id)
     if blueprint is None:
         raise DiagnosticReportError("diagnostic_blueprint_missing", "诊断题组不存在。")
+    from app.learning_generation_jobs import component_cache, assert_generation_owner
+    cache, save = component_cache(session)
+    report_key = f'diagnostic-report:{work.id}'
+    report_id = cache.get(report_key, {}).get('id') or new_public_id('diagreport')
+    if report_key not in cache:
+        save(report_key, {'id': report_id})
     responses = {
         item.question_version_id: item
         for item in session.query(DBDiagnosticResponseDraft).filter_by(session_id=work.id).all()
@@ -818,7 +962,6 @@ def generate_diagnostic_report(
             ),
         )
         attempts.append(attempt)
-    report_id = new_public_id("diagreport")
     # Subjective diagnostic attempts must be graded before the report is
     # projected; otherwise the report/profile would permanently see them as
     # pending and no reliable mastery evidence could be produced.
@@ -829,12 +972,18 @@ def generate_diagnostic_report(
                 "生成新诊断报告前必须提供受治理的真实模型。",
                 status_code=503,
             )
+        context_snapshot = (blueprint.review_decision or {}).get("contextSnapshot") or {}
         _grade_diagnostic_subjective_answers(
             session,
             llm=llm,
             user=user,
             course_id=blueprint.course_id,
             attempts=attempts,
+            frozen_refs=(
+                list(context_snapshot.get("sourceRefs") or [])
+                if context_snapshot.get("sourceSnapshotVersion") == "p1-b08-source.v2"
+                else None
+            ),
         )
     report_data = _build_report_data(session, work=work, blueprint=blueprint, attempts=attempts)
     if _is_legacy_blueprint(blueprint):
@@ -852,8 +1001,11 @@ def generate_diagnostic_report(
             course_id=blueprint.course_id,
             report_id=report_id,
             evidence=report_data["evidence"],
+            learning_context=((blueprint.review_decision or {}).get("contextSnapshot") or {}).get("profile", {}).get("learningContext", {}),
         ))
         report_data = _attach_explanations(report_data, bundle=bundle, call_meta=call_meta)
+    report_data = _apply_learning_focus(report_data)
+    assert_generation_owner(session)
     profile = _create_profile_snapshot(
         session, user=user, blueprint=blueprint, report_id=report_id, report_data=report_data,
     )
@@ -875,7 +1027,7 @@ def generate_diagnostic_report(
 
 
 def generate_report_path(
-    session: Any, *, user: DBUser, report: DBDiagnosticReport, time_budget_minutes: int,
+    session: Any, *, user: DBUser, report: DBDiagnosticReport, time_budget_minutes: int | None,
     idempotency_key: str, llm: Any | None = None,
 ) -> dict[str, Any]:
     if report.owner_public_id != user.public_id:
@@ -951,8 +1103,19 @@ def diagnostic_report_payload(session: Any, *, user: DBUser, row: DBDiagnosticRe
         )
     except PathDraftError:
         path = {"state": "not_generated", "plan": None, "nodes": []}
+    visible = _learner_report_data(row.report_data or {})
+    for item in visible.get("evidence", []):
+        version = session.get(DBAssessmentQuestionVersion, item.get("questionVersionId"))
+        if version is not None:
+            item["options"] = deepcopy(version.options or [])
+            item.setdefault("learningFeedback", item.get("explanation", ""))
+            if version.explanation:
+                item["explanation"] = learner_safe_explanation(
+                    version.explanation, prompt=version.prompt, options=version.options,
+                    answer_key=version.answer_key, question_type=item.get("questionType") or "single_choice")
+    visible = _apply_learning_focus(visible)
     return {
-        **dict(row.report_data or {}),
+        **visible,
         "id": row.id,
         "createdAt": _iso(row.created_at),
         "course": {
@@ -966,3 +1129,41 @@ def diagnostic_report_payload(session: Any, *, user: DBUser, row: DBDiagnosticRe
         "path": path,
         "contentHash": row.content_hash,
     }
+
+
+def _learner_report_data(stored: dict[str, Any]) -> dict[str, Any]:
+    """Present historical feedback without altering the saved report or its hash."""
+    result = deepcopy(stored)
+    names: dict[str, str] = {}
+    for item in result.get("evidence", []):
+        knowledge = item.get("knowledgePoint") or {}
+        if knowledge.get("id") and knowledge.get("title"):
+            names[knowledge["id"]] = knowledge["title"]
+        for source in item.get("sources", []):
+            if source.get("id") and source.get("title"):
+                names[source["id"]] = source["title"]
+    for item in result.get("evidence", []):
+        if "judgmentBasis" in item:
+            item["judgmentBasis"] = teacher_text(item["judgmentBasis"], names=names)
+        if "explanation" in item:
+            item["explanation"] = teaching_text(item["explanation"], names=names)
+        if "learningFeedback" in item:
+            item["learningFeedback"] = teaching_text(item["learningFeedback"], names=names)
+        for group, keys in (("evaluation", ("claim",)), ("errorType", ("basis", "label")), ("grading", ("feedback",))):
+            values = item.get(group) or {}
+            for key in keys:
+                if key in values:
+                    values[key] = teacher_text(values[key], names=names)
+        grading = item.get("grading") or {}
+        for criterion in grading.get("criterionResults", []):
+            for key in ("justification", "feedback", "improvement"):
+                if key in criterion:
+                    criterion[key] = teacher_text(criterion[key], names=names)
+        if "improvementAdvice" in grading:
+            grading["improvementAdvice"] = [teacher_text(text, names=names) for text in grading["improvementAdvice"]]
+    for group, keys in (("summary", ("coreAdvice", "strongest", "weakest")), ("difficultyFit", ("basis",))):
+        values = result.get(group) or {}
+        for key in keys:
+            if key in values:
+                values[key] = teacher_text(values[key], names=names)
+    return result

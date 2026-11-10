@@ -179,8 +179,8 @@ def test_faiss_special_formats_use_canonical_parser(tmp_path):
         "nbformat_minor": 5,
         "metadata": {},
         "cells": [
-            {"cell_type": "markdown", "metadata": {}, "source": "梯度下降沿负梯度方向更新参数，学习率决定每一步的步长。"},
-            {"cell_type": "code", "execution_count": 1, "metadata": {}, "outputs": [], "source": "x = 1\nfor step in range(3):\n    x -= 0.1 * step\nprint(x)"},
+            {"id": "lesson-intro", "cell_type": "markdown", "metadata": {}, "source": "梯度下降沿负梯度方向更新参数，学习率决定每一步的步长。"},
+            {"id": "lesson-code", "cell_type": "code", "execution_count": 1, "metadata": {}, "outputs": [], "source": "x = 1\nfor step in range(3):\n    x -= 0.1 * step\nprint(x)"},
         ],
     }), encoding="utf-8")
     epub_path = tmp_path / "book.epub"
@@ -211,6 +211,83 @@ def test_canonical_retrieval_returns_only_ready_sources_with_locators(canonical_
     assert evidence.metadata["source_ref_id"] == "noc-ref-ready"
     assert projection["location_label"] == "第 1 页"
     assert projection["route"].startswith("/knowledge/documents/noc-source-ready")
+
+
+def test_retrieval_keeps_multiple_passages_from_one_textbook_and_file_search_groups_them(canonical_session, monkeypatch, tmp_path):
+    # Exercise the lexical fallback explicitly; semantic similarity used to
+    # hide the contradiction between evidence and file search in this case.
+    from embedding_models import CachingEmbeddingBackend, HashEmbeddingBackend
+    monkeypatch.setattr('app.canonical_retrieval.EMBEDDINGS',
+        CachingEmbeddingBackend(HashEmbeddingBackend(), cache_path=str(tmp_path / 'lexical.db')))
+    session, owner, _, course = canonical_session
+    sections = ['## 训练误差\n训练误差衡量训练样本上的拟合。' + '训练样本用于估计参数。' * 35,
+                '## 验证误差\n验证误差用于比较模型和选择超参数。' + '验证样本不参与参数拟合。' * 35,
+                '## 测试误差\n测试误差用于最终评估。' + '测试集不能反复用于超参数选择。' * 35]
+    body = '\n\n'.join(sections)
+    session.get(DBCourseDocument, 'noc-doc-ready').content = body
+    ref = session.get(DBSourceRef, 'noc-ref-ready')
+    ref.char_end, ref.quote = len(body), body
+    session.get(DBChapter, 'noc-chapter-ready').char_end = len(body)
+    session.commit()
+    question = '训练误差和验证误差分别说明什么？'
+    result = retrieve_canonical_sources(session, course_id=course.id, query=question, actor=owner, top_k=8)
+    assert len(result['items']) > 1
+    assert any('训练误差衡量' in item['evidence'].content for item in result['items'])
+    assert any('验证误差用于' in item['evidence'].content for item in result['items'])
+    for item in result['items']:
+        evidence = item['evidence']
+        assert body[evidence.metadata['char_start']:evidence.metadata['char_end']] == evidence.content
+    files = search_persisted_course_documents(session, course_id=course.id, query=question, actor=owner)
+    assert result['low_confidence'] is False and files['low_confidence'] is False
+    assert len(files['items']) == 1
+    assert len(files['items'][0]['matches']) > 1
+    from app.chat_api import _stream_source_materials
+    conversation = DBChatConversation(id='passage-chat',owner_public_id=owner.public_id,course_id=course.id,title='片段问答')
+    frozen = _context_source_refs(session,owner,conversation,[{'courseId':course.id}],question=question)
+    materials = _stream_source_materials(session,owner,conversation,frozen)
+    assert len(materials)>1
+    for item in materials:
+        assert item['quote']==body[item['charStart']:item['charEnd']]
+        assert len(item['quote'])<len(body)
+
+
+def test_retrieval_preserves_teaching_code_and_jumps_to_match_in_second_chapter(canonical_session):
+    session, owner, _, course = canonical_session
+    first = "训练集与验证集\n训练集用于拟合，验证集用于选参。\n\n"
+    second = '准确率与混淆矩阵\n召回率为4/6，约66.7%。\n```python\nfor value in [0.8]:\n    print(f"accuracy: {value:.0%}")\n```\n'
+    body = first + second
+    session.get(DBCourseDocument, "noc-doc-ready").content = body
+    chapter = session.get(DBChapter, "noc-chapter-ready")
+    chapter.char_end = len(first)
+    ref = session.get(DBSourceRef, "noc-ref-ready")
+    ref.char_end = len(first)
+    ref.quote = first
+    session.add(DBChapter(id="second", course_id=course.id, source_document_id="noc-source-ready",
+                          stable_key="second", title="准确率与混淆矩阵", position=2,
+                          char_start=len(first), char_end=len(body)))
+    session.add(DBSourceRef(id="ref-second", source_document_id="noc-source-ready", chapter_id="second",
+                            page_number=2, char_start=len(first), char_end=len(body), quote=second,
+                            location_kind="page", location_index=2, content_hash=ref.content_hash,
+                            parser_version=ref.parser_version))
+    session.commit()
+    result = search_persisted_course_documents(session, course_id=course.id, query="召回率", actor=owner)
+    item = result["items"][0]
+    assert item["source_ref_id"] == "ref-second"
+    assert item["chapter_id"] == "second"
+    assert item["match_char_start"] == body.index("召回率")
+    assert item["match_text"] == "召回率"
+    assert "66.7%" in item["content_preview"]
+    assert '    print(f"accuracy: {value:.0%}")' in item["content_preview"]
+
+
+def test_document_chunks_preserve_all_original_text_and_exact_positions():
+    body = ('  示例段落。\n\n召回率66.7%。\n```python\nfor x in [0.8]:\n    print(f"{x:.0%}")\n```\n\n' * 40)
+    chunks = chunk_document(body, source="lesson.md", chunk_size=120)
+    assert len(chunks) > 1
+    assert "".join(chunk.content for chunk in chunks) == body
+    for chunk in chunks:
+        assert body[chunk.metadata["char_start"]:chunk.metadata["char_end"]] == chunk.content
+        assert chunk.content in chunk.metadata["parent_content"]
 
 
 def test_failed_source_is_not_indexed_and_ready_index_keeps_provenance(monkeypatch):

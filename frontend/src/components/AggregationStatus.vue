@@ -1,4 +1,5 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -67,7 +68,6 @@ const summary = computed(() => {
   return `${source}结果已经保存，已更新 ${feedback.value.completedCount || 0}/${feedback.value.totalCount || 6} 项。`
 })
 const nextSchedule = computed(() => feedback.value?.nextDaySchedule?.[0] || null)
-const shortToken = computed(() => feedback.value?.consistencyToken?.slice(0, 10) || '')
 
 function statusText(status) {
   return ({ completed: '已更新', failed: '待恢复', pending: '等待中' })[status] || '等待中'
@@ -194,15 +194,14 @@ watch(() => props.mode, value => { expanded.value = value === 'result' })
         <div>
           <span>下一日安排</span>
           <strong>{{ nextSchedule.title }}</strong>
-          <small>{{ nextSchedule.reason }}</small>
+          <small>{{ learningText(nextSchedule.reason) }}</small>
         </div>
         <button type="button" class="aggregation-next-action" @click="openView({ route: nextSchedule.target_route })">
           查看安排<ArrowRight :size="16" />
         </button>
       </div>
 
-      <footer v-if="shortToken">
-        <span>一致版本 {{ shortToken }}</span>
+      <footer v-if="feedback.event?.occurredAt">
         <span>{{ feedback.event?.label }} · {{ new Date(feedback.event?.occurredAt).toLocaleString('zh-CN') }}</span>
       </footer>
     </div>
@@ -212,8 +211,8 @@ watch(() => props.mode, value => { expanded.value = value === 'result' })
 <style scoped>
 .aggregation-status {
   width: 100%;
-  color: #11212d;
-  background: #ffffff;
+  color: var(--color-text);
+  background: var(--color-surface);
   border: 1px solid #d9dedf;
   border-radius: 8px;
   font-family: var(--font-sans, "Noto Sans CJK SC", "Source Han Sans SC", sans-serif);
@@ -244,13 +243,13 @@ watch(() => props.mode, value => { expanded.value = value === 'result' })
   align-items: center;
   justify-content: center;
   color: #ffffff;
-  background: #11212d;
+  background: var(--color-text);
   border-radius: 7px;
 }
 
 .aggregation-status--partial .aggregation-mark,
 .aggregation-status--failed .aggregation-mark {
-  background: #8f3f38;
+  background: var(--color-danger);
 }
 
 .aggregation-copy {
@@ -274,7 +273,7 @@ watch(() => props.mode, value => { expanded.value = value === 'result' })
 .aggregation-next span,
 .aggregation-next small,
 .aggregation-details footer {
-  color: #4a5c6a;
+  color: var(--color-text-secondary);
   font-size: 14px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -298,29 +297,29 @@ watch(() => props.mode, value => { expanded.value = value === 'result' })
 .aggregation-retry {
   padding: 7px 12px;
   color: #ffffff;
-  background: #11212d;
-  border: 1px solid #11212d;
+  background: var(--color-text);
+  border: 1px solid var(--color-text);
 }
 
 .aggregation-toggle,
 .aggregation-next-action {
   padding: 7px 10px;
-  color: #253745;
-  background: #ffffff;
+  color: var(--color-text);
+  background: var(--color-surface);
   border: 1px solid #c8d0d2;
 }
 
-.aggregation-retry:hover:not(:disabled) { background: #253745; }
+.aggregation-retry:hover:not(:disabled) { background: var(--color-text); }
 .aggregation-toggle:hover,
 .aggregation-next-action:hover,
-.aggregation-views button:hover { background: #edf1f2; }
+.aggregation-views button:hover { background: var(--color-surface-subtle); }
 .aggregation-retry:disabled { cursor: wait; opacity: 0.65; }
 
 .aggregation-retry:focus-visible,
 .aggregation-toggle:focus-visible,
 .aggregation-next-action:focus-visible,
 .aggregation-views button:focus-visible {
-  outline: 2px solid #11212d;
+  outline: 2px solid var(--color-text);
   outline-offset: 2px;
 }
 
@@ -358,13 +357,13 @@ watch(() => props.mode, value => { expanded.value = value === 'result' })
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #4a5c6a;
+  color: var(--color-text-secondary);
   border: 1px solid #c8d0d2;
   border-radius: 50%;
 }
 
-.view-state--completed { color: #11212d; border-color: #11212d; }
-.view-state--failed { color: #8f3f38; border-color: #c99187; }
+.view-state--completed { color: var(--color-text); border-color: var(--color-text); }
+.view-state--failed { color: var(--color-danger); border-color: #c99187; }
 
 .view-copy {
   min-width: 0;
@@ -379,7 +378,7 @@ watch(() => props.mode, value => { expanded.value = value === 'result' })
   width: 34px;
   min-height: 34px;
   flex: 0 0 34px;
-  color: #253745;
+  color: var(--color-text);
   background: transparent;
   border: 0;
 }

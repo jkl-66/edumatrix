@@ -101,6 +101,23 @@ def _complete_conversation(db, user):
         _confirm_current(db, user, f"complete-{index}", answer)
 
 
+def test_later_real_extraction_receives_the_previously_confirmed_context():
+    engine, db = _session()
+    try:
+        user = _learner(db, "contextual-extraction")
+        _confirm_current(db, user, "background-context", "我经营一家小商店，已经做了十二年。")
+        captured = {}
+        def extractor(dimension, answer, *, confirmed_context):
+            captured.update(confirmed_context)
+            return {"fields": [{"key": "learning_goals", "value": [answer], "kind": "list"}], "summary": answer}
+        record_turn(db, user, turn_id="goal-with-context", question_dimension="goal",
+                    user_answer="想用销售记录做补货表。", extractor=extractor, contextual_extractor=True)
+        assert "经营一家小商店" in captured["background_context"]
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_five_dimensions_progress_in_order_and_project_existing_profile_fields():
     engine, db = _session()
     try:
@@ -127,8 +144,11 @@ def test_five_dimensions_progress_in_order_and_project_existing_profile_fields()
         assert profile.learning_goals
         assert "Python" in profile.knowledge_base
         assert profile.weak_points
-        assert profile.misconception_patterns == {"概念辨析": 0.62}
-        assert payload["confirmedFields"]["difficulty"]["values"]["misconception_patterns"] == profile.misconception_patterns
+        # A reported conceptual difficulty is not a measured confusion score.
+        assert profile.misconception_patterns == {}
+        difficulty = payload["confirmedFields"]["difficulty"]["values"]
+        assert not difficulty.get("misconception_patterns")
+        assert "概念" in str(difficulty["weak_points"])
         assert profile.interaction_preferences
         assert profile.cognitive_style == "代码实操导向"
     finally:
@@ -229,6 +249,38 @@ def test_conflict_requires_explicit_resolution_before_overwriting_confirmed_dime
         engine.dispose()
 
 
+def test_edited_understanding_survives_reload_and_initial_snapshot_without_rewriting_draft():
+    engine, db = _session()
+    try:
+        user = _learner(db, "edited-understanding")
+        original = "条件概率尚未掌握"
+        corrected = "条件概率掌握程度待诊断确认"
+        record_turn(
+            db, user, turn_id="edited-background", question_dimension="background",
+            user_answer="我了解业务误判代价，但这不等于掌握条件概率。",
+            extractor=lambda dimension, answer: {
+                "summary": original, "understanding": original,
+                "fields": [{"key": "background_context", "label": "已有经验", "value": original, "kind": "text"}],
+            },
+        )
+        confirm_turn(db, user, turn_id="edited-background", fields={"background_context": corrected})
+        db.expire_all()
+        restored = session_payload(db, get_or_create_session(db, user))
+        assert corrected in restored["confirmedFields"]["background"]["summary"]
+        assert original not in restored["confirmedFields"]["background"]["summary"]
+        assert corrected in restored["turns"][0]["confirmedSummary"]
+        assert restored["turns"][0]["extractedCandidates"]["understanding"] == original
+        for index, answer in enumerate(("系统学习AI", "会比例，概率需诊断", "容易误解准确率", "先用数据表再解释公式")):
+            _confirm_current(db, user, f"after-edit-{index}", answer)
+        finalized = finalize_initial_profile(db, user)
+        snapshot = db.get(DBProfileSnapshot, finalized["profileSnapshotId"])
+        assert corrected in snapshot.snapshot["self_report"]["background"]["summary"]
+        assert original not in snapshot.snapshot["self_report"]["background"]["summary"]
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_extraction_failure_keeps_answer_and_allows_manual_confirmation():
     engine, db = _session()
     try:
@@ -308,7 +360,7 @@ def test_frontend_contract_has_conversation_live_profile_and_no_course_upload_ga
         'data-testid="onboarding-progress"',
         'data-testid="onboarding-conversation"',
         'data-testid="onboarding-candidate-editor"',
-        "不需要上传课程材料",
+        "可选个人资料",
         "grid-template-columns: minmax(0, 68fr) minmax(350px, 32fr)",
     ):
         assert marker in onboarding
@@ -463,6 +515,10 @@ def test_transcript_candidates_keep_value_confidence_source_and_confirmation_tim
         finalized = finalize_initial_profile(db, user)
         snapshot = db.get(DBProfileSnapshot, finalized["profileSnapshotId"])
         assert snapshot.snapshot["personal_evidence"][0]["evidence_type"] == "transcript"
+        from app.profile_adaptation import build_profile_adaptation
+        adaptation = build_profile_adaptation(snapshot, profile=db.get(DBStudentProfile, user.username))
+        assert "线性代数 91" in adaptation["registration_profile"]["knowledge_base"]
+        assert adaptation["point_mastery"] is None
     finally:
         db.close()
         engine.dispose()
@@ -483,8 +539,41 @@ def test_timetable_can_be_confirmed_and_duplicate_upload_is_idempotent():
         assert db.query(DBOnboardingPersonalEvidence).count() == 1
         item = first["personalEvidence"][0]
         fields = {field["key"]: field["value"] for field in item["candidates"]}
+        assert fields["current_courses"] == ["机器学习", "数据结构", "概率论"]
         confirmed = confirm_personal_evidence(db, user, evidence_id=item["evidenceId"], fields=fields)
         assert confirmed["personalEvidence"][0]["status"] == "confirmed"
+        _complete_conversation(db, user)
+        from app.profile_onboarding import project_confirmed_fields
+        from app.profile_adaptation import build_profile_adaptation, confirmed_study_minutes
+        project_confirmed_fields(db, user.username, "preference", {
+            "language_preference": "英语讲解", "available_tools": "手机和纸笔",
+            "study_schedule": "周二和周四晚上各30分钟", "interaction_preferences": ["先尝试再提示"],
+        })
+        finalized = finalize_initial_profile(db, user)
+        db.expire_all()
+        snapshot = db.get(DBProfileSnapshot, finalized["profileSnapshotId"])
+        plan = build_profile_adaptation(snapshot)
+        context = plan["registration_profile"]["learning_context"]
+        assert all(value in context for value in ("人工智能", "英语讲解", "手机和纸笔", "周一 08:00", "30分钟"))
+        assert confirmed_study_minutes(snapshot) == 30
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_personal_material_reads_scores_with_units_and_keeps_free_time_out_of_courses():
+    engine, db = _session()
+    try:
+        user = _learner(db, "material-formats")
+        transcript = upload_personal_evidence(db, user, evidence_type="transcript", filename="合成成绩单.txt", raw="GPA：3.6\nPython程序设计：62分\n高等数学：78分\n概率论：5分".encode())
+        fields = {item["key"]: item["value"] for item in transcript["personalEvidence"][0]["candidates"]}
+        assert fields["completed_courses"] == ["Python程序设计 62", "高等数学 78", "概率论 5"]
+        timetable = upload_personal_evidence(db, user, evidence_type="timetable", filename="合成课程表.txt", raw="每周一至周五白天有课\n可学习时间：周一至周五晚上25分钟；周末每天60分钟\n学习习惯：每次学习25分钟后休息5分钟\n周三 14:00 深度学习".encode())
+        item = next(item for item in timetable["personalEvidence"] if item["evidenceType"] == "timetable")
+        fields = {item["key"]: item["value"] for item in item["candidates"]}
+        assert fields["current_courses"] == ["深度学习"]
+        assert len(fields["weekly_schedule"]) == 4
+        assert db.get(DBStudentProfile, user.username).concept_mastery == {}
     finally:
         db.close()
         engine.dispose()
@@ -569,6 +658,27 @@ def test_document_conflict_exposes_current_and_document_sources_before_confirmat
         assert major["currentSourceRef"] == "background"
         assert major["value"] == "软件工程"
         assert major["sourceRef"]
+
+        first = payload["personalEvidence"][0]
+        confirm_personal_evidence(db, user, evidence_id=first["evidenceId"], fields={"major": "数据科学与大数据技术"})
+        second = upload_personal_evidence(db, user, evidence_type="transcript", filename="另一份成绩单.txt",
+                                         raw="专业：旅游管理\nGPA：3.5".encode())
+        latest = next(item for item in second["personalEvidence"] if item["filename"] == "另一份成绩单.txt")
+        correction = next(field for field in latest["candidates"] if field["key"] == "major")
+        assert correction["currentValue"] == "数据科学与大数据技术"
+        assert correction["currentSource"] == "已确认资料：个人成绩单.txt"
+        discard_personal_evidence(db, user, evidence_id=latest["evidenceId"])
+        assert db.get(DBStudentProfile, user.username).major == "数据科学与大数据技术"
+        original = db.query(DBOnboardingSession).filter_by(student_id=user.username).one()
+        assert original.confirmed_fields["background"]["values"]["major"] == "人工智能"
+
+        # A later explicit self-report correction takes precedence in turn.
+        record_turn(db, user, turn_id="correct-background", question_dimension="background", user_answer="现在更正为软件工程。")
+        confirm_turn(db, user, turn_id="correct-background", fields={"major": "软件工程"}, resolve_conflict=True)
+        third = upload_personal_evidence(db, user, evidence_type="transcript", filename="新核对成绩单.txt",
+                                        raw="专业：自动化\nGPA：3.6".encode())
+        latest = next(item for item in third["personalEvidence"] if item["filename"] == "新核对成绩单.txt")
+        assert next(field for field in latest["candidates"] if field["key"] == "major")["currentValue"] == "软件工程"
     finally:
         db.close()
         engine.dispose()

@@ -45,6 +45,7 @@ POLICIES: dict[tuple[str, str, str], CallsitePolicy] = {
     ("app/m4_executor.py", "execute", "self.llm.generate"): CallsitePolicy("migration_required", "frozen_compat", "direct_backend", "m4_evaluation"),
     ("app/m5_gateway.py", "execute", "backend.generate"): CallsitePolicy("gateway_core", "active", "unified_gateway", "dynamic"),
     ("app/m5_legacy_calls.py", "audited_legacy_text_call", "llm.generate"): CallsitePolicy("adapter_core", "active", "streaming_lifecycle", "dynamic"),
+    ("app/m5_legacy_calls.py", "audited_legacy_text_call", "llm.generate_stream"): CallsitePolicy("adapter_core", "active", "streaming_lifecycle", "dynamic"),
     ("app/m5_legacy_calls.py", "audited_legacy_sync_text_call", "llm.generate"): CallsitePolicy("adapter_core", "active", "sync_lifecycle", "dynamic"),
     ("app/code_review.py", "review", "self.backend.generate"): CallsitePolicy("domain_orchestrator", "active", "delegated_adapter", "code_review"),
     ("app/main.py", "test_vision_connection", "vision_llm.generate_stream"): CallsitePolicy("governed_compat", "active", "streaming_lifecycle", "vision"),
@@ -77,13 +78,14 @@ POLICIES: dict[tuple[str, str, str], CallsitePolicy] = {
     ("stream_api.py", "_generate_suggested_questions", "swarm.llm.generate"): CallsitePolicy("governed_compat", "active", "streaming_lifecycle", "answer"),
     ("stream_api.py", "_ocr_multimodal_describer", "vision_backend.generate_stream"): CallsitePolicy("governed_compat", "active", "streaming_lifecycle", "vision"),
     ("stream_api.py", "_run_professional_chain", "llm.generate"): CallsitePolicy("governed_compat", "active", "streaming_lifecycle", "answer"),
-    ("stream_api.py", "canonical_event_generator", "swarm.llm.generate_stream"): CallsitePolicy("governed_compat", "active", "streaming_lifecycle", "answer"),
-    ("stream_api.py", "event_generator", "swarm.llm.generate_stream"): CallsitePolicy("governed_compat", "active", "streaming_lifecycle", "answer"),
+    ("stream_api.py", "answer_chunks", "answer_llm.generate_stream"): CallsitePolicy("governed_compat", "active", "streaming_lifecycle", "answer"),
+    ("stream_api.py", "event_generator", "answer_llm.generate_stream"): CallsitePolicy("governed_compat", "active", "streaming_lifecycle", "answer"),
     ("stream_api.py", "regenerate_component", "swarm.async_generator.generate"): CallsitePolicy("domain_orchestrator", "active", "delegated_generator", "compound"),
     ("app/resource_bundles.py", "_real_model_payload", "backend.generate"): CallsitePolicy("domain_orchestrator", "active", "delegated_gateway", "compound"),
     ("app/resource_bundles.py", "_real_model_payload_async", "backend.generate"): CallsitePolicy("domain_orchestrator", "active", "delegated_gateway", "compound"),
     ("app/resource_bundles.py", "_shared_semantic_plan_async", "backend.generate"): CallsitePolicy("domain_orchestrator", "active", "delegated_gateway", "planning"),
-    ("app/resource_bundles.py", "_resource_review_async", "backend.generate"): CallsitePolicy("domain_orchestrator", "active", "delegated_gateway", "review"),
+    ("app/resource_bundles.py", "_resource_review_async", "reviewer.generate"): CallsitePolicy("domain_orchestrator", "active", "task_lifecycle", "review"),
+    ("app/resource_generation_parts.py", "call", "generator.generate"): CallsitePolicy("domain_orchestrator", "active", "delegated_gateway", "compound"),
 }
 
 
@@ -142,7 +144,7 @@ def governance_summary(callsites: list[ModelCallsite]) -> dict[str, object]:
     migration_required = [item.payload() for item in callsites if item.classification == "migration_required"]
     return {
         "schema_version": "next.model-call-governance.v1",
-        "registry_version": "2026-08-03.1",
+        "registry_version": "2026-10-30.1",
         "total_callsites": len(callsites),
         "classification_counts": dict(sorted(classifications.items())),
         "unregistered_count": len(unregistered),

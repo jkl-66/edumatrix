@@ -30,6 +30,16 @@ export async function getNoteVersions(noteId) {
   return r.data
 }
 
+export async function getRelatedNotes(noteId) {
+  const r = await api.get(`/notes/${noteId}/related`, { headers: buildHeaders() })
+  return r.data
+}
+
+export async function setNoteRelation(noteId, data) {
+  const r = await api.post(`/notes/${noteId}/relations`, data, { headers: buildHeaders() })
+  return r.data
+}
+
 export async function restoreNoteVersion(noteId, versionNumber, data) {
   const r = await api.post(`/notes/${noteId}/versions/${versionNumber}/restore`, data, { headers: buildHeaders() })
   return r.data

@@ -221,6 +221,7 @@ def test_model_payload_and_focus_are_redacted_and_configured_provider_is_used(mo
         monkeypatch.setattr(config, "CONFIG", replace(
             config.CONFIG,
             llm_provider="vllm",
+            llm_model="deepseek-v4-flash",
             llm_endpoint="https://remote.example/v1",
             llm_api_key="local-test-key",
         ))

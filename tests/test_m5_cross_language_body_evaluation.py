@@ -94,6 +94,17 @@ def test_glossary_expansion_preserves_non_chinese_and_unknown_queries():
     assert unknown.expanded_query == unknown.original_query
 
 
+@pytest.mark.parametrize('query,body', [
+    ('资源受限设备如何使用边缘计算', 'Embedded machine learning runs on resource-constrained devices.'),
+    ('目标检测与图像分割', 'Object detection and image segmentation are different tasks.'),
+    ('唤醒词与音频分类', 'Wake word detection is a specialized audio classification task.'),
+])
+def test_edge_vocabulary_matches_actual_english_body(query, body):
+    expansion = expand_ml_query(query)
+    assert english_lexical_score(expansion, body) >= .4
+    assert english_lexical_score(expansion, "Today's temperature and humidity.") == 0
+
+
 def test_glossary_strategy_is_explicit_in_report_and_baseline_remains_unchanged():
     baseline = evaluate(
         dataset_path=DEFAULT_DATASET,
@@ -131,7 +142,7 @@ def test_english_lexical_score_reads_body_terms_without_metadata():
     assert unrelated == 0.0
 
 
-def test_reciprocal_rank_fusion_is_deterministic_and_requires_same_documents():
+def test_reciprocal_rank_fusion_is_deterministic_and_allows_missing_candidates():
     ranking, diagnostics = reciprocal_rank_fusion(
         {"a": 0.9, "b": 0.8, "c": 0.7},
         {"a": 0.1, "b": 0.9, "c": 0.2},
@@ -141,8 +152,11 @@ def test_reciprocal_rank_fusion_is_deterministic_and_requires_same_documents():
     assert ranking == ["b", "a", "c"]
     assert diagnostics["b"]["semantic_rank"] == 2
     assert diagnostics["b"]["lexical_rank"] == 1
-    with pytest.raises(ValueError, match="document_sets_must_match"):
-        reciprocal_rank_fusion({"a": 1.0}, {"b": 1.0})
+    ranking, diagnostics = reciprocal_rank_fusion({'a': 1.0}, {'b': 1.0}, lexical_weight=1.0)
+    assert set(ranking) == {'a', 'b'}
+    assert diagnostics['a']['lexical_rank'] is None
+    assert diagnostics['b']['semantic_rank'] is None
+    assert diagnostics['a']['fused_score'] == diagnostics['b']['fused_score'] == 1/21
 
 
 def test_tfidf_document_scores_use_body_corpus_and_preserve_document_keys():

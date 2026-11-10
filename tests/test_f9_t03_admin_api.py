@@ -377,3 +377,89 @@ def test_system_cancel_is_admin_only_idempotent_and_releases_lease(monkeypatch):
     finally:
         close_client(client)
         db.close()
+
+
+def test_resource_admin_retry_executes_and_preserves_successful_items(monkeypatch):
+    from app.competition_demo_seed import seed_competition_demo
+    from app.database import DBProfileSnapshot, DBSourceRef
+    from tests.test_pr_01_b35_b09_resource_supervisor import _SupervisorBackend, _job
+
+    db, users = fixture()
+    seed_competition_demo(db)
+    learner = db.query(DBUser).filter_by(username="lzz").one()
+    backend = _SupervisorBackend(review_approved=False)
+    monkeypatch.setattr(admin_api.resource_bundles, "_real_model_backend", lambda: backend)
+    async def videos(query, *args, **kwargs):
+        return [{"title": f"{query} · 课程视频", "url": "https://www.bilibili.com/video/BV1supervisor", "source": "B站"}]
+    import web_search_api
+    monkeypatch.setattr(web_search_api, "search_videos", videos)
+    job = _job(db, learner, db.get(DBProfileSnapshot, "demo-profile-lzz-v1"),
+               db.get(DBSourceRef, "demo-ref-07"), "admin-real-retry-contract")
+    failed = admin_api.resource_bundles.execute_generation_job(db, learner, job["job_id"])
+    assert failed["checkpoint"]["failed_types"] == ["handout"]
+    preserved = {item["type"]: item["resource"]["version"]["id"] for item in failed["items"] if item["state"] == "succeeded"}
+    db.commit()
+    backend.review_approved = True
+    backend.roles.clear()
+    backend.inputs.clear()
+    client = client_for(monkeypatch, db, {"user": users["admin"]})
+    import asyncio
+    async def threaded_resource_operation(operation):
+        return await asyncio.to_thread(operation, db)
+    monkeypatch.setattr(admin_api, "run_db_op", threaded_resource_operation)
+    try:
+        response = client.post(f'/api/v1/admin/system/tasks/{job["job_id"]}/retry')
+        assert response.status_code == 200, response.text
+        current = admin_api.resource_bundles.generation_job_payload(db, learner, job["job_id"])
+        assert current["status"] == "succeeded", current
+        assert {item["type"]: item["resource"]["version"]["id"] for item in current["items"] if item["type"] in preserved} == preserved
+        assert backend.roles.count("resource_generator") == 1
+        # Review the changed resource once, then its links to the preserved
+        # companions; a failed item does not trigger whole-package re-review.
+        reviews = [payload for role, payload in backend.inputs if role == "resource_reviewer"]
+        assert {frozenset(item["type"] for item in payload["candidates"]) for payload in reviews} == {
+            frozenset({"handout"}),
+            frozenset({"handout", *preserved}),
+        }
+        assert len(reviews) == 2
+        assert all(item["version_id"] == preserved[item["type"]]
+                   for payload in reviews for item in payload["candidates"] if item["type"] in preserved)
+        assert "缺少边界" in next(item["input"]["revision_feedback"] for item in current["items"] if item["type"] == "handout")
+        assert db.query(DBAuditLog).filter_by(action="admin.task.retry").count() == 1
+    finally:
+        close_client(client)
+        db.close()
+
+
+@pytest.mark.parametrize("stage", ["resource_planner", "resource_generator", "resource_reviewer"])
+def test_admin_cancellation_survives_model_answer_arriving_later(monkeypatch, stage):
+    from app.competition_demo_seed import seed_competition_demo
+    from app.database import DBProfileSnapshot, DBSourceRef
+    from tests.test_pr_01_b35_b09_resource_supervisor import _SupervisorBackend, _single_quiz_job
+
+    db, users = fixture()
+    seed_competition_demo(db)
+    learner = db.query(DBUser).filter_by(username="lzz").one()
+    job = _single_quiz_job(db, learner, db.get(DBProfileSnapshot, "demo-profile-lzz-v1"),
+                          db.get(DBSourceRef, "demo-ref-07"), "cancel-" + stage)
+    db.commit()
+    cancelled = []
+    class Backend(_SupervisorBackend):
+        async def generate(self, *args, role, **kwargs):
+            if role == stage and not cancelled:
+                with sessionmaker(bind=db.get_bind())() as other:
+                    admin_api._cancel_task(other, actor=users["admin"], task_id=job["job_id"])
+                    other.commit()
+                cancelled.append(True)
+            return await super().generate(*args, role=role, **kwargs)
+    monkeypatch.setattr(admin_api.resource_bundles, "_real_model_backend", lambda: Backend())
+    try:
+        result = admin_api.resource_bundles.execute_generation_job(db, learner, job["job_id"])
+        assert cancelled
+        assert result["status"] == "cancelled"
+        assert result["publish_gate"]["status"] == "pending"
+        assert result["items"][0]["state"] == ("succeeded" if stage == "resource_reviewer" else "cancelled")
+        assert db.query(DBArtifact).filter_by(creating_task_id=job["job_id"]).count() == (1 if stage == "resource_reviewer" else 0)
+        assert not any(event["event_type"] == "run.failed" for event in result["events"])
+    finally:
+        db.close()

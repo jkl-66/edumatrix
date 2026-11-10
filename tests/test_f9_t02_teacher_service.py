@@ -463,6 +463,7 @@ def test_teacher_reads_are_evidence_based_sanitized_and_read_only(monkeypatch):
         }
         assert body["profile"]["evidenceState"] == "sufficient"
         assert body["profile"]["weakPoints"][0]["sourceEventIds"] == ["f9-event-1"]
+        assert body["profile"]["weakPoints"][0]["mastery"] is None
         assert body["evidenceTimeline"][0]["sourceEventId"] == "f9-event-1"
         audit = body["agentAudit"]
         assert audit["state"] == "complete"

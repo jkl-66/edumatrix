@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useContextStore } from '../stores/context'
 import { useCourseContextStore } from '../stores/courseContext'
-import { isContextResolutionError } from '../services/context'
+import { isContextResolutionError, normalizeContextRef } from '../services/context'
+import { getM5Resource } from '../api/m5'
 import { roleLandingPath } from '../utils/roleLanding'
 import routeMigrationContract from './routeMigrationContract.json'
 import Dashboard from '../views/Dashboard.vue'
@@ -197,6 +198,18 @@ function legacy(contractOrPath, legacyName, destination) {
 }
 
 function courseContextOverride(to) {
+  if (to.name === 'FeynmanResource') {
+    // Restore the resource's real course before validating the learning context.
+    // Old links and browser selections may carry another course's task or source.
+    return getM5Resource(String(to.params.resourceId)).then(detail => normalizeContextRef({
+      courseId: detail.course_id,
+      resourceId: detail.id,
+      version: to.query?.context_version || to.query?.contextVersion,
+    }))
+  }
+  // Selection and ownership are resolved by the resource API. The catalogue
+  // must remain reachable to restore an archived selection after refresh.
+  if (to.name === 'WorkspaceResources') return { resourceId: null }
   const isLegacyInteractiveModel = (
     to.name === 'InteractiveModelResource'
     && String(to.params?.resourceId || '') === 'legacy'
@@ -283,7 +296,7 @@ const routes = [
     meta: targetMeta('智能对话', '学习伙伴', STUDENT, { courseScoped: false }),
   },
   { path: '/learn', name: 'Learn', component: Chat, beforeEnter: requireAuth, meta: targetMeta('智能对话', '学习伙伴', STUDENT, { navigationLevel: 'primary', courseScoped: false }) },
-  { path: '/knowledge', name: 'Knowledge', component: Knowledge, beforeEnter: requireAuth, meta: targetMeta('知识库', '预置课程', STUDENT_AND_TEACHER, { navigationLevel: 'primary', courseScoped: true }) },
+  { path: '/knowledge', name: 'Knowledge', component: Knowledge, beforeEnter: requireAuth, meta: targetMeta('知识库', '学习资料', STUDENT_AND_TEACHER, { navigationLevel: 'primary', courseScoped: true }) },
   { path: '/marketplace', name: 'Marketplace', component: MarketplaceWorkspace, beforeEnter: requireAuth, meta: targetMeta('学习市场', '资源发现', STUDENT_AND_TEACHER, { navigationLevel: 'primary' }) },
   { path: '/settings', name: 'Settings', component: Settings, beforeEnter: requireAuth, meta: targetMeta('设置', '偏好与连接', ['student', 'teacher', 'admin'], { navigationLevel: 'primary' }) },
 
@@ -370,12 +383,14 @@ router.beforeEach(async (to) => {
 
   const context = useContextStore()
   try {
-    const identity = await context.ensureIdentity()
+    // Permissions can change while this tab remains open. Resolve the current
+    // role before choosing a workspace, instead of reusing the login-time role.
+    const identity = await context.ensureIdentity(true)
     if (Array.isArray(to.meta.roles) && !to.meta.roles.includes(identity?.role)) {
       return { path: roleLandingPath(identity?.role), query: { access: 'forbidden' } }
     }
     if (to.meta.courseScoped) {
-      await useCourseContextStore().restoreFromRoute(to, courseContextOverride(to))
+      await useCourseContextStore().restoreFromRoute(to, await courseContextOverride(to))
     }
     return true
   } catch (error) {

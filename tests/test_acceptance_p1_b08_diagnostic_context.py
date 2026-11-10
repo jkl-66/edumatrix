@@ -109,6 +109,8 @@ def _approved_review(generated: DiagnosticGeneratedSet) -> DiagnosticReviewBundl
                 "source_support": "supported",
                 "answer_consistency": "consistent",
                 "profile_fit": "fit",
+                "knowledge_alignment": "aligned",
+                "question_clarity": "self_contained",
                 "public_note": "已核对。",
             }
             for item in generated.questions
@@ -197,16 +199,23 @@ def test_generated_blueprint_keeps_course_version_profile_rating_and_sources_fro
             }
 
         monkeypatch.setattr(diagnostic_generation, "_generate_and_review", fake_generate_and_review)
+        # The old demo introduction is only goals and a contents table. It
+        # cannot support an answer just because a source reference exists.
+        with pytest.raises(diagnostic_generation.DiagnosticGenerationError) as missing_body:
+            generate_diagnostic_blueprint(session, user=learner,
+                request=DiagnosticBlueprintRequest(COURSE_A, "b08-outline-only", 15, "advanced"),
+                llm=_PolicyLLM())
+        assert missing_body.value.code == "diagnostic_sources_insufficient"
         row, created = generate_diagnostic_blueprint(
             session,
             user=learner,
-            request=DiagnosticBlueprintRequest(COURSE_A, "b08-frozen-context-001", 15, "advanced"),
+            request=DiagnosticBlueprintRequest(COURSE_B, "b08-frozen-context-001", 15, "advanced"),
             llm=_PolicyLLM(),
         )
         session.commit()
         original = dict(row.review_decision["contextSnapshot"])
         assert created is True
-        assert original["course"]["version"] == "competition-demo-rag-1.0.0"
+        assert original["course"]["version"] == "course-embedded-machine-learning-engineering-2.0.0"
         assert original["profile"]["id"] == row.profile_snapshot_id
         assert original["selfRating"] == "advanced"
         assert original["sourceRefs"]
@@ -223,11 +232,11 @@ def test_generated_blueprint_keeps_course_version_profile_rating_and_sources_fro
         frozen_after = _source_payload(session, version, frozen_refs=original["sourceRefs"])
         assert frozen_after == frozen_before
 
-        course = session.get(DBCourse, COURSE_A)
+        course = session.get(DBCourse, COURSE_B)
         course.version = "changed-after-start"
         session.commit()
         payload = diagnostic_blueprint_payload(session, row)
-        assert payload["course"]["version"] == "competition-demo-rag-1.0.0"
+        assert payload["course"]["version"] == "course-embedded-machine-learning-engineering-2.0.0"
         assert payload["contextSnapshot"] == original
         assert payload["selfRating"] == "advanced"
     finally:

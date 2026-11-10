@@ -154,8 +154,8 @@ async function retryTask(task) {
     const response = await retryAdminTask(task.id)
     replaceTask(response.task)
     recoveryMessage.value = response.task.has_existing_result
-      ? '已从失败步骤重新排队，已有结果保持可用。'
-      : '已从失败步骤重新排队，可稍后刷新查看进度。'
+      ? '已开始恢复未完成的内容，已有内容仍然保留；可刷新查看进度。'
+      : '已开始恢复未完成的内容，可稍后刷新查看进度。'
   } catch (value) {
     actionError.value = errorMessage(value, '任务重试失败，已有结果未受影响')
   } finally {
@@ -172,7 +172,7 @@ async function cancelTask(task) {
     const response = await cancelAdminTask(task.id)
     replaceTask(response.task)
     recoveryMessage.value = response.task.has_existing_result
-      ? '任务已取消，已有结果保持可用。'
+      ? '任务已取消，已有内容仍然保留；已经通过核对的资源可以继续使用。'
       : '任务已取消。'
   } catch (value) {
     actionError.value = errorMessage(value, '任务取消失败，当前状态已保留')
@@ -187,9 +187,8 @@ onMounted(loadSystem)
 <template>
   <main class="admin-page" data-testid="admin-system-page">
     <PageHeader
-      eyebrow="管理工作区"
+
       title="系统状态"
-      description="查看学习资源任务是否正常；失败任务只重试失败步骤，运行中的任务可以取消，已有结果始终保留。"
     >
       <template #actions>
         <button
@@ -279,7 +278,7 @@ onMounted(loadSystem)
         <div class="task-toolbar">
           <div>
             <h2 id="system-task-title">资源任务</h2>
-            <p>最近状态就是当前恢复位置；失败不会被显示为完成。</p>
+            
           </div>
           <label>
             <span>任务范围</span>
@@ -312,6 +311,7 @@ onMounted(loadSystem)
               <tr v-for="task in filteredTasks" :key="task.id">
                 <td>
                   <strong>{{ task.title }}</strong>
+                  <span v-if="task.learner_name">{{ task.learner_name }}</span>
                   <span v-if="task.failure_message" class="failure-message">{{ task.failure_message }}</span>
                 </td>
                 <td>
@@ -325,7 +325,7 @@ onMounted(loadSystem)
                     <span>{{ task.progress_percent }}%</span>
                   </div>
                 </td>
-                <td>{{ task.has_existing_result ? '可继续使用' : '尚未生成' }}</td>
+                <td>{{ task.has_existing_result ? '已保留生成内容' : '尚未生成' }}</td>
                 <td>{{ formatDate(task.updated_at) }}</td>
                 <td class="row-actions">
                   <button

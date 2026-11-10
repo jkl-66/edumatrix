@@ -76,6 +76,17 @@ def _evidence_passes(item: DBSkillEvidence, required_types: set[str]) -> bool:
     )
 
 
+def training_demo_course(session: Any) -> DBCourse | None:
+    """Keep existing usable demo courses, otherwise use the current catalog."""
+    from course_catalog import MASTER_COURSE_ID, FOUNDATIONS_COURSE_ID, course_is_selectable
+
+    for course_id in ("course-rag-engineering-m0", MASTER_COURSE_ID, FOUNDATIONS_COURSE_ID):
+        course = session.get(DBCourse, course_id)
+        if course_is_selectable(session, course):
+            return course
+    return None
+
+
 def bootstrap_competition_training_demo(session: Any, *, actor: DBUser) -> dict[str, str]:
     if normalize_role(actor.role) != "admin":
         raise HTTPException(status_code=403, detail="只有管理员可初始化企业培训样例")
@@ -118,7 +129,7 @@ def bootstrap_competition_training_demo(session: Any, *, actor: DBUser) -> dict[
         role="learner",
         actor_public_id=actor.public_id,
     )
-    course = session.query(DBCourse).filter_by(id="course-rag-engineering-m0").first()
+    course = training_demo_course(session)
     if course is not None:
         for user, course_role in ((actor, "teacher"), (learner, "student")):
             membership = session.query(DBCourseMembership).filter_by(
@@ -194,7 +205,7 @@ def bootstrap_competition_training_demo(session: Any, *, actor: DBUser) -> dict[
         session,
         program=program,
         actor_public_id=actor.public_id,
-        course_versions=["course-rag-engineering-m0@0.1.0"],
+        course_versions=[f"{course.id}@{course.version}"] if course else [],
         resource_version_ids=["lesson", "lab_guide", "tiered_quiz"],
         assessment_versions=["evaluation-m0-0.1"],
     )

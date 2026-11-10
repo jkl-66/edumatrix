@@ -164,6 +164,51 @@ def test_demo_continuous_reply_is_specific_and_does_not_nest_echoes():
     assert any(item["key"] == "learning_context" for item in result["fields"])
 
 
+def test_continuous_confirmation_keeps_measured_mastery_and_typed_values():
+    engine, db = _database()
+    try:
+        user, course = _learner(db, "self-report")
+        profile = db.get(DBStudentProfile, user.username)
+        profile.concept_mastery = {"正则化": 0.4}
+        profile.dimension_states = {"knowledge_mastery": {"score": 0.4, "status": "需要巩固", "summary": "最近练习仍有错误"}}
+        db.commit()
+        start_continuous_update(db, user, course_id=course.id)
+        record_continuous_turn(db, user, turn_id="self-report", user_answer="我觉得已经会了，晚上只能学25分钟。", course_id=course.id, extractor=lambda *_: _candidate())
+        confirm_continuous_turn(db, user, turn_id="self-report", fields={"focus_level": "晚上25分钟", "frustration_index": 0}, dimensions=[{**_candidate()["dimensions"][0], "score": 0.96}])
+        db.refresh(profile)
+        assert profile.concept_mastery == {"正则化": 0.4}
+        assert profile.dimension_states["knowledge_mastery"]["score"] == 0.4
+        assert profile.dimension_states["knowledge_mastery"]["status"] == "需要巩固"
+        assert profile.dimension_states["knowledge_mastery"]["self_report"]
+        assert profile.dimension_states["learning_context"]["summary"] == "晚上25分钟"
+        assert profile.frustration_index == 0
+        item = onboarding._continuous_field({"key": "misconception_patterns", "value": {"正则化": 0}, "evidence": "不再混淆", "confidence": 1})
+        assert item["value"] == {"正则化": 0.0}
+        assert onboarding._continuous_field({"key": "focus_level", "value": 0, "evidence": "难以集中", "confidence": 1})["value"] == "0.0"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_failed_round_can_be_left_without_blocking_later_completion(monkeypatch):
+    import config
+    from dataclasses import replace
+    monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, demo_mode=False))
+    engine, db = _database()
+    try:
+        user, course = _learner(db, "rephrase")
+        start_continuous_update(db, user, course_id=course.id)
+        record_continuous_turn(db, user, turn_id="failed", user_answer="晚上学25分钟", course_id=course.id, extractor=lambda *_: (_ for _ in ()).throw(RuntimeError("unavailable")))
+        confirm_continuous_turn(db, user, turn_id="failed", fields={}, continue_conversation=True)
+        assert db.query(DBProfileSnapshot).count() == 0
+        record_continuous_turn(db, user, turn_id="rephrased", user_answer="周一晚上可以学25分钟", course_id=course.id, extractor=lambda *_: _candidate())
+        confirm_continuous_turn(db, user, turn_id="rephrased", fields={"learning_context": "周一晚上25分钟"}, continue_conversation=True)
+        assert onboarding.complete_continuous_update(db, user)["active"] is False
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_continue_conversation_keeps_session_open_after_confirmed_round():
     engine, db = _database()
     try:
@@ -233,6 +278,32 @@ def test_continuous_turn_saves_original_before_extraction_and_confirmation_proje
         assert snapshot.snapshot["course_id"] == course.id
         assert snapshot.snapshot["profile_version"] == "profile.continuous.v1"
         assert snapshot.snapshot["evidence"][0]["text"]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_corrected_profile_understanding_saves_corrected_evidence_and_preserves_original():
+    engine, db = _database()
+    try:
+        user, course = _learner(db, "corrected-understanding")
+        start_continuous_update(db, user, course_id=course.id)
+        original = "周三晚上只有20分钟"
+        candidate = {**_candidate(), "dimensions": [{
+            "key": "learning_context", "label": "学习安排", "value": original,
+            "score": None, "status": original, "evidence": original, "confidence": 0.9,
+        }]}
+        record_continuous_turn(db, user, turn_id="corrected-understanding", user_answer=original,
+                              course_id=course.id, extractor=lambda *_: candidate)
+        corrected = [{**candidate["dimensions"][0], "value": "周六上午25分钟", "status": "周六上午25分钟"}]
+        for _ in range(2):
+            confirm_continuous_turn(db, user, turn_id="corrected-understanding", dimensions=corrected)
+        profile = db.get(DBStudentProfile, user.username)
+        assert profile.dimension_states["learning_context"]["summary"] == "周六上午25分钟"
+        assert profile.dimension_states["learning_context"]["evidence_fragments"] == ["确认时更正：周六上午25分钟"]
+        assert db.query(DBOnboardingTurn).filter_by(turn_id="corrected-understanding").one().user_answer == original
+        assert db.query(DBProfileSnapshot).count() == 1
+        assert db.query(DBProfileSnapshot).one().snapshot["evidence"][0]["text"] == "确认时更正：周六上午25分钟"
     finally:
         db.close()
         engine.dispose()

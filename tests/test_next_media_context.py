@@ -24,6 +24,19 @@ def _create(client: TestClient, headers: dict[str, str], **overrides):
     return client.post("/api/v1/media-context/resources", headers=headers, json=payload)
 
 
+def test_long_code_material_restores_without_losing_its_tail():
+    content = "# 完整代码材料\n" * 24000 + 'print("末尾保留")\n'
+    assert len(content) > 200_000
+    with TestClient(app) as client:
+        headers = auth_headers(client, "nc_media_long_material")
+        created = _create(client, headers, content=content)
+        assert created.status_code == 201
+        restored = client.get(f"/api/v1/media-context/resources/{created.json()['id']}", headers=headers)
+        assert restored.status_code == 200
+        assert restored.json()["content"] == content
+        assert restored.json()["content_sha256"] == hashlib.sha256(content.encode()).hexdigest()
+
+
 def test_code_and_video_positions_conversations_switch_and_refresh():
     with TestClient(app) as client:
         headers = auth_headers(client, "nc_media_04_owner")

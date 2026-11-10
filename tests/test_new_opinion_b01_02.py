@@ -25,7 +25,7 @@ def function_source(relative: str, name: str) -> str:
     raise AssertionError(f"function not found: {relative}:{name}")
 
 
-def test_a14_path_is_vertical_multicourse_and_has_no_budget_gate() -> None:
+def test_a14_path_is_vertical_multicourse_with_shared_schedule_budget() -> None:
     view = read("frontend/src/views/LearningPathGraph.vue")
     task_list = read("frontend/src/components/PathTaskList.vue")
     learning = read("app/m5_learning.py")
@@ -35,16 +35,19 @@ def test_a14_path_is_vertical_multicourse_and_has_no_budget_gate() -> None:
     assert ".path-course-paths { display: grid;" in view
     assert "所有任务按先修关系开放" in view
     assert "调整预算与重建" not in view
-    assert "time_budget_minutes" not in function_source("app/m5_learning.py", "multi_course_schedule")
-    assert "every currently-unblocked candidate" in function_source("app/m5_learning.py", "multi_course_schedule")
+    schedule = function_source("app/m5_learning.py", "multi_course_schedule")
+    assert 'item["time_budget_minutes"] for item in active_courses' in schedule
+    assert "budget = min(confirmed_budgets)" in schedule
     assert 'class="path-task-list__rows"' in task_list
     assert "path-task__criteria" in task_list
 
 
 def test_a14_schedule_keeps_prerequisites_and_returns_all_courses() -> None:
     source = function_source("app/m5_learning.py", "multi_course_schedule")
-    assert "DBLearningPath.course_id == course_id" in source
-    assert "DBLearningPath.status.in_((\"active\", \"paused\"))" in source
+    assert "DBLearningPath.course_id == course_id" not in source
+    assert 'courses = [item for item in courses if item["course_id"] == course_id]' in source
+    assert source.index('courses = [item for item in courses if item["course_id"] == course_id]') > source.index("days.append(")
+    assert "DBLearningPath.status.in_((\"active\", \"paused\", \"completed\"))" in source
     assert "prerequisite_keys - resolved[projection[\"path_id\"]]" in source
     assert '"courses": courses' in source
     assert '"learning_state_written": False' in source
@@ -68,8 +71,8 @@ def test_a15_flashcard_requires_completed_evidence_before_generation() -> None:
 def test_a15_flashcard_model_prompt_requires_answer_and_dimension_reduction() -> None:
     source = function_source("flashcard_api.py", "_generate_flashcard_answer")
     assert "JSON 必须包含 answer 和 explanation 字段" in source
-    assert "真实降维解释" in source
-    assert "困难知识点：必须先给出真实降维解释" in source
+    assert "直觉、类比或最小例子讲清原因" in source
+    assert "学习者暂时有困难：先用日常类比或最小例子解释，再给出严谨回答" in source
     assert "generate_review_model_json" in source
 
 
@@ -91,6 +94,7 @@ def test_a15_flashcard_generation_uses_real_model_metadata_and_explanation(monke
             owner_public_id="user-a15",
             course_id="course-a15",
             record=SimpleNamespace(
+                question="梯度下降怎样更新参数？", options=[], feedback="沿负梯度方向更新。",
                 accuracy_score=0.2,
                 correct_answer="沿负梯度方向更新参数",
                 student_answer="随机调整参数",
@@ -98,10 +102,9 @@ def test_a15_flashcard_generation_uses_real_model_metadata_and_explanation(monke
         )
     )
 
-    assert len(calls) == 1
-    assert calls[0]["operation"] == "review_flashcard_answer"
+    assert [call["operation"] for call in calls] == ["review_flashcard_answer", "review_flashcard_check"]
     assert "explanation" in calls[0]["system_prompt"]
-    assert "降维解释" in calls[0]["user_prompt"]
+    assert "先用日常类比或最小例子解释，再给出严谨回答" in calls[0]["user_prompt"]
     assert metadata == {
         "model": "deepseek-v4-flash",
         "provider": "OpenAI-compatible DeepSeek",
@@ -110,7 +113,7 @@ def test_a15_flashcard_generation_uses_real_model_metadata_and_explanation(monke
         "allow_fallback": False,
         "explanation_generated": True,
     }
-    assert "降维解释：" in answer
+    assert "理解要点：" in answer
 
 
 def test_a15_model_failure_is_not_replaced_by_template(monkeypatch: pytest.MonkeyPatch) -> None:

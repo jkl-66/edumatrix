@@ -137,6 +137,7 @@ def test_curated_course_upsert_is_idempotent_and_projects_canonical_sources():
             session.query(DBSourceRef, DBSourceDocument)
             .join(DBSourceDocument, DBSourceDocument.id == DBSourceRef.source_document_id)
             .filter(DBSourceDocument.course_id == COURSE_ID)
+            .filter(DBSourceRef.location_kind == "chapter")
             .all()
         )
         assert len(refs) == 12
@@ -187,3 +188,26 @@ def test_curated_course_http_detail_exposes_clickable_canonical_provenance():
         assert payload["source_ref_char_start"] == 0
         assert payload["source_ref_char_end"] == len(payload["content"])
         assert payload["source_sha256"] != payload["content_hash"].lower()
+
+
+def test_document_listing_ignores_selection_and_whole_reader_references():
+    bundle = load_versioned_course_bundle(CURATED_COURSE_MANIFESTS[0])
+    with SessionLocal() as session:
+        upsert_course_bundle(session, bundle)
+        source = session.query(DBSourceDocument).filter_by(legacy_document_id=bundle['documents'][0]['id']).one()
+        original = session.query(DBSourceRef).filter_by(source_document_id=source.id, location_kind='chapter').one()
+        extra_ids = ['ref-test-library-selection370', 'ref-test-library-document370']
+        for identifier, kind in zip(extra_ids, ['selection', 'reader_document']):
+            session.add(DBSourceRef(id=identifier, source_document_id=source.id,
+                parser_version=source.parser_version, location_kind=kind,
+                char_start=0, char_end=80, content_hash=source.processed_sha256,
+                quote='合成引用，保留原文关联'))
+        session.commit()
+        repository = LegacyReadRepository(session)
+        _, rows = repository.knowledge_library_rows('test-library370')
+        matches = [row for row in rows if row[0].id == source.legacy_document_id]
+        assert len(matches) == 1
+        assert matches[0][3].id == original.id
+        detail = repository.knowledge_document_context(source.legacy_document_id, 'test-library370')
+        assert detail[4].id == original.id
+        assert all(session.get(DBSourceRef, identifier) is not None for identifier in extra_ids)

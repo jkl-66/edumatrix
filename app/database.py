@@ -105,7 +105,9 @@ async def run_db_op(func, *args, **kwargs):
         finally:
             db.close()
             
-    return await loop.run_in_executor(None, _run_with_session)
+    from contextvars import copy_context
+    context = copy_context()
+    return await loop.run_in_executor(None, context.run, _run_with_session)
 
 class DBStudentProfile(Base):
     """持久化物理表：存储学生 10 维画像、掌握度、认知负荷与学习偏好"""
@@ -275,6 +277,7 @@ class DBUser(Base):
     hashed_password = Column(String(128), nullable=False)
     role = Column(String(16), default="student")  # "student" 或 "teacher"
     display_name = Column(String(64), default="")
+    avatar_url = Column(Text, default="")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=_utcnow)
 
@@ -349,6 +352,8 @@ class DBReviewPlan(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     student_id = Column(String(64), ForeignKey("student_profiles.student_id", ondelete="CASCADE"), index=True)
     concept = Column(String(128))
+    course_id = Column(String(64), nullable=True)
+    knowledge_point_id = Column(String(64), nullable=True)
     interval_days = Column(Integer, default=1)
     next_review_at = Column(DateTime)
     mastery = Column(Float, default=0.0)
@@ -1537,6 +1542,13 @@ class DBGenerationTask(Base):
     actual_cost = Column(Float, default=0.0)
     failure_code = Column(String(64), default="")
     failure_reason = Column(Text, default="")
+    # Empty for historical/manual jobs. Only explicitly submitted work is picked
+    # up by the durable dispatcher; task status continues to describe the output.
+    automation_state = Column(String(32), nullable=False, default="", server_default="")
+    execution_token = Column(String(64), nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    next_attempt_at = Column(DateTime, nullable=True)
+    automation_context = Column(JSON, nullable=False, default=dict, server_default="{}")
     created_at = Column(DateTime, default=_utcnow)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -3892,7 +3904,7 @@ class DBResourceBundleItem(Base):
         UniqueConstraint("bundle_version_id", "position", name="uq_resource_bundle_item_position"),
         UniqueConstraint("bundle_version_id", "resource_type", name="uq_resource_bundle_item_type"),
         CheckConstraint("position >= 0", name="ck_resource_bundle_item_position"),
-        CheckConstraint("resource_type IN ('handout','mind_map','code','exercise','video','ppt','animation','lab')", name="ck_resource_bundle_item_type"),
+        CheckConstraint("resource_type IN ('handout','mind_map','code','exercise','video','ppt','animation','lab','quiz','training_task','code_sandbox','deck','interactive_model','feynman')", name="ck_resource_bundle_item_type"),
     )
 
 
@@ -4176,6 +4188,19 @@ class DBAssessmentExam(Base):
         CheckConstraint("status IN ('draft','published','open','closed','archived')", name="ck_assessment_exam_status"),
         CheckConstraint("duration_minutes >= 1 AND lock_version >= 1", name="ck_assessment_exam_versions"),
     )
+
+
+class DBAssessmentGenerationReview(Base):
+    """Complete public teaching review bound to the exact generated question versions."""
+    __tablename__ = "assessment_generation_reviews"
+    id = Column(String(64), primary_key=True, default=lambda: new_public_id("aereview"))
+    generation_call_id = Column(String(64), ForeignKey("model_calls.id", ondelete="RESTRICT"), nullable=False, unique=True)
+    owner_public_id = Column(String(64), ForeignKey("users.public_id", ondelete="CASCADE"), nullable=False, index=True)
+    trace_id = Column(String(64), nullable=False, index=True)
+    question_version_ids = Column(JSON, nullable=False, default=list)
+    review = Column(JSON, nullable=False, default=dict)
+    content_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class DBAssessmentExamVersion(Base):
@@ -4495,6 +4520,10 @@ def _migrate_schema():
         with engine.connect() as conn:
             conn.execute(sa.text("ALTER TABLE users ADD COLUMN display_name VARCHAR(64) DEFAULT ''"))
             conn.commit()
+
+    if "avatar_url" not in columns:
+        with engine.begin() as conn:
+            conn.execute(sa.text("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''"))
 
     course_columns = [c["name"] for c in inspector.get_columns("courses")]
     if "subject" not in course_columns:

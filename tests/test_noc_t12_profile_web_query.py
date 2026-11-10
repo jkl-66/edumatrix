@@ -92,6 +92,8 @@ def test_discovery_endpoint_projects_swarm_text_backend_for_profile_query(monkey
                     trace_id=f"trace-{suffix}",
                 )
             )
+            from app.database import DBSourceDocument
+            session.add(DBSourceDocument(id=f"source-{suffix}", course_id=course_id, title="检索资料", filename="source.md", file_format="md", content_hash="synthetic", processing_status="ready"))
             session.commit()
 
         response = client.get(

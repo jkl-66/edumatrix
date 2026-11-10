@@ -26,7 +26,7 @@ except ImportError:
     EMBEDDINGS = None
 
 # 数据持久化路径
-_ALIGNMENT_DATA_DIR = Path("data")
+_ALIGNMENT_DATA_DIR = Path(os.environ.get("EDUMATRIX_ALIGNMENT_DATA_DIR", "data"))
 _ALIGNMENT_FILE = _ALIGNMENT_DATA_DIR / "cross_modal_pairs.json"
 
 # 共享潜空间维度（投影后的低维空间）
@@ -53,25 +53,25 @@ _BUILTIN_SEED_PAIRS = [
     },
     {
         "text": "逻辑回归通过 sigmoid 将线性组合映射为概率",
-        "image_desc": "混淆矩阵展示 TP、FP、FN、TN，可进一步计算 accuracy、precision、recall 和 F1",
+        "image_desc": "Sigmoid 的 S 形曲线把线性得分映射到 0 到 1 之间，作为正类概率",
         "formula": r"\sigma(z) = \frac{1}{1 + e^{-z}}, \quad z = w^T x + b",
         "concept": "逻辑回归",
     },
     {
         "text": "损失函数衡量预测值与真实值的差距",
-        "image_desc": "反向传播链式法则推导：展示损失函数对参数求导时的链式法则展开",
+        "image_desc": "预测点与真实点之间的残差及平方误差，汇总为均方误差",
         "formula": r"\mathcal{L}(w) = \frac{1}{n}\sum_{i=1}^{n} (y_i - \hat{y}_i)^2",
         "concept": "损失函数",
     },
     {
         "text": "梯度下降利用损失函数的梯度更新参数",
-        "image_desc": "训练误差持续下降而验证误差上升时通常意味着过拟合",
+        "image_desc": "参数点沿损失曲面的负梯度方向移动，每步位移由学习率控制",
         "formula": r"w \leftarrow w - \eta \nabla_w \mathcal{L}(w)",
         "concept": "梯度下降",
     },
     {
         "text": "Softmax 将任意实数向量转换为概率分布",
-        "image_desc": "注意力机制的 scaled dot-product attention 数学表达",
+        "image_desc": "多个类别的实数得分经过指数与归一化，得到总和为 1 的概率柱状图",
         "formula": r"\text{softmax}(x_i) = \frac{e^{x_i}}{\sum_{j} e^{x_j}}",
         "concept": "激活函数",
     },
@@ -95,7 +95,7 @@ _BUILTIN_SEED_PAIRS = [
     },
     {
         "text": "交叉熵损失常用于多分类任务的模型训练",
-        "image_desc": "机器学习项目流程图展示从数据理解到模型评估的完整流程",
+        "image_desc": "真实类别与预测概率对照，真实类别概率越低时交叉熵损失越大",
         "formula": r"\mathcal{L}_{\text{CE}} = -\sum_{c=1}^{C} y_c \log(\hat{y}_c)",
         "concept": "损失函数",
     },
@@ -109,7 +109,7 @@ _BUILTIN_SEED_PAIRS = [
     {
         "text": "反向传播算法基于链式法则将误差从输出层逐层传回输入层",
         "image_desc": "反向传播动态演示：梯度沿网络层层回传，各层权重按梯度方向更新",
-        "formula": r"\delta^{(l)} = ((W^{(l)})^T \delta^{(l+1)}) \odot \sigma'(z^{(l)})",
+        "formula": r"\delta^{(l)} = ((W^{(l+1)})^T \delta^{(l+1)}) \odot \sigma'(z^{(l)})",
         "concept": "反向传播",
     },
     {
@@ -133,7 +133,7 @@ _BUILTIN_SEED_PAIRS = [
     {
         "text": "线性回归通过最小化均方误差拟合最优直线",
         "image_desc": "动画演示散点图中回归线随梯度下降逐步调整斜率和截距的过程",
-        "formula": r"y = w^T x + b, \quad \min_w \frac{1}{n}\sum_{i=1}^{n}(y_i - w^T x_i)^2",
+        "formula": r"\hat{y} = w^T x + b, \quad \min_{w,b} \frac{1}{n}\sum_{i=1}^{n}(y_i - w^T x_i - b)^2",
         "concept": "线性回归",
     },
     {
@@ -205,6 +205,19 @@ _BUILTIN_SEED_PAIRS = [
 ]
 
 
+_LEGACY_SEED_FIELDS = {
+    "逻辑回归通过 sigmoid 将线性组合映射为概率": {"image_desc": "混淆矩阵展示 TP、FP、FN、TN，可进一步计算 accuracy、precision、recall 和 F1"},
+    "损失函数衡量预测值与真实值的差距": {"image_desc": "反向传播链式法则推导：展示损失函数对参数求导时的链式法则展开"},
+    "梯度下降利用损失函数的梯度更新参数": {"image_desc": "训练误差持续下降而验证误差上升时通常意味着过拟合"},
+    "Softmax 将任意实数向量转换为概率分布": {"image_desc": "注意力机制的 scaled dot-product attention 数学表达"},
+    "交叉熵损失常用于多分类任务的模型训练": {"image_desc": "机器学习项目流程图展示从数据理解到模型评估的完整流程"},
+    "反向传播算法基于链式法则将误差从输出层逐层传回输入层": {
+        "formula": r"\delta^{(l)} = ((W^{(l)})^T \delta^{(l+1)}) \odot \sigma'(z^{(l)})"},
+    "线性回归通过最小化均方误差拟合最优直线": {
+        "formula": r"y = w^T x + b, \quad \min_w \frac{1}{n}\sum_{i=1}^{n}(y_i - w^T x_i)^2"},
+}
+
+
 
 # PyTorch projection head per implementation plan 1.1
 class ProjectionHead(nn.Module):
@@ -250,15 +263,50 @@ class CrossModalAligner:
         # 是否已完成对比学习校准
         self._is_calibrated: bool = False
         self._last_calibration_loss: float = float("inf")
+        self._embedding_identity: dict = {}
+        self._calibration_embedding_identity: dict = {}
 
         self._initialized = False
 
         # Load from disk if available; otherwise build from built-in seeds
-        loaded = self._load_from_disk()
-        if loaded:
-            self._build_embeddings()
+        self._load_from_disk()
+        # Update only exact copies of known built-in seeds. User-edited pairs
+        # and the original file are preserved until an explicit save.
+        seeds = {p["text"]: p for p in _BUILTIN_SEED_PAIRS}
+        for i, pair in enumerate(self._pairs):
+            seed = seeds.get(pair.get("text"))
+            legacy = _LEGACY_SEED_FIELDS.get(pair.get("text"))
+            if seed and legacy and pair == {**seed, **legacy}:
+                self._pairs[i] = dict(seed)
+                self._invalidate_calibration()
+        self._build_embeddings()
+
+    @staticmethod
+    def _current_embedding_identity() -> dict:
+        identity = getattr(EMBEDDINGS, "identity", None)
+        if callable(identity):
+            value = identity()
         else:
-            self._build_embeddings()  # Build from _BUILTIN_SEED_PAIRS
+            value = {
+                "name": getattr(EMBEDDINGS, "name", type(EMBEDDINGS).__name__),
+                "model": getattr(EMBEDDINGS, "model_name", getattr(EMBEDDINGS, "model", "")),
+                "dim": getattr(EMBEDDINGS, "dim", 0),
+            }
+        # Persist model identity only, never service credentials or configuration.
+        return {key: value.get(key, "" if key != "dim" else 0)
+                for key in ("name", "model", "dim")}
+
+    def _ensure_embeddings(self) -> None:
+        if not self._initialized or self._embedding_identity != self._current_embedding_identity():
+            self._build_embeddings()
+
+    def _invalidate_calibration(self) -> None:
+        self._is_calibrated = False
+        self._last_calibration_loss = float("inf")
+        self._calibration_embedding_identity = {}
+        self._text_proj_state = {}
+        self._image_proj_state = {}
+        self._formula_proj_state = {}
 
     # ══════════════════════════════════════════════════════════════
     # 投影矩阵工具方法
@@ -287,8 +335,7 @@ class CrossModalAligner:
         Uses PyTorch autograd: cross_entropy on cross-modal similarity matrices.
         Positive pairs = same concept across modalities; negatives = other concepts.
         Replaces the broken hand-coded finite-difference approximation."""
-        if not self._initialized:
-            self._build_embeddings()
+        self._ensure_embeddings()
         if not self._initialized or len(self._pairs) < 3:
             return float('inf')
 
@@ -347,6 +394,7 @@ class CrossModalAligner:
         self._proj_in_dim = d_in
         self._proj_out_dim = d_out
         self._is_calibrated = True
+        self._calibration_embedding_identity = dict(self._embedding_identity)
         self._last_calibration_loss = final_loss
         print(f'  [CrossModalAligner] PyTorch calibration: loss={final_loss:.4f}, dim={d_in}->{d_out}')
         return final_loss
@@ -390,6 +438,7 @@ class CrossModalAligner:
                     self._pairs = data.get("pairs", list(_BUILTIN_SEED_PAIRS))
                     self._is_calibrated = data.get("calibrated", False)
                     self._last_calibration_loss = data.get("calibration_loss", float("inf"))
+                    self._calibration_embedding_identity = data.get("embedding_identity", {})
                     proj_data = data.get("projections", {})
                     if proj_data:
                         self._text_proj_state = proj_data.get("text_proj_state", {})
@@ -413,6 +462,7 @@ class CrossModalAligner:
             "pairs": self._pairs,
             "calibrated": self._is_calibrated,
             "calibration_loss": self._last_calibration_loss,
+            "embedding_identity": self._calibration_embedding_identity,
             "proj_in_dim": self._proj_in_dim,
             "proj_out_dim": self._proj_out_dim,
             "projections": {
@@ -444,6 +494,19 @@ class CrossModalAligner:
             self._formula_embeddings = [
                 list(EMBEDDINGS.embed(p.get("formula", p["text"]))) for p in self._pairs
             ]
+            self._original_dim = len(self._text_embeddings[0])
+            vectors = self._text_embeddings + self._image_embeddings + self._formula_embeddings
+            if not self._original_dim or any(len(v) != self._original_dim for v in vectors):
+                raise ValueError("Embedding dimensions must agree across all modalities")
+            self._embedding_identity = self._current_embedding_identity()
+            if self._is_calibrated and (
+                self._proj_in_dim != self._original_dim
+                or self._calibration_embedding_identity != self._embedding_identity
+                or not all((self._text_proj_state, self._image_proj_state, self._formula_proj_state))
+            ):
+                # All modalities return to the current raw space together. Keep
+                # pairs and the saved file intact; recalibration is explicit.
+                self._invalidate_calibration()
             self._initialized = True
         except Exception as e:
             print(f"  [CrossModalAligner] 嵌入计算失败: {e}")
@@ -463,7 +526,11 @@ class CrossModalAligner:
             "formula": formula or text,
             "concept": concept,
         }
+        self._ensure_embeddings()
         self._pairs.append(pair)
+        if not self._initialized:
+            self._build_embeddings()
+            return
         # 增量更新嵌入
         if EMBEDDINGS is not None:
             self._text_embeddings.append(list(EMBEDDINGS.embed(pair["text"])))
@@ -498,10 +565,9 @@ class CrossModalAligner:
         """
         if not query.strip():
             return []
+        self._ensure_embeddings()
         if not self._initialized or not self._pairs:
-            self._build_embeddings()
-            if not self._initialized:
-                return []
+            return []
 
         if EMBEDDINGS is None:
             return []
@@ -510,6 +576,11 @@ class CrossModalAligner:
             query_vec = list(EMBEDDINGS.embed(query))
         except Exception:
             return []
+
+        if len(query_vec) != self._original_dim:
+            self._build_embeddings()
+            if not self._initialized or len(query_vec) != self._original_dim:
+                return []
 
         # If calibrated, project query via PyTorch ProjectionHead
         if self._is_calibrated:

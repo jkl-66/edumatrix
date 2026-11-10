@@ -85,22 +85,25 @@ def test_custom_generation_uses_real_outline_point_sources_and_profile_snapshot(
         "generationKnowledgePointId",
         "generationGoal",
         "generationTypeLocked",
-        'knowledge_point_id: point.id',
-        'source_ref_ids: point.source_ref_ids',
+        'knowledge_point_id: pointId || undefined',
+        "source_ref_ids: sourceIds.length ? sourceIds.join(',') : undefined",
         "profile_snapshot_id",
-        "createM5ResourceGenerationJob",
+        "intent: 'resource_generation'",
         '@generate="openTypeGeneration"',
         '@generate="openPreviewGeneration"',
         '@click="openGenericGeneration"',
     ):
         assert marker in center
 
-    request_start = center.index("generationJob.value = await createM5ResourceGenerationJob({")
-    request_end = center.index("})", request_start)
-    request = center[request_start:request_end]
-    assert "knowledge_point_id: point.id" in request
-    assert "learning_goal: learningGoal" in request
-    assert "source_ref_ids: point.source_ref_ids" in request
+    navigation = center.split("async function openGeneration(", 1)[1].split("function openTypeGeneration", 1)[0]
+    assert "path: '/chat'" in navigation
+    assert "customContext?.course_id" in navigation
+    assert "customContext ? customContext.source_ref_ids" in navigation
+    assert "return_to: route.fullPath" in navigation
+    request = center.split("async function startSingleGeneration", 1)[1].split("async function retryGenerationItem", 1)[0]
+    assert "knowledgePointId: generationKnowledgePointId.value" in request
+    assert "generationGoal.value.trim()" in request
+    assert "!generationCanStart.value" in request
 
 
 def test_custom_generation_keeps_native_map_for_outline_deduplication() -> None:
@@ -119,13 +122,12 @@ def test_generation_form_exposes_type_point_goal_and_truthful_block_states() -> 
     for message in (
         "请先选择一门课程",
         "当前课程还没有可用知识点",
-        "当前账号还没有可用画像快照",
         "该知识点尚未绑定可用章节来源",
     ):
         assert message in center
 
     assert ':disabled="!generationCanStart || generationLoading"' in center
-    assert "不会产生学习证据或改变掌握度" in center
+    assert "仅生成资源不会改变掌握情况" in center
 
 
 def test_existing_nine_dedicated_workspace_routes_remain_registered() -> None:

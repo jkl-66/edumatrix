@@ -175,7 +175,7 @@ def test_catalog_cat_scoring_ability_recovery_idempotency_and_permissions(monkey
         first = _run(m5_api.submit_assessment_attempt(request, payload, current_user=learner))
         assert first["created"] is True
         assert first["correct"] is True and first["score"] == 1.0
-        assert first["grading"]["label"] == "服务端客观评分"
+        assert first["grading"]["label"] == "答题评分"
         assert first["grading"]["rubric_version"] == "competition-diagnostic-v1"
         assert first["ability_update"]["applied"] is True
         assert first["ability_update"]["before"]["response_count"] == 0
@@ -238,7 +238,7 @@ def test_invalid_source_reference_fails_closed_and_frontend_preserves_course_dee
         assessment_source = ASSESSMENT.read_text(encoding="utf-8")
         knowledge_source = KNOWLEDGE.read_text(encoding="utf-8")
         for marker in (
-            "DEFAULT_DEMO_COURSE_ID",
+            "route.query.course_id || courseContext.contextRef?.courseId",
             "getM5NextCatQuestion",
             "completedVersionIds",
             'data-testid="cat-selection-reason"',
@@ -254,7 +254,7 @@ def test_invalid_source_reference_fails_closed_and_frontend_preserves_course_dee
                 "openCourseSource",
                 "openCourseSearchResult",
                 "source_document_id",
-                "path: `/knowledge/documents/${encodeURIComponent(sourceDocumentId)}`",
+                "path: `/knowledge/documents/${encodeURIComponent(canonicalDocumentId)}`",
             ):
                 assert marker in knowledge_source
     finally:

@@ -100,6 +100,18 @@ def test_retrieved_source_refs_resolve_to_canonical_database_objects():
         session.close()
 
 
+def test_unrelated_course_statistics_do_not_support_an_unseen_product_gain():
+    bundle = load_versioned_course_bundle(DEFAULT_MANIFEST_PATH)
+    with SessionLocal() as session:
+        upsert_course_bundle(session, bundle)
+    ingest_course_bundle(bundle)
+    result = hybrid_rag.retrieve(
+        "根据这些资料，TutorNova真实用户平均提高了多少考试分数？",
+        course_id=COURSE_ID, disable_external=True, top_k=8,
+    )
+    assert result.low_confidence is True
+
+
 def test_course_scope_excludes_other_public_courses_until_explicitly_expanded():
     curated = load_versioned_course_bundle(DEFAULT_MANIFEST_PATH)
     baseline = load_m0_course_bundle()
@@ -157,3 +169,40 @@ def test_course_scope_keeps_owner_private_material_but_rejects_other_owner():
     finally:
         hybrid_rag.remove_user_documents("private-pca-note.md", owner_id=owner_id)
         hybrid_rag.remove_user_documents("other-private-note.md", owner_id="other-owner")
+
+
+def test_course_personal_context_filters_before_scoring_and_top_k(monkeypatch):
+    from types import SimpleNamespace
+    import app.canonical_retrieval as canonical
+    import rag_engine
+
+    note = Evidence(
+        id="own-note", title="个人 PCA 笔记", content="PCA 复习方法",
+        modality=EvidenceModality.TEXT, source="own-note.md",
+        metadata={"visibility": "private", "owner_id": "note-owner"},
+    )
+    items = {
+        "own": note,
+        "other": replace(note, id="other-note", metadata={"visibility": "private", "owner_id": "someone-else"}),
+        "canonical": replace(note, id="canonical", metadata={**note.metadata, "canonical_source": True}),
+        **{f"public-{i}": replace(note, id=f"public-{i}", metadata={"visibility": "public", "course_id": COURSE_ID})
+           for i in range(30)},
+    }
+    monkeypatch.setattr(hybrid_rag, "user_index", SimpleNamespace(_items=items))
+    monkeypatch.setattr(canonical, "retrieve_canonical_sources", lambda *args, **kwargs: {"evidence": (), "low_confidence": True})
+    scored = []
+
+    def score(query, item):
+        scored.append(item.id)
+        return 0.1 if item.id == "own-note" else 1.0
+
+    monkeypatch.setattr(rag_engine, "_similarity", score)
+    result = hybrid_rag.retrieve("PCA复习", profile=StudentProfile(student_id="note-owner"),
+                                 course_id=COURSE_ID, disable_external=True, top_k=1)
+    assert [item.id for item in result.evidence] == ["own-note"]
+    assert scored == ["own-note"]
+
+    scored.clear()
+    anonymous = hybrid_rag.retrieve("PCA复习", course_id=COURSE_ID, disable_external=True, top_k=1)
+    assert anonymous.evidence == ()
+    assert scored == []

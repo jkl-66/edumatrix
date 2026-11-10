@@ -139,7 +139,7 @@ def test_only_valid_observation_submission_creates_learning_evidence():
         assert exc_info.value.code == "lab_observation_required"
         assert session.query(DBLearningEvent).filter_by(owner_public_id=learner.public_id).count() == baseline
 
-        observation = "提高召回数量会改善召回率，但平均延迟也随之上升，因此需要结合排序质量选择平衡点。"
+        observation = "提高召回数量会改善召回率，但平均延迟也随之上升。\n\n| 对照 | 结论 |\n| 小召回 | 延迟较低 |\n因此需要结合排序质量选择平衡点。"
         submitted, created = apply_action(
             session,
             instance_id=state.instance_id,
@@ -157,8 +157,18 @@ def test_only_valid_observation_submission_creates_learning_evidence():
         event = session.get(DBLearningEvent, submitted["learning_evidence"]["event_id"])
         assert event.event_type == "interactive_model_observation_submitted"
         assert event.object_id == artifact.id
-        assert event.evidence_status == "accepted"
-        assert event.mastery_eligible is True
+        assert event.evidence_status == "none"
+        assert event.mastery_eligible is False
+        assert event.completion_effect == "progress"
+        assert event.payload["evidence_kind"] == "guided_practice"
+        from app.learning_aggregation import _event_observations, _mastery_events
+        assert _event_observations(session, event) == []
+        assert event.id not in {row[0].id for row in _mastery_events(session, event)}
+        from app.m5_resources import _practice_completion
+        completion = _practice_completion(session, artifact, session.get(DBArtifactVersion, artifact.current_version_id),
+                                          "interactive_model_observation_submitted", "interactive_model")
+        assert completion["status"] == "completed"
+        assert completion["mastery_eligible"] is False
         assert event.payload["observation"] == observation
         assert session.query(DBLearningEvent).filter_by(owner_public_id=learner.public_id).count() == baseline + 1
 

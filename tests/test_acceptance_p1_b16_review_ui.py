@@ -32,8 +32,8 @@ def test_review_cards_keep_user_decision_facts_and_actions() -> None:
 
     for marker in (
         "{{ task.knowledge_point_title }}",
-        "{{ task.reason }}",
-        "<dt>到期</dt>",
+        "{{ learningText(task.reason) }}",
+        "task.status === 'completed' ? '完成时间' : '到期'",
         "formatTime(task.due_at)",
         "<dt>方式</dt>",
         "{{ task.method }}",

@@ -27,7 +27,8 @@ def test_discovery_projects_format_confidence_capabilities_and_pipeline_stages()
         "metadata_only",
         "pending_download",
         "data-status=\"entry.status\"",
-        "!['summary', 'pipeline'].includes(key)",
+        "['text', 'images', 'tables', 'formulas', 'code', 'outputs', 'metadata', 'transcript', 'dynamic_content'].includes(key)",
+        "typeof value !== 'object'",
     ):
         assert marker in source
 

@@ -48,11 +48,18 @@ def test_student_and_outsider_cannot_review():
 
 def test_http_queue_decisions_and_cross_course_visibility(monkeypatch):
     db,_,teacher,student,outsider,artifact,version=fixture();identity={'user':student}
+    content = json.dumps({'title': '长讲义', 'concepts': [{'explanation': '教学例子。' * 700}], 'summary': '讲义末尾仍需审核'}, ensure_ascii=False)
+    version.content = content
+    db.commit()
     async def fake(operation):return operation(db)
     monkeypatch.setattr(review_api,'run_db_op',fake);app.dependency_overrides[get_current_user]=lambda:identity['user'];client=TestClient(app)
     try:
         created=client.post('/api/v1/content-review/cases',json={'artifact_id':artifact.id,'version_id':version.id,'submission_note':'submit through API'});assert created.status_code==201
         case=created.json();identity['user']=teacher
+        detail = client.get(f"/api/v1/content-review/cases/{case['id']}").json()
+        assert json.loads(detail['version']['content'])['summary'] == '讲义末尾仍需审核'
+        assert detail['version']['content'] == content
+        assert len(detail['version']['preview']) == 2000
         approved=client.post(f"/api/v1/content-review/cases/{case['id']}/decisions",json={'action':'approve','reason':'quality evidence accepted','expected_version':case['lock_version']});assert approved.status_code==200
         conflict=client.post(f"/api/v1/content-review/cases/{case['id']}/decisions",json={'action':'publish','reason':'stale review attempt','expected_version':case['lock_version']});assert conflict.status_code==409 and conflict.json()['detail']['code']=='review_version_conflict'
         identity['user']=outsider;assert client.get('/api/v1/content-review/queue').json()['items']==[]

@@ -120,7 +120,7 @@ def _course_fixture():
         ("course-current", "当前课程", "CUR-01"),
         ("course-other", "其他课程", "OTHER-01"),
     ):
-        session.add(DBCourse(id=course_id, version="v1", title=title, manifest_version="noc-t06"))
+        session.add(DBCourse(id=course_id, version="v1", title=title, status="published", manifest_version="noc-t06"))
         source_id = f"source-{course_id}"
         chapter_id = f"chapter-{course_id}"
         point_id = f"kp-{course_id}"

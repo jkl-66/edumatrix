@@ -32,7 +32,7 @@ def _session():
     session = sessionmaker(bind=engine)()
     user = SimpleNamespace(public_id=OWNER, role="student")
     session.add(DBCourse(
-        id=COURSE, version="1", title="Workspace course", visibility="public",
+        id=COURSE, version="1", title="Workspace course", visibility="public", status="published",
         manifest_version="1",
     ))
     session.add(DBSourceDocument(

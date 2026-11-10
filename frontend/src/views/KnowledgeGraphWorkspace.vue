@@ -1,4 +1,7 @@
 <script setup>
+import { projectCourseMasteryNode } from '../utils/courseGraphProjection.js'
+import { learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -33,16 +36,12 @@ const showHierarchy = ref(false)
 
 const courseId = computed(() => String(route.params.courseId || ''))
 const chapters = computed(() => graph.value?.hierarchy || [])
-const allNodes = computed(() => graph.value?.nodes || [])
+const allNodes = computed(() => (graph.value?.nodes || []).map(node => ({
+  ...node, ...projectCourseMasteryNode(node, profileNodeById.value.get(String(node.knowledgePointId || ''))),
+})))
 const allEdges = computed(() => graph.value?.edges || [])
 const topicClusters = computed(() => graph.value?.topicClusters || [])
 const layoutDecision = computed(() => graph.value?.layoutDecision || graph.value?.structureAnalysis?.layoutDecision || null)
-const layoutExplanation = computed(() => (
-  layoutDecision.value?.strategy === 'hierarchical'
-  && Number(graph.value?.statistics?.knowledgePointCount || 0) > 8
-    ? '连接关系决定方向，节点通过吸引与排斥自然散开。'
-    : layoutDecision.value?.reason || ''
-))
 const semanticGraphNodeCount = computed(() => filteredNodes.value.filter((node) => !['course', 'chapter', 'source'].includes(String(node?.nodeType || '').toLowerCase())).length)
 const graphCanvasHeight = computed(() => {
   if (layoutDecision.value?.strategy === 'hierarchical') return semanticGraphNodeCount.value > 20 ? 960 : 720
@@ -53,10 +52,7 @@ const nodeById = computed(() => new Map(allNodes.value.map(node => [node.id, nod
 const profileNodeById = computed(() => new Map(
   (profileSummary.value?.knowledge_graph?.nodes || []).map(node => [String(node.id), node]),
 ))
-const selectedProfileNode = computed(() => {
-  const knowledgePointId = selectedNode.value?.knowledgePointId
-  return knowledgePointId ? profileNodeById.value.get(String(knowledgePointId)) || null : null
-})
+const selectedProfileNode = computed(() => selectedNode.value?.knowledgePointId ? selectedNode.value : null)
 const selectedBehaviors = computed(() => selectedProfileNode.value?.behaviors || [])
 const selectedEvidence = computed(() => selectedProfileNode.value?.evidence || [])
 
@@ -114,6 +110,13 @@ const filteredNodes = computed(() => {
   }
   return allNodes.value.filter(node => visible.has(node.id))
 })
+
+const visibleChapters = computed(() => chapters.value
+  .filter(chapter => chapterFilter.value === 'all' || chapter.chapterId === chapterFilter.value)
+  .map(chapter => ({
+    ...chapter,
+    knowledgePoints: chapter.knowledgePoints.filter(point => filteredNodes.value.some(node => node.id === `knowledge:${point.id}`)),
+  })))
 
 const activeEdges = computed(() => {
   if (!selectedNode.value) return []
@@ -228,7 +231,6 @@ onMounted(loadGraph)
       </button>
       <div class="workspace-header__copy">
         <h1>{{ graph?.course?.title || '课程知识图谱' }}</h1>
-        <p>查看章节、知识点、先修与来源事实。选择节点后可进入对应原文。</p>
       </div>
       <button type="button" class="secondary-action" :disabled="status === 'loading'" @click="loadGraph">
         <RotateCw :size="17" aria-hidden="true" />重新读取
@@ -238,8 +240,8 @@ onMounted(loadGraph)
     <TaskState
       v-if="status === 'loading'"
       state="loading"
-      title="正在读取课程事实"
-      message="课程、章节、知识点和来源保持原有版本，不会写入学习证据。"
+      title="正在整理课程知识"
+      message="即将展示章节、知识点与参考资料。"
     />
     <TaskState
       v-else-if="status === 'failed'"
@@ -259,10 +261,6 @@ onMounted(loadGraph)
     />
 
     <template v-else>
-      <div class="graph-readonly-note" data-testid="graph-readonly-note">
-        <span>{{ graph.availability?.readOnly ? '只读图谱' : '课程图谱' }}</span>
-        <p>{{ graph.availability?.message || '浏览、搜索、筛选和来源预览不会写入学习证据。' }}<template v-if="graph.availability?.version"> 当前版本 {{ graph.availability.version }}。</template></p>
-      </div>
       <section class="graph-controls" aria-label="课程图谱筛选与视图">
         <label>
           <span>章节</span>
@@ -284,9 +282,9 @@ onMounted(loadGraph)
           </select>
         </label>
         <label v-if="topicClusters.length">
-          <span>主题簇</span>
+          <span>相关主题</span>
           <select v-model="clusterFilter" data-testid="graph-cluster-filter">
-            <option value="all">全部主题簇</option>
+            <option value="all">全部主题</option>
             <option v-for="cluster in topicClusters" :key="cluster.id" :value="cluster.id">
               {{ cluster.title }} · {{ cluster.size }} 个节点
             </option>
@@ -297,12 +295,12 @@ onMounted(loadGraph)
             type="button"
             :aria-pressed="!showHierarchy && layoutMode === 'graph'"
             @click="showHierarchy = false; layoutMode = 'graph'"
-          ><Network :size="16" />关系图</button>
+          ><Network :size="16" />三维图谱</button>
           <button
             type="button"
             :aria-pressed="!showHierarchy && layoutMode === 'relationship_projection'"
             @click="showHierarchy = false; layoutMode = 'relationship_projection'"
-          ><Layers3 :size="16" />关系投影</button>
+          ><Layers3 :size="16" />局部关联</button>
           <button
             type="button"
             :aria-pressed="showHierarchy"
@@ -320,18 +318,19 @@ onMounted(loadGraph)
           </div>
           <div v-else-if="showHierarchy" class="hierarchy-view" data-testid="graph-hierarchy-fallback">
             <header>
-              <div><h2>课程层级列表</h2><p>当关系画布不适合阅读时，可使用同一组课程事实继续查看。</p></div>
-              <span>{{ chapters.length }} 章</span>
+              <h2>课程结构</h2>
             </header>
             <ol>
-              <li v-for="chapter in chapters" :key="chapter.chapterId">
-                <button type="button" @click="chapterFilter = chapter.chapterId; showHierarchy = false">
+              <li v-for="chapter in visibleChapters" :key="chapter.chapterId">
+                <button type="button" @click="selectNode(nodeById.get(`chapter:${chapter.chapterId}`))">
                   <span class="chapter-index">{{ chapter.position }}</span>
-                  <span><strong>{{ chapter.title }}</strong><small>{{ chapter.knowledgePoints.length }} 个知识点</small></span>
+                  <strong>{{ chapter.title }}</strong>
                   <ChevronRight :size="17" />
                 </button>
                 <ul>
-                  <li v-for="point in chapter.knowledgePoints" :key="point.id">{{ point.title }}</li>
+                  <li v-for="point in chapter.knowledgePoints" :key="point.id">
+                    <button class="hierarchy-point" type="button" :aria-pressed="selectedNode?.id === `knowledge:${point.id}`" @click="selectNode(nodeById.get(`knowledge:${point.id}`))">{{ point.title }}</button>
+                  </li>
                 </ul>
               </li>
             </ol>
@@ -343,14 +342,15 @@ onMounted(loadGraph)
             :categories="graph.categories"
             :layout-mode="layoutMode"
             :show-details="false"
-            :show-mastery-in-tooltip="false"
+            :show-relation-filter="false"
+            :show-mastery-in-tooltip="true"
             :legacy-path-layout="false"
             :layout-decision="layoutDecision"
             :topic-clusters="topicClusters"
             fit-dense-graph
             :height="graphCanvasHeight"
-            :chart-title="layoutMode === 'graph' ? '课程关系图' : '中心与邻接关系投影'"
-            :chart-subtitle="layoutMode === 'graph' ? '拖拽与缩放只改变视图，不改变掌握度' : '与关系图使用同一组节点、边和来源事实'"
+            :chart-title="layoutMode === 'graph' ? '课程知识星系' : '当前知识与关联'"
+            chart-subtitle=""
             @node-select="selectNode"
             @reset="selectedNode = null"
           />
@@ -361,18 +361,11 @@ onMounted(loadGraph)
             <div class="overview-heading">
               <span>{{ nodeTypeLabel(selectedNode) }}</span>
               <h2>{{ selectedNode.name }}</h2>
-              <p>{{ selectedNode.summary || '当前节点来自课程固定版本。' }}</p>
+              <p v-if="selectedNode.summary">{{ learningText(selectedNode.summary) }}</p>
             </div>
             <dl class="overview-facts">
-              <div><dt>关联关系</dt><dd>{{ activeEdges.length }} 条</dd></div>
-              <div><dt>来源状态</dt><dd>{{ selectedNode.sourceStatus === 'ready' ? '可定位' : '暂无可用来源' }}</dd></div>
               <div v-if="selectedNode.locationLabel"><dt>正文位置</dt><dd>{{ selectedNode.locationLabel }}</dd></div>
-              <div v-if="selectedNode.knowledgePointId"><dt>初始掌握证据</dt><dd>{{ selectedNode.masteryStatus === 'known' ? `${selectedNode.masteryLabel} · ${selectedNode.masteryEvidenceCount} 条` : '未知 · 尚无足够诊断证据' }}</dd></div>
-              <div v-if="selectedNode.knowledgePointId && selectedNode.masteryEvidenceCount"><dt>交叉证据</dt><dd>{{ selectedNode.masteryCrossEvidence ? '已有多条题目证据' : '目前只有单条题目证据' }}</dd></div>
-              <div v-if="selectedNode.topicClusterIds?.length"><dt>主题簇</dt><dd>{{ selectedNode.topicClusterIds.join('、') }}</dd></div>
-              <div v-if="selectedNode.nodeType === 'knowledge_point'"><dt>结构指标</dt><dd>重要性 {{ selectedNode.importance ?? '—' }} · 连接 {{ selectedNode.degree ?? 0 }}</dd></div>
-              <div v-if="selectedNode.nodeType === 'knowledge_point'"><dt>结构角色</dt><dd>{{ selectedNode.isBridgeNode ? '桥接节点' : '主题节点' }}{{ selectedNode.isCurrentFocus ? ' · 当前重点' : '' }}</dd></div>
-              <div v-if="selectedNode.nodeType === 'knowledge_point' && selectedNode.needsDetailExplanation"><dt>详情建议</dt><dd>建议结合来源和掌握证据查看</dd></div>
+              <div v-if="selectedNode.topicClusterIds?.length"><dt>相关主题</dt><dd>{{ topicClusters.filter(cluster => selectedNode.topicClusterIds.includes(cluster.id)).map(cluster => cluster.title).filter(Boolean).join('、') || '当前课程知识' }}</dd></div>
               <div v-if="selectedProfileNode"><dt>当前掌握判断</dt><dd>{{ selectedProfileNode.mastery == null ? '待补证据' : `${Math.round(selectedProfileNode.mastery * 100)}% · ${selectedProfileNode.judgement}` }}</dd></div>
             </dl>
             <section v-if="selectedBehaviors.length" class="overview-behaviors" data-testid="course-graph-node-behaviors">
@@ -385,9 +378,8 @@ onMounted(loadGraph)
                 <small v-else>来源暂不可用，仍保留行为记录</small>
               </article>
             </section>
-            <section v-else-if="selectedNode.knowledgePointId" class="overview-evidence-empty" data-testid="course-graph-node-no-behaviors">
-              <strong>暂无可展示的学习行为</strong>
-              <p>{{ profileSummaryError || '当前没有足够证据形成行为时间线；掌握判断保持待确认。' }}</p>
+            <section v-else-if="selectedNode.knowledgePointId && !selectedEvidence.length" class="overview-evidence-empty" data-testid="course-graph-node-no-behaviors">
+              <p>{{ userMessage(profileSummaryError || '完成诊断或练习后，可在这里查看判断依据。') }}</p>
             </section>
             <section v-if="selectedEvidence.length" class="overview-evidence" data-testid="course-graph-node-evidence">
               <header><h3>判断依据</h3><span>{{ selectedEvidence.length }} 条</span></header>
@@ -418,29 +410,16 @@ onMounted(loadGraph)
           <template v-else>
             <div class="overview-heading">
               <span>课程概览</span>
-              <h2>{{ graph.course.title }}</h2>
-              <p>{{ graph.course.description || '选择画布中的章节、知识点或来源，查看关系与原文入口。' }}</p>
+              <h2>从知识关系开始</h2>
+              <p>沿先修关系探索课程，选择知识点查看原文与学习依据。</p>
             </div>
             <dl class="course-statistics">
               <div><dt>章节</dt><dd>{{ graph.statistics.chapterCount }}</dd></div>
               <div><dt>知识点</dt><dd>{{ graph.statistics.knowledgePointCount }}</dd></div>
               <div><dt>来源</dt><dd>{{ graph.statistics.sourceCount }}</dd></div>
               <div><dt>关系</dt><dd>{{ graph.statistics.edgeCount }}</dd></div>
-              <div v-if="layoutDecision"><dt>主题簇</dt><dd>{{ layoutDecision.clusterCount }}</dd></div>
+              
             </dl>
-            <div v-if="layoutDecision" class="layout-explanation">
-              <strong>布局依据</strong>
-              <p>{{ layoutExplanation }}</p>
-              <small>节点与标签避让、边界约束和右侧详情空间均作为布局约束。</small>
-            </div>
-            <div class="authority-note">
-              <GitBranch :size="18" />
-              <p>{{ graph.authorityBoundary }}</p>
-            </div>
-            <div class="mastery-note" data-testid="graph-mastery-boundary">
-              <span>学习掌握证据</span>
-              <p>{{ graph.masterySnapshot?.status === 'available' ? '来自本课程最近一次诊断证据快照；查看图谱不会修改掌握度。' : '完成本课程诊断后，这里会显示可回溯的初始掌握证据。' }}</p>
-            </div>
           </template>
         </aside>
       </div>
@@ -454,8 +433,8 @@ onMounted(loadGraph)
   min-width: 0;
   gap: 20px;
   padding: 24px;
-  color: #4b4039;
-  background: #f7f2ea;
+  color: var(--color-text);
+  background: transparent;
 }
 
 .mastery-note {
@@ -475,7 +454,7 @@ onMounted(loadGraph)
   display: grid;
   gap: 4px;
   padding: 11px 14px;
-  border: 1px solid #ded3c7;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
   background: #fffaf4;
 }
@@ -526,10 +505,10 @@ onMounted(loadGraph)
   min-width: 0;
   align-items: end;
   gap: 14px;
-  padding: 14px 16px;
-  border: 1px solid #ded3c7;
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-panel);
-  background: #fffef9;
+  background: var(--color-surface);
 }
 .graph-controls label { display: grid; min-width: 180px; gap: 5px; color: var(--color-text-secondary); font-size: 14px; }
 .graph-controls select { min-height: 40px; padding: 0 34px 0 11px; color: var(--color-text); border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); font-size: 14px; }
@@ -544,8 +523,8 @@ onMounted(loadGraph)
   gap: 16px;
   align-items: stretch;
 }
-.graph-stage { min-width: 0; min-height: 604px; }
-.graph-overview { min-width: 0; min-height: 604px; padding: 22px; border: 1px solid #ded3c7; border-radius: var(--radius-panel); background: #fffef9; }
+.graph-stage { min-width: 0; }
+.graph-overview { position: sticky; top: 20px; align-self: start; min-width: 0; max-height: calc(100dvh - var(--topbar-height, 64px) - 60px); overflow-y: auto; padding: 24px; border: 0; border-radius: var(--radius-panel); background: var(--color-surface); }
 .overview-heading > span { color: var(--color-text-muted); font-size: 14px; font-weight: 600; }
 .overview-heading h2 { margin-top: 6px; font-size: 20px; line-height: 1.4; }
 .overview-heading p { margin-top: 9px; color: var(--color-text-secondary); font-size: 14px; line-height: 1.65; }
@@ -559,8 +538,8 @@ onMounted(loadGraph)
 .course-statistics dd { margin: 0; font-size: 14px; }
 .overview-facts dt { color: var(--color-text-muted); }
 .overview-facts dd { color: var(--color-text); font-weight: 600; overflow-wrap: anywhere; }
-.course-statistics { grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--color-border); border-left: 1px solid var(--color-border); }
-.course-statistics div { padding: 14px; border-right: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
+.course-statistics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.course-statistics div { padding: 8px 0; }
 .course-statistics dt { color: var(--color-text-muted); }
 .course-statistics dd { margin-top: 4px; color: var(--color-text); font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
 
@@ -630,13 +609,21 @@ onMounted(loadGraph)
 .hierarchy-view ol button strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .hierarchy-view ol button small { color: var(--color-text-muted); font-size: 14px; }
 .chapter-index { display: grid; width: 30px; height: 30px; place-items: center; color: #fff; border-radius: 50%; background: var(--color-accent); font-size: 14px; font-variant-numeric: tabular-nums; }
-.hierarchy-view ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0 44px; padding: 0; list-style: none; }
-.hierarchy-view ul li { padding: 2px 7px; color: var(--color-text-secondary); border: 1px solid var(--color-border); border-radius: 999px; font-size: 14px; }
+.hierarchy-view ul { display: grid; margin: 10px 0 0 15px; padding: 0; list-style: none; }
+.hierarchy-view ul li { position: relative; padding: 3px 0 3px 28px; color: var(--color-text-secondary); font-size: 14px; }
+.hierarchy-view ul li::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--color-border-strong); }
+.hierarchy-view ul li:last-child::before { bottom: 50%; }
+.hierarchy-view ul li::after { content: ''; position: absolute; left: 0; top: 50%; width: 18px; border-top: 1px solid var(--color-border-strong); }
+.hierarchy-view ul .hierarchy-point { display: block; padding: 6px 9px; color: inherit; font: inherit; line-height: 1.6; border-radius: var(--radius-control); }
+.hierarchy-view ul .hierarchy-point:hover { background: var(--color-surface-subtle); }
+.hierarchy-view ul .hierarchy-point[aria-pressed='true'] { color: var(--color-accent); background: var(--color-accent-soft); }
+.hierarchy-view ul li:has([aria-pressed='true'])::after { border-color: var(--color-accent); }
 
 @media (max-width: 1240px) {
   .graph-controls { flex-wrap: wrap; }
+  .graph-overview { position: static; max-height: none; }
   .view-switch { width: 100%; margin-left: 0; }
   .view-switch button { flex: 1; }
-  .graph-layout { grid-template-columns: minmax(0, 2.35fr) minmax(270px, 1fr); }
+  .graph-layout { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

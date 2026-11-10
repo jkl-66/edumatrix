@@ -5,9 +5,10 @@ from __future__ import annotations
 import copy, hashlib, json, math, re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.course_governance import require_manager
-from app.course_sharing import _apply_snapshot, _changes, _snapshot
+from app.course_sharing import _apply_snapshot, _changes, _snapshot, apply_source_graph, copied_source_mapping
 from app.database import (
     DBAuditLog, DBCourse, DBMarketplaceAcquisition, DBMarketplaceDecision,
     DBMarketplaceListing, DBMarketplaceReport, DBMarketplaceComment,
@@ -18,7 +19,7 @@ from app.database import (
     DBMarketplaceRecommendationRun, DBMarketplaceRecommendationResult,
     DBProfileSnapshot, DBStudentProfile, DBArtifact, DBArtifactVersion, DBQualityCheck,
     DBMarketplacePersonalCopy, DBResourceBundle, DBResourceBundleVersion,
-    DBResourceBundleItem, DBPlanDraft, DBPlanVersion, DBLearningPath, DBPathNode,
+    DBResourceBundleItem, DBPlanDraft, DBPlanVersion, DBLearningPath, DBPathNode, DBGenerationTask,
 )
 from app.identity import new_public_id, normalize_role
 from app.m5_resources import canonical_resource_type, resource_route
@@ -172,7 +173,8 @@ def _resource_market_snapshot(db: Any, actor: DBUser, source_object_id: str) -> 
 
 def _bundle_market_snapshot(db: Any, actor: DBUser, source_object_id: str) -> tuple[DBCourse, str, dict[str, Any], dict[str, Any]]:
     bundle = db.get(DBResourceBundle, source_object_id)
-    if bundle is None: _fail("marketplace_resource_bundle_unknown", "resource bundle does not exist")
+    if bundle is None:
+        return _generated_bundle_market_snapshot(db, actor, source_object_id)
     if bundle.owner_public_id != actor.public_id: _fail("marketplace_forbidden", "resource bundle belongs to another owner")
     if bundle.status != "active" or not bundle.current_version_id:
         _fail("marketplace_resource_bundle_unavailable", "resource bundle has no available current version")
@@ -213,6 +215,63 @@ def _bundle_market_snapshot(db: Any, actor: DBUser, source_object_id: str) -> tu
         "provenance": provenance,
     }
     return course, version.id, snapshot, licenses
+
+
+def _generated_bundle_market_snapshot(db: Any, actor: DBUser, task_id: str) -> tuple[DBCourse, str, dict[str, Any], dict[str, Any]]:
+    from app.resource_bundles import GENERATION_CAPABILITY, generation_job_payload
+
+    task = db.get(DBGenerationTask, task_id)
+    if task is None or task.capability != GENERATION_CAPABILITY:
+        _fail("marketplace_resource_bundle_unknown", "资源包不存在。")
+    if task.owner_public_id != actor.public_id:
+        _fail("marketplace_forbidden", "只能发布自己的资源包。")
+    job = generation_job_payload(db, actor, task.id)
+    if (job["scope"] == "single" or len(job["items"]) < 2 or job["status"] != "succeeded"
+            or job["review_gate"]["status"] != "passed" or job["publish_gate"]["status"] != "completed"):
+        _fail("marketplace_resource_bundle_unavailable", "请先完成资源包生成和内容检查，再分享给其他学习者。")
+    course, course_snapshot, licenses, provenance = _course_for_object(db, task.course_id)
+    items = []
+    for position, item in enumerate(job["items"], 1):
+        resource = item.get("resource") or {}
+        artifact = db.get(DBArtifact, resource.get("resource_id"))
+        version = db.get(DBArtifactVersion, (resource.get("version") or {}).get("id"))
+        if (artifact is None or version is None or artifact.owner_public_id != actor.public_id
+                or artifact.course_id != course.id or version.artifact_id != artifact.id
+                or resource.get("status") != "available"):
+            _fail("marketplace_resource_bundle_unavailable", "资源包中有内容暂时无法打开，请先检查对应资源。")
+        items.append({
+            "position": position, "resource_type": item["type"],
+            "resource_id": artifact.id, "resource_version_id": version.id,
+            "frozen_snapshot": {
+                "resource_type": item["type"], "resource_id": artifact.id,
+                "resource_version_id": version.id, "title": item["title"], "route": resource["route"],
+            },
+            "reference": {
+                "kind": "artifact",
+                "artifact": {"artifact_type": artifact.artifact_type, "title": artifact.title, "status": artifact.status},
+                "version": {"content": version.content, "content_format": version.content_format,
+                    "content_hash": version.content_hash, "metadata": _safe_metadata(version.metadata_json or {})},
+            },
+        })
+    content_hash = _hash(items)
+    version_id = _stable("generation-bundlever", task.id, content_hash)
+    title = f"{job['context'].get('knowledge_point_title') or course.title} · 学习资源包"
+    objective = str(job["context"].get("learning_goal") or "围绕当前知识点理解、练习和实践。")
+    snapshot = {
+        "schema_version": "f9.marketplace-learning-object.v1", "item_type": "resource_bundle",
+        "source": {"object_id": task.id, "version_id": version_id}, "course_snapshot": course_snapshot,
+        "object": {
+            "bundle": {"title": title, "learning_objective": objective, "status": "active"},
+            "version": {"quality_summary": {"review_status": "passed"}, "content_hash": content_hash,
+                "change_summary": "保存本次生成并通过检查的资源版本"},
+            "items": items,
+        },
+        "preview": {"kind": "resource_bundle", "title": title, "summary": objective,
+            "item_count": len(items), "included_items": [
+                {"type": item["resource_type"], "title": item["frozen_snapshot"]["title"]} for item in items]},
+        "provenance": provenance,
+    }
+    return course, version_id, snapshot, licenses
 
 
 def _path_market_snapshot(db: Any, actor: DBUser, source_object_id: str) -> tuple[DBCourse, str, dict[str, Any], dict[str, Any]]:
@@ -259,7 +318,18 @@ def _learning_object_snapshot(db: Any, actor: DBUser, item_type: str, source_obj
 
 def submit_listing(db: Any, *, actor: DBUser, title: str, summary: str, category: str, tags: list[str],
                    item_type: str = "course", course_id: str | None = None,
-                   source_object_id: str | None = None, source_version_id: str | None = None) -> dict[str, Any]:
+                   source_object_id: str | None = None, source_version_id: str | None = None,
+                   revision_of: str | None = None, expected_version: int | None = None) -> dict[str, Any]:
+    previous = _listing(db, revision_of) if revision_of else None
+    if previous:
+        if previous.owner_public_id != actor.public_id:
+            _fail("marketplace_forbidden", "只能修改自己提交的分享。")
+        if previous.item_type != item_type or (source_object_id or course_id) != previous.source_object_id:
+            _fail("marketplace_source_conflict", "请修改原分享内容；分享其他内容请另外发布。")
+    title, summary, category = title.strip(), summary.strip(), category.strip()
+    tags = sorted(set(x.strip() for x in tags if x.strip()))
+    if not title or len(summary) < 8 or not category:
+        _fail("marketplace_details_invalid", "请补全标题、分类和不少于8个字的分享说明。")
     if item_type not in MARKETPLACE_ITEM_TYPES: _fail("marketplace_item_type_invalid", "unsupported marketplace item type")
     if item_type == "course":
         if normalize_role(actor.role) not in {"teacher", "admin"}:
@@ -284,19 +354,33 @@ def submit_listing(db: Any, *, actor: DBUser, title: str, summary: str, category
     if source_version_id and source_version_id != actual_source_version_id:
         _fail("marketplace_source_version_conflict", "source object changed; refresh before publishing")
     _require_complete_provenance(provenance)
-    digest = _hash({"item_type": item_type, "snapshot": snapshot, "licenses": licenses})
+    digest_input = {"item_type": item_type, "snapshot": snapshot, "licenses": licenses}
+    if previous:
+        digest_input["revision"] = {"listing_id": previous.id, "title": title, "summary": summary,
+                                    "category": category, "tags": tags}
+    digest = _hash(digest_input)
     existing = db.query(DBMarketplaceListing).filter_by(
         item_type=item_type, source_object_id=actual_source_object_id,
         source_version_id=actual_source_version_id, snapshot_hash=digest,
         owner_public_id=actor.public_id,
     ).first()
     if existing: return listing_payload(db, existing, actor)
+    if previous:
+        if previous.lock_version != expected_version or _resubmitted_listing_id(db, previous):
+            _fail("marketplace_version_conflict", "这份分享已有新的处理结果，请重新查看后再提交。")
+        if previous.status != "changes_requested":
+            _fail("marketplace_transition_invalid", "只有要求修改的分享可以重新提交。")
     row = DBMarketplaceListing(course_id=course.id, course_version=course.version, item_type=item_type,
         source_object_id=actual_source_object_id, source_version_id=actual_source_version_id,
         title=title.strip(), summary=summary.strip(), category=category.strip(),
         tags=sorted(set(x.strip() for x in tags if x.strip())), snapshot_data=snapshot,
         license_snapshot=licenses, snapshot_hash=digest, owner_public_id=actor.public_id)
-    db.add(row); db.flush(); _decision(db, row, actor, "submit", "pending", "submitted for public marketplace review", {"snapshot_hash": digest})
+    db.add(row); db.flush()
+    _decision(db, row, actor, "submit", "pending", "修改后重新提交审核" if previous else "提交公开审核",
+              {"snapshot_hash": digest, **({"revision_of": previous.id} if previous else {})})
+    if previous:
+        _decision(db, previous, actor, "resubmit", previous.status, "已修改并重新提交审核，原审核意见保留。",
+                  {"replacement_listing_id": row.id})
     return listing_payload(db, row, actor)
 
 
@@ -354,7 +438,7 @@ def _saved_state(db: Any, row: DBMarketplaceListing, actor: DBUser | None) -> di
     personal = _personal_copy(db, row, actor)
     if personal is None: return None
     return {"id": personal.id, "source_status": personal.source_status,
-        "open_route": personal.open_route, "item_type": personal.item_type}
+        "open_route": _personal_copy_route(personal), "item_type": personal.item_type}
 
 
 def _public_preview(row: DBMarketplaceListing) -> dict[str, Any]:
@@ -398,16 +482,31 @@ def public_payload(row: DBMarketplaceListing, engagement: dict[str, Any] | None 
         "engagement": engagement or {"favorite_count": 0, "review_count": 0, "average_rating": None, "minimum_sample": 3, "sample_state": "insufficient"}}
 
 
+def _resubmitted_listing_id(db: Any, row: DBMarketplaceListing) -> str | None:
+    decision = db.query(DBMarketplaceDecision).filter_by(listing_id=row.id, action="resubmit").order_by(
+        DBMarketplaceDecision.created_at.desc()).first()
+    return (decision.evidence_snapshot or {}).get("replacement_listing_id") if decision else None
+
+
 def listing_payload(db: Any, row: DBMarketplaceListing, actor: DBUser) -> dict[str, Any]:
-    if normalize_role(actor.role) != "admin" and row.owner_public_id != actor.public_id and row.status != "published":
+    saved = _saved_state(db, row, actor)
+    favorited = db.query(DBMarketplaceFavorite).filter_by(listing_id=row.id, owner_public_id=actor.public_id, status="active").first()
+    can_view_withdrawn = row.status == "withdrawn" and (saved or favorited)
+    if normalize_role(actor.role) != "admin" and row.owner_public_id != actor.public_id and row.status != "published" and not can_view_withdrawn:
         _fail("marketplace_forbidden", "marketplace listing is not visible")
     decisions = db.query(DBMarketplaceDecision).filter_by(listing_id=row.id).order_by(DBMarketplaceDecision.created_at).all()
     reports = db.query(DBMarketplaceReport).filter_by(listing_id=row.id).order_by(DBMarketplaceReport.created_at.desc()).all()
     own_or_admin = normalize_role(actor.role) == "admin" or row.owner_public_id == actor.public_id
-    return {**public_payload(row, engagement_summary(db, row, actor), _saved_state(db, row, actor)),
+    replacement = _resubmitted_listing_id(db, row) if own_or_admin else None
+    source_route = resource_route(str((row.snapshot_data.get("preview") or {}).get("resource_type") or ""), row.source_object_id) if own_or_admin and row.item_type == "resource" else None
+    return {**public_payload(row, engagement_summary(db, row, actor), saved),
         "course_id": row.course_id, "source_object_id": row.source_object_id,
         "source_version_id": row.source_version_id, "owner_public_id": row.owner_public_id,
         "lock_version": row.lock_version, "report_count": len(reports), "open_report_count": sum(x.status == "open" for x in reports),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "can_resubmit": row.owner_public_id == actor.public_id and row.status == "changes_requested" and not replacement,
+        "resubmitted_listing_id": replacement,
+        "source_open_route": source_route + "?course_id=" + row.course_id if source_route else None,
         "decisions": [{"id": x.id, "action": x.action, "from_status": x.from_status, "to_status": x.to_status,
             "actor_role": x.actor_role, "reason": x.reason, "created_at": x.created_at.isoformat()} for x in decisions] if own_or_admin else [],
         "reports": [report_payload(x) for x in reports] if normalize_role(actor.role) == "admin" else []}
@@ -420,6 +519,9 @@ def _publishable_sources(db: Any, actor: DBUser) -> dict[str, list[dict[str, Any
         DBArtifact.current_version_id.isnot(None), DBArtifact.archived_at.is_(None)).order_by(DBArtifact.updated_at.desc()).all())
     sources.extend(("resource_bundle", row.id) for row in db.query(DBResourceBundle).filter_by(
         owner_public_id=actor.public_id, status="active").filter(DBResourceBundle.current_version_id.isnot(None)).order_by(DBResourceBundle.updated_at.desc()).all())
+    sources.extend(("resource_bundle", row.id) for row in db.query(DBGenerationTask).filter_by(
+        owner_public_id=actor.public_id, capability="learning_resource_bundle.generate", status="completed"
+    ).order_by(DBGenerationTask.updated_at.desc()).all())
     sources.extend(("learning_path", row.id) for row in db.query(DBLearningPath).filter_by(
         owner_public_id=actor.public_id).filter(DBLearningPath.status != "archived").order_by(DBLearningPath.updated_at.desc()).all())
     for item_type, object_id in sources:
@@ -435,10 +537,18 @@ def _publishable_sources(db: Any, actor: DBUser) -> dict[str, list[dict[str, Any
     return result
 
 
+def _personal_copy_route(row: DBMarketplacePersonalCopy) -> str:
+    # Also repairs navigation for copies saved before course context was included.
+    route = urlsplit(row.open_route)
+    query = dict(parse_qsl(route.query))
+    query["course_id"] = _stable("market-course", row.listing_id, row.recipient_public_id)
+    return urlunsplit((route.scheme, route.netloc, route.path, urlencode(query), route.fragment))
+
+
 def personal_copy_payload(row: DBMarketplacePersonalCopy, listing: DBMarketplaceListing | None = None) -> dict[str, Any]:
     return {"id": row.id, "listing_id": row.listing_id, "item_type": row.item_type,
         "copy_object_id": row.copy_object_id, "copy_version_id": row.copy_version_id,
-        "open_route": row.open_route, "provenance": copy.deepcopy(row.provenance_snapshot or {}),
+        "open_route": _personal_copy_route(row), "provenance": copy.deepcopy(row.provenance_snapshot or {}),
         "source_status": row.source_status, "created_at": row.created_at.isoformat() if row.created_at else None,
         "title": listing.title if listing else "", "summary": listing.summary if listing else "",
         "preview": _public_preview(listing) if listing else {}}
@@ -458,9 +568,13 @@ def workspace(db: Any, actor: DBUser) -> dict[str, Any]:
             except Exception: pass
     personal_copies = db.query(DBMarketplacePersonalCopy).filter_by(recipient_public_id=actor.public_id).order_by(
         DBMarketplacePersonalCopy.created_at.desc()).all()
+    favorites = db.query(DBMarketplaceListing).join(DBMarketplaceFavorite, DBMarketplaceFavorite.listing_id == DBMarketplaceListing.id).filter(
+        DBMarketplaceFavorite.owner_public_id == actor.public_id, DBMarketplaceFavorite.status == "active",
+        DBMarketplaceListing.status.in_(("published", "withdrawn"))).order_by(DBMarketplaceFavorite.created_at.desc()).all()
     return {"schema_version": "f9.marketplace-workspace.v1", "truth_label": "学习市场 · 发现并保存可学习内容",
         "disclaimer": "所有内容按发布时版本冻结；来源与许可可查，保存后形成独立个人副本。",
         "published": published, "managed": managed, "manageable_courses": courses,
+        "favorites": [public_payload(row, engagement_summary(db, row, actor), _saved_state(db, row, actor)) for row in favorites],
         "publishable_sources": _publishable_sources(db, actor),
         "personal_copies": [personal_copy_payload(row, db.get(DBMarketplaceListing, row.listing_id)) for row in personal_copies],
         "is_admin": normalize_role(actor.role) == "admin"}
@@ -797,7 +911,28 @@ def decide_report(db: Any, *, actor: DBUser, report_id: str, action: str, reason
 
 
 def get_listing(db: Any, *, actor: DBUser, listing_id: str) -> dict[str, Any]:
-    return listing_payload(db, _listing(db, listing_id), actor)
+    row = _listing(db, listing_id)
+    payload = listing_payload(db, row, actor)
+    # Review the submitted copy, never the author's subsequently edited version.
+    # Full teaching answers belong only in the administrator's review detail.
+    if normalize_role(actor.role) == "admin":
+        snapshot = row.snapshot_data or {}
+        body = snapshot.get("object") or {}
+        if row.item_type == "resource":
+            parts = [{"title": body.get("artifact", {}).get("title", row.title),
+                      "content": body.get("version", {}).get("content", "")}]
+        elif row.item_type == "resource_bundle":
+            parts = [{"title": (item.get("reference") or {}).get("artifact", {}).get("title")
+                      or (item.get("frozen_snapshot") or {}).get("title", "学习内容"),
+                      "content": (item.get("reference") or {}).get("version", {}).get("content")
+                      or item.get("frozen_snapshot") or {}} for item in body.get("items", [])]
+        elif row.item_type == "learning_path":
+            parts = [{"title": row.title, "content": body.get("plan", {}).get("content", {})}]
+        else:
+            parts = [{"title": item.get("title") or item.get("filename") or "课程资料",
+                      "content": item.get("content") or ""} for item in snapshot.get("documents", [])]
+        payload["review_contents"] = parts
+    return payload
 
 
 def _create_personal_course(db: Any, actor: DBUser, listing: DBMarketplaceListing) -> DBCourse:
@@ -820,13 +955,21 @@ def _create_personal_course(db: Any, actor: DBUser, listing: DBMarketplaceListin
 
 
 def _clone_artifact(db: Any, actor: DBUser, listing: DBMarketplaceListing, course: DBCourse,
-                    artifact_data: dict[str, Any], version_data: dict[str, Any], identity: str) -> tuple[DBArtifact, DBArtifactVersion]:
+                    artifact_data: dict[str, Any], version_data: dict[str, Any], identity: str,
+                    resource_mapping: dict[str, str] | None = None) -> tuple[DBArtifact, DBArtifactVersion]:
     artifact_id = _stable("market-art", listing.id, actor.public_id, identity)
     version_id = _stable("market-av", listing.id, actor.public_id, identity, str(version_data.get("content_hash") or ""))
     artifact = db.get(DBArtifact, artifact_id)
     version = db.get(DBArtifactVersion, version_id)
     if artifact is not None or version is not None: _fail("marketplace_copy_conflict", "recipient resource identity already exists")
-    metadata = _safe_metadata(version_data.get("metadata") or {})
+    content, metadata = _personal_resource_content(db, listing, course,
+        str(version_data.get("content") or ""), _safe_metadata(version_data.get("metadata") or {}))
+    if resource_mapping:
+        metadata = _remap_source_context(metadata, resource_mapping)
+        try:
+            content = _canonical(_remap_source_context(json.loads(content), resource_mapping))
+        except (ValueError, TypeError):
+            pass
     metadata["marketplace_source"] = {"listing_id": listing.id, "listing_snapshot_hash": listing.snapshot_hash,
         "source_object_id": listing.source_object_id, "source_version_id": listing.source_version_id}
     artifact = DBArtifact(id=artifact_id, owner_public_id=actor.public_id, course_id=course.id,
@@ -834,11 +977,63 @@ def _clone_artifact(db: Any, actor: DBUser, listing: DBMarketplaceListing, cours
         title=f"{str(artifact_data.get('title') or listing.title)}（个人副本）",
         status="approved", current_version_id=version_id)
     version = DBArtifactVersion(id=version_id, artifact_id=artifact.id, version_number=1,
-        content=str(version_data.get("content") or ""), content_format=str(version_data.get("content_format") or "markdown"),
-        content_hash=str(version_data.get("content_hash") or _hash(str(version_data.get("content") or ""))),
+        content=content, content_format=str(version_data.get("content_format") or "markdown"),
+        content_hash=_hash(content),
         metadata_json=metadata, created_by_public_id=actor.public_id)
     db.add(artifact); db.add(version); db.flush()
     return artifact, version
+
+
+def _remap_source_context(value: Any, mapping: dict[str, str]) -> Any:
+    if isinstance(value, dict):
+        return {key: _remap_source_context(item, mapping) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_remap_source_context(item, mapping) for item in value]
+    if isinstance(value, str):
+        if value in mapping:
+            return mapping[value]
+        if value.startswith(("/knowledge/documents/", "/workspace/")):
+            for original, copied in mapping.items():
+                value = value.replace(original, copied)
+    return value
+
+
+def _personal_resource_content(db: Any, listing: DBMarketplaceListing, course: DBCourse,
+                               content: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    snapshot = listing.snapshot_data.get("course_snapshot") or listing.snapshot_data
+    mapping = apply_source_graph(db, course, snapshot)
+    metadata = _remap_source_context(metadata, mapping)
+    try:
+        structured = json.loads(content)
+    except (ValueError, TypeError):
+        return content, metadata
+    remapped = _remap_source_context(structured, mapping)
+    return (_canonical(remapped) if remapped != structured else content), metadata
+
+
+def repair_personal_copy_sources(db: Any) -> None:
+    """Append corrected source links; retain acquired and learner-edited versions."""
+    for personal in db.query(DBMarketplacePersonalCopy).all():
+        listing = db.get(DBMarketplaceListing, personal.listing_id)
+        course = db.get(DBCourse, _stable("market-course", personal.listing_id, personal.recipient_public_id))
+        if listing is None or course is None:
+            continue
+        for artifact in db.query(DBArtifact).filter_by(course_id=course.id).all():
+            version = db.get(DBArtifactVersion, artifact.current_version_id)
+            if version is None:
+                continue
+            content, metadata = _personal_resource_content(db, listing, course, version.content, version.metadata_json or {})
+            if content == version.content and metadata == (version.metadata_json or {}):
+                continue
+            metadata = {**metadata, "change_summary": "补全学习资料来源链接，保留原有学习内容。"}
+            repaired = DBArtifactVersion(id=new_public_id("av"), artifact_id=artifact.id,
+                version_number=version.version_number + 1, content=content,
+                content_format=version.content_format, content_hash=_hash(content),
+                metadata_json=metadata, created_by_public_id=personal.recipient_public_id)
+            db.add(repaired)
+            db.flush()
+            artifact.current_version_id = repaired.id
+    db.flush()
 
 
 def _clone_resource(db: Any, actor: DBUser, listing: DBMarketplaceListing, course: DBCourse) -> tuple[str, str, str]:
@@ -866,15 +1061,24 @@ def _clone_bundle(db: Any, actor: DBUser, listing: DBMarketplaceListing, course:
         content_hash=str(version_data.get("content_hash") or _hash(body)),
         change_summary="从学习市场保存的独立个人副本", created_by_public_id=actor.public_id)
     db.add(bundle); db.add(version); db.flush()
+    resource_mapping = {}
+    for item in body.get("items") or []:
+        reference = item.get("reference") or {}
+        if reference.get("kind") != "artifact":
+            continue
+        identity = f"bundle:{int(item.get('position') or 0)}"
+        resource_mapping[item["resource_id"]] = _stable("market-art", listing.id, actor.public_id, identity)
+        resource_mapping[item["resource_version_id"]] = _stable("market-av", listing.id, actor.public_id, identity, str((reference.get("version") or {}).get("content_hash") or ""))
     for item in body.get("items") or []:
         resource_id = str(item.get("resource_id") or "")
         resource_version_id = str(item.get("resource_version_id") or "")
-        frozen = copy.deepcopy(item.get("frozen_snapshot") or {})
+        frozen = _remap_source_context(copy.deepcopy(item.get("frozen_snapshot") or {}), resource_mapping)
         reference = item.get("reference") or {}
         if reference.get("kind") == "artifact":
             cloned_artifact, cloned_version = _clone_artifact(
                 db, actor, listing, course, reference.get("artifact") or {}, reference.get("version") or {},
                 f"bundle:{int(item.get('position') or 0)}",
+                resource_mapping,
             )
             resource_id, resource_version_id = cloned_artifact.id, cloned_version.id
             canonical_type = canonical_resource_type(cloned_artifact.artifact_type, cloned_version.metadata_json or {})
@@ -891,7 +1095,8 @@ def _clone_bundle(db: Any, actor: DBUser, listing: DBMarketplaceListing, course:
 
 
 def _clone_learning_path(db: Any, actor: DBUser, listing: DBMarketplaceListing, course: DBCourse) -> tuple[str, str, str]:
-    body = (listing.snapshot_data or {}).get("object") or {}
+    mapping = copied_source_mapping(db, course, listing.snapshot_data["course_snapshot"])
+    body = _remap_source_context((listing.snapshot_data or {}).get("object") or {}, mapping)
     plan_data = body.get("plan") or {}; path_data = body.get("path") or {}
     plan_id = _stable("market-plan", listing.id, actor.public_id)
     version_id = _stable("market-planver", listing.id, actor.public_id, str(plan_data.get("content_hash") or ""))
@@ -904,7 +1109,7 @@ def _clone_learning_path(db: Any, actor: DBUser, listing: DBMarketplaceListing, 
         confirmed_version_id=version_id, confirmed_at=_now())
     version = DBPlanVersion(id=version_id, plan_draft_id=plan.id, version_number=1, profile_snapshot_id=None,
         content=copy.deepcopy(plan_data.get("content") or {}),
-        content_hash=str(plan_data.get("content_hash") or _hash(plan_data.get("content") or {})),
+        content_hash=_hash(plan_data.get("content") or {}),
         created_by_public_id=actor.public_id)
     path = DBLearningPath(id=path_id, owner_public_id=actor.public_id, course_id=course.id,
         source_plan_version_id=version.id, status="active")
@@ -922,6 +1127,42 @@ def _clone_learning_path(db: Any, actor: DBUser, listing: DBMarketplaceListing, 
             actual_minutes=None, blocked_reason=""))
     db.flush()
     return path.id, version.id, f"/workspace/path?path_id={path.id}"
+
+
+def repair_personal_path_sources(db: Any) -> None:
+    """Repair copied path links, retaining frozen versions and learning progress."""
+    for personal in db.query(DBMarketplacePersonalCopy).filter_by(item_type="learning_path"):
+        listing = db.get(DBMarketplaceListing, personal.listing_id)
+        path = db.get(DBLearningPath, personal.copy_object_id)
+        if not listing or not path or path.owner_public_id != personal.recipient_public_id:
+            continue
+        course = db.get(DBCourse, path.course_id)
+        if not course or course.owner_public_id != personal.recipient_public_id:
+            continue
+        snapshot = (listing.snapshot_data or {}).get("course_snapshot")
+        if not snapshot:
+            continue
+        mapping = copied_source_mapping(db, course, snapshot)
+        version = db.get(DBPlanVersion, path.source_plan_version_id)
+        if version:
+            content = _remap_source_context(version.content, mapping)
+            if content != version.content:
+                plan = db.get(DBPlanDraft, version.plan_draft_id)
+                last = db.query(DBPlanVersion).filter_by(plan_draft_id=plan.id).order_by(DBPlanVersion.version_number.desc()).first()
+                repaired = DBPlanVersion(plan_draft_id=plan.id, version_number=last.version_number + 1,
+                    profile_snapshot_id=version.profile_snapshot_id, content=content, content_hash=_hash(content),
+                    created_by_public_id=personal.recipient_public_id)
+                db.add(repaired); db.flush()
+                path.source_plan_version_id = repaired.id
+                if plan.current_version_id == version.id:
+                    plan.current_version_id = repaired.id
+                if plan.confirmed_version_id == version.id:
+                    plan.confirmed_version_id = repaired.id
+        for node in db.query(DBPathNode).filter_by(learning_path_id=path.id):
+            node.target_object_id = mapping.get(node.target_object_id, node.target_object_id)
+            node.node_key = mapping.get(node.node_key, node.node_key)
+            node.prerequisites = _remap_source_context(node.prerequisites, mapping)
+        db.flush()
 
 
 def _acquire_course(db: Any, actor: DBUser, listing: DBMarketplaceListing) -> dict[str, Any]:
@@ -1105,11 +1346,8 @@ def _merge_non_conflicting(base: dict[str, Any], local: dict[str, Any], upstream
         section, key = path.split(".", 1)
         if section == "course": result["course"][key] = copy.deepcopy(upstream["course"].get(key))
         else:
-            values = {item["filename"]: item for item in upstream.get(section, [])}
-            current = {item["filename"]: item for item in result.get(section, [])}
-            if key in values: current[key] = copy.deepcopy(values[key])
-            else: current.pop(key, None)
-            result[section] = [current[name] for name in sorted(current)]
+            result[section] = [item for item in result.get(section, []) if item['filename'] != key]
+            result[section].extend(copy.deepcopy(item) for item in upstream.get(section, []) if item['filename'] == key)
     return result
 
 

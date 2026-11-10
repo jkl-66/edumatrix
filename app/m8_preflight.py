@@ -59,7 +59,7 @@ def deployment_preflight() -> dict[str, Any]:
     )
     deterministic_model = CONFIG.llm_provider.strip().lower() in {"mock", "deterministic"}
     generation_runtime_available = runtime.text_model or deterministic_model
-    canonical_retrieval = published_documents > 0 and source_references > 0
+    canonical_retrieval = runtime.retrieval
 
     checks = {
         "database": {"available": database_available, "required": True, "error_code": database_error_code},
@@ -83,8 +83,9 @@ def deployment_preflight() -> dict[str, Any]:
         "vision_model": {"available": runtime.vision_model, "required": False},
         "retrieval": {
             "available": canonical_retrieval,
-            "backend": "faiss" if runtime.retrieval else "canonical_hash",
-            "faiss_available": runtime.retrieval,
+            "backend": "canonical",
+            "configured_embedding_provider": CONFIG.embedding_provider,
+            "faiss_available": any((ROOT / "data" / "faiss_indexes").glob("*.faiss")),
             "required": True,
         },
         "sandbox": {"available": runtime.sandbox_mode != "disabled", "mode": runtime.sandbox_mode, "required": False},

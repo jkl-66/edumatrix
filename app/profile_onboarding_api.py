@@ -115,10 +115,12 @@ async def submit_turn(payload: TurnInput, current_user: DBUser = Depends(get_cur
             question_dimension=payload.question_dimension,
             user_answer=payload.user_answer,
             feature_enabled=CONFIG.onboarding_v2,
-            extractor=lambda dimension, answer: llm_extract_candidates(
+            contextual_extractor=True,
+            extractor=lambda dimension, answer, confirmed_context=None: llm_extract_candidates(
                 dimension,
                 answer,
                 owner_public_id=user.public_id,
+                **({"confirmed_context": confirmed_context} if confirmed_context is not None else {}),
             ),
         )
     except OnboardingError as error:
@@ -152,8 +154,8 @@ async def upload_evidence(
     current_user: DBUser = Depends(get_current_user),
 ):
     user = _student(current_user)
-    raw = await file.read(CONFIG.max_upload_bytes + 1)
-    if len(raw) > CONFIG.max_upload_bytes:
+    raw = await file.read(CONFIG.max_upload_bytes + 1) if CONFIG.max_upload_bytes > 0 else await file.read()
+    if CONFIG.max_upload_bytes > 0 and len(raw) > CONFIG.max_upload_bytes:
         raise HTTPException(
             status_code=413,
             detail={"code": "personal_evidence_too_large", "message": "个人资料文件过大。"},

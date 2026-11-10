@@ -116,18 +116,103 @@ def test_normal_knowledge_points_select_distinct_applicable_templates():
     assert _interactive_template_for_knowledge_point("K-Means 聚类稳定性").template_id == "clustering-configuration"
     assert _interactive_template_for_knowledge_point("PCA 主成分降维").template_id == "dimensionality-reduction"
     assert _interactive_template_for_knowledge_point("梯度下降学习率").template_id == "optimization-dynamics"
+    assert _interactive_template_for_knowledge_point("Python 机器学习编程基础").template_id == "data-processing-sensitivity"
     assert _interactive_template_for_knowledge_point("课程历史背景") is None
     assert len(list_templates()) >= 7
 
 
+def test_confirmed_unit_scope_controls_template_through_prompt_generation_and_save():
+    import asyncio
+    from app.resource_bundles import _real_model_prompt, _shared_semantic_plan_async
+    manifest = _manifest("误差越低表示预测越准确")
+    scope = {"title": "理解预测误差", "goal": "比较模型表现", "knowledge_points": [
+        {"id": "definition", "title": "误差越低表示预测越准确"},
+        {"id": "comparison", "title": "训练误差与验证误差"},
+    ]}
+    manifest['context']['teaching_scope'] = scope
+    chosen = _interactive_template_for_knowledge_point("误差越低表示预测越准确", scope)
+    assert chosen.template_id == "model-complexity-generalization"
+    _, prompt = _real_model_prompt(resource_type="interactive_model", item={}, manifest=manifest,
+                                   source_snapshots=_source_snapshots())
+    assert json.loads(prompt)['interactive_template']['templateId'] == chosen.template_id
+    class Planner:
+        async def generate(self, system, user, *, role):
+            assert json.loads(user)['interactive_template']['templateId'] == chosen.template_id
+            return json.dumps({'plan':'按本单元比较训练与验证表现','summary':'比较误差','resourceBriefs':[]})
+    asyncio.run(_shared_semantic_plan_async(Planner(), manifest=manifest, source_snapshots=_source_snapshots()))
+    payload = _model_payload(chosen.template_id)
+    payload.pop('templateId'); payload.pop('parameters')
+    for unused in ('practiceSteps', 'starterCode', 'quizQuestions'):
+        payload.pop(unused, None)
+    generated = asyncio.run(_real_model_payload_async(_StaticBackend(payload), resource_type="interactive_model",
+        item={}, manifest=manifest, source_snapshots=_source_snapshots()))
+    content = parse_interactive_model_content(_llm_resource_content(resource_type="interactive_model",
+        item={"title":"预测误差实验","completion_rule":"比较两次实验结果"},manifest=manifest,
+        source_snapshots=_source_snapshots(),linked_resource_ids=[],llm_payload=generated))
+    assert content.templateId == chosen.template_id
+    assert validate_resource_template_content(content).template_id == chosen.template_id
+    # A general course ambition must not turn a history-only unit into RAG.
+    history = {"title":"大模型RAG工程", "goal":"优化检索", "knowledge_points":[{"title":"课程历史背景"}]}
+    assert _interactive_template_for_knowledge_point("混合检索", history) is None
+
+
 def test_each_supported_template_produces_content_that_runtime_can_run():
     for template in list_templates():
-        knowledge_point = template.applicability.split("、")[0]
+        knowledge_point = "Agent 工具调用" if template.template_id == "agent-workflow" else template.applicability.split("、")[0]
         content = parse_interactive_model_content(_content(knowledge_point, template.template_id))
         assert content.templateId == template.template_id
         assert validate_resource_template_content(content).template_id == template.template_id
         assert {item.key for item in content.parameters} == {item.key for item in template.parameters}
         assert {item.key for item in content.chart.series} == {item.key for item in template.metrics}
+
+
+def test_localized_lab_labels_survive_generation_and_runtime_without_changing_math():
+    import asyncio
+    from app.interactive_lab import get_instance
+    from app.m5_capabilities import M5CapabilityError
+    payload = _model_payload("inventory-demand-boundary")
+    names = {"initial_stock": "Stock on hand", "lead_days": "Fixed delivery time",
+             "demand_variation": "Demand variation", "backorder": "Unmet demand: 0 lost, 1 backordered"}
+    for parameter in payload["parameters"]:
+        parameter["label"] = names[parameter["key"]]
+        parameter["description"] = "Use the displayed setting for each of the ten teaching cases."
+    for metric in payload["chart"]["series"]:
+        metric["label"] = {"immediate_fill_rate": "Immediate fill rate", "average_unmet": "Average unmet demand",
+                           "average_backlog": "Average backlog", "average_lost": "Average lost sales"}[metric["key"]]
+    generated = asyncio.run(_real_model_payload_async(_StaticBackend(payload), resource_type="interactive_model",
+        item={}, manifest=_manifest("库存模型假设"), source_snapshots=_source_snapshots()))
+    content = _llm_resource_content(resource_type="interactive_model", item={"title":"Inventory experiment"},
+        manifest=_manifest("库存模型假设"), source_snapshots=_source_snapshots(), linked_resource_ids=[], llm_payload=generated)
+    parsed = parse_interactive_model_content(content)
+    assert parsed.parameters[0].label == "Stock on hand"
+    assert parsed.chart.series[0].label == "Immediate fill rate"
+    validate_resource_template_content(parsed)
+    engine, session = _session()
+    try:
+        seed_competition_demo(session)
+        learner = session.query(DBUser).filter_by(username="lzz").one()
+        artifact, version = create_artifact_with_version(session, owner_public_id=learner.public_id,
+            artifact_type="interactive_model", title="Inventory experiment", content=content, content_format="json",
+            course_id=COURSE_ID, metadata={"resource_type":"interactive_model", "source_ref_ids":["demo-ref-07"]})
+        state, _, _ = create_instance(session, owner=learner.public_id, template_id=None, title=None,
+            parameters=None, linked_media_resource_id=None, source_resource_id=artifact.id, idempotency_key="localized-inventory")
+        result, _ = apply_action(session, instance_id=state.instance_id, owner=learner.public_id, action="run",
+            parameters=None, observation=None, expected_version=1, idempotency_key="localized-inventory-run")
+        assert result["metrics"]["immediate_fill_rate"] == pytest.approx(109 / 110 * 100, abs=.001)
+        assert get_instance(session, state.instance_id, learner.public_id)["metrics"] == result["metrics"]
+        assert session.get(type(version), version.id).content == content
+        for field, wrong in (("maximum", 600), ("unit", "kg"), ("step", 2)):
+            altered = json.loads(content)
+            altered["parameters"][0][field] = wrong
+            with pytest.raises(M5CapabilityError, match="参数范围|指标定义"):
+                validate_resource_template_content(parse_interactive_model_content(json.dumps(altered)))
+        altered = json.loads(content)
+        altered["chart"]["series"][0]["higherIsBetter"] = False
+        with pytest.raises(M5CapabilityError, match="参数范围|指标定义"):
+            validate_resource_template_content(parse_interactive_model_content(json.dumps(altered)))
+    finally:
+        session.close()
+        engine.dispose()
 
 
 def test_model_invented_parameter_is_rejected_before_persistence():
@@ -319,3 +404,17 @@ def test_runtime_run_does_not_create_learning_event_for_valid_model():
     finally:
         session.close()
         engine.dispose()
+
+
+def test_formula_simulation_keeps_zero_rows_through_normalization_and_storage_contract():
+    from app.resource_bundles import _normalize_interactive_dataset
+    from app.m5_resources import InteractiveModelDataset
+    payload = {'dataset': {'id': 'simulation', 'title': '复杂度模拟', 'summary': '参数公式计算。', 'sampleCount': 0}}
+    normalized = _normalize_interactive_dataset(payload, knowledge_point='泛化')
+    dataset = InteractiveModelDataset(**normalized['dataset'], sourceRefIds=['source-1'])
+    assert dataset.sampleCount == 0
+    assert payload['dataset']['sampleCount'] == 0
+    missing = _normalize_interactive_dataset({'dataset': {'title': '实验', 'summary': '记录'}}, knowledge_point='泛化')
+    assert missing['dataset']['sampleCount'] is None
+    with pytest.raises(ValueError):
+        InteractiveModelDataset(**missing['dataset'], sourceRefIds=['source-1'])

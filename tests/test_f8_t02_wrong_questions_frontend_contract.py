@@ -102,7 +102,8 @@ def test_similar_challenge_preserves_result_after_refresh_and_shows_feedback() -
     submit = view[view.index("async function submitSimilar"):view.index("function openRoute")]
 
     for marker in (
-        "const submittedResult = await evaluateQuizAnswer(",
+        "submittedResult = await evaluateQuizAnswer(",
+        "await submitM5AssessmentAttempt(",
         "const submittedQuiz = similarQuiz.value",
         "await loadData()",
         "similarQuiz.value = submittedQuiz",
@@ -183,14 +184,15 @@ def test_route_and_full_user_states_are_preserved() -> None:
     router = source(ROUTER)
 
     assert "path: '/workspace/review/wrong-questions'" in router
-    assert "legacy('/wrong-questions'" in router
+    contracts = __import__("json").loads(source(ROOT / "frontend/src/router/routeMigrationContract.json"))
+    assert next(item for item in contracts if item["sourcePath"] == "/wrong-questions")["destination"] == "/workspace/review/wrong-questions"
     for marker in (
         'data-testid="wrong-question-error"',
         'data-testid="wrong-question-empty"',
         'data-testid="wrong-question-filter-empty"',
         "错题加载中",
         "反馈尚未开放",
-        "来源已撤回或定位缺失",
+        "材料已撤回或位置缺失",
         "判分中",
         "本次仍需巩固",
         "回答正确",

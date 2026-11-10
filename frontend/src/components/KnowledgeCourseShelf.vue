@@ -1,6 +1,9 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useCourseContextStore } from '../stores/courseContext'
 import {
   ArrowLeft,
   ArrowRight,
@@ -14,9 +17,9 @@ import {
   Library,
   LoaderCircle,
   Plus,
+  Pin,
   RefreshCw,
   Search,
-  ShieldCheck,
   Upload,
   X,
 } from '@lucide/vue'
@@ -29,12 +32,17 @@ import {
   getKnowledgeDocument,
   listKnowledgeCourseShelf,
   uploadKnowledgeDocumentsBatch,
+  retryCourseSourceReading,
 } from '../api'
 import SearchField from './ui/SearchField.vue'
+import CourseStructureEditor from './CourseStructureEditor.vue'
+import { renderCourseDocument, renderCourseMath } from '../utils/courseDocumentRenderer.js'
+import { arrangeCourseMaterials, readMaterialBrowser, saveMaterialBrowser } from '../utils/courseMaterialBrowser.js'
 
 const emit = defineEmits(['open-source', 'open-search-result'])
 const route = useRoute()
 const router = useRouter()
+const courseContext = useCourseContextStore()
 
 const catalog = ref(null)
 const catalogStatus = ref('loading')
@@ -47,8 +55,36 @@ const outlineError = ref('')
 const selectedChapterId = ref('')
 const selectedResourceId = ref('')
 const resourceTypeFilter = ref('all')
+const materialQuery = ref('')
+const materialSort = ref('course')
+const pinnedMaterials = ref([])
+const recentMaterials = ref([])
+const restoredCourseId = ref('')
+let outlineRequest = 0
+const sourceRequests = new Set()
 const sourceDetails = ref({})
+const readingRetryId = ref('')
+const readingRetryMessage = ref('')
+const resourcePreview = computed(() => {
+  const content = selectedResourceDetail.value?.content || ''
+  const container = document.createElement('div')
+  container.innerHTML = renderCourseDocument(content.slice(0, 12000)).html
+  container.querySelectorAll('button').forEach(button => button.remove())
+  const paragraphs = [...container.querySelectorAll('.lesson-block--explanation p, table tr')]
+  const text = (paragraphs.length ? paragraphs.map(item => item.tagName === 'TR'
+    ? [...item.cells].map(cell => cell.textContent.trim()).join(' · ')
+    : item.textContent).join('\n\n') : container.textContent).replace(/[ \t]+/g, ' ').trim()
+  return text.slice(0, 280) + (text.length > 280 ? '…' : '')
+})
+function searchExcerpt(content) {
+  const container = document.createElement('div')
+  container.innerHTML = renderCourseDocument(content || '').html
+  container.querySelectorAll('button,.lesson-block__label').forEach(element => element.remove())
+  renderCourseMath(container, window.katex)
+  return container.innerHTML
+}
 const resourceDetailStatus = ref('idle')
+const resourceDetailError = ref('')
 const searchQuery = ref('')
 const searchStatus = ref('idle')
 const searchError = ref('')
@@ -61,9 +97,11 @@ const uploadInput = ref(null)
 const uploadStatus = ref('idle')
 const uploadError = ref('')
 const uploadMessage = ref('')
+const uploadFailures = ref([])
 const materialPreview = ref(null)
 const materialPreviewStatus = ref('idle')
 const materialPreviewError = ref('')
+const structureEditorOpen = ref(false)
 
 const shelfCourses = computed(() => catalog.value?.shelf || [])
 const recommendations = computed(() => catalog.value?.recommendations || [])
@@ -100,7 +138,9 @@ const resourceItems = computed(() => {
       groups.set(id, {
         id,
         source_document_id: chapter.source_document_id || '',
-        title: sourceDetails.value[id]?.title || chapter.title,
+        title: sourceDetails.value[id]?.title || chapter.source_title || chapter.title,
+        fileType: chapter.source_file_format || '',
+        processingStatus: chapter.source_processing_status || '',
         chapters: [],
         knowledgePointCount: 0,
       })
@@ -108,33 +148,66 @@ const resourceItems = computed(() => {
     const item = groups.get(id)
     item.chapters.push(chapter)
     item.knowledgePointCount += chapter.knowledge_points?.length || 0
-    if (!sourceDetails.value[id]?.title && chapter.title) item.title = chapter.title
   })
   return [...groups.values()].map(item => ({
     ...item,
-    fileType: sourceDetails.value[item.id]?.file_type || sourceDetails.value[item.id]?.file_format || 'resource',
-    processingStatus: sourceDetails.value[item.id]?.source_processing_status || sourceDetails.value[item.id]?.processing_status || 'ready',
+    fileType: sourceDetails.value[item.id]?.file_type || sourceDetails.value[item.id]?.file_format || item.fileType || 'resource',
+    processingStatus: sourceDetails.value[item.id]?.source_processing_status || sourceDetails.value[item.id]?.processing_status || item.processingStatus || 'ready',
   }))
 })
 const resourceTypeOptions = computed(() => {
   const types = new Set(resourceItems.value.map(item => resourceType(item)))
   return ['all', ...[...types].filter(type => type !== 'all')]
 })
-const filteredResources = computed(() => (
+const filteredResources = computed(() => arrangeCourseMaterials(
   resourceTypeFilter.value === 'all'
     ? resourceItems.value
-    : resourceItems.value.filter(item => resourceType(item) === resourceTypeFilter.value)
+    : resourceItems.value.filter(item => resourceType(item) === resourceTypeFilter.value),
+  { query: materialQuery.value, sort: materialSort.value, pinned: pinnedMaterials.value, recent: recentMaterials.value },
 ))
 const selectedResource = computed(() => (
-  resourceItems.value.find(item => item.id === selectedResourceId.value)
+  filteredResources.value.find(item => item.id === selectedResourceId.value)
   || filteredResources.value[0]
-  || resourceItems.value[0]
   || null
 ))
 const selectedResourceDetail = computed(() => (
   selectedResource.value ? sourceDetails.value[selectedResource.value.id] || null : null
 ))
-const firstShelfCourse = computed(() => shelfCourses.value[0] || null)
+const imageReadingIncomplete = computed(() => ['partial', 'unavailable'].includes(
+  selectedResourceDetail.value?.source_parser_metadata?.visual_reading?.status,
+))
+
+async function retryImageReading() {
+  const sourceId = selectedResource.value?.source_document_id
+  const courseId = activeCourseId.value
+  if (!sourceId || readingRetryId.value) return
+  readingRetryId.value = sourceId
+  readingRetryMessage.value = ''
+  try {
+    const result = await retryCourseSourceReading(sourceId)
+    if (activeCourseId.value !== courseId) return
+    if (result.visual_retry === 'unchanged') {
+      readingRetryMessage.value = '图片仍未读完整，可先阅读原文件，稍后再试。'
+      return
+    }
+    if (result.source_processing_status !== 'ready') {
+      readingRetryMessage.value = '章节暂未整理完成，请稍后再试。'
+      return
+    }
+    await loadCatalog()
+    await loadOutline(courseId)
+    selectedResourceId.value = result.source_document_id
+    await loadSourceDetail(result.source_document_id)
+  } catch (error) {
+    if (activeCourseId.value === courseId) readingRetryMessage.value = apiErrorMessage(error, '图片暂未读完，请稍后再试。')
+  } finally {
+    readingRetryId.value = ''
+  }
+}
+
+watch(() => selectedResource.value?.id, () => { readingRetryMessage.value = '' })
+const continuingCourse = computed(() => shelfCourses.value.find(course => course.id === courseContext.contextRef.courseId) || null)
+const firstShelfCourse = computed(() => continuingCourse.value || shelfCourses.value[0] || null)
 
 function apiErrorMessage(error, fallback) {
   const detail = error?.response?.data?.detail
@@ -147,17 +220,13 @@ function courseMark(course) {
   const text = `${course?.subject || ''} ${course?.title || ''}`.toLowerCase()
   if (text.includes('edge') || text.includes('边缘')) return 'EDGE'
   if (text.includes('rag') || text.includes('检索')) return 'RAG'
-  return 'ML'
+  return Array.from(String(course?.title || '课程').trim()).slice(0, 2).join('') || '课程'
 }
 
 function sourceLabel(course) {
-  if (course?.source_health === 'ready' && course?.index_status === 'ready') return '来源与索引完整'
+  if (course?.source_health === 'ready' && course?.index_status === 'ready') return ''
   if (course?.source_health === 'missing') return '来源信息待补充'
   return '部分资料仍在整理'
-}
-
-function sourceTone(course) {
-  return course?.source_health === 'ready' && course?.index_status === 'ready' ? 'ready' : 'attention'
 }
 
 function resourceType(item) {
@@ -292,16 +361,22 @@ async function uploadCourseFiles(event) {
   uploadStatus.value = 'loading'
   uploadError.value = ''
   uploadMessage.value = ''
+  uploadFailures.value = []
   try {
     const result = await uploadKnowledgeDocumentsBatch(files, 'default', activeCourse.value.id)
-    const failedNames = (result.results || [])
+    uploadFailures.value = (result.results || [])
       .filter(item => item.status === 'failed')
-      .map(item => item.filename)
-    uploadMessage.value = `${result.succeeded || 0} 份资料已进入课程${failedNames.length ? `，${failedNames.length} 份失败` : ''}`
-    if (failedNames.length) uploadError.value = `未完成：${failedNames.join('、')}`
+      .map(item => ({
+        filename: item.filename,
+        message: userMessage({
+          detail: item.error || item.document?.knowledge_extraction?.error,
+          status: item.http_status,
+        }, '这份资料还没有整理完成，请重新选择文件上传。'),
+      }))
+    uploadMessage.value = `${result.succeeded || 0} 份资料已进入课程${uploadFailures.value.length ? `，${uploadFailures.value.length} 份未完成` : ''}`
     await loadCatalog()
     await loadOutline(activeCourse.value.id)
-    uploadStatus.value = failedNames.length ? 'partial' : 'ready'
+    uploadStatus.value = uploadFailures.value.length ? 'partial' : 'ready'
   } catch (error) {
     uploadStatus.value = 'failed'
     uploadError.value = apiErrorMessage(error, '资料上传失败，请重试')
@@ -309,6 +384,7 @@ async function uploadCourseFiles(event) {
 }
 
 async function loadOutline(courseId) {
+  const request = ++outlineRequest
   if (!courseId) {
     outline.value = []
     outlineStatus.value = 'idle'
@@ -318,14 +394,22 @@ async function loadOutline(courseId) {
   outlineError.value = ''
   try {
     const result = await getCanonicalCourseOutline(courseId)
+    if (request !== outlineRequest) return
+    const saved = readMaterialBrowser(localStorage, currentUsername.value, courseId)
+    materialQuery.value = typeof saved.query === 'string' ? saved.query : ''
+    materialSort.value = ['course', 'title', 'recent'].includes(saved.sort) ? saved.sort : 'course'
+    pinnedMaterials.value = Array.isArray(saved.pinned) ? saved.pinned : []
+    recentMaterials.value = Array.isArray(saved.recent) ? saved.recent : []
     outline.value = Array.isArray(result) ? result : []
     selectedChapterId.value = rootChapters.value.some(item => item.id === selectedChapterId.value)
       ? selectedChapterId.value
       : rootChapters.value[0]?.id || ''
-    selectedResourceId.value = ''
-    resourceTypeFilter.value = 'all'
+    resourceTypeFilter.value = resourceTypeOptions.value.includes(saved.type) ? saved.type : 'all'
+    selectedResourceId.value = saved.selected || ''
+    restoredCourseId.value = courseId
     outlineStatus.value = outline.value.length ? 'ready' : 'empty'
   } catch (error) {
+    if (request !== outlineRequest) return
     outline.value = []
     outlineStatus.value = 'failed'
     outlineError.value = apiErrorMessage(error, '课程章节加载失败')
@@ -334,20 +418,40 @@ async function loadOutline(courseId) {
 
 async function loadSourceDetail(sourceDocumentId) {
   if (!sourceDocumentId || sourceDetails.value[sourceDocumentId]) return
+  const courseId = activeCourseId.value
+  const requestKey = `${courseId}:${sourceDocumentId}`
+  if (sourceRequests.has(requestKey)) return
+  sourceRequests.add(requestKey)
   resourceDetailStatus.value = 'loading'
+  resourceDetailError.value = ''
   try {
     const detail = await getCanonicalCourseSource(sourceDocumentId)
+    if (courseId !== activeCourseId.value) return
     sourceDetails.value = { ...sourceDetails.value, [sourceDocumentId]: detail }
-    resourceDetailStatus.value = 'ready'
+    if (selectedResource.value?.source_document_id === sourceDocumentId) resourceDetailStatus.value = 'ready'
   } catch (error) {
-    resourceDetailStatus.value = 'failed'
+    if (courseId === activeCourseId.value && selectedResource.value?.source_document_id === sourceDocumentId) {
+      resourceDetailStatus.value = 'failed'
+      resourceDetailError.value = '这份资料的预览暂时没有打开，请重试，或直接阅读全文。'
+    }
+  } finally {
+    sourceRequests.delete(requestKey)
   }
 }
 
 function selectResource(resource) {
   if (!resource) return
   selectedResourceId.value = resource.id
+  recentMaterials.value = [resource.id, ...recentMaterials.value.filter(id => id !== resource.id)].slice(0, 40)
   void loadSourceDetail(resource.source_document_id)
+}
+
+function toggleMaterialPin() {
+  const id = selectedResource.value?.id
+  if (!id) return
+  pinnedMaterials.value = pinnedMaterials.value.includes(id)
+    ? pinnedMaterials.value.filter(item => item !== id)
+    : [...pinnedMaterials.value, id]
 }
 
 function openResource(resource = selectedResource.value) {
@@ -356,7 +460,6 @@ function openResource(resource = selectedResource.value) {
   emit('open-source', {
     courseId: activeCourse.value?.id,
     sourceDocumentId: resource.source_document_id,
-    chapterId: chapter.id,
     title: resource.title,
   })
 }
@@ -406,6 +509,8 @@ function openSearchResult(item) {
 }
 
 watch(activeCourseId, courseId => {
+  restoredCourseId.value = ''
+  outline.value = []
   searchQuery.value = ''
   searchReport.value = null
   searchStatus.value = 'idle'
@@ -414,12 +519,21 @@ watch(activeCourseId, courseId => {
   loadOutline(courseId)
 }, { immediate: true })
 
-watch([resourceItems, resourceTypeFilter], () => {
+watch(filteredResources, () => {
   if (!filteredResources.value.some(item => item.id === selectedResourceId.value)) {
-    selectedResourceId.value = filteredResources.value[0]?.id || resourceItems.value[0]?.id || ''
+    selectedResourceId.value = filteredResources.value[0]?.id || ''
   }
   if (selectedResource.value?.source_document_id) void loadSourceDetail(selectedResource.value.source_document_id)
 }, { immediate: true })
+
+watch([selectedResourceId, resourceTypeFilter, materialQuery, materialSort, pinnedMaterials, recentMaterials], () => {
+  if (restoredCourseId.value !== activeCourseId.value || outlineStatus.value !== 'ready') return
+  saveMaterialBrowser(localStorage, currentUsername.value, activeCourseId.value, {
+    selected: selectedResourceId.value, type: resourceTypeFilter.value,
+    query: materialQuery.value, sort: materialSort.value,
+    pinned: pinnedMaterials.value, recent: recentMaterials.value,
+  })
+})
 
 onMounted(loadCatalog)
 </script>
@@ -430,7 +544,6 @@ onMounted(loadCatalog)
       <LoaderCircle :size="22" class="state-spinner" />
       <div>
         <strong>正在整理课程书架</strong>
-        <p>读取预置课程、章节和来源状态。</p>
       </div>
     </section>
 
@@ -438,7 +551,7 @@ onMounted(loadCatalog)
       <CircleAlert :size="22" />
       <div>
         <strong>课程书架暂时无法打开</strong>
-        <p>{{ catalogError }}</p>
+        <p>{{ userMessage(catalogError) }}</p>
         <button type="button" class="secondary-button" @click="loadCatalog">
           <RefreshCw :size="16" />重新加载
         </button>
@@ -449,7 +562,7 @@ onMounted(loadCatalog)
       <Library :size="24" />
       <div>
         <strong>还没有可用课程</strong>
-        <p>课程资料不会要求学生在首次使用时上传；课程发布后会直接显示在这里。</p>
+        <p>新建一门课程，整理你的学习资料。</p>
         <button type="button" class="primary-button empty-state-create" data-testid="create-personal-course-empty" @click="openCourseCreator">
           <Plus :size="17" />新建课程
         </button>
@@ -460,14 +573,13 @@ onMounted(loadCatalog)
       <header class="page-intro">
         <div>
           <h1>课程知识库</h1>
-          <p>从团队预置课程直接开始。章节、正文、知识点和来源已经按课程组织，无需先上传教材。</p>
         </div>
         <div class="page-intro__actions">
           <button type="button" class="secondary-button" data-testid="create-personal-course" @click="openCourseCreator">
             <Plus :size="17" />新建课程
           </button>
           <button v-if="firstShelfCourse" type="button" class="primary-button" @click="openCourse(firstShelfCourse)">
-            继续学习<ArrowRight :size="17" />
+            {{ continuingCourse ? '继续学习' : '开始学习' }}<ArrowRight :size="17" />
           </button>
         </div>
       </header>
@@ -475,8 +587,7 @@ onMounted(loadCatalog)
       <section class="shelf-section" aria-labelledby="my-shelf-title">
         <div class="section-heading">
           <div>
-            <h2 id="my-shelf-title">我的书架</h2>
-            <p>{{ shelfCourses.length }} 门可直接学习的课程</p>
+            <h2 id="my-shelf-title">我的书架<span class="shelf-count">{{ shelfCourses.length }}</span></h2>
           </div>
         </div>
 
@@ -484,27 +595,25 @@ onMounted(loadCatalog)
           <article v-for="course in shelfCourses" :key="course.id" class="course-card" :data-testid="`shelf-course-${course.id}`">
             <div class="course-spine" aria-hidden="true">
               <span>{{ courseMark(course) }}</span>
-              <small>{{ course.shelf_origin === 'team_preloaded' ? 'PRESET' : 'SHELF' }}</small>
             </div>
             <div class="course-card__body">
               <div class="course-card__heading">
                 <div>
                   <h3>{{ course.title }}</h3>
-                  <p>{{ course.subject || course.domain_pack }}</p>
+                  <p v-if="course.subject">{{ course.subject }}</p>
                 </div>
-                <span class="status-badge" :data-tone="sourceTone(course)">
-                  <ShieldCheck :size="14" />{{ sourceLabel(course) }}
+                <span v-if="sourceLabel(course)" class="status-badge" data-tone="attention">
+                  <CircleAlert :size="14" />{{ sourceLabel(course) }}
                 </span>
               </div>
-              <p class="course-description">{{ course.description }}</p>
-              <dl class="course-facts">
-                <div><dt>章节</dt><dd>{{ course.chapter_count }}</dd></div>
-                <div><dt>文档</dt><dd>{{ course.document_count }}</dd></div>
-                <div><dt>知识点</dt><dd>{{ course.knowledge_point_count }}</dd></div>
-                <div><dt>来源</dt><dd>{{ course.source_count }}</dd></div>
-              </dl>
+              <p class="course-description">{{ learningText(course.description) }}</p>
+              <p class="course-facts" aria-label="课程规模">
+                <span>{{ course.chapter_count }} 章</span>
+                <span>{{ course.knowledge_point_count }} 个知识点</span>
+                <span>{{ course.document_count }} 份资料</span>
+              </p>
               <div class="course-card__footer">
-                <span>{{ course.version }} · {{ course.language || '中文' }}</span>
+                <span>{{ course.language === 'en' ? '英文资料' : course.language === 'zh-CN' || !course.language ? '中文资料' : course.language }}</span>
                 <button type="button" class="secondary-button" :data-testid="`open-course-${course.id}`" @click="openCourse(course)">
                   打开课程<ChevronRight :size="16" />
                 </button>
@@ -514,11 +623,10 @@ onMounted(loadCatalog)
         </div>
       </section>
 
-      <section class="shelf-section" aria-labelledby="recommendation-title">
+      <section v-if="recommendations.length" class="shelf-section" aria-labelledby="recommendation-title">
         <div class="section-heading">
           <div>
             <h2 id="recommendation-title">智能推荐</h2>
-            <p>{{ catalog.profile_basis?.explanation }}</p>
           </div>
         </div>
 
@@ -527,8 +635,8 @@ onMounted(loadCatalog)
             <div class="recommendation-cover" aria-hidden="true">{{ courseMark(course) }}</div>
             <div class="recommendation-copy">
               <h3>{{ course.title }}</h3>
-              <p>{{ course.recommendation_reason }}</p>
-              <span>{{ course.chapter_count }} 章 · {{ course.document_count }} 份文档 · {{ sourceLabel(course) }}</span>
+              <p>{{ learningText(course.recommendation_reason) }}</p>
+              <span>{{ course.chapter_count }} 章 · {{ course.document_count }} 份文档<span v-if="sourceLabel(course)"> · {{ sourceLabel(course) }}</span></span>
             </div>
             <button type="button" class="secondary-button" :data-testid="`add-course-${course.id}`" :disabled="addingCourseId === course.id" @click="addCourse(course)">
               <LoaderCircle v-if="addingCourseId === course.id" :size="16" class="state-spinner" />
@@ -537,15 +645,14 @@ onMounted(loadCatalog)
             </button>
           </article>
         </div>
-        <div v-else class="quiet-state">当前已审核课程都在你的书架中。</div>
-        <p v-if="actionMessage" class="action-message" aria-live="polite"><Check :size="16" />{{ actionMessage }}</p>
       </section>
+      <p v-if="actionMessage" class="action-message" aria-live="polite"><Check :size="16" />{{ actionMessage }}</p>
 
-      <section class="shelf-section material-recommendation-section" aria-labelledby="material-recommendation-title">
+      <section v-if="materialRecommendations.length" class="shelf-section material-recommendation-section" aria-labelledby="material-recommendation-title">
         <div class="section-heading">
           <div>
             <h2 id="material-recommendation-title">教材补充推荐</h2>
-            <p>这些资料尚未纳入当前课程书架，适合作为辅助阅读；查看不会改变课程检索或学习进度。</p>
+            <p>辅助阅读，尚未加入课程。</p>
           </div>
           <span>{{ materialRecommendations.length }} 份资料</span>
         </div>
@@ -558,15 +665,14 @@ onMounted(loadCatalog)
                 <h3>{{ material.title }}</h3>
                 <span class="material-quality-badge">{{ material.quality_label }}</span>
               </div>
-              <p>{{ material.recommendation_reason }}</p>
-              <span>{{ material.chunk_count }} 个解析分块 · {{ material.owner_scope === 'personal' ? '你的资料' : '公共资料' }} · {{ material.traceability === 'canonical_source' ? '来源可定位' : '辅助材料 / 待审核' }}</span>
+              <p>{{ learningText(material.recommendation_reason) }}</p>
+              <span>{{ material.owner_scope === 'personal' ? '你的资料' : '公共资料' }} · {{ material.traceability === 'canonical_source' ? '可查看原文' : '辅助材料 / 待审核' }}</span>
             </div>
             <button type="button" class="secondary-button" :data-testid="`open-material-${material.id}`" @click="openMaterial(material)">
               <FileText :size="16" />{{ material.open_mode === 'reader' ? '打开教材' : '查看预览' }}
             </button>
           </article>
         </div>
-        <div v-else class="quiet-state" data-testid="material-recommendations-empty">暂无符合质量和权限条件的教材补充资料。</div>
       </section>
 
       <div v-if="materialPreview" class="material-preview-backdrop" role="presentation" @click.self="closeMaterialPreview">
@@ -581,11 +687,11 @@ onMounted(loadCatalog)
           <div v-if="materialPreviewStatus === 'loading'" class="material-preview-state"><LoaderCircle :size="20" class="state-spinner" />正在读取教材正文…</div>
           <div v-else-if="materialPreviewStatus === 'failed'" class="material-preview-state material-preview-state--error" role="alert">
             <CircleAlert :size="20" />
-            <span>{{ materialPreviewError }}</span>
+            <span>{{ userMessage(materialPreviewError) }}</span>
             <button type="button" class="text-button" @click="openMaterial(materialPreview)">重试</button>
           </div>
           <div v-else class="material-preview-content">
-            <div class="material-preview-facts"><span>{{ materialPreview.file_type?.toUpperCase() }}</span><span>{{ materialPreview.chunk_count }} 个分块</span><span>待课程审核</span></div>
+            <div class="material-preview-facts"><span>{{ materialPreview.file_type?.toUpperCase() }}</span><span>待课程审核</span></div>
             <p>{{ materialPreview.detail?.content || materialPreview.content_preview }}</p>
           </div>
         </section>
@@ -595,7 +701,7 @@ onMounted(loadCatalog)
         <div class="discovery-band__icon"><FileSearch :size="22" /></div>
         <div>
           <h2 id="discovery-title">联网发现</h2>
-          <p>查找新的教材和课程资料。联网结果先作为候选来源，完成来源与许可确认后才能加入课程知识库。</p>
+          <p>查找公开教材、论文和课程资料。</p>
         </div>
         <button type="button" class="secondary-button" data-testid="enter-knowledge-discovery" @click="router.push('/knowledge/discover')">
           进入联网发现<ArrowRight :size="16" />
@@ -611,33 +717,39 @@ onMounted(loadCatalog)
         <div v-if="activeCourse" class="course-header__main">
           <div>
             <h1>{{ viewKind === 'graph' ? '课程知识图谱' : activeCourse.title }}</h1>
-            <p>{{ viewKind === 'graph' ? '查看课程中已经验证的章节与知识点结构。浏览不会改变学习掌握度。' : activeCourse.description }}</p>
+            <p>{{ viewKind === 'graph' ? '查看章节与知识点的关系。' : activeCourse.description }}</p>
           </div>
           <div class="course-header__actions">
-            <span class="status-badge" :data-tone="sourceTone(activeCourse)">
-              <ShieldCheck :size="14" />{{ sourceLabel(activeCourse) }}
+            <span v-if="sourceLabel(activeCourse)" class="status-badge" data-tone="attention">
+              <CircleAlert :size="14" />{{ sourceLabel(activeCourse) }}
             </span>
             <button v-if="viewKind === 'course' && activeCourse.can_manage" type="button" class="secondary-button" data-testid="add-course-material" :disabled="uploadStatus === 'loading'" @click="chooseCourseFiles">
               <LoaderCircle v-if="uploadStatus === 'loading'" :size="16" class="state-spinner" />
               <Upload v-else :size="16" />
               {{ uploadStatus === 'loading' ? '处理资料中' : '添加资料' }}
             </button>
+            <button v-if="viewKind === 'course' && activeCourse.can_manage" type="button" class="secondary-button" data-testid="edit-course-structure" @click="structureEditorOpen = !structureEditorOpen">整理结构</button>
             <button v-if="viewKind === 'course'" type="button" class="secondary-button" data-testid="open-course-structure" @click="openGraph(activeCourse)">
               <GitBranch :size="16" />查看课程结构
             </button>
           </div>
         </div>
       </header>
+      <CourseStructureEditor v-if="structureEditorOpen && activeCourse?.can_manage" :key="activeCourseId" :course-id="activeCourseId" @close="structureEditorOpen = false" @applied="loadOutline(activeCourseId); loadCatalog()" />
       <input
         ref="uploadInput"
         class="visually-hidden"
         type="file"
         multiple
-        accept=".ppt,.pdf,.docx,.pptx,.ipynb,.md,.txt,.json,.py,.mp4,.avi,.mov,.mkv,.webm,.flv"
+        accept=".ppt,.pdf,.docx,.pptx,.ipynb,.md,.html,.htm,.txt,.json,.py,.mp4,.avi,.mov,.mkv,.webm,.flv"
         @change="uploadCourseFiles"
       />
       <p v-if="uploadMessage" class="action-message" aria-live="polite"><Check :size="16" />{{ uploadMessage }}</p>
-      <p v-if="uploadError" class="inline-error" role="alert">{{ uploadError }}</p>
+      <p v-if="uploadError" class="inline-error" role="alert">{{ userMessage(uploadError) }}</p>
+      <div v-if="uploadFailures.length" class="inline-error" role="alert">
+        <p v-for="item in uploadFailures" :key="item.filename">{{ item.filename }}：{{ item.message }}</p>
+        <p>已成功的资料可以继续阅读。请检查未完成的文件，再点“添加资料”重新上传。</p>
+      </div>
 
       <section v-if="!activeCourse" class="state-panel state-panel--error">
         <CircleAlert :size="22" />
@@ -657,7 +769,7 @@ onMounted(loadCatalog)
         <CircleAlert :size="22" />
         <div>
           <strong>章节暂时无法打开</strong>
-          <p>{{ outlineError }}</p>
+          <p>{{ userMessage(outlineError) }}</p>
           <button type="button" class="secondary-button" @click="loadOutline(activeCourse.id)"><RefreshCw :size="16" />重试</button>
         </div>
       </section>
@@ -674,23 +786,29 @@ onMounted(loadCatalog)
       <section v-else-if="viewKind === 'course'" class="course-main-view" data-testid="course-workspace">
         <section class="course-search course-search--shelf" aria-labelledby="course-search-title">
           <div>
-            <h2 id="course-search-title">检索课程正文</h2>
-            <p>结果只来自当前课程已解析正文，并保留章节和来源定位。</p>
+            <h2 id="course-search-title">在课程中找答案</h2>
           </div>
           <form class="search-form" @submit.prevent="runCourseSearch">
             <SearchField v-model="searchQuery" class="course-search-field" style="flex: 1" :bordered="false" maxlength="500" aria-label="课程正文检索词" placeholder="输入概念或问题" />
             <button type="submit" class="secondary-button" :disabled="searchStatus === 'loading' || !searchQuery.trim()">
-              {{ searchStatus === 'loading' ? '检索中' : '检索' }}
+              {{ searchStatus === 'loading' ? '查找中' : '查找正文' }}
             </button>
           </form>
-          <p v-if="searchStatus === 'failed'" class="inline-error" role="alert">{{ searchError }} <button type="button" @click="runCourseSearch">重试</button></p>
+          <p v-if="searchStatus === 'failed'" class="inline-error" role="alert">{{ userMessage(searchError) }} <button type="button" @click="runCourseSearch">重试</button></p>
           <p v-else-if="searchStatus === 'empty'" class="quiet-state">当前课程正文中没有找到足够匹配的内容，请换一个更具体的说法。</p>
           <div v-else-if="searchStatus === 'ready'" class="search-results" data-testid="course-search-results">
             <article v-for="item in searchReport.items" :key="item.document_id" class="search-result">
               <div>
                 <h3>{{ item.title }}</h3>
-                <p>{{ item.content_preview }}</p>
-                <span>{{ item.chapter_title }} · 来源可定位</span>
+                <div class="search-excerpt" v-html="searchExcerpt(item.content_excerpt || item.content_preview)"></div>
+                <span v-if="item.chapter_title && item.chapter_title !== item.title">{{ item.chapter_title }}</span>
+                <details v-if="item.matches?.length > 1" class="search-passages">
+                  <summary>其他相关段落</summary>
+                  <div v-for="match in item.matches.slice(1)" :key="match.evidence_id" class="search-passage">
+                    <div class="search-excerpt" v-html="searchExcerpt(match.content_excerpt || match.content_preview)"></div>
+                    <button type="button" class="text-button" @click="openSearchResult({ ...item, ...match })">{{ match.chapter_title || '查看这一段' }}<ArrowRight :size="15" /></button>
+                  </div>
+                </details>
               </div>
               <button type="button" class="text-button" :disabled="!item.locatable" @click="openSearchResult(item)">打开来源<ArrowRight :size="15" /></button>
             </article>
@@ -700,8 +818,7 @@ onMounted(loadCatalog)
         <section class="resource-shelf-layout" aria-label="课程资源">
           <aside class="resource-filters" data-testid="resource-filters" aria-label="资源类型筛选">
             <div class="resource-filters__heading">
-              <strong>资源类型</strong>
-              <span>{{ resourceItems.length }}</span>
+              <strong>资料分类</strong>
             </div>
             <button
               v-for="type in resourceTypeOptions"
@@ -713,17 +830,24 @@ onMounted(loadCatalog)
               @click="resourceTypeFilter = type"
             >
               <span>{{ resourceTypeLabel(type) }}</span>
-              <small>{{ type === 'all' ? resourceItems.length : resourceItems.filter(item => resourceType(item) === type).length }}</small>
+              <small v-if="type !== 'all' && resourceTypeOptions.length > 2">{{ resourceItems.filter(item => resourceType(item) === type).length }}</small>
             </button>
           </aside>
 
           <div class="resource-shelf-content">
             <div class="resource-shelf-heading">
-              <div>
-                <h2>课程资源</h2>
-                <p>点击资源查看简介、解析状态和预览；进入资源后才使用完整阅读器。</p>
-              </div>
+              <h2>课程资源</h2>
               <span>{{ filteredResources.length }} 项</span>
+            </div>
+            <div class="material-list-tools">
+              <SearchField v-model="materialQuery" aria-label="筛选资料名称或章节" placeholder="筛选名称或章节" />
+              <label class="material-sort">
+                <select v-model="materialSort" aria-label="资料排列方式">
+                  <option value="course">课程顺序</option>
+                  <option value="title">名称顺序</option>
+                  <option value="recent">最近查看</option>
+                </select>
+              </label>
             </div>
 
             <div v-if="filteredResources.length" class="resource-grid" data-testid="course-resource-shelf">
@@ -740,41 +864,41 @@ onMounted(loadCatalog)
                 <span class="resource-card__icon" aria-hidden="true"><component :is="resourceIcon(resource)" :size="23" /></span>
                 <span class="resource-card__copy">
                   <strong>{{ resource.title }}</strong>
-                  <small>{{ resourceType(resource) }} · {{ resource.chapters.length }} 个语义章节</small>
                 </span>
-                <ChevronRight :size="16" aria-hidden="true" />
+                <Pin v-if="pinnedMaterials.includes(resource.id)" :size="14" aria-label="已置顶" />
+                <ChevronRight v-else :size="16" aria-hidden="true" />
               </button>
             </div>
             <div v-else class="quiet-state resource-empty">当前筛选下没有资源，请切换类型或添加资料。</div>
-
+          </div>
             <section v-if="selectedResource" class="resource-detail" data-testid="selected-resource-detail" aria-live="polite">
               <div class="resource-detail__header">
                 <div>
-                  <span class="resource-detail__eyebrow">已选资源 · {{ resourceType(selectedResource) }}</span>
                   <h3>{{ selectedResource.title }}</h3>
-                  <span class="resource-detail__section-label">本章资料</span>
                 </div>
-                <button type="button" class="primary-button" aria-label="打开本章文档" :disabled="!selectedResource.source_document_id" @click="openResource()">
-                  <FileText :size="17" />进入资源
+                <button type="button" class="material-pin" :aria-pressed="pinnedMaterials.includes(selectedResource.id)" :aria-label="pinnedMaterials.includes(selectedResource.id) ? '取消置顶资料' : '置顶资料'" @click="toggleMaterialPin"><Pin :size="18" /></button>
+              </div>
+              <div v-if="imageReadingIncomplete || selectedResource.processingStatus === 'failed'" class="resource-detail__status" role="status">
+                <p>{{ readingRetryMessage || (imageReadingIncomplete ? '部分图片尚未读完整，已读文字可以继续阅读。' : '原文件与正文已保留，章节还没有整理完成。') }}</p>
+                <button v-if="activeCourse.can_manage" type="button" class="text-button" :disabled="Boolean(readingRetryId)" @click="retryImageReading">
+                  {{ readingRetryId === selectedResource.source_document_id ? '正在整理…' : imageReadingIncomplete ? '重新读取图片' : '重新整理章节' }}
                 </button>
               </div>
-              <div class="resource-detail__facts">
-                <span>格式：{{ selectedResourceDetail?.file_type || selectedResource.fileType || '待识别' }}</span>
-                <span>章节：{{ selectedResource.chapters.length }}</span>
-                <span>知识点：{{ selectedResource.knowledgePointCount }}</span>
-                <span>状态：{{ selectedResource.processingStatus === 'failed' ? '待重试' : '已解析' }}</span>
+              <p v-if="resourceDetailStatus === 'loading' && !selectedResourceDetail" class="resource-detail__status">正在打开资料预览…</p>
+              <div v-else-if="resourceDetailStatus === 'failed' && !selectedResourceDetail" class="inline-error" role="alert">{{ resourceDetailError }} <button type="button" @click="loadSourceDetail(selectedResource.source_document_id)">重试预览</button></div>
+              <p v-else-if="selectedResourceDetail?.content" class="resource-preview">{{ resourcePreview }}</p>
+              <p v-else class="resource-preview">暂时没有正文预览，可打开原文阅读。</p>
+              <div class="resource-reading-action">
+                <button type="button" class="primary-button" aria-label="打开本章文档" :disabled="!selectedResource.source_document_id" @click="openResource()"><BookOpen :size="17" />阅读全文<ArrowRight :size="16" /></button>
               </div>
-              <p v-if="resourceDetailStatus === 'loading'" class="resource-detail__status">正在读取资源简介与预览…</p>
-              <p v-else-if="selectedResourceDetail?.content" class="resource-preview">{{ selectedResourceDetail.content.slice(0, 420) }}{{ selectedResourceDetail.content.length > 420 ? '…' : '' }}</p>
-              <p v-else class="resource-preview">该资源已有 canonical 来源定位，进入资源后可查看完整正文、目录和多格式预览。</p>
-              <ul class="resource-chapter-list" aria-label="资源语义章节">
+              <h4 class="resource-outline-title">章节</h4>
+              <ul class="resource-chapter-list" aria-label="资源章节">
                 <li v-for="chapter in selectedResource.chapters" :key="chapter.id">
-                  <span>{{ chapter.title }}</span>
-                  <small>{{ chapter.knowledge_points?.length || 0 }} 个知识点</small>
+                  <button type="button" @click="openChapterSource(chapter)"><span>{{ chapter.title }}</span><ChevronRight :size="15" /></button>
                 </li>
               </ul>
             </section>
-          </div>
+            <section v-else class="resource-detail resource-detail--empty"><FileSearch :size="28" /><h3>选择一份资料开始阅读</h3><p>调整左侧筛选，找到这次要学习的内容。</p></section>
         </section>
       </section>
 
@@ -819,7 +943,7 @@ onMounted(loadCatalog)
       <section class="discovery-workflow" data-testid="knowledge-discovery-boundary">
         <div>
           <FileSearch :size="24" />
-          <h2>候选资料不会自动进入课程</h2>
+          <h2>确认要加入的资料</h2>
           <p>{{ catalog.discovery?.authority_boundary }}</p>
         </div>
         <ol>
@@ -853,7 +977,7 @@ onMounted(loadCatalog)
             <span>课程说明</span>
             <textarea v-model="courseForm.description" maxlength="1000" rows="4" placeholder="说明想解决的问题和预期能力" />
           </label>
-          <p v-if="courseCreateError" class="inline-error" role="alert">{{ courseCreateError }}</p>
+          <p v-if="courseCreateError" class="inline-error" role="alert">{{ userMessage(courseCreateError) }}</p>
           <div class="dialog-actions">
             <button type="button" class="secondary-button" @click="courseDialogOpen = false">取消</button>
             <button type="submit" class="primary-button" :disabled="courseCreateStatus === 'loading' || courseForm.title.trim().length < 2">
@@ -869,16 +993,16 @@ onMounted(loadCatalog)
 
 <style scoped>
 .course-shelf {
-  --shelf-page: #f5f7f7;
-  --shelf-surface: #ffffff;
-  --shelf-ink: #06141b;
-  --shelf-primary: #11212d;
-  --shelf-muted: #52606a;
-  --shelf-line: #d8dfe2;
-  --shelf-soft: #edf1f2;
+  --shelf-page: var(--color-page);
+  --shelf-surface: var(--color-surface);
+  --shelf-ink: var(--color-text);
+  --shelf-primary: var(--color-accent);
+  --shelf-muted: var(--color-text-secondary);
+  --shelf-line: var(--color-border);
+  --shelf-soft: var(--color-surface-subtle);
   --shelf-danger: #9f352a;
   color: var(--shelf-ink);
-  font-family: "Source Han Sans SC", "Noto Sans CJK SC", sans-serif;
+  font-family: var(--font-sans);
   font-size: 14px;
   letter-spacing: 0;
 }
@@ -909,9 +1033,8 @@ onMounted(loadCatalog)
 }
 
 .page-intro {
-  padding: 8px 0 34px;
+  padding: 8px 0 26px;
   align-items: center;
-  border-bottom: 1px solid var(--shelf-line);
 }
 
 .page-intro__actions,
@@ -921,6 +1044,24 @@ onMounted(loadCatalog)
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.page-intro__actions {
+  flex-shrink: 0;
+}
+
+.page-intro__actions button,
+.course-card__footer button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.shelf-count {
+  margin-left: 12px;
+  color: var(--shelf-muted);
+  font-size: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .course-header__actions {
@@ -946,8 +1087,8 @@ p {
 }
 
 h1 {
-  font-family: "Source Han Serif SC", "Noto Serif CJK SC", serif;
-  font-size: 32px;
+  font-family: var(--font-display);
+  font-size: 28px;
   line-height: 1.35;
   font-weight: 700;
 }
@@ -1012,7 +1153,7 @@ h1 {
 .back-button {
   min-height: 36px;
   padding: 0;
-  color: #334d5c;
+  color: var(--color-text-secondary);
   background: transparent;
 }
 
@@ -1054,6 +1195,12 @@ h1 {
   gap: 16px;
 }
 
+@media (min-width: 1400px) {
+  .course-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .course-card {
   display: grid;
   grid-template-columns: 74px minmax(0, 1fr);
@@ -1065,7 +1212,6 @@ h1 {
 
 .course-spine {
   display: flex;
-  min-height: 230px;
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
@@ -1075,19 +1221,14 @@ h1 {
 }
 
 .course-spine > span {
-  font-family: "Source Han Serif SC", "Noto Serif CJK SC", serif;
+  font-family: var(--font-display);
   font-size: 21px;
   font-weight: 700;
 }
 
-.course-spine small {
-  display: block;
-  font-size: 14px;
-  line-height: 1.4;
-  writing-mode: vertical-rl;
-}
-
 .course-card__body {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   padding: 24px;
 }
@@ -1113,7 +1254,7 @@ h1 {
   gap: 6px;
   border-radius: 999px;
   padding: 4px 10px;
-  color: #334d5c;
+  color: var(--color-text-secondary);
   background: var(--shelf-soft);
   font-size: 14px;
   font-weight: 650;
@@ -1127,47 +1268,23 @@ h1 {
 .course-description {
   max-width: 72ch;
   margin-top: 18px;
-  color: #31434d;
+  color: var(--color-text-secondary);
   font-size: 14px;
   line-height: 1.75;
 }
 
 .course-facts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 22px 0 0;
-  padding: 16px 0;
-  border-top: 1px solid var(--shelf-line);
-  border-bottom: 1px solid var(--shelf-line);
-}
-
-.course-facts div {
-  padding: 0 14px;
-  border-right: 1px solid var(--shelf-line);
-}
-
-.course-facts div:first-child {
-  padding-left: 0;
-}
-
-.course-facts div:last-child {
-  border-right: 0;
-}
-
-.course-facts dt {
-  color: var(--shelf-muted);
-  font-size: 14px;
-}
-
-.course-facts dd {
-  margin: 5px 0 0;
-  font-size: 20px;
-  font-weight: 700;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 16px;
+  color: var(--shelf-ink);
   font-variant-numeric: tabular-nums;
 }
 
 .course-card__footer {
-  margin-top: 18px;
+  margin-top: auto;
+  padding-top: 18px;
   align-items: center;
 }
 
@@ -1200,13 +1317,13 @@ h1 {
   border-radius: 4px;
   color: #ffffff;
   background: #354956;
-  font-family: "Source Han Serif SC", "Noto Serif CJK SC", serif;
+  font-family: var(--font-display);
   font-weight: 700;
 }
 
 .recommendation-copy p {
   margin: 5px 0 7px;
-  color: #31434d;
+  color: var(--color-text-secondary);
   line-height: 1.55;
 }
 
@@ -1215,7 +1332,7 @@ h1 {
   align-items: center;
   gap: 8px;
   margin-top: 12px;
-  color: #334d5c;
+  color: var(--color-text-secondary);
 }
 
 .material-recommendation-section {
@@ -1241,7 +1358,7 @@ h1 {
   display: grid;
   min-height: 54px;
   place-items: center;
-  color: #334d5c;
+  color: var(--color-text-secondary);
   border: 1px solid var(--shelf-line);
   background: var(--shelf-soft);
   font-size: 14px;
@@ -1268,7 +1385,7 @@ h1 {
 
 .material-recommendation-copy p {
   margin: 5px 0 6px;
-  color: #31434d;
+  color: var(--color-text-secondary);
   line-height: 1.55;
 }
 
@@ -1279,7 +1396,7 @@ h1 {
 
 .material-quality-badge {
   padding: 3px 8px;
-  color: #334d5c;
+  color: var(--color-text-secondary);
   border: 1px solid var(--shelf-line);
   background: var(--shelf-soft);
   font-size: 14px;
@@ -1489,248 +1606,81 @@ h1 {
 }
 
 .course-header {
-  padding: 4px 0 26px;
-  border-bottom: 1px solid var(--shelf-line);
+  padding: 0 0 16px;
 }
 
 .course-header__main {
   align-items: center;
-  margin-top: 18px;
+  margin-top: 8px;
 }
+
+.course-header h1 { font-family: var(--font-heading); font-size: 24px; font-weight: 650; }
+.course-header .back-button { min-height: 28px; }
+.course-header__main > div > p { max-width: 92ch; font-size: 14px; line-height: 1.65; }
 
 .course-main-view {
   display: flex;
   flex-direction: column;
-  gap: 26px;
-  padding-top: 26px;
+  gap: 18px;
+  padding-top: 18px;
 }
 
 .course-search--shelf {
-  margin: 0;
+  display: grid; grid-template-columns: 210px minmax(0, 1fr); align-items: center;
+  gap: 8px 24px; margin: 0; padding: 4px 0;
 }
+.course-search--shelf h2 { font-size: 16px; font-weight: 650; }
+.course-search--shelf p { margin-top: 4px; color: var(--shelf-muted); font-size: 14px; }
+.course-search--shelf .search-form { margin-top: 0; }
+.course-search--shelf > :is(.search-results, .inline-error, .quiet-state) { grid-column: 1 / -1; }
+
 
 .resource-shelf-layout {
-  display: grid;
-  grid-template-columns: minmax(180px, 0.22fr) minmax(0, 0.78fr);
-  gap: 28px;
-  align-items: start;
+  display: grid; grid-template-columns: 154px minmax(250px, 0.8fr) minmax(340px, 1.35fr);
+  gap: 0; align-items: stretch; min-height: 550px;
+  border-radius: 14px;
+  background: var(--shelf-surface); overflow: hidden;
 }
-
-.resource-filters {
-  display: flex;
-  position: sticky;
-  top: 20px;
-  flex-direction: column;
-  gap: 5px;
-  padding: 16px;
-  border: 1px solid var(--shelf-line);
-  border-radius: 8px;
-  background: var(--shelf-surface);
-}
-
-.resource-filters__heading,
-.resource-shelf-heading,
-.resource-detail__header,
-.resource-detail__facts,
-.resource-chapter-list li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.resource-filters__heading {
-  padding: 2px 4px 12px;
-  border-bottom: 1px solid var(--shelf-line);
-}
-
-.resource-filters__heading span,
-.resource-shelf-heading > span,
-.resource-detail__facts,
-.resource-detail__eyebrow,
-.resource-chapter-list small {
-  color: var(--shelf-muted);
-  font-size: 14px;
-}
-
-.resource-filter-button {
-  display: flex;
-  min-height: 42px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: #31434d;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.resource-filter-button:hover,
-.resource-filter-button--active {
-  color: var(--shelf-ink);
-  border-color: var(--shelf-line);
-  background: var(--shelf-soft);
-}
-
-.resource-filter-button small {
-  color: var(--shelf-muted);
-  font-size: 14px;
-}
-
-.resource-shelf-content {
-  min-width: 0;
-}
-
-.resource-shelf-heading {
-  align-items: flex-end;
-  margin-bottom: 16px;
-}
-
-.resource-shelf-heading h2 {
-  font-size: 22px;
-  line-height: 1.35;
-}
-
-.resource-shelf-heading p {
-  margin-top: 7px;
-  color: var(--shelf-muted);
-  line-height: 1.6;
-}
-
-.resource-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.resource-card {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: 46px minmax(0, 1fr) 18px;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--shelf-line);
-  border-radius: 8px;
-  color: var(--shelf-ink);
-  background: var(--shelf-surface);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
-}
-
-.resource-card:hover,
-.resource-card--selected {
-  border-color: #70838d;
-  background: var(--shelf-soft);
-}
-
-.resource-card:active {
-  transform: translateY(1px);
-}
-
-.resource-card__icon {
-  display: flex;
-  width: 46px;
-  height: 46px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  color: #ffffff;
-  background: var(--shelf-primary);
-}
-
-.resource-card__copy {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
-}
-
-.resource-card__copy strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 15px;
-}
-
-.resource-card__copy small {
-  color: var(--shelf-muted);
-  font-size: 14px;
-}
-
-.resource-empty {
-  padding: 22px 0;
-}
-
-.resource-detail {
-  margin-top: 18px;
-  padding: 22px;
-  border: 1px solid var(--shelf-line);
-  border-radius: 8px;
-  background: var(--shelf-surface);
-}
-
-.resource-detail__header {
-  align-items: flex-start;
-}
-
-.resource-detail__eyebrow {
-  display: block;
-  margin-bottom: 6px;
-}
-
-.resource-detail h3 {
-  font-family: "Source Han Serif SC", "Noto Serif CJK SC", serif;
-  font-size: 24px;
-  line-height: 1.35;
-}
-
-.resource-detail__facts {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  margin-top: 18px;
-  padding: 14px 0;
-  border-top: 1px solid var(--shelf-line);
-  border-bottom: 1px solid var(--shelf-line);
-}
-
-.resource-detail__facts span {
-  padding-right: 14px;
-  border-right: 1px solid var(--shelf-line);
-}
-
-.resource-detail__facts span:last-child {
-  border-right: 0;
-}
-
-.resource-detail__status {
-  margin-top: 16px;
-  color: var(--shelf-muted);
-}
-
-.resource-preview {
-  margin-top: 16px;
-  color: #31434d;
-  line-height: 1.75;
-  white-space: pre-line;
-}
-
-.resource-chapter-list {
-  display: grid;
-  gap: 8px;
-  margin: 18px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.resource-chapter-list li {
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: var(--shelf-soft);
-}
+.resource-filters { display: flex; flex-direction: column; gap: 5px; padding: 18px 10px; background: var(--gradient-rail); }
+.resource-filters__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 7px 18px; font-size: 14px; }
+.resource-filter-button { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border: 1px solid transparent; border-radius: 8px; color: var(--shelf-muted); background: transparent; text-align: left; cursor: pointer; }
+.resource-filter-button:hover { background: rgb(255 255 255 / 45%); }
+.resource-filter-button--active { color: var(--shelf-primary); background: var(--shelf-surface); font-weight: 650; }
+.resource-filter-button small { font-size: 14px; font-variant-numeric: tabular-nums; }
+.resource-shelf-content { min-width: 0; padding: 18px 12px 12px; background: var(--color-surface); }
+.resource-shelf-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 6px 14px; }
+.resource-shelf-heading h2 { font-size: 16px; font-weight: 650; }
+.resource-shelf-heading > span { color: var(--shelf-muted); font-size: 14px; }
+.material-list-tools { display: grid; gap: 9px; margin-bottom: 12px; }
+.material-sort { display: flex; align-items: center; justify-content: flex-end; padding-inline: 6px; }
+.material-sort select { max-width: 160px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--shelf-ink); font-size: 14px; cursor: pointer; }
+.resource-grid { display: grid; align-content: start; gap: 5px; max-height: 510px; overflow-y: auto; scrollbar-gutter: stable; }
+.resource-card { display: grid; min-width: 0; grid-template-columns: 34px minmax(0, 1fr) 14px; align-items: center; gap: 9px; padding: 13px 9px; border: 1px solid transparent; border-radius: 9px; color: var(--shelf-ink); background: transparent; text-align: left; cursor: pointer; }
+.resource-card:hover { background: #efeeeb; }
+.resource-card--selected { background: var(--color-accent-soft); }
+.resource-card--selected:hover { background: var(--color-accent-soft); }
+.resource-card__icon { display: grid; place-items: center; width: 34px; height: 40px; border-radius: 6px; color: #5b7281; background: #e4ebec; }
+.resource-card--selected .resource-card__icon { color: var(--shelf-primary); background: #fbf7f3; }
+.resource-card__copy { min-width: 0; }
+.resource-card__copy strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 14px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
+.resource-empty { padding: 22px 8px; }
+.resource-detail { min-width: 0; padding: 26px 30px; background: var(--gradient-paper); }
+.resource-detail__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.resource-detail h3 { font-family: var(--font-display); font-size: 26px; font-weight: 650; line-height: 1.5; overflow-wrap: anywhere; }
+.material-pin { display: grid; flex: 0 0 34px; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 8px; color: var(--shelf-muted); background: transparent; cursor: pointer; }
+.material-pin:hover { background: var(--color-accent-soft); }
+.material-pin[aria-pressed="true"] { color: var(--shelf-primary); background: var(--color-accent-soft); }
+.resource-detail__status { margin-top: 22px; color: var(--shelf-muted); }
+.resource-preview { margin-top: 22px; color: var(--shelf-ink); font-family: var(--font-display); font-size: 17px; line-height: 1.95; overflow-wrap: anywhere; }
+.resource-reading-action { display: flex; padding-block: 22px; }
+.resource-outline-title { margin: 8px 0 10px; padding-top: 20px; font-size: 14px; font-weight: 650; color: var(--shelf-muted); }
+.resource-chapter-list { display: grid; gap: 6px; max-height: 220px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.resource-chapter-list button { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 10px 0; border: 0; background: transparent; color: var(--shelf-ink); text-align: left; cursor: pointer; }
+.resource-chapter-list button:hover { color: var(--shelf-primary); }
+.resource-chapter-list button svg { flex: none; }
+.resource-detail--empty { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 18px; text-align: center; }
+.resource-detail--empty h3 { font-size: 21px; }
+.resource-detail--empty p { font-size: 14px; color: var(--shelf-muted); }
 
 .course-layout {
   display: grid;
@@ -1769,7 +1719,7 @@ h1 {
   padding: 9px 14px;
   border: 0;
   border-bottom: 1px solid var(--shelf-line);
-  color: #31434d;
+  color: var(--color-text-secondary);
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -1797,8 +1747,7 @@ h1 {
   gap: 28px;
 }
 
-.chapter-focus,
-.course-search {
+.chapter-focus {
   padding: 24px;
   border: 1px solid var(--shelf-line);
   border-radius: 8px;
@@ -1812,7 +1761,7 @@ h1 {
 
 .chapter-focus__heading h2 {
   margin-top: 6px;
-  font-family: "Source Han Serif SC", "Noto Serif CJK SC", serif;
+  font-family: var(--font-display);
   font-size: 24px;
   line-height: 1.35;
 }
@@ -1837,7 +1786,7 @@ h1 {
 .structure-overview li {
   border-radius: 999px;
   padding: 7px 11px;
-  color: #31434d;
+  color: var(--color-text-secondary);
   background: var(--shelf-soft);
 }
 
@@ -1884,7 +1833,7 @@ h1 {
 .material-row:hover { background: var(--shelf-soft); }
 .material-row > span { display: grid; min-width: 0; gap: 3px; }
 .material-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.material-row small { color: var(--shelf-muted); font-size: 13px; }
+.material-row small { color: var(--shelf-muted); font-size: 14px; }
 
 .chapter-next {
   align-items: center;
@@ -1898,23 +1847,24 @@ h1 {
 
 .search-form {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   margin-top: 16px;
-  padding-left: 13px;
-  border: 1px solid #aebbc1;
-  border-radius: 7px;
-  background: #ffffff;
+  padding: 4px 5px 4px 13px;
+  border-radius: 10px;
+  background: var(--shelf-surface);
 }
 
 .search-form:focus-within {
-  border-color: #526b79;
+  outline: 2px solid #526b79;
+  outline-offset: 2px;
 }
 
 .search-form .secondary-button {
-  margin-right: -1px;
-  border-radius: 0 6px 6px 0;
+  border: 0;
+  border-radius: 7px;
+  background: var(--color-surface-muted);
 }
 
 .inline-error {
@@ -1948,11 +1898,19 @@ h1 {
   display: -webkit-box;
   overflow: hidden;
   margin: 5px 0 7px;
-  color: #31434d;
+  color: var(--color-text-secondary);
   line-height: 1.55;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
+
+.search-excerpt { max-height: 6.8em; overflow: hidden; margin: 10px 0; line-height: 1.7; color: var(--shelf-ink); }
+.search-excerpt :deep(p) { margin: 0 0 8px; }
+.search-excerpt :deep(:is(h1,h2,h3,h4,h5,h6)) { font-size: 1em; margin: 0 0 6px; }
+.search-excerpt :deep(pre) { white-space: pre-wrap; }
+.search-passages { margin-top: 12px; }
+.search-passages summary { cursor: pointer; color: var(--shelf-accent); }
+.search-passage { padding-top: 14px; }
 
 .graph-layout {
   display: grid;
@@ -1975,7 +1933,7 @@ h1 {
   padding: 10px 14px;
   border: 0;
   border-top: 1px solid var(--shelf-line);
-  color: #31434d;
+  color: var(--color-text-secondary);
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -2109,7 +2067,6 @@ h1 {
 }
 
 @media (max-width: 1100px) {
-  .resource-shelf-layout,
   .course-layout,
   .graph-layout {
     grid-template-columns: minmax(220px, 0.36fr) minmax(0, 0.64fr);
@@ -2125,6 +2082,22 @@ h1 {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+@media (max-width: 1350px) {
+  .resource-shelf-layout { grid-template-columns: minmax(240px, 0.85fr) minmax(320px, 1.2fr); }
+  .resource-filters { grid-column: 1 / -1; flex-direction: row; align-items: center; flex-wrap: wrap; padding: 10px 14px; gap: 7px; }
+  .resource-filters__heading { padding: 0 14px 0 0; gap: 9px; }
+  .resource-filter-button { gap: 12px; min-height: 36px; padding: 5px 12px; }
+  .course-header__main { align-items: flex-start; flex-wrap: wrap; gap: 14px; }
+  .resource-detail { padding: 24px; }
+}
+@media (max-width: 850px) {
+  .resource-shelf-layout { grid-template-columns: 1fr; }
+  .resource-grid { max-height: 260px; }
+  .course-search--shelf { grid-template-columns: 1fr; gap: 12px; }
+  .course-header h1 { font-size: 23px; }
+  .resource-detail { padding: 22px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

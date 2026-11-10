@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import Field
 
 from config import CONFIG
@@ -20,6 +20,7 @@ from app.database import (
     DBGenerationTask,
     DBModelCall,
     DBTaskStep,
+    DBTaskEvent,
     DBUser,
     DBWorkerLease,
     run_db_op,
@@ -27,6 +28,7 @@ from app.database import (
 from app.identity import normalize_role
 from app.m1_repository import append_task_event, create_task_step
 from app.m2_contracts import StrictModel
+from app import resource_bundles
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -117,8 +119,8 @@ def _configuration_slots() -> list[dict[str, Any]]:
     )
 
     embedding_provider = str(CONFIG.embedding_provider or "").strip().lower()
-    local_embedding = embedding_provider in {"hash", "local", "offline"}
-    embedding_configured = local_embedding or bool(
+    local_embedding = embedding_provider in {"hash", "local", "offline", "sentence_transformer"}
+    embedding_configured = (local_embedding and (embedding_provider != 'sentence_transformer' or bool(CONFIG.embedding_model))) or bool(
         CONFIG.embedding_endpoint and CONFIG.embedding_api_key and CONFIG.embedding_model
     )
 
@@ -203,15 +205,23 @@ def _task_failure_message(task: DBGenerationTask) -> str:
 
 
 def _has_existing_result(db: Any, task_id: str) -> bool:
-    return bool(
+    if (
         db.query(DBArtifact.id).filter(DBArtifact.creating_task_id == task_id).first()
         or db.query(DBArtifactVersion.id).filter(DBArtifactVersion.created_task_id == task_id).first()
-    )
+    ):
+        return True
+    for event in db.query(DBTaskEvent).filter(DBTaskEvent.task_id == task_id,
+            DBTaskEvent.event_type.in_(["path.progress", "path.completed", "diagnostic.work_saved", "diagnostic.completed"])):
+        if event.event_type != "path.progress" or (event.payload or {}).get("stage") in {"review", "saved"}:
+            return True
+    return False
 
 
 def _task_label(capability: str) -> str:
     value = str(capability or "").lower()
     labels = (
+        ("diagnostic", "学习起点诊断"),
+        ("path.prepare", "学习路径安排"),
         ("lecture", "个性化讲义生成"),
         ("handout", "个性化讲义生成"),
         ("quiz", "测验题生成"),
@@ -229,9 +239,17 @@ def _task_label(capability: str) -> str:
 
 
 def _task_payload(db: Any, task: DBGenerationTask) -> dict[str, Any]:
+    owner = db.query(DBUser).filter_by(public_id=task.owner_public_id).first()
+    title = _task_label(task.capability)
+    if task.capability == resource_bundles.GENERATION_CAPABILITY:
+        manifest = resource_bundles._generation_manifest(db, task.id)
+        items = manifest.get("items") or []
+        if items and items[0].get("title"):
+            title = items[0]["title"] + ("等学习资源" if len(items) > 1 else "")
     payload = {
         "id": task.id,
-        "title": _task_label(task.capability),
+        "title": title,
+        "learner_name": (owner.display_name or owner.username) if owner else "原学习账号已不可用",
         "status": task.status,
         "progress_percent": int(round(float(task.progress or 0.0) * 100)),
         "has_existing_result": _has_existing_result(db, task.id),
@@ -248,16 +266,25 @@ def _task_payload(db: Any, task: DBGenerationTask) -> dict[str, Any]:
     return payload
 
 
+def _resource_task_owner(db: Any, task: DBGenerationTask) -> DBUser:
+    owner = db.query(DBUser).filter_by(public_id=task.owner_public_id).first()
+    if owner is None:
+        raise HTTPException(status_code=409, detail={
+            "code": "admin_task_owner_unavailable", "message": "原学习账号已不可用，无法继续生成。",
+        })
+    return owner
+
+
 def _retry_task(db: Any, *, actor: DBUser, task_id: str) -> DBGenerationTask:
     task = db.get(DBGenerationTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail={"code": "admin_task_unknown", "message": "任务不存在"})
-    if task.status == "queued":
+    if task.status in {"queued", "running"}:
         return task
     if task.status != "failed":
         raise HTTPException(status_code=409, detail={
             "code": "admin_task_not_retryable",
-            "message": f"当前任务状态为 {task.status}，不能重试",
+            "message": "当前任务不需要重试，请刷新查看结果。",
         })
 
     previous_failure = _task_failure_category(task)
@@ -280,8 +307,14 @@ def _retry_task(db: Any, *, actor: DBUser, task_id: str) -> DBGenerationTask:
         DBTaskStep.sequence, DBTaskStep.attempt,
     ).all():
         latest_steps[step.sequence] = step
+    is_resource = task.capability == resource_bundles.GENERATION_CAPABILITY
+    owner = _resource_task_owner(db, task) if is_resource else None
     for step in latest_steps.values():
         if step.status == "failed":
+            if is_resource:
+                resource_type = resource_bundles.GENERATION_RESOURCE_TYPES[step.sequence - 1]
+                resource_bundles.retry_generation_item(db, owner, task.id, resource_type)
+                continue
             create_task_step(
                 db,
                 task_id=task.id,
@@ -292,6 +325,21 @@ def _retry_task(db: Any, *, actor: DBUser, task_id: str) -> DBGenerationTask:
                 input_summary=step.input_summary,
                 parent_step_id=step.id,
             )
+
+    # Resource generation is request driven; the endpoint schedules the shared
+    # executor after committing this queue state. Existing worker tasks keep
+    # their original queue/lease mechanism.
+    task.status = "queued"
+    task.failure_code = ""
+    task.failure_reason = ""
+
+    from app.learning_generation_jobs import CAPABILITIES, enable_task
+    if task.capability in CAPABILITIES:
+        enable_task(task)
+        task.automation_state = 'queued'
+        task.execution_token = None
+        task.lease_expires_at = None
+        task.next_attempt_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     existing_result = _has_existing_result(db, task.id)
     append_task_event(db, task_id=task.id, event_type="generation_task.admin_retry", payload={
@@ -329,7 +377,7 @@ def _cancel_task(db: Any, *, actor: DBUser, task_id: str) -> DBGenerationTask:
     if task.status not in {"queued", "running"}:
         raise HTTPException(status_code=409, detail={
             "code": "admin_task_not_cancellable",
-            "message": f"当前任务状态为 {task.status}，不能取消",
+            "message": "任务已结束，不能再取消，请刷新查看结果。",
         })
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -344,6 +392,8 @@ def _cancel_task(db: Any, *, actor: DBUser, task_id: str) -> DBGenerationTask:
             "code": "admin_task_state_conflict",
             "message": "任务状态已变化，请刷新后重试",
         })
+    if task.capability == resource_bundles.GENERATION_CAPABILITY:
+        resource_bundles.cancel_generation_job(db, _resource_task_owner(db, task), task.id)
     for lease in db.query(DBWorkerLease).filter_by(task_id=task.id, status="active").all():
         lease.status = "cancelled"
         lease.released_at = now
@@ -475,12 +525,36 @@ async def get_system(current_user: DBUser = Depends(get_current_user)):
 
 
 @router.post("/system/tasks/{task_id}/retry")
-async def retry_system_task(task_id: str, current_user: DBUser = Depends(get_current_user)):
+async def retry_system_task(task_id: str, background_tasks: BackgroundTasks, current_user: DBUser = Depends(get_current_user)):
     _require_admin(current_user)
-    return await run_db_op(_transaction(lambda db: {
-        "schema_version": "admin.system-task.v1",
-        "task": _task_payload(db, _retry_task(db, actor=current_user, task_id=task_id)),
-    }))
+    def operation(db):
+        before = db.get(DBGenerationTask, task_id)
+        executor = before.capability if before and before.status == "failed" else None
+        task = _retry_task(db, actor=current_user, task_id=task_id)
+        return {"schema_version": "admin.system-task.v1", "task": _task_payload(db, task)}, executor
+
+    result, executor = await run_db_op(_transaction(operation))
+    if executor == resource_bundles.GENERATION_CAPABILITY:
+        background_tasks.add_task(_execute_resource_retry, task_id)
+    return result
+
+
+def _resume_resource_retry(db, task_id: str) -> None:
+    task = db.get(DBGenerationTask, task_id)
+    if task is None or task.status == "cancelled":
+        return
+    owner = _resource_task_owner(db, task)
+    from app.generation_dispatch import submit_resource_job, confirm_service_restored
+    if task.automation_state == "waiting_configuration":
+        confirm_service_restored(db)
+    elif task.automation_state == "needs_attention":
+        task.automation_state = ""
+        db.flush()
+    submit_resource_job(db, owner, task.id)
+
+
+async def _execute_resource_retry(task_id: str) -> None:
+    await run_db_op(_transaction(lambda db: _resume_resource_retry(db, task_id)))
 
 
 @router.post("/system/tasks/{task_id}/cancel")

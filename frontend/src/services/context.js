@@ -1,4 +1,4 @@
-import { api, buildHeaders } from '../api'
+import { api, buildHeaders } from '../api/common.js'
 
 export const CONTEXT_STORAGE_KEY = 'edumatrix_context_ref'
 
@@ -40,6 +40,13 @@ export function saveStoredContext(context) {
   return normalized
 }
 
+export function invalidateResourceContextVersion(resourceId) {
+  const current = loadStoredContext()
+  if (current.resourceId === String(resourceId)) {
+    saveStoredContext({ ...current, version: null })
+  }
+}
+
 export function clearStoredContext({ keepCourse = true } = {}) {
   const current = loadStoredContext()
   const next = { ...EMPTY_CONTEXT, courseId: keepCourse ? current.courseId : null }
@@ -67,8 +74,11 @@ export function contextRefFromRoute(route) {
   const stored = loadStoredContext()
   const explicitCourseId = routeValue(route, 'courseId', 'course_id')
   const courseChanged = Boolean(explicitCourseId && explicitCourseId !== stored.courseId)
-  const inherited = courseChanged
-    ? { ...EMPTY_CONTEXT, userId: stored.userId }
+  const explicitDocumentId = routeValue(route, 'documentId', 'canonical_source_id')
+  // A document link supplies its own reading target. Saved chapter/citation or
+  // learning objects can belong to another document even within this course.
+  const inherited = courseChanged || explicitDocumentId
+    ? { ...EMPTY_CONTEXT, userId: stored.userId, courseId: stored.courseId }
     : stored
   const candidate = {
     ...inherited,
@@ -80,12 +90,9 @@ export function contextRefFromRoute(route) {
     sourceRefId: routeValue(route, 'sourceRefId', 'source_ref_id') || inherited.sourceRefId,
     attemptId: routeValue(route, 'attemptId', 'attempt_id') || inherited.attemptId,
   }
-  const identityChanged = Object.keys(EMPTY_CONTEXT)
-    .filter((key) => key !== 'version' && key !== 'userId')
-    .some((key) => value(candidate[key]) !== value(stored[key]))
-  candidate.version = identityChanged
-    ? routeValue(route, 'contextVersion', 'context_version')
-    : routeValue(route, 'contextVersion', 'context_version') || stored.version
+  // Navigation reads the current objects. A cached resolution may have become
+  // stale in another tab; only an explicitly pinned link requires that version.
+  candidate.version = routeValue(route, 'contextVersion', 'context_version')
   return normalizeContextRef(candidate)
 }
 

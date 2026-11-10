@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app import document_selection
+from app import pptx_rendering
 from app.database import DBSourceDocument
 
 
@@ -50,7 +51,7 @@ def test_pptx_high_fidelity_preview_is_rendered_and_cached(tmp_path: Path, monke
 
 def test_pptx_high_fidelity_preview_has_honest_unavailable_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EDUMATRIX_PPTX_PREVIEW_DIR", str(tmp_path))
-    monkeypatch.setattr(document_selection, "_libreoffice_executable", lambda: None)
+    monkeypatch.setattr(pptx_rendering, "_libreoffice_executable", lambda: None)
     path = CURATED / "materials" / "module-02" / "2.2.1.introduction-to-neural-networks.1.pptx"
     source = _source(path)
 

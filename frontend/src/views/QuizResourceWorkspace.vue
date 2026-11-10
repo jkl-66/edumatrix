@@ -1,4 +1,6 @@
 <script setup>
+import { quizStartQuestion, quizStudySession } from '../utils/quizStudySession.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -7,13 +9,12 @@ import {
 } from '@lucide/vue'
 import {
   compareM5ResourceVersions, createM5ResourceVersion, getM5Resource,
-  restoreM5ResourceVersion,
+  restoreM5ResourceVersion, createQuizPractice,
 } from '../api'
 import InlineQuizCard from '../components/InlineQuizCard.vue'
 import ResourceHistoryDrawer from '../components/ResourceHistoryDrawer.vue'
 import ResourceToolbar from '../components/ResourceToolbar.vue'
 import ResourceFloatingQa from '../components/ResourceFloatingQa.vue'
-import ResourceProfileAdaptation from '../components/ResourceProfileAdaptation.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -33,6 +34,7 @@ const draft = ref(null)
 const actionError = ref('')
 const notice = ref('')
 const qaOpen = ref(false)
+const preparingPractice = ref(false)
 
 const resourceId = computed(() => String(route.params.resourceId || ''))
 const versions = computed(() => detail.value?.quiz?.versions || [])
@@ -64,18 +66,16 @@ const activeIndex = computed(() => {
   return index >= 0 ? index : 0
 })
 const activeQuestion = computed(() => questions.value[activeIndex.value] || null)
-const historyItems = computed(() => versions.value.map(item => ({
-  ...item,
-  source_status: item.projection?.source_refs?.length ? 'available' : 'missing',
-  revision_origin: item.revision_origin || item.metadata?.revision_origin,
-})))
+const studySession = computed(() => quizStudySession(
+  structured.value?.studySessions || [], questions.value, activeIndex.value,
+))
+const historyItems = computed(() => detail.value?.history?.items || [])
 const qaSourceRefIds = computed(() => sourceRefs.value
   .map(item => item.id || item.source_ref_id)
   .filter(Boolean))
 
 function message(exception, fallback) {
-  const detailMessage = exception?.response?.data?.detail || exception?.detail
-  return detailMessage?.message || (typeof detailMessage === 'string' ? detailMessage : '') || exception?.message || fallback
+  return userMessage(exception, fallback)
 }
 
 function clone(value) {
@@ -88,7 +88,7 @@ function selectInitialQuestion(preferredId = '') {
     return
   }
   const requested = preferredId || String(route.query.question_version_id || '')
-  activeQuestionId.value = questions.value.some(item => item.id === requested) ? requested : questions.value[0].id
+  activeQuestionId.value = quizStartQuestion(questions.value, requested)?.id || ''
 }
 
 async function loadResource({ preserveVersion = false, preserveQuestion = false } = {}) {
@@ -100,7 +100,11 @@ async function loadResource({ preserveVersion = false, preserveQuestion = false 
     if (payload?.catalog?.type !== 'quiz') throw new Error('当前资源不是测验题资源。')
     detail.value = payload
     const keepVersion = preserveVersion && versions.value.some(item => item.id === selectedVersionId.value)
-    if (!keepVersion) selectedVersionId.value = payload.quiz?.current_version_id || ''
+    if (!keepVersion) {
+      const requestedVersion = String(route.query.resource_version_id || '')
+      selectedVersionId.value = versions.value.some(item => item.id === requestedVersion)
+        ? requestedVersion : payload.quiz?.current_version_id || ''
+    }
     await nextTick()
     selectInitialQuestion(previousQuestionId)
   } catch (exception) {
@@ -136,9 +140,25 @@ function moveQuestion(delta) {
   if (target) selectQuestion(target)
 }
 
-async function handleSubmitted() {
-  notice.value = '本次作答已单独保存，学习证据将在统一聚合后更新画像和路径。'
+async function handleSubmitted(attempt) {
+  notice.value = '' // The question already shows the saved result and feedback.
   await loadResource({ preserveVersion: true, preserveQuestion: true })
+}
+
+async function startNewPractice() {
+  if (preparingPractice.value || !selectedVersion.value) return
+  preparingPractice.value = true
+  actionError.value = ''
+  try {
+    const job = await createQuizPractice({ resource_id: resourceId.value, version_id: selectedVersion.value.id })
+    // The saved job has its own progress/recovery page; leaving this quiz must
+    // not abort generation or replace the learner's previous answers.
+    await router.push({ path: `/workspace/resources/bundles/${job.job_id}`, query: { course_id: job.course_id } })
+  } catch (exception) {
+    actionError.value = message(exception, '新练习暂时无法准备，请稍后再试。')
+  } finally {
+    preparingPractice.value = false
+  }
 }
 
 function openFollowUp(payload) {
@@ -158,11 +178,20 @@ function openFollowUp(payload) {
 }
 
 function openSource(sourceId) {
-  const source = sourceRefs.value.find(item => item.id === sourceId) || sourceRefs.value[0]
+  const source = sourceRefs.value.find(item => (item.id || item.source_ref_id) === sourceId) || sourceRefs.value[0]
   if (!source) return
   const documentId = source.source_document_id || source.document_id
-  if (documentId) router.push({ path: `/knowledge/documents/${encodeURIComponent(documentId)}`, query: { course_id: catalog.value.course?.id } })
-  else router.push({ path: '/knowledge', query: { course_id: catalog.value.course?.id, source_ref_id: source.id } })
+  const returnTo = router.resolve({
+    path: route.path,
+    query: { ...route.query, resource_version_id: selectedVersionId.value, question_version_id: activeQuestionId.value },
+  }).fullPath
+  const query = {
+    course_id: catalog.value.course?.id || catalog.value.course_id,
+    source_ref_id: source.id || source.source_ref_id,
+    return_to: returnTo,
+  }
+  if (documentId) router.push({ path: `/knowledge/documents/${encodeURIComponent(documentId)}`, query })
+  else router.push({ path: '/knowledge', query })
 }
 
 function startEditing() {
@@ -198,7 +227,7 @@ async function saveVersion() {
     await nextTick()
     selectInitialQuestion(activeQuestionId.value)
   } catch (exception) {
-    actionError.value = exception?.status === 409
+    actionError.value = exception?.detail?.code === 'resource_version_conflict'
       ? '资源已在别处更新。当前草稿仍保留，请重新加载后再次保存。'
       : message(exception, '保存失败，草稿已保留。')
   } finally {
@@ -272,9 +301,8 @@ onMounted(() => loadResource())
   <main class="quiz-workspace" data-testid="quiz-resource-workspace">
     <ResourceToolbar
       :title="title"
-      :type-label="`${catalog.course?.title || structured?.courseTitle || '当前课程'} · ${catalog.knowledge_point?.title || structured?.knowledgePoint?.title || '测验题'}`"
-      :version-label="versionLabel"
-      :status-label="progress.completed ? '今日必做已完成' : `答对 ${progress.required_correct_count}/${progress.required_count} 道必做题`"
+      type-label=""
+      version-label=""
       :history-count="historyItems.length"
       :can-edit="isStructured && Boolean(selectedVersion)"
       :editing="editing"
@@ -293,13 +321,12 @@ onMounted(() => loadResource())
     <div v-if="loading" class="workspace-state" aria-live="polite">
       <LoaderCircle :size="27" class="spin" />
       <strong>正在恢复测验题</strong>
-      <span>题目位置、历史尝试和完成进度会一起恢复。</span>
     </div>
 
     <div v-else-if="error" class="workspace-state workspace-state--error" role="alert">
       <AlertCircle :size="27" />
       <strong>暂时无法打开测验题</strong>
-      <span>{{ error }}</span>
+      <span>{{ userMessage(error) }}</span>
       <button type="button" @click="loadResource()"><RefreshCw :size="17" />重新加载</button>
     </div>
 
@@ -307,7 +334,7 @@ onMounted(() => loadResource())
       <div v-if="actionError || notice" class="status-line" :class="{ 'status-line--error': actionError }" role="status">
         <AlertCircle v-if="actionError" :size="17" />
         <Check v-else :size="17" />
-        <span>{{ actionError || notice }}</span>
+        <span>{{ userMessage(actionError || notice) }}</span>
         <button type="button" title="关闭提示" @click="actionError = ''; notice = ''"><X :size="16" /></button>
       </div>
 
@@ -327,26 +354,18 @@ onMounted(() => loadResource())
       </section>
 
       <template v-else>
-        <ResourceProfileAdaptation
-          :adaptation="structured?.adaptation"
-          :plan="detail?.resource?.profile_adaptation_plan"
-          :summary="structured?.adaptation?.profileSummary || ''"
-          resource-type="quiz"
-        />
         <section class="quiz-summary" aria-label="测验说明与完成条件">
-          <div>
-            <span>{{ structured.knowledgePoint?.title || catalog.knowledge_point?.title || '当前知识点' }}</span>
-            <h1>{{ structured.summary }}</h1>
-            <p>完成条件：{{ progress.required_count }} 道必做题均至少答对一次。修改答案会新增作答记录，不覆盖历史。</p>
-          </div>
           <div class="progress-summary" :class="{ complete: progress.completed }">
             <strong>{{ progress.required_correct_count }}/{{ progress.required_count }}</strong>
-            <span>{{ progress.completed ? '今日必做已完成' : '必做题已答对' }}</span>
+            <span>{{ progress.completed ? '练习完成' : '必做题已答对' }}</span>
           </div>
+          <button v-if="progress.attempted_count" type="button" class="quiz-qa-button" :disabled="preparingPractice || editing || Boolean(projection.learning_unavailable_reason)" :title="projection.learning_unavailable_reason || undefined" @click="startNewPractice">
+            <LoaderCircle v-if="preparingPractice" :size="16" class="spin" /><RefreshCw v-else :size="16" />再练一组
+          </button>
           <button type="button" class="quiz-qa-button" @click="qaOpen = true"><MessageSquareText :size="16" />资源内提问</button>
         </section>
 
-        <div class="workspace-version-row">
+        <div v-if="versions.length > 1" class="workspace-version-row">
           <label>
             <History :size="16" /><span>资源版本</span>
             <select v-model="selectedVersionId" :disabled="editing" aria-label="测验资源版本">
@@ -360,26 +379,32 @@ onMounted(() => loadResource())
 
         <section class="quiz-layout">
           <aside class="question-rail" aria-label="题目列表">
-            <header><FileQuestion :size="18" /><strong>题目</strong><span>{{ progress.attempted_count }}/{{ progress.question_count }} 已作答</span></header>
+            <header><FileQuestion :size="18" /><strong>题目</strong></header>
             <button
               v-for="(question, index) in questions"
               :key="question.id"
               type="button"
               :class="{ active: question.id === activeQuestion?.id }"
+              :aria-label="`第 ${index + 1} 题，${questionCorrect(question) ? '已答对' : questionAttempted(question) ? '可再次作答' : '未作答'}`"
+              :aria-current="question.id === activeQuestion?.id ? 'step' : undefined"
               @click="selectQuestion(question)"
             >
               <CheckCircle2 v-if="questionCorrect(question)" :size="18" />
               <Circle v-else :size="18" />
-              <span><strong>第 {{ index + 1 }} 题</strong><small>{{ questionCorrect(question) ? '已答对' : questionAttempted(question) ? '可再次作答' : '未作答' }}</small></span>
-              <em v-if="question.required">必做</em>
+              <span><strong>第 {{ index + 1 }} 题</strong><small v-if="questionAttempted(question) && !questionCorrect(question)">可再次作答</small></span>
+              <em v-if="!question.required">选做</em>
             </button>
           </aside>
 
           <div class="question-stage">
             <template v-if="activeQuestion">
+              <p v-if="studySession" class="study-session">
+                第 {{ studySession.startQuestion }}–{{ studySession.endQuestion }} 题 · 约 {{ studySession.estimatedMinutes }} 分钟
+              </p>
               <InlineQuizCard
                 :question="activeQuestion"
                 :resource-id="resourceId"
+                :resource-version-id="selectedVersionId"
                 :initial-attempt="activeQuestion.latest_attempt"
                 :position="activeIndex + 1"
                 :total="questions.length"
@@ -388,12 +413,15 @@ onMounted(() => loadResource())
                 @follow-up="openFollowUp"
                 @open-source="openSource"
               />
+              <p v-if="studySession?.reachedEnd && studySession.attempted && studySession.nextQuestion" class="session-pause" role="status">
+                这段已作答，可以休息了。下次从第 {{ studySession.nextQuestion }} 题继续。
+              </p>
               <section v-if="activeQuestion.attempts?.length" class="attempt-history" aria-label="本题作答历史">
                 <header><strong>本题作答历史</strong><span>{{ activeQuestion.attempts.length }} 次提交</span></header>
                 <ol>
                   <li v-for="(attempt, index) in activeQuestion.attempts" :key="attempt.id">
                     <span>第 {{ activeQuestion.attempts.length - index }} 次</span>
-                    <strong>{{ attempt.correct ? '回答正确' : '回答错误' }}</strong>
+                    <strong>{{ attempt.practice_kind === 'correction' && attempt.correct ? '已订正' : attempt.correct ? '回答正确' : '回答错误' }}</strong>
                     <span>选择 {{ attempt.answer?.choice || '未记录' }}</span>
                     <time>{{ formatAttemptTime(attempt.submitted_at) }}</time>
                   </li>
@@ -435,6 +463,7 @@ onMounted(() => loadResource())
       :course-id="catalog.course?.id || catalog.course_id || ''"
       :knowledge-point-id="catalog.knowledge_point?.id || structured?.knowledgePoint?.id || ''"
       :resource-id="resourceId"
+      :resource-version-id="selectedVersionId"
       :resource-title="title"
       :source-ref-ids="qaSourceRefIds"
       @close="qaOpen = false"
@@ -443,66 +472,75 @@ onMounted(() => loadResource())
 </template>
 
 <style scoped>
-.quiz-workspace { min-width: 0; padding: 18px; background: #f6f8f8; color: #06141b; font-family: "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; }
-.workspace-state { display: grid; min-height: 430px; place-content: center; justify-items: center; gap: 9px; border: 1px solid #dfe4e5; border-radius: 8px; background: #fff; color: #60727c; text-align: center; }
-.workspace-state strong { color: #06141b; font-size: 17px; }
+.quiz-workspace { min-width: 0; padding: 8px 0; container-type: inline-size; background: transparent; color: var(--color-text); font-family: var(--font-sans); }
+.workspace-state { display: grid; min-height: 430px; place-content: center; justify-items: center; gap: 9px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); color: var(--color-text-muted); text-align: center; }
+.workspace-state strong { color: var(--color-text); font-size: 17px; }
 .workspace-state span { max-width: 46ch; font-size: 14px; line-height: 1.6; }
-.workspace-state button { display: inline-flex; min-height: 38px; align-items: center; gap: 7px; border: 1px solid #11212d; border-radius: 8px; padding: 0 12px; background: #11212d; color: #fff; font-size: 14px; cursor: pointer; }
-.workspace-state--error { color: #8b3d35; }
-.status-line { display: flex; min-height: 42px; align-items: center; gap: 8px; margin-top: 10px; border: 1px solid #ccd0cf; border-radius: 8px; padding: 0 11px; background: #fff; color: #344957; font-size: 14px; }
-.status-line--error { border-color: #d8aaa5; background: #fff5f3; color: #8b3d35; }
+.workspace-state button { display: inline-flex; min-height: 38px; align-items: center; gap: 7px; border: 1px solid var(--color-text); border-radius: 8px; padding: 0 12px; background: var(--color-text); color: #fff; font-size: 14px; cursor: pointer; }
+.workspace-state--error { color: var(--color-danger); }
+.status-line { display: flex; min-height: 42px; align-items: center; gap: 8px; margin-top: 10px; border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 0 11px; background: var(--color-surface); color: var(--color-text-secondary); font-size: 14px; }
+.status-line--error { border-color: #d8aaa5; background: var(--color-danger-soft); color: var(--color-danger); }
 .status-line span { flex: 1; }
 .status-line button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; background: transparent; color: currentColor; cursor: pointer; }
-.metadata-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; border: 1px solid #ccd0cf; border-radius: 8px; padding: 16px; background: #fff; }
-.metadata-editor label { display: grid; gap: 6px; color: #344957; font-size: 14px; }
-.metadata-editor input, .metadata-editor textarea { width: 100%; border: 1px solid #ccd0cf; border-radius: 8px; padding: 9px 10px; color: #06141b; font-family: inherit; font-size: 14px; line-height: 1.55; }
-.metadata-editor p { grid-column: 1 / -1; margin: 0; color: #60727c; font-size: 14px; line-height: 1.6; }
-.quiz-summary { display: flex; min-height: 112px; align-items: center; justify-content: space-between; gap: 22px; margin-top: 12px; border: 1px solid #ccd0cf; border-radius: 8px; padding: 18px 20px; background: #fff; }
-.quiz-summary > div:first-child { min-width: 0; }
-.quiz-summary > div:first-child > span { color: #60727c; font-size: 14px; }
-.quiz-summary h1 { margin: 5px 0 6px; font-size: 20px; font-weight: 650; line-height: 1.45; }
-.quiz-summary p { margin: 0; color: #4a5c6a; font-size: 14px; line-height: 1.6; }
-.progress-summary { display: grid; min-width: 132px; justify-items: end; border-left: 1px solid #dfe4e5; padding-left: 20px; }
-.progress-summary strong { font-size: 28px; font-variant-numeric: tabular-nums; }
-.progress-summary span { color: #60727c; font-size: 14px; }
-.progress-summary.complete strong, .progress-summary.complete span { color: #11212d; }
-.workspace-version-row { display: flex; min-height: 50px; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: #60727c; font-size: 14px; }
+.metadata-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 16px; background: var(--color-surface); }
+.metadata-editor label { display: grid; gap: 6px; color: var(--color-text-secondary); font-size: 14px; }
+.metadata-editor input, .metadata-editor textarea { width: 100%; border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 9px 10px; color: var(--color-text); font-family: inherit; font-size: 14px; line-height: 1.55; }
+.metadata-editor p { grid-column: 1 / -1; margin: 0; color: var(--color-text-muted); font-size: 14px; line-height: 1.6; }
+ .quiz-summary { display: flex; align-items: flex-start; gap: 22px; margin: 12px 0; padding: 12px 2px; }
+.study-session { margin: 0 0 16px; color: var(--color-text-secondary); font-size: 15px; }
+.session-pause { margin: 18px 0; color: var(--color-text); line-height: 1.7; }
+.quiz-qa-button { display: inline-flex; min-height: 36px; flex-shrink: 0; align-items: center; gap: 7px; padding: 0 10px; border: 0; background: transparent; color: var(--color-accent); white-space: nowrap; cursor: pointer; }
+.progress-summary { display: flex; min-height: 36px; align-items: center; gap: 8px; color: var(--color-text-secondary); font-size: 15px; }
+.progress-summary strong { font-size: 18px; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.workspace-version-row { display: flex; min-height: 50px; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--color-text-muted); font-size: 14px; }
 .workspace-version-row label { display: inline-flex; align-items: center; gap: 7px; }
-.workspace-version-row select { min-height: 36px; border: 1px solid #ccd0cf; border-radius: 8px; padding: 0 28px 0 9px; background: #fff; color: #253745; font-size: 14px; }
-.quiz-layout { display: grid; min-height: 570px; grid-template-columns: 220px minmax(0, 1fr); overflow: hidden; border: 1px solid #ccd0cf; border-radius: 8px; background: #fff; }
-.question-rail { border-right: 1px solid #dfe4e5; background: #f8fafa; }
-.question-rail header { display: grid; min-height: 54px; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 7px; border-bottom: 1px solid #dfe4e5; padding: 0 12px; }
+.workspace-version-row select { min-height: 36px; border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 0 28px 0 9px; background: var(--color-surface); color: var(--color-text); font-size: 14px; }
+.quiz-layout { display: grid; min-height: 570px; grid-template-columns: 154px minmax(0, 1fr); border: 0; border-radius: 8px; background: var(--color-surface); }
+.question-rail { border-right: 1px solid var(--color-border); background: transparent; }
+.question-rail header { display: grid; min-height: 54px; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 7px; border-bottom: 1px solid var(--color-border); padding: 0 12px; }
 .question-rail header strong { font-size: 15px; }
-.question-rail header span { grid-column: 1 / -1; margin-top: -10px; padding-left: 27px; color: #60727c; font-size: 14px; }
-.question-rail > button { display: grid; width: 100%; min-height: 62px; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 9px; border: 0; border-bottom: 1px solid #e7ebec; padding: 8px 11px; background: transparent; color: #4a5c6a; text-align: left; cursor: pointer; }
-.question-rail > button.active { background: #fff; box-shadow: inset 3px 0 #11212d; color: #06141b; }
+.question-rail header span { grid-column: 1 / -1; margin-top: -10px; padding-left: 27px; color: var(--color-text-muted); font-size: 14px; }
+.question-rail > button { display: grid; width: 100%; min-height: 62px; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 9px; border: 0; border-bottom: 0; padding: 8px 11px; background: transparent; color: var(--color-text-secondary); text-align: left; cursor: pointer; }
+.question-rail > button.active { background: var(--color-accent-soft); box-shadow: inset 2px 0 var(--color-accent); color: var(--color-text); }
 .question-rail > button span { min-width: 0; }
 .question-rail > button strong, .question-rail > button small { display: block; }
 .question-rail > button strong { font-size: 14px; }
-.question-rail > button small { margin-top: 3px; color: #60727c; font-size: 14px; }
-.question-rail > button em { border: 1px solid #ccd0cf; border-radius: 5px; padding: 2px 5px; color: #4a5c6a; font-size: 14px; font-style: normal; }
+.question-rail > button small { margin-top: 3px; color: var(--color-text-muted); font-size: 14px; }
+.question-rail > button em { border: 1px solid var(--color-border-strong); border-radius: 5px; padding: 2px 5px; color: var(--color-text-secondary); font-size: 14px; font-style: normal; }
 .question-stage { min-width: 0; padding: 24px clamp(18px, 3vw, 42px) 18px; }
 .question-navigation { display: flex; min-height: 52px; align-items: center; justify-content: space-between; gap: 12px; }
-.question-navigation button { display: inline-flex; min-height: 36px; align-items: center; gap: 5px; border: 1px solid #ccd0cf; border-radius: 8px; padding: 0 10px; background: #fff; color: #11212d; font-size: 14px; cursor: pointer; }
+.question-navigation button { display: inline-flex; min-height: 36px; align-items: center; gap: 5px; border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 0 10px; background: var(--color-surface); color: var(--color-text); font-size: 14px; cursor: pointer; }
 .question-navigation button:disabled { cursor: default; opacity: .45; }
-.question-navigation span { color: #60727c; font-size: 14px; font-variant-numeric: tabular-nums; }
-.attempt-history { margin-top: 12px; border: 1px solid #dfe4e5; border-radius: 8px; background: #fff; }
+.question-navigation span { color: var(--color-text-muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.attempt-history { margin-top: 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); }
 .attempt-history header { display: flex; min-height: 43px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e7ebec; padding: 0 13px; }
 .attempt-history header strong { font-size: 15px; }
-.attempt-history header span { color: #60727c; font-size: 14px; }
+.attempt-history header span { color: var(--color-text-muted); font-size: 14px; }
 .attempt-history ol { margin: 0; padding: 0; list-style: none; }
-.attempt-history li { display: grid; min-height: 42px; grid-template-columns: 72px 92px minmax(100px, 1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid #eef2f2; padding: 0 13px; color: #4a5c6a; font-size: 14px; }
+.attempt-history li { display: grid; min-height: 42px; grid-template-columns: 72px 92px minmax(100px, 1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--color-surface-subtle); padding: 0 13px; color: var(--color-text-secondary); font-size: 14px; }
 .attempt-history li:last-child { border-bottom: 0; }
-.attempt-history li strong { color: #06141b; font-size: 14px; }
-.attempt-history time { color: #60727c; font-size: 14px; }
+.attempt-history li strong { color: var(--color-text); font-size: 14px; }
+.attempt-history time { color: var(--color-text-muted); font-size: 14px; }
 .spin { animation: spin .8s linear infinite; }
-button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #11212d; outline-offset: 2px; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1120px) {
   .quiz-workspace { padding: 14px; }
-  .quiz-layout { grid-template-columns: 190px minmax(0, 1fr); }
+  .quiz-layout { grid-template-columns: 132px minmax(0, 1fr); }
   .question-stage { padding-right: 20px; padding-left: 20px; }
   .metadata-editor { grid-template-columns: 1fr; }
   .metadata-editor p { grid-column: 1; }
+}
+@container (max-width: 760px) {
+  .quiz-summary { flex-wrap: wrap; gap: 12px; }
+  .quiz-objectives { flex-basis: 100%; }
+  .quiz-layout { grid-template-columns: minmax(0, 1fr); }
+  .question-rail { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; border-right: 0; }
+  .question-rail header { display: none; }
+  .question-rail > button { width: auto; min-height: 40px; grid-template-columns: 18px auto; border-radius: 6px; }
+  .question-stage { padding: 12px; }
+  .attempt-history li { grid-template-columns: auto auto; padding-block: 8px; }
+  :deep(.resource-toolbar) { flex-wrap: wrap; }
+  :deep(.toolbar-actions) { flex-basis: 100%; justify-content: flex-end; }
 }
 </style>

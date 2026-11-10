@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.source_refs import current_chapter_clause
+
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
@@ -15,6 +17,8 @@ from app.database import (
     DBChapter,
     DBChapterKnowledgePoint,
     DBCourse,
+    DBDiagnosticReport,
+    DBDiagnosticSession,
     DBArtifact,
     DBKnowledgePoint,
     DBLearningEvent,
@@ -31,6 +35,7 @@ from app.dashboard_summary import mastery_trend
 from app.learning_aggregation import (
     AGGREGATION_PROCESSOR_VERSION,
     _event_observations,
+    current_exam_feedback_payload,
 )
 from app.m5_resources import canonical_resource_type, resource_route
 from app.legacy_adapter import LegacyDataAdapter, LegacyProfileMigrationError
@@ -72,12 +77,84 @@ def _legacy_profile_report(session: Any, *, current_user: DBUser, course_id: str
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    if value is None:
+        return None
+    return (value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value).isoformat()
+
+
+def _learning_evidence_reason(value: str) -> str:
+    return {
+        '已通过来源与证据完整性校验': '本次学习结果已记录，可用于后续学习安排。',
+        '学习者完成确定性参数实验并提交了观察结论。': '完成了参数对比实验，并提交观察结论。',
+        '笔记行为可追溯，但不是知识掌握证据': '这次笔记已保存；理解情况仍需通过练习判断。',
+    }.get(value, value)
 
 
 def _latest_time(*values: datetime | None) -> str | None:
     present = [value for value in values if value is not None]
     return _iso(max(present)) if present else None
+
+
+def build_concept_learning_history(
+    session: Any, *, student_id: str, course_id: str, points: list[dict[str, Any]],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Read saved learning results; never synthesize observations or dates."""
+    empty = {"concept": None, "history": [], "memory_retention": []}
+    owner = session.query(DBUser).filter_by(username=student_id).first()
+    if owner is None or not course_id:
+        return empty
+    point_ids = {str(point["id"]) for point in points}
+    rows = session.query(DBLearningEvent, DBLearningEventConsumption).join(
+        DBLearningEventConsumption,
+        DBLearningEventConsumption.learning_event_id == DBLearningEvent.id,
+    ).filter(
+        DBLearningEvent.owner_public_id == owner.public_id,
+        DBLearningEvent.course_id == course_id,
+        DBLearningEvent.mastery_eligible.is_(True),
+        DBLearningEvent.evidence_status == "accepted",
+        DBLearningEventConsumption.consumer == "learning_aggregation",
+        DBLearningEventConsumption.status == "processed",
+    ).order_by(
+        DBLearningEvent.occurred_at.desc(), DBLearningEvent.id.desc(),
+        DBLearningEventConsumption.processed_at.desc(), DBLearningEventConsumption.id.desc(),
+    ).all()
+    by_concept: dict[str, list[dict[str, Any]]] = {}
+    seen = set()
+    for event, consumption in rows:
+        if event.id in seen:
+            continue
+        seen.add(event.id)
+        projection = ((consumption.result or {}).get("steps") or {}).get("profile_snapshot") or {}
+        mastery = projection.get("mastery_after") or {}
+        for point_id, title, observation in _event_observations(session, event):
+            if str(point_id) not in point_ids or title not in mastery:
+                continue
+            by_concept.setdefault(title, []).append({
+                "time": _iso(event.occurred_at),
+                "raw": round(float(observation), 4),
+                "smoothed": round(float(mastery[title]), 4),
+                "source_event_id": event.id,
+            })
+    if not by_concept:
+        return empty
+    # The first concept belongs to the latest completed learning result.
+    concept = next(iter(by_concept))
+    from bkt_engine import ebbinghaus_decay
+    observed_now = _as_utc(now or datetime.now(timezone.utc))
+    retention = []
+    for title, history in by_concept.items():
+        latest = history[0]
+        if not latest["time"]:
+            continue
+        elapsed = max(0.0, (observed_now - datetime.fromisoformat(latest["time"])).total_seconds() / 3600)
+        retention.append({
+            "name": title,
+            "last_learned_at": latest["time"],
+            "mastery_at_learning": latest["smoothed"],
+            "retention": round(ebbinghaus_decay(latest["smoothed"], elapsed), 4),
+        })
+    return {"concept": concept, "history": list(reversed(by_concept[concept])), "memory_retention": retention}
 
 
 _DISPLAY_TZ = ZoneInfo("Asia/Shanghai")
@@ -90,9 +167,11 @@ _EVENT_LABELS = {
     "assessment_correct": "完成一次正确作答",
     "assessment_incorrect": "完成一次错题诊断",
     "code_tests_passed": "代码任务通过检查",
+    "interactive_model_observation_submitted": "完成参数实验并提交观察",
     "formal_exam_submitted": "提交智能组卷",
     "feynman_submitted": "完成费曼复述",
     "misconception_decided": "确认错题原因",
+    "learning_inquiry_answered": "回答学习追问",
     "note_created": "创建学习笔记",
     "note_version_saved": "保存笔记版本",
     "note_version_restored": "恢复笔记历史版本",
@@ -163,7 +242,7 @@ def _event_kind(event: DBLearningEvent) -> str:
         return "review"
     if any(token in marker for token in ("conversation", "chat", "tutor", "session")):
         return "conversation"
-    if any(token in marker for token in ("artifact", "resource", "document")):
+    if any(token in marker for token in ("artifact", "resource", "document", "interactive_model")):
         return "resource"
     if any(token in marker for token in ("path", "chapter", "knowledge_point")):
         return "path"
@@ -230,13 +309,16 @@ def _event_target(
     object_id = str(event.object_id or "")
     object_type = str(event.object_type or "").lower()
     course_id = event.course_id
-    if object_type == "artifact" and object_id:
+    if object_type in {"artifact", "interactive_model"} and object_id:
         artifact = artifacts.get(object_id)
         if artifact is None or artifact.status in {"archived", "withdrawn"}:
             return {"label": "原资源已不可用", "route": "", "available": False}
         resource_type = canonical_resource_type(artifact.artifact_type)
         route = resource_route(resource_type, artifact.id)
         if route:
+            if object_type == "interactive_model":
+                route = _route(route, course_id=course_id,
+                               version_id=(event.context_ref or {}).get("resource_version_id"))
             return {"label": f"打开{artifact.title or '学习资源'}", "route": route, "available": True}
     if object_type == "feynman_resource" and object_id:
         return {"label": "继续费曼复述", "route": f"/workspace/feynman/{object_id}", "available": True}
@@ -298,8 +380,8 @@ def _event_feedback(session: Any, event: DBLearningEvent) -> dict[str, Any]:
         "status": event.evidence_status,
         "masteryEligible": bool(event.mastery_eligible),
         "completionEffect": event.completion_effect,
-        "label": label,
-        "reason": reason,
+        "label": _learning_evidence_reason(label),
+        "reason": _learning_evidence_reason(reason),
         "knowledgePointIds": point_ids,
         "knowledgePointTitles": point_titles,
         "observations": observation_rows,
@@ -315,9 +397,9 @@ def _event_item(
     event: DBLearningEvent, *, course_titles: dict[str, str], artifacts: dict[str, DBArtifact],
     session: Any,
 ) -> dict[str, Any]:
-    payload = event.payload or {}
+    payload = current_exam_feedback_payload(session, event)
     score = payload.get("score", payload.get("rubric_score"))
-    detail = event.evidence_reason or "该动作已进入个人学习记录。"
+    detail = _learning_evidence_reason(event.evidence_reason or "该动作已进入个人学习记录。")
     if isinstance(score, (int, float)) and not isinstance(score, bool):
         detail = f"记录得分 {round(float(score) * 100)}%；{detail}"
     elif _event_minutes(event) > 0:
@@ -421,6 +503,7 @@ def _knowledge_graph(
     snapshot: dict[str, Any],
     snapshot_row: DBProfileSnapshot | None,
     attempts: list[DBAssessmentAttempt],
+    grading_by_attempt: dict[str, DBAssessmentGradingResult],
     versions: dict[str, DBAssessmentQuestionVersion],
     events: list[DBLearningEvent],
     profile_evidence_rows: list[DBProfileEvidence],
@@ -429,7 +512,7 @@ def _knowledge_graph(
         session.query(DBChapter, DBChapterKnowledgePoint, DBKnowledgePoint)
         .join(DBChapterKnowledgePoint, DBChapterKnowledgePoint.chapter_id == DBChapter.id)
         .join(DBKnowledgePoint, DBKnowledgePoint.id == DBChapterKnowledgePoint.knowledge_point_id)
-        .filter(DBChapter.course_id == course_id, DBKnowledgePoint.status == "active")
+        .filter(DBChapter.course_id == course_id, DBKnowledgePoint.status == "active", current_chapter_clause())
         .order_by(DBChapter.position, DBKnowledgePoint.code, DBKnowledgePoint.id)
         .all()
     )
@@ -437,6 +520,16 @@ def _knowledge_graph(
     for chapter, _relation, point in rows:
         point_rows.setdefault(point.id, (chapter, point))
     known_ids = set(point_rows)
+    from app.course_structure import confirmed_concept_aliases, prerequisite_ids
+    course = session.get(DBCourse, course_id)
+    aliases = {old: current for old, current in confirmed_concept_aliases(course).items() if current in known_ids}
+    referenced_ids = known_ids | set(aliases)
+    old_points = {point.id: point for point in session.query(DBKnowledgePoint).filter(
+        DBKnowledgePoint.id.in_(list(aliases)),
+    ).all()} if aliases else {}
+
+    def current_ids(value):
+        return {aliases.get(id, id) for id in _referenced_knowledge_point_ids(value, referenced_ids)}
 
     categories: list[dict[str, Any]] = []
     category_indexes: dict[int, int] = {}
@@ -449,16 +542,26 @@ def _knowledge_graph(
                 "name": f"第 {cluster_start}-{cluster_start + 2} 章",
             })
 
-    mastered_ids = set(snapshot.get("mastered_knowledge_point_ids") or [])
-    weak_ids = set(snapshot.get("weak_knowledge_point_ids") or [])
+    mastered_ids = current_ids(snapshot.get("mastered_knowledge_point_ids") or [])
+    weak_ids = current_ids(snapshot.get("weak_knowledge_point_ids") or [])
     attempts_by_point: dict[str, list[DBAssessmentAttempt]] = {point_id: [] for point_id in known_ids}
+    diagnostic_routes = {}
+    diagnostic_owners = {item.owner_public_id for item in attempts if item.mode == "diagnostic"}
+    if diagnostic_owners:
+        reports = session.query(DBDiagnosticReport, DBDiagnosticSession).join(
+            DBDiagnosticSession, DBDiagnosticSession.id == DBDiagnosticReport.session_id,
+        ).filter(DBDiagnosticReport.owner_public_id.in_(diagnostic_owners),
+                 DBDiagnosticReport.course_id == course_id).all()
+        for report, work in reports:
+            for attempt_id in report.attempt_ids or []:
+                diagnostic_routes[attempt_id] = _route(
+                    "/workspace/assessment", course_id=course_id, blueprint_id=work.blueprint_id,
+                )
     for attempt in attempts:
         version = versions.get(attempt.question_version_id)
         if version is None:
             continue
-        point_ids = _referenced_knowledge_point_ids(
-            [version.primary_knowledge_point_id, version.secondary_knowledge_point_ids], known_ids,
-        )
+        point_ids = current_ids([version.primary_knowledge_point_id, version.secondary_knowledge_point_ids])
         for point_id in point_ids:
             attempts_by_point[point_id].append(attempt)
 
@@ -467,10 +570,10 @@ def _knowledge_graph(
         if not event.mastery_eligible or event.evidence_status != "accepted":
             continue
         point_ids = set()
-        if event.object_type == "knowledge_point" and event.object_id in known_ids:
-            point_ids.add(event.object_id)
-        point_ids.update(_referenced_knowledge_point_ids(event.context_ref, known_ids))
-        point_ids.update(_referenced_knowledge_point_ids(event.payload, known_ids))
+        if event.object_type == "knowledge_point" and event.object_id in referenced_ids:
+            point_ids.add(aliases.get(event.object_id, event.object_id))
+        point_ids.update(current_ids(event.context_ref))
+        point_ids.update(current_ids(event.payload))
         for point_id in point_ids:
             events_by_point[point_id].append(event)
 
@@ -478,9 +581,7 @@ def _knowledge_graph(
         point_id: [] for point_id in known_ids
     }
     for row in profile_evidence_rows:
-        point_ids = _referenced_knowledge_point_ids(
-            [row.source_object_id, row.features], known_ids,
-        )
+        point_ids = current_ids([row.source_object_id, row.features])
         for point_id in point_ids:
             profile_evidence_by_point[point_id].append(row)
 
@@ -494,7 +595,14 @@ def _knowledge_graph(
         behaviors: list[dict[str, Any]] = []
         evidence_times: list[datetime] = []
         snapshot_band = None
-        if point_id in mastered_ids:
+        snapshot_point = (snapshot.get("mastery_by_knowledge_point") or {}).get(point_id) or {}
+        point_attempt_ids = {attempt.id for attempt in point_attempts}
+        snapshot_attempt_ids = set(snapshot_point.get("attempt_ids") or [])
+        # A diagnostic summary describes these same answers. Counting its
+        # strong/weak label again fabricates a second observation and can even
+        # make a correct aggregate score conflict with its own rubric gaps.
+        snapshot_is_derived = bool(snapshot_attempt_ids & point_attempt_ids)
+        if point_id in mastered_ids and not snapshot_is_derived:
             snapshot_band = "mastered"
             evidence.append({
                 "label": "课程画像快照",
@@ -525,7 +633,7 @@ def _knowledge_graph(
                     occurred_at=snapshot_row.created_at if snapshot_row else None,
                 ),
             })
-        if point_id in weak_ids:
+        if point_id in weak_ids and not snapshot_is_derived:
             snapshot_band = "conflict" if snapshot_band else "weak"
             evidence.append({
                 "label": "课程画像快照",
@@ -559,40 +667,82 @@ def _knowledge_graph(
         if snapshot_band and snapshot_row and snapshot_row.created_at:
             evidence_times.append(snapshot_row.created_at)
 
-        scored_attempts = [
-            item for item in point_attempts
-            if item.grading_status == "graded" and item.score is not None
-        ]
+        scored_attempts = []
+        for item in point_attempts:
+            grade = grading_by_attempt.get(item.id)
+            score = grade.score if grade and grade.status == "completed" else item.score if item.grading_status == "graded" else None
+            if score is not None:
+                scored_attempts.append((item, float(score)))
         attempt_score = (
-            sum(float(item.score) for item in scored_attempts) / len(scored_attempts)
+            sum(score for _, score in scored_attempts) / len(scored_attempts)
             if scored_attempts else None
         )
-        for attempt in scored_attempts[:4]:
+        learning_needs = []
+        if scored_attempts:
+            from app.profile_adaptation import grading_learning_needs
+            needs_by_criterion = {}
+            for item, _ in sorted(scored_attempts, key=lambda pair: _as_utc(pair[0].submitted_at)):
+                grade = grading_by_attempt.get(item.id)
+                if grade is None or grade.status != "completed":
+                    continue
+                version = versions.get(item.question_version_id)
+                practice = (grade.evidence or {}).get("practice_context") or {}
+                guided = bool((item.answer or {}).get("used_hints")) or practice.get("kind") == "guided_practice"
+                if grade.correct is True and not guided:
+                    needs_by_criterion.pop((item.question_version_id, "answer_correctness"), None)
+                # A new score only updates the criteria that were actually
+                # assessed. Code execution, other questions and a total score
+                # cannot establish that this particular misconception cleared.
+                for criterion in grade.criterion_results or []:
+                    criterion_id = criterion.get("criterion_id")
+                    score = criterion.get("score")
+                    if (not criterion_id or isinstance(score, bool)
+                            or not isinstance(score, (int, float)) or not 0 <= score <= 1):
+                        continue
+                    key = (item.question_version_id, criterion_id)
+                    if score >= 0.7:
+                        if not guided:
+                            needs_by_criterion.pop(key, None)
+                        continue
+                    need = grading_learning_needs({
+                        "status": "completed", "criterion_results": [criterion],
+                    }, explanation=str(version.explanation or "") if version else "")[0]
+                    needs_by_criterion[key] = {
+                        **need, "question_version_id": item.question_version_id, "attempt_id": item.id,
+                    }
+            learning_needs.extend(needs_by_criterion.values())
+            learning_needs.sort(key=lambda need: (need.get("criterion_id") == "answer_correctness", need["score"]))
+        from app.learning_inquiry import inquiry_learning_needs
+        learning_needs.extend(inquiry_learning_needs(events, point_id, point_attempts))
+        for attempt, score in scored_attempts[:4]:
+            diagnostic = attempt.mode == "diagnostic"
+            source_route = diagnostic_routes.get(attempt.id) if diagnostic else _route("/workspace/assessment/exams", course_id=course_id)
+            source_label = "查看入学诊断报告" if diagnostic else "查看相关测评记录"
             evidence.append({
                 "label": "正式学习作答",
-                "value": f"得分 {round(float(attempt.score) * 100)}%",
+                "value": f"得分 {round(score * 100)}%",
                 "sourceType": "assessment_attempt",
                 "sourceId": attempt.id,
                 "observedAt": _iso(attempt.submitted_at),
                 "sourceLabel": "正式学习作答",
                 "source": _public_source(
-                    label="查看相关测评记录",
-                    route=_route("/workspace/assessment/exams", course_id=course_id),
-                    available=True,
+                    label=source_label,
+                    route=source_route or "",
+                    available=bool(source_route),
                     kind="assessment_attempt",
                     occurred_at=attempt.submitted_at,
                 ),
             })
             behaviors.append({
                 "label": "完成正式学习作答",
-                "detail": f"这次作答得分 {round(float(attempt.score) * 100)}%。",
+                "detail": f"这次作答得分 {round(score * 100)}%。",
                 "occurredAt": _iso(attempt.submitted_at),
                 "evidenceStatus": "accepted",
                 "evidenceLabel": "计入掌握判断",
                 "source": _public_source(
-                    label="查看相关测评记录",
-                    route=_route("/workspace/assessment/exams", course_id=course_id),
-                    available=True,
+                    label=source_label,
+                    route=source_route or "",
+                    available=bool(source_route),
                     kind="assessment_attempt",
                     occurred_at=attempt.submitted_at,
                 ),
@@ -602,7 +752,7 @@ def _knowledge_graph(
         for event in point_events[:4]:
             evidence.append({
                 "label": "有效学习行为",
-                "value": event.evidence_reason or f"{_human_event_label(event)}已记录。",
+                "value": _learning_evidence_reason(event.evidence_reason or f"{_human_event_label(event)}已记录。"),
                 "sourceType": "learning_event",
                 "sourceId": event.id,
                 "observedAt": _iso(event.occurred_at),
@@ -611,7 +761,7 @@ def _knowledge_graph(
             })
             behaviors.append({
                 "label": _human_event_label(event),
-                "detail": event.evidence_reason or "该行为已进入课程学习记录。",
+                "detail": _learning_evidence_reason(event.evidence_reason or "该行为已进入课程学习记录。"),
                 "occurredAt": _iso(event.occurred_at),
                 "evidenceStatus": event.evidence_status or "unknown",
                 "evidenceLabel": (
@@ -662,16 +812,38 @@ def _knowledge_graph(
             if snapshot_band == "weak" and attempt_score >= 0.7:
                 conflict = True
         if conflict:
-            mastery_value = attempt_score if attempt_score is not None else 0.5
+            mastery_value = attempt_score
             mastery_band = "conflict"
             confidence = 0.35
             judgement = "现有证据方向不一致，暂不形成稳定掌握结论。"
         else:
-            prior = 0.82 if snapshot_band == "mastered" else 0.34 if snapshot_band == "weak" else None
-            if prior is not None and attempt_score is not None:
-                mastery_value = round((prior + attempt_score) / 2, 4)
-            else:
-                mastery_value = attempt_score if attempt_score is not None else prior
+            # Labels carry no numeric measurement. Use an actual saved score
+            # only when the underlying answers are not already represented.
+            prior = snapshot_point.get("score") if not snapshot_is_derived else None
+            if isinstance(prior, bool) or not isinstance(prior, (int, float)) or not 0 <= prior <= 1:
+                prior = None
+            mastery_value = attempt_score if attempt_score is not None else prior
+            # The accepted learning projection is the same cumulative estimate
+            # used by teaching and the radar. Do not replace it with an older
+            # diagnostic score or an unweighted average of recent answers.
+            projection = snapshot.get("profile_projection") or {}
+            legacy_scores = snapshot.get("mastery")
+            mastery_scores = (snapshot.get("concept_mastery") or projection.get("concept_mastery")
+                              or (legacy_scores if isinstance(legacy_scores, dict) else {}))
+            aggregate_score = next((mastery_scores[key] for key in (point_id, point.code, point.title)
+                                    if key in mastery_scores), None)
+            if aggregate_score is None:
+                # Renaming/merging changes the read identity, not the saved
+                # results. Use an unambiguous old estimate only when the new
+                # canonical name does not already have a current estimate.
+                old_values = {float(mastery_scores[key]) for old, current in aliases.items() if current == point_id
+                    for key in (old, getattr(old_points.get(old), 'code', ''), getattr(old_points.get(old), 'title', ''))
+                    if key in mastery_scores and isinstance(mastery_scores[key], (int, float))
+                    and not isinstance(mastery_scores[key], bool) and 0 <= mastery_scores[key] <= 1}
+                if len(old_values) == 1:
+                    aggregate_score = next(iter(old_values))
+            if isinstance(aggregate_score, (int, float)) and not isinstance(aggregate_score, bool) and 0 <= aggregate_score <= 1:
+                mastery_value = float(aggregate_score)
             if mastery_value is None:
                 mastery_band = "unknown"
                 confidence = 0.0
@@ -695,6 +867,12 @@ def _knowledge_graph(
                     "weak": "当前证据显示仍有薄弱环节，建议先完成针对性学习任务。",
                 }[mastery_band]
 
+        if learning_needs and mastery_value is not None and not conflict:
+            # Preserve the numeric result while explaining why a high total
+            # does not yet justify skipping the remaining learning work.
+            mastery_band = "developing" if mastery_value >= 0.55 else "weak"
+            judgement = "已有答对的部分，仍需补齐：" + (learning_needs[0]["basis"] or "本次作答中尚未完成的环节。")
+
         last_evidence_at = max(evidence_times) if evidence_times else None
         if last_evidence_at and (latest_graph_time is None or last_evidence_at > latest_graph_time):
             latest_graph_time = last_evidence_at
@@ -713,6 +891,7 @@ def _knowledge_graph(
             "sourceEventIds": [event.id for event in point_events],
             "confidence": round(confidence, 2),
             "judgement": judgement,
+            "learningNeeds": learning_needs,
             "evidence": evidence,
             "behaviors": behaviors,
             "behaviorCount": len(behaviors),
@@ -727,14 +906,15 @@ def _knowledge_graph(
                 "reason": (
                     "先补充或核对有效证据，再更新画像判断。"
                     if mastery_band in {"unknown", "conflict"}
-                    else "根据当前掌握区间进入对应强度的下一项学习任务。"
+                    else (learning_needs[0]["next_step"] if learning_needs else
+                          "根据当前掌握区间进入对应强度的下一项学习任务。")
                 ),
             },
         })
 
     graph_edges = []
     for point_id, (_chapter, point) in point_rows.items():
-        for prerequisite_id in point.prerequisites or []:
+        for prerequisite_id in prerequisite_ids(course, point):
             if prerequisite_id in known_ids:
                 graph_edges.append({
                     "source": prerequisite_id,
@@ -763,6 +943,19 @@ def _knowledge_graph(
     }
 
 
+def _require_profile_course_access(session: Any, current_user: DBUser, course: DBCourse) -> None:
+    from app.authorization import ObjectAccess, active_course_role, can_access_object
+
+    if not can_access_object(
+        current_user,
+        ObjectAccess("course", course.id, owner_public_id=course.owner_public_id,
+                     course_id=course.id, visibility=course.visibility),
+        course_role=active_course_role(session, course_id=course.id,
+                                       user_public_id=current_user.public_id),
+    ):
+        _fail("course_unavailable", "当前课程画像上下文暂不可用")
+
+
 def build_profile_summary(
     session: Any, *, current_user: DBUser, course_id: str,
 ) -> dict[str, Any]:
@@ -772,12 +965,7 @@ def build_profile_summary(
     from course_catalog import course_is_selectable
     if not course_is_selectable(session, course):
         _fail("course_unavailable", "课程当前不可用")
-    if (
-        course.visibility != "public"
-        and course.owner_public_id != current_user.public_id
-        and str(getattr(current_user, "role", "")) != "admin"
-    ):
-        _fail("course_unavailable", "当前课程画像上下文暂不可用")
+    _require_profile_course_access(session, current_user, course)
 
     snapshot_row = (
         session.query(DBProfileSnapshot)
@@ -803,11 +991,16 @@ def build_profile_summary(
         course_id=course_id,
     ).order_by(DBAssessmentAttempt.submitted_at.desc(), DBAssessmentAttempt.id.desc()).all()
     attempts = [item for item in all_attempts if item.mode == "diagnostic"]
-    attempt_ids = [item.id for item in attempts]
+    attempt_ids = [item.id for item in all_attempts]
     grading_rows = session.query(DBAssessmentGradingResult).filter(
         DBAssessmentGradingResult.attempt_id.in_(attempt_ids),
-    ).all() if attempt_ids else []
-    grading_by_attempt = {item.attempt_id: item for item in grading_rows}
+    ).filter(DBAssessmentGradingResult.status == "completed").order_by(
+        DBAssessmentGradingResult.created_at.desc(), DBAssessmentGradingResult.id.desc()).all() if attempt_ids else []
+    grading_by_attempt = {}
+    for item in grading_rows:
+        previous = grading_by_attempt.get(item.attempt_id)
+        if previous is None or (item.grader_type == "human" and previous.grader_type != "human"):
+            grading_by_attempt[item.attempt_id] = item
     version_ids = [item.question_version_id for item in all_attempts]
     versions = {
         item.id: item for item in session.query(DBAssessmentQuestionVersion).filter(
@@ -848,6 +1041,9 @@ def build_profile_summary(
     reviews = session.query(DBReviewPlan).filter_by(student_id=current_user.username).order_by(
         DBReviewPlan.priority, DBReviewPlan.id,
     ).all()
+    from app.review_schedule import review_plan_contexts
+    review_contexts = review_plan_contexts(session, current_user, reviews) if reviews else {}
+    reviews = [row for row in reviews if review_contexts.get(row.id, {}).get('course_id') == course_id]
     path = session.query(DBLearningPath).filter(
         DBLearningPath.owner_public_id == current_user.public_id,
         DBLearningPath.course_id == course_id,
@@ -873,9 +1069,13 @@ def build_profile_summary(
 
     skill_evidence = []
     if snapshot_row:
+        overall = snapshot.get("mastery")
+        overall_text = (f"总体掌握度 {round(overall * 100)}%"
+                        if isinstance(overall, (int, float)) and not isinstance(overall, bool)
+                        and 0 <= overall <= 1 else "已保存各知识点的学习依据")
         skill_evidence.append(_evidence(
             label="课程掌握快照",
-            value=f"总体掌握度 {round(float(snapshot.get('mastery') or 0) * 100)}%",
+            value=overall_text,
             source_type="profile_snapshot",
             source_id=snapshot_row.id,
             observed_at=snapshot_row.created_at,
@@ -940,7 +1140,7 @@ def build_profile_summary(
     if latest_event:
         behavior_evidence.append(_evidence(
             label="课程学习事件",
-            value=f"累计 {len(events)} 条，最近为 {latest_event.event_type}",
+            value=f"累计 {len(events)} 条，最近为{_human_event_label(latest_event)}",
             source_type="learning_event",
             source_id=latest_event.id,
             observed_at=latest_event.occurred_at,
@@ -995,7 +1195,7 @@ def build_profile_summary(
             "key": "behavior",
             "title": "行为画像",
             "question": "下一步做什么",
-            "headline": f"已记录 {len(events)} 条课程事件和 {len(attempts)} 次诊断作答",
+            "headline": f"已记录 {len(events)} 次课程学习活动和 {len(attempts)} 次诊断作答",
             "strengths": ["已进入主课程并持续产生可追溯学习证据"] if events or attempts else ["尚未形成稳定学习行为证据"],
             "difficulties": [f"仍有 {len(reviews)} 项复习任务"] if reviews else ["当前没有到期复习项"],
             "next_step": next_action,
@@ -1009,10 +1209,25 @@ def build_profile_summary(
         snapshot=snapshot,
         snapshot_row=snapshot_row,
         attempts=all_attempts,
+        grading_by_attempt=grading_by_attempt,
         versions=versions,
         events=events,
         profile_evidence_rows=profile_evidence_rows,
     )
+    current_mastered = [node['name'] for node in knowledge_graph['nodes'] if node['masteryBand'] == 'mastered']
+    current_weak = [node['name'] for node in knowledge_graph['nodes']
+                    if node['masteryBand'] in {'weak', 'conflict'} or node.get('learningNeeds')]
+    # Aggregation snapshots retain a learner-wide weak_points list beside the
+    # triggering event's course_id. That id does not make every old weakness a
+    # fact about this course. Resolve it against the same course graph used by
+    # the mastery panel, without rewriting the stored learning history.
+    snapshot_course = snapshot.get('course_id') or (snapshot.get('course_context') or {}).get('courseId')
+    if snapshot.get('kind') in {'learning_aggregation_projection', 'learning_aggregation_baseline', 'flashcard_mastery_correction'} or not snapshot_course:
+        course_names = {node['name'] for node in knowledge_graph['nodes']}
+        weak = [name for name in weak if name in course_names and name not in current_mastered]
+    sections[0]['headline'] = f"已有 {len(current_mastered)} 个知识点的记录支持较稳定掌握"
+    sections[0]['strengths'] = current_mastered or ['正在积累掌握依据']
+    sections[0]['difficulties'] = weak or current_weak
     return {
         "schema_version": "r3.profile-summary.v1",
         "course": {"id": course.id, "title": course.title, "version": course.version},
@@ -1021,6 +1236,7 @@ def build_profile_summary(
             "title": "会什么、哪里困难、下一步做什么",
             "diagnostic_response_count": int(ability.response_count or 0) if ability else 0,
             "diagnostic_attempt_count": len(attempts),
+            "learning_response_count": int(ability.response_count or 0) if ability else 0,
             "evidence_count": sum(len(item["evidence"]) for item in sections),
             "next_action": next_action,
         },
@@ -1061,12 +1277,7 @@ def build_personal_activity(
         course = session.query(DBCourse).filter_by(id=course_id).first()
         if course is None:
             _fail("course_not_found", "课程不存在")
-        if (
-            course.visibility != "public"
-            and course.owner_public_id != current_user.public_id
-            and str(getattr(current_user, "role", "")) != "admin"
-        ):
-            _fail("course_unavailable", "当前课程画像上下文暂不可用")
+        _require_profile_course_access(session, current_user, course)
         if not course_is_selectable(session, course):
             _fail("course_unavailable", "当前课程已停止发布或没有可用学习资料")
 
@@ -1099,7 +1310,7 @@ def build_personal_activity(
     course_titles = {row.id: row.title for row in course_rows}
     artifact_ids = {
         str(event.object_id) for event in events
-        if event.object_type == "artifact" and event.object_id
+        if event.object_type in {"artifact", "interactive_model"} and event.object_id
     }
     artifact_rows = session.query(DBArtifact).filter(
         DBArtifact.id.in_(artifact_ids), DBArtifact.owner_public_id == current_user.public_id,
@@ -1214,9 +1425,9 @@ def build_personal_activity(
         "generatedAt": utc_now.isoformat(),
     }
     calculation = {
-        "duration": "只累计学习事件明确上报的actual_minutes、duration_minutes或active_seconds；页面停留和普通点击不计时。",
-        "activity": "热力图与连续学习只统计有明确时长、完成效果或已接受掌握证据的事件。",
-        "trend": "趋势来自已处理学习事件聚合结果中的真实掌握均值；无结果时不补线。",
+        "duration": "只累计学习任务中明确记录的学习时长；页面停留和普通点击不计时。",
+        "activity": "热力图和连续学习天数，只统计已记录时长或取得学习结果的日期。",
+        "trend": "趋势根据已经完成的有效练习和测评展示掌握变化；没有记录的日期不补画结果。",
     }
     return {
         "schemaVersion": "f8.personal-activity.v1",
@@ -1225,6 +1436,7 @@ def build_personal_activity(
             "publicId": current_user.public_id,
             "username": current_user.username,
             "displayName": current_user.display_name or current_user.username,
+            "avatarUrl": current_user.avatar_url or "",
             "major": student_profile.major if student_profile else "",
             "favoriteCount": len(student_profile.favorites or []) if student_profile else 0,
             "memberSince": _iso(current_user.created_at),

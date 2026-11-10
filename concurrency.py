@@ -92,6 +92,8 @@ class TokenBucket:
         self._last_refill = time.time()
 
     async def acquire(self, tokens: float = 1.0, timeout: float = 30.0) -> bool:
+        if self.capacity <= 0:
+            return True
         deadline = time.time() + timeout
         while time.time() < deadline:
             async with self._lock:
@@ -117,8 +119,8 @@ class APIRateLimiter:
 
     def __init__(
         self,
-        max_rpm: int = 120,
-        max_tpm: int = 100000,
+        max_rpm: int = 0,
+        max_tpm: int = 0,
         max_concurrent: int = 8,
     ) -> None:
         self.rpm_bucket = TokenBucket(capacity=max_rpm, refill_rate=max_rpm / 60.0)
@@ -140,9 +142,23 @@ class APIRateLimiter:
         except Exception:
             self.request_semaphore.release()
             return False
+        except asyncio.CancelledError:
+            self.request_semaphore.release()
+            raise
 
     def release(self) -> None:
         self.request_semaphore.release()
+
+    async def account_usage(self, estimated_tokens: int, actual_tokens: int) -> None:
+        """Replace a request's reservation with provider-reported consumption."""
+        if self.tpm_bucket.capacity <= 0:
+            return
+        async with self.tpm_bucket._lock:
+            self.tpm_bucket._refill()
+            self.tpm_bucket._tokens = min(
+                float(self.tpm_bucket.capacity),
+                self.tpm_bucket._tokens + estimated_tokens - actual_tokens,
+            )
 
 
 @dataclass
@@ -211,6 +227,7 @@ async def retry_with_backoff(
     base_delay: float = 1.0,
     max_delay: float = 30.0,
     jitter: bool = True,
+    retryable: Callable[[Exception], bool] | None = None,
 ) -> Any:
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
@@ -219,6 +236,8 @@ async def retry_with_backoff(
         except CircuitBreakerOpenError:
             raise
         except Exception as exc:
+            if retryable is not None and not retryable(exc):
+                raise
             last_exc = exc
             if attempt < max_attempts - 1:
                 import random

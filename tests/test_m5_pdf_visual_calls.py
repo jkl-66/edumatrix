@@ -46,6 +46,7 @@ def _fixture(monkeypatch, response=None, *, error=None):
         multimodal_llm_endpoint="https://vision.example/v1/chat/completions",
         multimodal_llm_api_key="test-key",
         multimodal_llm_model="vision-test-model",
+        llm_timeout=90,
     ))
     calls = []
 

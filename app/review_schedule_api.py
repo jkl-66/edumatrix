@@ -25,6 +25,7 @@ class ReviewCompletionInput(StrictModel):
 
 class ReviewResourceInput(StrictModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
+    resource_types: list[str] | None = None
 
 
 def _http(exc: ReviewScheduleError) -> HTTPException:
@@ -91,6 +92,7 @@ async def review_resource_job(
                 actor=current_user,
                 task_id=task_id,
                 idempotency_key=payload.idempotency_key,
+                resource_types=payload.resource_types,
             )
         )
     except ReviewScheduleError as exc:

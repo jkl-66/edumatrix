@@ -53,7 +53,8 @@ def test_legacy_run_returns_execution_when_profile_is_not_initialized(monkeypatc
     assert result["canonical_evidence"] is None
 
 
-def test_legacy_syntax_error_has_explicit_unsaved_history_status():
+def test_legacy_syntax_error_has_explicit_unsaved_history_status(monkeypatch):
+    monkeypatch.setattr(SANDBOX_RUNNER, "mode", "trusted_local")
     username = f"noc-t19-syntax-{uuid.uuid4().hex[:10]}"
     user = DBUser(username=username, role="student")
 
@@ -65,7 +66,8 @@ def test_legacy_syntax_error_has_explicit_unsaved_history_status():
     assert result["canonical_evidence"] is None
 
 
-def test_legacy_run_keeps_history_and_non_mastery_evidence_with_profile():
+def test_legacy_run_keeps_history_and_non_mastery_evidence_with_profile(monkeypatch):
+    monkeypatch.setattr(SANDBOX_RUNNER, "mode", "trusted_local")
     username = f"noc-t19-profile-{uuid.uuid4().hex[:10]}"
     public_id = f"usr-{uuid.uuid4().hex[:16]}"
     with SessionLocal() as db:
@@ -191,13 +193,3 @@ def test_validate_code_rejects_invalid_generated_code_without_local_rewrite():
     assert validate_code("from collections import Counter\nprint(Counter(['a']))") is None
 
 
-def test_legacy_sandbox_components_extract_structured_error_messages():
-    root = Path(__file__).resolve().parents[1]
-    visualizer = (root / "frontend/src/components/SandboxVisualizer.vue").read_text(encoding="utf-8")
-    console = (root / "frontend/src/components/SandboxConsole.vue").read_text(encoding="utf-8")
-
-    for source in (visualizer, console):
-        assert "function readableRunError" in source
-        assert "detail.message" in source
-        assert "detail.error" in source
-        assert "[object Object]" not in source

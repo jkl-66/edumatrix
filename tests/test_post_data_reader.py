@@ -28,7 +28,19 @@ def _source(file_format: str) -> tuple[DBSourceDocument, DBChapter, DBSourceRef]
         return source, chapter, ref
 
 
-def test_curated_course_outline_reader_pdf_selection_and_video_are_real() -> None:
+def test_curated_course_outline_reader_pdf_selection_and_video_are_real(monkeypatch) -> None:
+    import app.document_selection as selection_service
+    captured = []
+    original = selection_service.audited_legacy_text_call
+    async def observe(*args, **kwargs):
+        captured.append(kwargs)
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(selection_service, "audited_legacy_text_call", observe)
+    # This archived course is an explicit reader fixture, not a startup course.
+    from course_catalog import ALL_CURATED_COURSE_MANIFESTS, load_versioned_course_bundle, upsert_course_bundle
+    with SessionLocal() as db:
+        upsert_course_bundle(db, load_versioned_course_bundle(ALL_CURATED_COURSE_MANIFESTS[2]))
+        db.commit()
     with TestClient(app) as client:
         headers = auth_headers(client, "post_data_reader")
         with SessionLocal() as db:
@@ -87,7 +99,11 @@ def test_curated_course_outline_reader_pdf_selection_and_video_are_real() -> Non
         )
         assert answer.status_code == 200, answer.text
         assert answer.json()["answer_status"] == "ready"
-        assert "课程目标" in answer.json()["answer_text"]
+        assert answer.json()["answer_text"].strip()
+        assert answer.json()["answer_source_ref_id"] == pdf_ref.id
+        assert captured[-1]["role"] == "选区课程答疑"
+        assert selected["ocr_text"][:8000] in captured[-1]["user_prompt"]
+        assert "这一区域要求我掌握什么？" in captured[-1]["user_prompt"]
 
         video_source, _video_chapter, _video_ref = _source("mp4")
         video_detail = client.get(f"/api/v1/document-reader/documents/{video_source.id}", headers=headers)
@@ -117,4 +133,5 @@ def test_reader_frontend_exposes_grouped_materials_pdf_pages_and_video_player() 
     assert "视频说明与可检索文字" in reader_source
     assert "const rootChapters" in shelf_source
     assert "const selectedMaterials" in shelf_source
-    assert "本章资料" in shelf_source
+    assert 'data-testid="course-resource-shelf"' in shelf_source
+    assert 'data-testid="selected-resource-detail"' in shelf_source

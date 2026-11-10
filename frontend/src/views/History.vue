@@ -1,4 +1,6 @@
 <script setup>
+import { learningText, displayLabel } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -50,7 +52,7 @@ const visibleItems = computed(() => {
   ].some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(query)))
 })
 const selectedItem = computed(() => (
-  rawItems.value.find(item => item.id === selectedItemId.value) || visibleItems.value[0] || null
+  visibleItems.value.find(item => item.id === selectedItemId.value) || visibleItems.value[0] || null
 ))
 const total = computed(() => Number(data.value?.activity?.total || 0))
 const pageStart = computed(() => total.value ? offset.value + 1 : 0)
@@ -164,9 +166,9 @@ onMounted(() => loadHistory({ discoverCourses: true }))
 <template>
   <main class="history-page" data-testid="profile-history">
     <PageHeader
-      eyebrow="个人中心 / 学习历史"
+
       title="学习历史"
-      description="按课程和学习对象找回真实记录，确认其是否形成掌握证据，并从原位置继续。"
+      description="按课程找回学过的内容，查看练习结果和学习变化，并从原位置继续。"
     >
       <template #actions>
         <button class="button button--secondary" type="button" @click="router.push('/profile')">
@@ -181,7 +183,7 @@ onMounted(() => loadHistory({ discoverCourses: true }))
       <RefreshCw :size="20" class="spin" />
       <div>
         <strong>正在读取学习历史</strong>
-        <p>筛选区、时间线和详情区会保持稳定。</p>
+        <p>正在找回学过的内容和练习结果，请稍候。</p>
       </div>
     </section>
 
@@ -189,7 +191,7 @@ onMounted(() => loadHistory({ discoverCourses: true }))
       <AlertCircle :size="22" />
       <div>
         <strong>学习历史加载失败</strong>
-        <p>{{ error }}</p>
+        <p>{{ userMessage(error) }}</p>
       </div>
       <button class="button button--primary" type="button" @click="loadHistory({ discoverCourses: true })">
         <RefreshCw :size="16" /> 重试
@@ -239,7 +241,7 @@ onMounted(() => loadHistory({ discoverCourses: true }))
 
         <div class="read-boundary">
           <ShieldCheck :size="18" />
-          <p>查看、筛选和展开历史不会改变掌握度、路径或复习安排。</p>
+          
         </div>
       </aside>
 
@@ -314,20 +316,21 @@ onMounted(() => loadHistory({ discoverCourses: true }))
               <dd>{{ selectedItem.evidence?.label }}</dd>
             </div>
             <div>
-              <dt>证据原因</dt>
-              <dd>{{ selectedItem.evidence?.reason || '未提供证据原因' }}</dd>
+              <dt>判断依据</dt>
+              <dd>{{ learningText(selectedItem.evidence?.reason || '暂时没有更多说明') }}</dd>
             </div>
             <div v-if="selectedItem.evidence?.knowledgePointTitles?.length">
               <dt>对应知识点</dt>
               <dd>{{ selectedItem.evidence.knowledgePointTitles.join('、') }}</dd>
             </div>
             <div v-if="selectedItem.evidence?.observations?.length">
-              <dt>观察值</dt>
+              <dt>本次学习结果</dt>
               <dd>{{ selectedItem.evidence.observations.map(item => `${item.knowledgePointTitle} ${Math.round(item.value * 100)}%`).join('、') }}</dd>
             </div>
             <div>
-              <dt>反馈聚合状态</dt>
-              <dd>{{ selectedItem.evidence?.aggregationStatus || '待同步' }}</dd>
+              <dt>学习安排更新</dt>
+              <dd v-if="selectedItem.kind === 'note' && !selectedItem.evidence?.masteryEligible && selectedItem.evidence?.completionEffect === 'none'">笔记已保存</dd>
+              <dd v-else>{{ displayLabel(selectedItem.evidence?.aggregationStatus, '待更新') }}</dd>
             </div>
             <div>
               <dt>记录说明</dt>
@@ -338,9 +341,9 @@ onMounted(() => loadHistory({ discoverCourses: true }))
           <div class="source-box">
             <BookOpen :size="18" />
             <div>
-              <strong>来源与上下文</strong>
-              <p v-if="selectedItem.target?.available">原学习对象仍可打开，继续后才按真实动作记录新事件。</p>
-              <p v-else>原学习对象已撤回或不支持直接打开，历史摘要仍被保留。</p>
+              <strong>继续原来的学习</strong>
+              
+              <p v-if="!selectedItem.target?.available">原内容暂时无法打开。</p>
             </div>
           </div>
 
@@ -355,16 +358,16 @@ onMounted(() => loadHistory({ discoverCourses: true }))
 
           <details class="evidence-details">
             <summary>查看记录依据</summary>
-            <p>事件类型：{{ selectedItem.eventType || '未记录' }}</p>
-            <p>对象：{{ selectedItem.objectType || '未记录' }} / {{ selectedItem.objectId || '未记录' }}</p>
-            <p>来源事件：{{ selectedItem.sourceEventIds?.join('、') || '未记录' }}</p>
+            <p>学习活动：{{ selectedItem.label }}</p>
+            <p>记录时间：{{ formatTime(selectedItem.occurredAt, true) }}</p>
+            <p>学习依据：{{ learningText(selectedItem.evidence?.reason || selectedItem.detail) }}</p>
           </details>
         </template>
 
         <div v-else class="empty-state empty-state--detail">
           <Clock3 :size="27" />
           <strong>请选择一条学习记录</strong>
-          <p>这里会显示来源、证据状态和继续动作。</p>
+          <p>查看这次学了什么、完成结果，以及接下来可以做什么。</p>
         </div>
       </aside>
     </section>
@@ -425,6 +428,10 @@ onMounted(() => loadHistory({ discoverCourses: true }))
   grid-template-columns: 220px minmax(360px, 1fr) 300px;
   align-items: stretch;
   gap: 16px;
+
+  background: var(--gradient-paper);
+
+  border: 0;
 }
 .filter-panel,
 .timeline-panel,
@@ -492,7 +499,7 @@ onMounted(() => loadHistory({ discoverCourses: true }))
 }
 .timeline-row.active { background: var(--color-accent-soft); box-shadow: inset 3px 0 0 var(--color-accent); }
 .timeline-marker { width: 9px; height: 9px; background: var(--color-text-muted); border-radius: 50%; }
-.timeline-marker.evidence { background: var(--color-accent); box-shadow: 0 0 0 3px #dce2e3; }
+.timeline-marker.evidence { background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-border); }
 .timeline-copy { display: block; min-width: 0; }
 .timeline-copy strong,
 .timeline-copy small,

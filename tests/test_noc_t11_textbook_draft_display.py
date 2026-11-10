@@ -16,7 +16,8 @@ def test_textbook_draft_keeps_only_time_and_core_path_content():
     source = VIEW.read_text(encoding="utf-8")
     draft = _draft_template(source)
 
-    assert "预计 {{ textbookDraft.plan.total_minutes }} 分钟" in draft
+    assert "formatMinutes(textbookDraft.plan.total_minutes)" in draft
+    assert "textbookDraft.plan.total_min_minutes" in draft
     assert "{{ node.estimate_max_minutes }} 分钟" in draft
     assert "{{ node.title }}" in draft
     assert "node.knowledge_points" in draft
@@ -28,7 +29,9 @@ def test_textbook_draft_keeps_only_time_and_core_path_content():
     assert "textbookGeneration.error_code" not in draft
     assert "textbookGeneration.personalization_summary" not in draft
     assert "node.reason" not in draft
-    assert "textbookDraft.diff" not in draft
+    assert '{{ textbookDraft.diff.summary }}' in draft
+    assert '{{ textbookDraft.diff }}' not in draft
+    assert 'textbookDraft.diff.added' not in draft
     assert "textbookDraft.boundary" not in draft
 
 

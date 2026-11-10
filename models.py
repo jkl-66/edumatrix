@@ -214,6 +214,9 @@ class DimensionState:
     evidence_fragments: list[str] = field(default_factory=list)
     recommended_interventions: list[str] = field(default_factory=list)
     last_updated: str = field(default_factory=_utc_now)
+    self_report: str = ""
+    qualitative: bool = False
+    confirmed_state_scores: dict[str, float | None] = field(default_factory=dict)
 
 
 @dataclass
@@ -558,7 +561,8 @@ class StudentProfile:
 
     def profile_prompt(self) -> str:
         dimensions = "；".join(
-            f"{state.label}={state.status}(score={state.score:.2f}, confidence={state.confidence:.2f})"
+            (f"{state.label}={state.self_report}" if state.qualitative else
+             f"{state.label}={state.status}(score={state.score:.2f}, confidence={state.confidence:.2f})")
             for state in self.dimension_states.values()
         )
         causes = "；".join(
@@ -572,7 +576,9 @@ class StudentProfile:
         goals = "、".join(self.learning_goals) or "未显式说明"
         preferences = "、".join(self.interaction_preferences) or self.cognitive_style
         # === P1-1 情感信息注入 ===
-        affect_info = f"挫败感={self.frustration_index:.2f}；参与度={self.engagement_level:.2f}；动机类型={self.motivation_type}"
+        affect = self.dimension_states.get("affect_resilience")
+        affect_text = affect.self_report if affect and affect.qualitative else f"挫败感={self.frustration_index:.2f}"
+        affect_info = f"{affect_text}；参与度={self.engagement_level:.2f}；动机类型={self.motivation_type}"
         return (
             f"课程={self.target_course}；专业/方向={self.major or self.major_preference}；学习目标={goals}；"
             f"偏好支持={preferences}；薄弱点={','.join(self.weak_points) or '待诊断'}；"
@@ -585,6 +591,9 @@ class StudentProfile:
         if self.major or self.learning_goals:
             lines.append(f"- 背景目标: {self.target_course}；{self.major or self.major_preference}；{', '.join(self.learning_goals) or '目标待细化'}")
         for state in self.dimension_states.values():
+            if state.qualitative:
+                lines.append(f"- {state.label}: {state.self_report}")
+                continue
             fragments = " / ".join(state.evidence_fragments[:2]) or "暂无直接证据"
             lines.append(
                 f"- {state.label}: {state.status} "

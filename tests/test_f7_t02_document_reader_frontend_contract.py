@@ -97,7 +97,7 @@ def test_text_and_image_selections_share_source_bound_actions_and_recovery() -> 
         "图片区域已保留",
         "问题和选区均已保留",
         "正文和来源仍保留在这里",
-        "String(readerDoc.value?.content || '').slice(start, end)",
+        "trimSourceTextRange(readerDoc.value?.content, start, end)",
     ):
         assert marker in reader
     for action in ("针对选区提问", "把选区记入笔记", "基于选区生成资源", "取消选区"):
@@ -115,7 +115,7 @@ def test_reader_generates_into_existing_resources_and_never_writes_mastery_evide
         "当前文件",
         "当前选区",
         "生成并归档",
-        "任务已进入资源中心",
+        "学习资源任务已保存",
         "openResourceCenter",
     ):
         assert marker in source
@@ -163,11 +163,11 @@ def test_reader_keeps_loading_empty_failure_retry_recovery_and_completion_states
         "文档暂时无法打开",
         "重新加载",
         "当前文档没有可读正文",
-        "正在加载解析页图",
+        "正在加载这一页",
         "重试本页",
-        "重试 OCR",
+        "重新识别文字",
         "已恢复上次位置",
-        "已保存，文档位置与选区引用已归档",
-        "任务已进入资源中心",
+        "已保存笔记和原文位置",
+        "学习资源任务已保存",
     ):
         assert marker in source

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,20 @@ def test_textbook_draft_is_explainable_idempotent_and_confirmed_through_existing
             return operation(session, *args, **kwargs)
 
         monkeypatch.setattr(m5_api, "run_db_op", isolated_run_db_op)
+        import app.path_draft as path_service
+        from tests.test_acceptance_p1_b11_personalized_path import _RealPathBackend, _model_payload
+        class PathModel(_RealPathBackend):
+            async def generate(self, system_prompt, user_prompt, *, role, **kwargs):
+                context = json.loads(user_prompt)["context"]
+                payload = _model_payload(session, context["profile_snapshot_id"], node_count=8)
+                nodes = payload["plan"]["nodes"][3:7]
+                for index, node in enumerate(nodes):
+                    node["estimate_min_minutes"] = node["estimate_max_minutes"] = context["time_budget_minutes"] // len(nodes)
+                    node["prerequisites"] = [nodes[index-1]["node_key"]] if index else []
+                    node["rationale"] = "根据薄弱点和先修关系安排本章。"
+                payload["plan"]["nodes"] = nodes
+                return json.dumps(payload, ensure_ascii=False)
+        monkeypatch.setattr(m5_api, "_build_path_model", PathModel)
         before = _run(m5_api.get_textbook_path_draft(
             course_id=COURSE_ID, current_user=learner,
         ))

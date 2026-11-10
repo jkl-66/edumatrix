@@ -43,7 +43,7 @@ def test_showcase_bootstrap_is_idempotent_and_does_not_complete_journeys():
         assert first.status_code == 200, first.text
         body = first.json()
         assert body["initialized"] is True and body["ready_count"] == 6
-        assert body["context"]["course"]["id"] == "course-rag-engineering-m0"
+        assert body["context"]["course"]["id"] == "course-ai-deep-learning-agents-v1"
         assert body["roles"]["teacher"]["local_demo_password"] == "EduMatrix-FC-Demo"
         assert body["roles"]["learner"]["local_demo_password"] == "EduMatrix-FC-Demo"
         for journey in ("student", "media", "teacher", "enterprise", "marketplace", "integration"):
@@ -56,6 +56,6 @@ def test_showcase_bootstrap_is_idempotent_and_does_not_complete_journeys():
         assert "local_demo_password" not in readback["roles"]["teacher"]
     with SessionLocal() as db:
         admin = db.query(DBUser).filter_by(username=username).one()
-        memberships = db.query(DBCourseMembership).filter_by(course_id="course-rag-engineering-m0", status="active").all()
+        memberships = db.query(DBCourseMembership).filter_by(course_id=body["context"]["course"]["id"], status="active").all()
         assert any(row.user_public_id == admin.public_id and row.role == "admin" for row in memberships)
         assert db.query(DBCompetitionJourneyRun).filter_by(owner_public_id=admin.public_id).count() == 0

@@ -64,7 +64,7 @@ def test_opening_and_follow_up_are_contextual_not_form_questions():
         assert "你刚才提到" in after["question"]
         assert "知识库问答项目" in after["question"]
         first_turn = after["turns"][0]
-        assert first_turn["assistantReply"].startswith("我听到的是：")
+        assert first_turn["assistantReply"] == first_turn["extractedCandidates"]["understanding"]
         assert first_turn["question"]
     finally:
         db.close()
@@ -110,19 +110,24 @@ def test_natural_signals_project_and_change_adaptation_controls():
 
         profile = db.get(DBStudentProfile, user.username)
         assert profile.motivation_type in {"项目/工作", "职业发展"}
-        assert profile.cognitive_load >= 0.5
-        assert profile.frustration_index >= 0.5
+        # The learner described a context-specific feeling, not a measured score.
+        assert profile.cognitive_load == 0.45
+        assert profile.frustration_index == 0
+        assert "焦虑" in profile.dimension_states["misconception_profile"]["summary"]
+        confirmed_plan = build_profile_adaptation({}, profile=profile, knowledge_point={"title": "公式推导"})
+        assert "焦虑" in confirmed_plan["dimensions"]["misconception_profile"]
+        assert confirmed_plan["scaffolding_level"] == "high"
         assert profile.dimension_states
         assert any(item.get("label") == "学习情境" for item in profile.dimension_states.values())
 
         finalized = finalize_initial_profile(db, user)
         assert finalized["finalized"] is True
         assert payload["profileSignals"]
-        assert any(signal["label"] == "学习节奏" for signal in payload["profileSignals"])
+        assert any(signal["label"] in {"讲解节奏", "更顺手的学习方式"} for signal in payload["profileSignals"])
 
         novice = {
             "profile_projection": {
-                "knowledge_base": "零基础",
+                "knowledge_base": "RAG零基础",
                 "learning_goals": ["理解核心概念"],
                 "interaction_preferences": ["分步讲解"],
                 "cognitive_load": 0.78,
@@ -131,7 +136,7 @@ def test_natural_signals_project_and_change_adaptation_controls():
         }
         practitioner = {
             "profile_projection": {
-                "knowledge_base": "熟练，有经验",
+                "knowledge_base": "熟练使用RAG，有项目经验",
                 "learning_goals": ["上线项目"],
                 "interaction_preferences": ["代码实操"],
                 "cognitive_load": 0.3,

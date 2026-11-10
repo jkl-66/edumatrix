@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth import get_current_user, get_password_hash
 from app.database import (
     Base, DBChapter, DBCourse, DBCourseMembership, DBSourceDocument,
-    DBStudentProfile, DBUser,
+    DBStudentProfile, DBUser, DBKnowledgePoint, DBChapterKnowledgePoint, DBLearningPath, DBPathNode,
 )
 from app.main import app
 from app.m6_enterprise import bootstrap_competition_training_demo, enterprise_workspace
@@ -206,7 +206,7 @@ def _teacher_fixture(session):
     )
     course = DBCourse(
         id="m6-course", version="1", title="RAG 工程",
-        visibility="private", manifest_version="1",
+        visibility="private", status="published", manifest_version="1",
     )
     source = DBSourceDocument(
         id="m6-source", course_id=course.id, title="可信检索",
@@ -227,6 +227,11 @@ def _teacher_fixture(session):
         ),
     ])
     session.commit()
+    point = DBKnowledgePoint(id="m6-retrieval", domain_pack="m6", code="retrieval", version="1", title="混合检索与重排")
+    session.add(point)
+    session.flush()
+    session.add(DBChapterKnowledgePoint(chapter_id="m6-chapter", knowledge_point_id=point.id))
+    session.commit()
     return teacher, learner, course
 
 
@@ -245,6 +250,27 @@ def test_m6_teacher_intervention_requires_learner_evidence_then_teacher_confirma
     overview = teacher_intervention_overview(session, actor=teacher, course_id=course.id)
     assert overview["interventions"][0]["node_status"] == "pending"
 
+    # A completed exercise in the same chapter is not teacher confirmation.
+    from datetime import datetime, timezone
+    from app.m5_learning import LearningEventInput, record_learning_event, process_path_event
+    event, _ = record_learning_event(session, owner_public_id=learner.public_id, trusted_source=True,
+        event=LearningEventInput(idempotency_key="unrelated-same-chapter", event_type="quiz_answered",
+            course_id=course.id, object_type="chapter", object_id="m6-chapter", source="backend",
+            occurred_at=datetime.now(timezone.utc), payload={"correct": True, "score": 1.0}))
+    process_path_event(session, event=event)
+    assert teacher_intervention_overview(session, actor=teacher, course_id=course.id)["interventions"][0]["node_status"] == "pending"
+
+    # Historical false completion is repaired without altering learning events.
+    from app.migrations import _repair_teacher_intervention_completion
+    path = session.get(DBLearningPath, published["path_id"])
+    node = session.query(DBPathNode).filter_by(learning_path_id=path.id).one()
+    node.status = "completed"
+    path.status = "completed"
+    session.flush()
+    _repair_teacher_intervention_completion(session.connection())
+    session.expire_all()
+    assert node.status == "pending" and path.status == "active"
+
     evidence = learner_submit_intervention_evidence(
         session, actor=learner, path_id=published["path_id"], active_seconds=900,
     )
@@ -262,6 +288,9 @@ def test_m6_teacher_intervention_requires_learner_evidence_then_teacher_confirma
     assert confirmed["path_status"] == "completed"
     final = teacher_intervention_overview(session, actor=teacher, course_id=course.id)
     assert final["interventions"][0]["teacher_confirmed"] is True
+    _repair_teacher_intervention_completion(session.connection())
+    session.expire_all()
+    assert path.status == "completed" and node.status == "completed"
 
 
 def test_m6_teacher_http_intervention_enforces_actor_responsibility(monkeypatch):

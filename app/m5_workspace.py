@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.source_refs import current_chapter_clause
+
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -742,7 +744,7 @@ def workspace_overview(
             "next_action": {"label": "选择课程", "route": "/knowledge"},
         }
 
-    chapters = session.query(DBChapter).filter_by(course_id=course.id).order_by(
+    chapters = session.query(DBChapter).filter_by(course_id=course.id).filter(current_chapter_clause()).order_by(
         DBChapter.position, DBChapter.id,
     ).all()
     chapter_ids = [item.id for item in chapters]
@@ -880,16 +882,19 @@ def workspace_overview(
     reviews = session.query(DBReviewPlan).filter_by(student_id=current_user.username).order_by(
         DBReviewPlan.priority, DBReviewPlan.next_review_at, DBReviewPlan.id,
     ).all()
+    from app.review_schedule import review_plan_contexts
+    review_contexts = review_plan_contexts(session, current_user, reviews)
     due_reviews = [
         row for row in reviews
-        if row.concept in knowledge_point_ids
+        if review_contexts[row.id].get("course_id") == course.id
         and (row.next_review_at is None or row.next_review_at <= _now())
     ]
     review_items = due_reviews[:6]
 
     state = "ready" if path is not None else "path_required"
-    if today:
-        next_action = {"label": "继续今日任务", "route": f"/workspace?node_id={today[0]['node_id']}"}
+    remaining_today = [item for item in today if item.get("status") != "completed"]
+    if remaining_today:
+        next_action = {"label": "继续今日任务", "route": remaining_today[0]["continue_route"]}
     elif path is None:
         next_action = {"label": "创建学习路径", "route": "/learning-path"}
     else:
@@ -975,11 +980,11 @@ def workspace_overview(
             "due_count": len(due_reviews),
             "items": [{
                 "id": item.id,
-                "knowledge_point_id": item.concept,
-                "title": knowledge_point_titles.get(item.concept, item.concept),
+                "knowledge_point_id": review_contexts[item.id]["knowledge_point_id"],
+                "title": review_contexts[item.id]["knowledge_point_title"],
                 "mastery": item.mastery,
                 "interval_days": item.interval_days,
-                "next_review_at": item.next_review_at.isoformat() if item.next_review_at else None,
+                "next_review_at": item.next_review_at.replace(tzinfo=timezone.utc).isoformat() if item.next_review_at else None,
                 "priority": item.priority,
             } for item in review_items],
         },

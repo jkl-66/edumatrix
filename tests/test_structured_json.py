@@ -38,6 +38,24 @@ def test_requires_json_object_only_for_explicit_structured_prompts():
     assert requires_json_object("JSON Schema: {type: object}") is True
 
 
+@pytest.mark.parametrize("prompt", [
+    "你是学习资源审核者。只输出一个 JSON 对象，不要输出其他内容。",
+    "只输出一个JSON对象。",
+    "仅输出 JSON 对象，保留教学内容。",
+    "只输出符合 JSON Schema 的对象。",
+])
+def test_requires_json_object_recognizes_generation_and_review_prompts(prompt):
+    assert requires_json_object(prompt) is True
+
+
+@pytest.mark.parametrize("prompt", [
+    "请用自然语言解释 JSON 的用途",
+    "讲解如何输出一个 JSON 对象，并给出示例。",
+])
+def test_requires_json_object_does_not_turn_json_lessons_into_structured_output(prompt):
+    assert requires_json_object(prompt) is False
+
+
 @pytest.mark.parametrize(
     ("mode", "expected"),
     [("disabled", {"type": "disabled"}), ("ENABLED", {"type": "enabled"})],

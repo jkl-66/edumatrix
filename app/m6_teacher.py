@@ -9,9 +9,12 @@ from fastapi import HTTPException
 
 from app.audit_log import record_backend_audit
 from app.authorization import ObjectAccess, active_course_role, require_object_access
+from app.source_refs import current_chapter_clause
 from app.database import (
     DBAuditLog,
     DBChapter,
+    DBChapterKnowledgePoint,
+    DBKnowledgePoint,
     DBCourse,
     DBCourseMembership,
     DBLearningEvent,
@@ -60,6 +63,38 @@ def _student_member(session: Any, *, course_id: str, learner_public_id: str) -> 
     return membership, learner
 
 
+def _course_weakest(session: Any, course_id: str, mastery: dict):
+    rows = (session.query(DBKnowledgePoint, DBChapter)
+            .join(DBChapterKnowledgePoint, DBChapterKnowledgePoint.knowledge_point_id == DBKnowledgePoint.id)
+            .join(DBChapter, DBChapter.id == DBChapterKnowledgePoint.chapter_id)
+            .filter(DBChapter.course_id == course_id, current_chapter_clause()).order_by(DBChapter.position).all())
+    candidates = []
+    for point, chapter in rows:
+        values = [float(mastery[key]) for key in (point.id, point.code, point.title) if key in mastery]
+        if values:
+            candidates.append((point.title, min(values), chapter))
+    return min(candidates, key=lambda item: item[1]) if candidates else None
+
+
+def intervention_progress(session: Any, path: DBLearningPath) -> dict[str, Any]:
+    events = session.query(DBLearningEvent).filter_by(owner_public_id=path.owner_public_id, course_id=path.course_id).filter(
+        DBLearningEvent.event_type.in_(("reading_threshold", "teacher_confirmed")),
+    ).all()
+    study = next((event for event in events if event.event_type == "reading_threshold"
+                  and (event.payload or {}).get("path_id") == path.id), None)
+    confirmed = any(event.event_type == "teacher_confirmed" and (event.payload or {}).get("scope") == "intervention_completion"
+                    and ((event.payload or {}).get("path_id") == path.id
+                         or (study and (event.payload or {}).get("learner_event_id") == study.id)) for event in events)
+    return {"learner_event_id": study.id if study else None, "teacher_confirmed": confirmed}
+
+
+def _intervention_node(session: Any, path: DBLearningPath):
+    node = session.query(DBPathNode).filter_by(learning_path_id=path.id).order_by(DBPathNode.sequence).first()
+    if node is None or not node.node_key.startswith("teacher-intervention-"):
+        raise HTTPException(status_code=409, detail="请从教师布置的补充任务提交学习情况。")
+    return node
+
+
 def publish_teacher_intervention(
     session: Any,
     *,
@@ -74,12 +109,10 @@ def publish_teacher_intervention(
     )
     profile = session.query(DBStudentProfile).filter_by(student_id=learner.username).first()
     mastery = dict(profile.concept_mastery or {}) if profile else {}
-    if not mastery:
-        raise HTTPException(status_code=409, detail="缺少可解释的学员掌握度证据")
-    concept, score = min(mastery.items(), key=lambda item: float(item[1]))
-    chapter = session.query(DBChapter).filter_by(course_id=course_id).order_by(DBChapter.position).first()
-    if chapter is None:
-        raise HTTPException(status_code=409, detail="课程没有可分配的正式章节")
+    weakest = _course_weakest(session, course_id, mastery)
+    if weakest is None:
+        raise HTTPException(status_code=409, detail="本课程还没有可用于安排补充学习的掌握情况，请先完成诊断或练习。")
+    concept, score, chapter = weakest
     spec = PlanSpec(
         goal=f"针对薄弱点“{concept}”完成证据精读并由教师复核",
         assumptions=(f"发布时掌握度={float(score):.2f}", "来源=正式学员画像"),
@@ -150,7 +183,7 @@ def learner_submit_intervention_evidence(
     path = session.query(DBLearningPath).filter_by(id=path_id).first()
     if path is None or path.owner_public_id != actor.public_id:
         raise HTTPException(status_code=403, detail="只能提交自己的干预学习证据")
-    node = session.query(DBPathNode).filter_by(learning_path_id=path.id).order_by(DBPathNode.sequence).first()
+    node = _intervention_node(session, path)
     event, _ = record_learning_event(
         session,
         owner_public_id=actor.public_id,
@@ -181,9 +214,9 @@ def teacher_confirm_intervention(
     learner_event = session.query(DBLearningEvent).filter_by(
         id=learner_event_id, owner_public_id=path.owner_public_id
     ).first()
-    if learner_event is None or learner_event.payload.get("path_id") != path.id:
+    if learner_event is None or learner_event.event_type != "reading_threshold" or (learner_event.payload or {}).get("path_id") != path.id:
         raise HTTPException(status_code=409, detail="缺少该干预路径的学员学习证据")
-    node = session.query(DBPathNode).filter_by(learning_path_id=path.id).order_by(DBPathNode.sequence).first()
+    node = _intervention_node(session, path)
     event, _ = record_learning_event(
         session,
         owner_public_id=path.owner_public_id,
@@ -196,7 +229,7 @@ def teacher_confirm_intervention(
             object_id=node.target_object_id,
             source="teacher",
             occurred_at=datetime.now(timezone.utc),
-            payload={"scope": "intervention_completion", "learner_event_id": learner_event.id, "teacher_public_id": actor.public_id},
+            payload={"scope": "intervention_completion", "path_id": path.id, "learner_event_id": learner_event.id, "teacher_public_id": actor.public_id},
         ),
     )
     process_path_event(session, event=event)
@@ -214,7 +247,7 @@ def teacher_intervention_overview(session: Any, *, actor: DBUser, course_id: str
         user = session.query(DBUser).filter_by(public_id=member.user_public_id).one()
         profile = session.query(DBStudentProfile).filter_by(student_id=user.username).first()
         mastery = dict(profile.concept_mastery or {}) if profile else {}
-        weakest = min(mastery.items(), key=lambda item: float(item[1])) if mastery else ("未形成", 0.0)
+        weakest = _course_weakest(session, course_id, mastery) or ("本课程尚无学习记录", 0.0, None)
         students.append({"public_id": user.public_id, "display_name": user.display_name, "weakest_concept": weakest[0], "mastery": weakest[1]})
     interventions = []
     versions = session.query(DBPlanVersion).filter_by(created_by_public_id=actor.public_id).all()
@@ -238,6 +271,6 @@ def teacher_intervention_overview(session: Any, *, actor: DBUser, course_id: str
             "learner_public_id": learner.public_id, "learner_name": learner.display_name,
             "title": plan.title, "node_status": node.status if node else "pending",
             "learner_event_id": study_event.id if study_event else None,
-            "teacher_confirmed": bool(node and node.status == "completed"),
+            "teacher_confirmed": intervention_progress(session, path)["teacher_confirmed"] if path else False,
         })
     return {"course_id": course_id, "students": students, "interventions": interventions}

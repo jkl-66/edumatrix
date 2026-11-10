@@ -54,7 +54,7 @@ def _runtime():
 
 
 def _task(session, learner, key="timeline-task-001"):
-    workspace = workspace_overview(session, current_user=learner)
+    workspace = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
     item = next(value for value in workspace["learning_objects"] if value["object_type"] == "experiment")
     context, _ = create_tutor_context(
         session,
@@ -264,7 +264,7 @@ def test_timeline_api_is_authenticated_and_frontend_uses_user_facing_projection(
         frontend = Path("frontend/src/views/LearningWorkspace.vue").read_text(encoding="utf-8")
         api_source = Path("frontend/src/api/m5.js").read_text(encoding="utf-8")
         assert "workspace-agent-timeline" in frontend
-        assert "Agent 任务进度" in frontend
+        assert "学习内容准备进度" in frontend
         assert "getM5WorkspaceTaskTimeline" in frontend
         assert "restoreLatestActionTask" in frontend
         assert "workspaceData?.running_tasks?.[0]" in frontend

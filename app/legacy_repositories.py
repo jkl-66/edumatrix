@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import func, select
+from app.source_refs import current_structure_ref_clause
 
 from app.database import (
     DBAlignmentLog, DBCodeExecution, DBCourse, DBCourseDocument, DBConversationHistory,
@@ -388,6 +389,17 @@ class LegacyReadRepository:
             DBWebSearchHistory.created_at.desc()
         ).limit(limit).all()
 
+    def _document_entry_reference(self):
+        # One catalog entry per document. Selections/reader sessions are real
+        # references, but must not duplicate or replace its chapter entry.
+        return select(DBSourceRef.id).where(
+            DBSourceRef.source_document_id == DBSourceDocument.id,
+            current_structure_ref_clause(),
+        ).order_by(
+            (DBSourceRef.location_kind == 'chapter').desc(),
+            DBSourceRef.char_start, DBSourceRef.location_index, DBSourceRef.id,
+        ).limit(1).correlate(DBSourceDocument).scalar_subquery()
+
     def knowledge_library_rows(self, student_id: str):
         legacy = self.session.query(DBKnowledgeDocument).filter(
             DBKnowledgeDocument.student_id.in_([student_id, "public", "system"])
@@ -401,7 +413,7 @@ class LegacyReadRepository:
             (DBSourceDocument.course_id == DBCourseDocument.course_id)
             & (DBSourceDocument.legacy_document_id == DBCourseDocument.id),
         ).outerjoin(
-            DBSourceRef, DBSourceRef.source_document_id == DBSourceDocument.id
+            DBSourceRef, DBSourceRef.id == self._document_entry_reference()
         ).outerjoin(
             DBChapter, DBChapter.id == DBSourceRef.chapter_id
         ).filter(
@@ -427,7 +439,7 @@ class LegacyReadRepository:
             (DBSourceDocument.course_id == DBCourseDocument.course_id)
             & (DBSourceDocument.legacy_document_id == DBCourseDocument.id),
         ).outerjoin(
-            DBSourceRef, DBSourceRef.source_document_id == DBSourceDocument.id
+            DBSourceRef, DBSourceRef.id == self._document_entry_reference()
         ).outerjoin(
             DBChapter, DBChapter.id == DBSourceRef.chapter_id
         ).filter(

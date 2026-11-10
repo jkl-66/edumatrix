@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -12,9 +13,6 @@ from app.database import (
     DBChapterKnowledgePoint,
     DBCourse,
     DBCourseDocument,
-    DBChapterVideoLink,
-    DBDocumentReadingPosition,
-    DBDocumentSelection,
     DBKnowledgePoint,
     DBSourceDocument,
     DBSourceRef,
@@ -23,6 +21,7 @@ from app.database import (
 )
 from document_parser import chunk_document, parse_document, parse_uploaded_file
 from rag_engine import hybrid_rag
+from app.source_refs import document_original_location
 
 
 ROOT = Path(__file__).resolve().parent
@@ -241,7 +240,7 @@ def _course_manifest_diff(
         if current_files[key]["position"] != incoming_files[key]["position"]
     ]
 
-    ignored_metadata = {"files", "knowledge_points", "generated_at", "manifest_version"}
+    ignored_metadata = {"files", "knowledge_points", "generated_at", "manifest_version", "structure_workspace"}
     current_metadata = {
         key: value for key, value in current_manifest.items() if key not in ignored_metadata
     }
@@ -276,7 +275,9 @@ def preflight_course_bundle_update(session, bundle: dict[str, Any]) -> dict[str,
         raise ValueError("course bundle version differs from manifest payload")
 
     course = session.query(DBCourse).filter(DBCourse.id == course_data["id"]).first()
-    incoming_hash = _canonical_json_hash(incoming_manifest)
+    # Course organization is edited locally; it is not a revision of the
+    # packaged source manifest and must not prevent an unchanged startup.
+    incoming_hash = _canonical_json_hash({k: v for k, v in incoming_manifest.items() if k != "structure_workspace"})
     if course is None:
         return {
             "schema_version": COURSE_UPDATE_PREFLIGHT_SCHEMA,
@@ -292,7 +293,7 @@ def preflight_course_bundle_update(session, bundle: dict[str, Any]) -> dict[str,
 
     current_manifest = course.manifest_data if isinstance(course.manifest_data, dict) else {}
     current_version = str(course.manifest_version or course.version or "")
-    current_hash = _canonical_json_hash(current_manifest)
+    current_hash = _canonical_json_hash({k: v for k, v in current_manifest.items() if k != "structure_workspace"})
     if current_version == incoming_version and current_hash == incoming_hash:
         status = "unchanged"
         requires_approval = False
@@ -495,6 +496,8 @@ def load_versioned_course_bundle(manifest_path: Path) -> dict[str, Any]:
             f"{str(item['repository_url']).removesuffix('.git')}/blob/"
             f"{item['git_revision']}/{item['source_path']}"
         )
+        source_url = document_original_location(source_url,
+            f"{item['repository_key']}@{item['git_revision']}:{item['source_path']}")["url"]
         documents.append(
             {
                 "id": _document_id(manifest["course_id"], str(item["path"])),
@@ -583,7 +586,14 @@ def upsert_course_bundle(
     if course is None:
         course = DBCourse(id=course_data["id"])
         session.add(course)
+        source_update = None
+    else:
+        from app.course_source_updates import preserve_bundle_source_versions
+        source_update = preserve_bundle_source_versions(session, course, bundle["documents"])
+    workspace = deepcopy((course.manifest_data or {}).get("structure_workspace"))
     for key, value in course_data.items():
+        if key == "manifest_data" and workspace is not None:
+            value = {**value, "structure_workspace": workspace}
         setattr(course, key, value)
 
     inserted = 0
@@ -618,9 +628,18 @@ def upsert_course_bundle(
     removed = 0
     for document in stale:
         if document.id not in active_ids:
+            # Canonical sources can be cited by questions, plans and notes in
+            # JSON as well as foreign keys. Keep their original body readable.
+            # Teacher uploads are also independent of the packaged manifest.
+            if session.query(DBSourceDocument.id).filter_by(legacy_document_id=document.id).first():
+                continue
             session.delete(document)
             removed += 1
     _sync_canonical_course_objects(session, bundle)
+    from app.course_source_updates import finish_bundle_source_versions
+    finish_bundle_source_versions(session, course, source_update)
+    from app.course_structure import initialize_curated_structure
+    initialize_curated_structure(session, course, (course.manifest_data or {}).get('teaching_structure'))
     session.commit()
     # Preserve the M0 caller contract. Canonical M1 objects are verified via
     # their repositories/tables rather than extending this legacy result.
@@ -647,6 +666,14 @@ def apply_course_bundle_update(
 def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str, int]:
     """Idempotently project a course bundle into canonical M1 objects."""
     course = bundle["course"]
+    organized = session.query(DBChapter).filter(
+        DBChapter.course_id == course["id"], DBChapter.stable_key.startswith("structure:"),
+    ).order_by(DBChapter.position, DBChapter.id).all()
+    organized_sources = {}
+    for chapter in organized:
+        organized_sources.setdefault(chapter.source_document_id, chapter)
+    organized_point_ids = {row.knowledge_point_id for row in session.query(DBChapterKnowledgePoint).filter(
+        DBChapterKnowledgePoint.chapter_id.in_([ch.id for ch in organized]))} if organized else set()
     if bundle.get("knowledge_points"):
         domain_id = course["domain_pack"]
         point_version = bundle["knowledge_point_version"]
@@ -683,9 +710,10 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
                 version=point_version,
             )
             session.add(point)
-        point.title = item["title"]
-        point.level = item["level"]
-        point.prerequisites = item.get("prerequisites", [])
+        if point.id not in organized_point_ids:
+            point.title = item["title"]
+            point.level = item["level"]
+            point.prerequisites = item.get("prerequisites", [])
         point.status = "active"
         session.flush()
         points_by_code[item["id"]] = point
@@ -722,6 +750,8 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
         parser_version = item.get("parser_version", PARSER_VERSION)
         source.parser_version = parser_version
         source.parser_metadata = {
+            **({"previous_source_id": source.parser_metadata["previous_source_id"]}
+               if (source.parser_metadata or {}).get("previous_source_id") else {}),
             "origin": "versioned_course_bundle",
             "manifest_version": course.get("manifest_version", course.get("version", "")),
             "bundle_asset": dict(item.get("bundle_asset") or {}),
@@ -748,8 +778,15 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
         source.processing_error_code = ""
         source.processing_status = "ready"
         session.flush()
+        item["canonical_source_document_id"] = source.id
 
         stable_key = str(item.get("chapter_key") or f"document:{item['id']}")
+        if source.id in organized_sources:
+            # The confirmed chapters already cover this document. Recreating
+            # its original whole-document chapter both duplicates the path
+            # and collides with the identity retained for historical work.
+            chapter_by_key[stable_key] = organized_sources[source.id]
+            continue
         chapter = (
             session.query(DBChapter)
             .filter(DBChapter.course_id == course["id"], DBChapter.stable_key == stable_key)
@@ -864,10 +901,9 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
             raise ValueError(f"Curated course parent chapter is missing: {parent_key}")
         chapter.parent_id = parent.id
 
-    # When a manifest introduces explicit chapter keys after an older seed used
-    # ``document:<document_id>``, both keys can temporarily point at the same
-    # source. Keep the manifest chapter and remove only unreferenced aliases so
-    # graph/path consumers never render duplicate chapters.
+    # Only an exact legacy alias is redundant. Other chapters from the same
+    # source can be deliberate sections or old confirmed structures. Retain
+    # aliases as history because questions/plans may cite them in JSON.
     duplicate_chapters_removed = 0
     for item in bundle["documents"]:
         stable_key = str(item.get("chapter_key") or f"document:{item['id']}")
@@ -877,30 +913,14 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
         duplicate_rows = session.query(DBChapter).filter(
             DBChapter.source_document_id == canonical.source_document_id,
             DBChapter.id != canonical.id,
+            DBChapter.stable_key == f"document:{item['id']}",
         ).all()
         for duplicate in duplicate_rows:
-            has_user_history = bool(
-                session.query(DBDocumentReadingPosition.id).filter_by(section_id=duplicate.id).first()
-                or session.query(DBDocumentSelection.id).filter_by(section_id=duplicate.id).first()
-                or session.query(DBChapterVideoLink.id).filter_by(chapter_id=duplicate.id).first()
-                or session.query(DBChapter.id).filter_by(parent_id=duplicate.id).first()
-            )
-            if has_user_history:
-                continue
-            session.query(DBSourceRef).filter(
-                DBSourceRef.chapter_id == duplicate.id
-            ).delete(synchronize_session=False)
-            session.query(DBChapterKnowledgePoint).filter(
-                DBChapterKnowledgePoint.chapter_id == duplicate.id
-            ).delete(synchronize_session=False)
-            session.delete(duplicate)
+            duplicate.stable_key = "structure-history:" + duplicate.id
             duplicate_chapters_removed += 1
 
-    # A course version may replace an earlier manifest whose document IDs were
-    # generated differently.  Remove those no-longer-declared canonical rows so
-    # graph/path consumers see one chapter per active manifest file.  Preserve
-    # any source that already has user-owned reading/selection/video records;
-    # those rows are retired rather than deleting learning history.
+    # Removed bundle sources leave current listings while original text,
+    # chapters and citations remain readable. User uploads are not bundle data.
     incoming_document_ids = {str(item["id"]) for item in bundle["documents"]}
     stale_sources = (
         session.query(DBSourceDocument)
@@ -912,40 +932,39 @@ def _sync_canonical_course_objects(session, bundle: dict[str, Any]) -> dict[str,
     )
     stale_removed = stale_retired = 0
     for source in stale_sources:
-        stale_chapters = session.query(DBChapter).filter_by(source_document_id=source.id).all()
-        chapter_ids = [chapter.id for chapter in stale_chapters]
-        has_user_history = bool(
-            session.query(DBDocumentReadingPosition.id).filter_by(source_document_id=source.id).first()
-            or session.query(DBDocumentSelection.id).filter_by(source_document_id=source.id).first()
-            or (
-                chapter_ids
-                and session.query(DBDocumentSelection.id)
-                .filter(DBDocumentSelection.section_id.in_(chapter_ids))
-                .first()
-            )
-            or (
-                chapter_ids
-                and session.query(DBChapterVideoLink.id)
-                .filter(DBChapterVideoLink.chapter_id.in_(chapter_ids))
-                .first()
-            )
-        )
-        if has_user_history:
-            source.processing_status = "retired"
-            stale_retired += 1
+        metadata = source.parser_metadata or {}
+        if metadata.get("origin") != "versioned_course_bundle":
             continue
-        if chapter_ids:
-            session.query(DBSourceRef).filter(
-                DBSourceRef.source_document_id == source.id
-            ).delete(synchronize_session=False)
-            session.query(DBChapterKnowledgePoint).filter(
-                DBChapterKnowledgePoint.chapter_id.in_(chapter_ids)
-            ).delete(synchronize_session=False)
-            session.query(DBChapter).filter(
-                DBChapter.id.in_(chapter_ids)
-            ).delete(synchronize_session=False)
-        session.delete(source)
-        stale_removed += 1
+        source.parser_metadata = {**metadata, "retired_from_catalog": True}
+        document = session.get(DBCourseDocument, source.legacy_document_id) if source.legacy_document_id else None
+        if document is not None:
+            document.status = "retired"
+        stale_retired += 1
+
+    # Chunk locators cover the whole frozen document. Fine teaching chapters
+    # stay in the visible course structure; this hidden locator is only for
+    # exact retrieval excerpts and never adds a second learning task.
+    session.flush()
+    for item in bundle["documents"]:
+        source = session.get(DBSourceDocument, item["canonical_source_document_id"])
+        locator = session.query(DBSourceRef).filter_by(source_document_id=source.id,
+            parser_version=source.parser_version, content_hash=source.processed_sha256,
+            location_kind="chapter", char_start=0, char_end=len(item["content"])).first()
+        if locator is None:
+            chapter_id = _stable_object_id("ch", source.id, source.parser_version, "document-locator")
+            chapter = DBChapter(id=chapter_id, course_id=course["id"], source_document_id=source.id,
+                stable_key="structure-history:"+chapter_id, title=source.title,
+                position=item["chapter_order"], heading_level=1, char_start=0, char_end=len(item["content"]))
+            session.add(chapter)
+            session.flush()
+            locator = DBSourceRef(id=_stable_object_id("ref", source.id, chapter.id, source.parser_version),
+                source_document_id=source.id, chapter_id=chapter.id, parser_version=source.parser_version,
+                content_hash=source.processed_sha256, location_kind="chapter", location_index=item["chapter_order"],
+                location_label=source.title, char_start=0, char_end=len(item["content"]), quote=item["content"][:300])
+            session.add(locator)
+            session.flush()
+        item["canonical_chapter_id"] = locator.chapter_id
+        item["canonical_source_ref_id"] = locator.id
 
     return {
         "source_documents": source_count,
@@ -965,13 +984,14 @@ def ingest_course_bundle(bundle: dict[str, Any]) -> int:
     total = 0
     for document in bundle["documents"]:
         source = f"{course['id']}/{document['filename']}"
-        source_document_id = _stable_object_id("src", course["id"], document["id"])
-        chapter_id = _stable_object_id("ch", course["id"], f"document:{document['id']}")
+        source_document_id = document.get("canonical_source_document_id") or _stable_object_id("src", course["id"], document["id"])
+        chapter_id = document.get("canonical_chapter_id") or _stable_object_id("ch", course["id"], f"document:{document['id']}")
         parser_version = document.get("parser_version", PARSER_VERSION)
-        source_ref_id = _stable_object_id("ref", source_document_id, parser_version)
+        source_ref_id = document.get("canonical_source_ref_id") or _stable_object_id("ref", source_document_id, parser_version)
         evidence_locations = build_evidence_locations(
             document["content"], document["chunks"]
         )
+        source_ref_content_hash = hashlib.sha256(document["content"].encode("utf-8")).hexdigest()
         locatable_chunks = tuple(
             replace(
                 item,
@@ -985,9 +1005,7 @@ def ingest_course_bundle(bundle: dict[str, Any]) -> int:
                     "evidence_char_start": evidence_locations[item.id].char_start,
                     "evidence_char_end": evidence_locations[item.id].char_end,
                     "evidence_fragment_hash": evidence_locations[item.id].fragment_hash,
-                    "source_ref_content_hash": hashlib.sha256(
-                        document["content"].encode("utf-8")
-                    ).hexdigest(),
+                    "source_ref_content_hash": source_ref_content_hash,
                     "parser_version": parser_version,
                 },
             )

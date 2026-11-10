@@ -34,7 +34,8 @@ def test_profile_migration_and_internal_versions_are_not_projected_to_ui() -> No
         assert "f8.learning-feedback.v2" not in source
         assert "legacy-migration" not in source
     assert "最近画像摘要" in dashboard
-    assert "画像快照：" in home
+    assert "查看画像证据" in home
+    assert "画像快照：" not in home
     assert "profile_alignment?.legacy_migration?.mapping_version" not in home
 
 

@@ -150,8 +150,8 @@ def test_attachment_disclosure_preserves_ids_states_selection_and_keyboard(tmp_p
     with _frontend_server() as base_url, sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 900), (1366, 768)):
-                context = browser.new_context(viewport={"width": width, "height": height})
+            for width, height in ((1707, 876), (1440, 900), (1366, 768)):
+                context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1.5 if width == 1707 else 1)
                 context.add_init_script(
                     "localStorage.setItem('edumatrix_token', 'b32-browser-token');"
                     "localStorage.setItem('edumatrix_role', 'student');"

@@ -181,7 +181,7 @@ def test_dashboard_weak_evidence_complete_unknown_empty_and_spacing():
             browser = playwright.chromium.launch(headless=True)
             try:
                 for mode in ("complete", "unknown", "empty"):
-                    for width, height in ((1440, 900), (1366, 768)):
+                    for width, height in ((1707, 876), (1440, 900), (1366, 768)):
                         context = browser.new_context(viewport={"width": width, "height": height}, locale="zh-CN")
                         context.add_init_script(
                             "localStorage.setItem('edumatrix_token', 'p1-b33-browser-token');"
@@ -199,7 +199,7 @@ def test_dashboard_weak_evidence_complete_unknown_empty_and_spacing():
                         side = page.locator(".dashboard-side-summary")
                         side.wait_for(state="visible")
                         if mode == "empty":
-                            assert "当前没有可用的画像快照" in side.inner_text()
+                            assert "当前没有可用的学习情况记录" in side.inner_text()
                         else:
                             item = page.get_by_test_id("dashboard-weak-item")
                             item.wait_for(state="visible")

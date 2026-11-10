@@ -101,6 +101,41 @@ def _response(
     )
 
 
+def test_incomplete_legacy_question_prevents_submission_and_retains_saved_draft():
+    engine, session = _session()
+    try:
+        learner, blueprint = _fixture(session)
+        from app.m5_assessment_core import QuestionVersionInput, create_question_version
+        _, legacy = create_question_version(session, owner_public_id=learner.public_id,
+            course_id=COURSE_ID, question_type="single_choice", origin="manual",
+            version=QuestionVersionInput(prompt="哪项表示参数更新？", options=("沿负梯度更新", "保持不变"),
+                answer_key={"choice": "A"}, scoring_rule={"type": "exact"}))
+        blueprint.question_version_ids = [legacy.id]
+        session.flush()
+        work, _ = start_or_resume_diagnostic_session(session, user=learner, blueprint_id=blueprint.id)
+        question_id = legacy.id
+        version = session.get(DBAssessmentQuestionVersion, question_id)
+        question = session.get(DBAssessmentQuestion, version.question_id)
+        assert question.question_type in {"single_choice", "multiple_choice"}
+        saved, _ = save_diagnostic_response(session, user=learner, session_id=work.id,
+            question_version_id=question_id, response=_complete_response(session, question_id, "legacy-diagnostic-363"))
+        answer = saved.answer.copy()
+        version.options = []
+        session.flush()
+        count = session.query(DBAssessmentAttempt).count()
+        with pytest.raises(DiagnosticSessionError) as error:
+            submit_diagnostic_session(session, user=learner, session_id=work.id, idempotency_key="legacy-submit-363")
+        assert error.value.code == "question_content_incomplete"
+        assert work.status != "submitted" and saved.answer == answer
+        assert session.query(DBAssessmentAttempt).count() == count
+        from app.diagnostic_generation import diagnostic_blueprint_payload
+        projected = next(item for item in diagnostic_blueprint_payload(session, blueprint)["questions"] if item["id"] == question_id)
+        assert projected["options"] == [] and "选项" in projected["contentIssue"]
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def _complete_response(
     session,
     question_version_id: str,

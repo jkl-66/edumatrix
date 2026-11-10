@@ -37,7 +37,7 @@ const capabilityRows = [
   {
     number: '03',
     title: '从行动获得反馈',
-    copy: '阅读、作答、运行、复述和实验，都会成为可解释的学习证据。',
+    copy: '阅读、作答、运行、复述和实验，都会成为可解释的学习记录。',
     icon: CheckCircle2,
   },
 ]
@@ -75,7 +75,7 @@ function start() {
         <span class="landing-brand__mark">E</span>
         <span class="landing-brand__copy">
           <strong>EduMatrix</strong>
-          <small>人工智能工程技能学习</small>
+          <small>围绕目标，系统学习</small>
         </span>
       </a>
 
@@ -114,7 +114,7 @@ function start() {
         <div class="hero-system-map" aria-label="理解、路径、练习、反馈的学习机制示意">
           <div class="hero-system-map__header">
             <span>EDUMATRIX / LEARNING SYSTEM</span>
-            <span class="hero-system-map__signal"><i /> ACTIVE LOOP</span>
+            <span class="hero-system-map__signal"><i /> 持续学习</span>
           </div>
           <div class="hero-system-map__canvas">
             <div class="hero-system-map__spine" aria-hidden="true" />
@@ -141,7 +141,7 @@ function start() {
       <section id="capabilities" class="capabilities-section section-wrap" aria-labelledby="capabilities-title">
         <div class="section-intro">
           <p class="section-eyebrow">THE LEARNING LOGIC</p>
-          <h2 id="capabilities-title">不是把功能堆在一起，<br />而是让每一步产生下一步。</h2>
+          <h2 id="capabilities-title">理解你的起点，<br />陪你走好每一步。</h2>
           <p class="section-lead">
             面对同一份领域知识，不同的人需要不同的入口、节奏和练习。系统把这种差异变成清晰可走的学习行动。
           </p>
@@ -163,9 +163,9 @@ function start() {
       <section id="path" class="path-section section-wrap" aria-labelledby="path-title">
         <div class="path-section__copy">
           <p class="section-eyebrow">A PATH THAT ADAPTS</p>
-          <h2 id="path-title">学习路径，<br /><em>不是一张清单。</em></h2>
+          <h2 id="path-title">每一步学习，<br /><em>都有自己的方向。</em></h2>
           <p class="section-lead">
-            画像、课程知识和每一次真实行动共同决定学习顺序。你看到的不是复杂的系统状态，而是此刻最值得完成的下一步。
+            画像、课程知识和每一次真实行动共同决定学习顺序。找到此刻适合你的下一步。
           </p>
           <a class="text-link" href="#resources">看看资源如何进入路径 <ArrowRight :size="16" /></a>
         </div>
@@ -184,7 +184,7 @@ function start() {
           <div class="path-rail__connector" />
           <div class="path-rail__item">
             <span class="path-rail__dot" />
-            <div><small>SIGNAL</small><strong>学习证据</strong><p>作答 · 运行 · 复述</p></div>
+            <div><small>SIGNAL</small><strong>学习记录</strong><p>作答 · 运行 · 复述</p></div>
           </div>
           <div class="path-rail__result"><Route :size="18" /><span>生成当前的下一步</span><ArrowRight :size="17" /></div>
         </div>
@@ -274,7 +274,7 @@ function start() {
         </div>
         <div class="evidence-notes">
           <span>不凭点击猜测掌握</span>
-          <span>只让有证据的行为进入反馈</span>
+          <span>让练习结果指引下一步</span>
           <span>让路径持续贴近学习者</span>
         </div>
       </section>
@@ -309,7 +309,7 @@ function start() {
   height: 100vh;
   overflow: auto;
   color: var(--landing-ink);
-  background: var(--landing-surface);
+  background: var(--gradient-workspace);
   font-family: var(--font-sans);
   scroll-behavior: smooth;
   scroll-padding-top: 76px;
@@ -339,8 +339,8 @@ function start() {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   padding: 0 5vw;
-  border-bottom: 1px solid color-mix(in srgb, var(--landing-line) 82%, transparent);
-  background: color-mix(in srgb, var(--landing-surface) 93%, transparent);
+  border-bottom: 0;
+  background: rgb(255 255 255 / 65%);
   backdrop-filter: blur(14px);
 }
 
@@ -452,14 +452,18 @@ function start() {
 .landing-final h2 {
   margin: 0;
   color: var(--landing-ink);
-  font-family: var(--font-display);
-  font-weight: 650;
+  font-family: var(--font-editorial);
+  font-weight: 400;
   letter-spacing: 0;
 }
 
 .landing-hero h1 {
-  font-size: clamp(56px, 7.3vw, 104px);
-  line-height: 0.98;
+  font-size: clamp(48px, 5.2vw, 76px);
+  line-height: 1.12;
+
+  font-family: var(--font-editorial);
+
+  font-weight: 400;
 }
 
 .landing-page em {
@@ -471,8 +475,8 @@ function start() {
   max-width: 600px;
   margin: 28px 0 0;
   color: var(--landing-muted);
-  font-size: clamp(18px, 1.65vw, 24px);
-  font-weight: 570;
+  font-size: 20px;
+  font-weight: 400;
   line-height: 1.65;
 }
 
@@ -532,9 +536,11 @@ function start() {
 .hero-system-map {
   align-self: center;
   min-height: 460px;
-  border: 1px solid var(--landing-line);
-  background: var(--landing-card);
-  box-shadow: 0 24px 60px rgb(17 33 45 / 8%);
+  border: 0;
+  background: var(--gradient-paper);
+  box-shadow: var(--shadow-panel);
+
+  border-radius: 24px;
 }
 
 .hero-system-map__header,
@@ -571,7 +577,7 @@ function start() {
   position: relative;
   min-height: 360px;
   overflow: hidden;
-  background: #f9fafa;
+  background: transparent;
 }
 
 .hero-system-map__canvas::before,
@@ -583,14 +589,14 @@ function start() {
 
 .hero-system-map__canvas::before {
   inset: 15% 11%;
-  border: 1px solid #dfe4e5;
+  border: 1px solid var(--color-border);
   border-radius: 50%;
   transform: rotate(-17deg) scaleY(0.68);
 }
 
 .hero-system-map__canvas::after {
   inset: 24% 20%;
-  border: 1px dashed #ccd0cf;
+  border: 1px dashed var(--color-border-strong);
   border-radius: 50%;
   transform: rotate(34deg) scaleY(0.78);
 }
@@ -601,7 +607,7 @@ function start() {
   bottom: 10%;
   left: 50%;
   width: 1px;
-  background: #aebabc;
+  background: var(--color-border-strong);
 }
 
 .hero-system-map__axis {
@@ -658,7 +664,7 @@ function start() {
 }
 
 .hero-system-map__center small {
-  color: #ccd0cf;
+  color: var(--color-border-strong);
   font-size: 11px;
 }
 
@@ -793,7 +799,7 @@ function start() {
 .path-rail {
   position: relative;
   padding: 4px 0 0 34px;
-  border-left: 1px solid #aebabc;
+  border-left: 1px solid var(--color-border-strong);
 }
 
 .path-rail__topline {
@@ -866,7 +872,7 @@ function start() {
   bottom: 103px;
   left: -1px;
   width: 1px;
-  background: repeating-linear-gradient(to bottom, #aebabc 0 6px, transparent 6px 12px);
+  background: repeating-linear-gradient(to bottom, var(--color-border-strong) 0 6px, transparent 6px 12px);
 }
 
 .path-rail__result {
@@ -901,11 +907,11 @@ function start() {
 }
 
 .knowledge-section em {
-  color: #aebabc;
+  color: var(--color-border-strong);
 }
 
 .section-eyebrow--light {
-  color: #aebabc;
+  color: var(--color-border-strong);
 }
 
 .knowledge-section__copy .section-lead {
@@ -923,7 +929,7 @@ function start() {
 }
 
 .knowledge-index {
-  border: 1px solid #4a5c6a;
+  border: 1px solid var(--color-text-secondary);
   background: #172a36;
 }
 
@@ -933,14 +939,14 @@ function start() {
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px;
-  color: #aebabc;
+  color: var(--color-border-strong);
   font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.13em;
 }
 
 .knowledge-index__head {
-  border-bottom: 1px solid #4a5c6a;
+  border-bottom: 1px solid var(--color-text-secondary);
 }
 
 .knowledge-index__body {
@@ -951,7 +957,7 @@ function start() {
 
 .knowledge-index__column {
   padding: 28px 22px;
-  border-right: 1px solid #4a5c6a;
+  border-right: 1px solid var(--color-text-secondary);
 }
 
 .knowledge-index__label {
@@ -976,14 +982,14 @@ function start() {
 .knowledge-signal i {
   display: block;
   height: 4px;
-  background: #aebabc;
+  background: var(--color-border-strong);
 }
 
 .knowledge-signal i::after {
   display: block;
   width: var(--signal-width);
   height: 4px;
-  background: #ffffff;
+  background: var(--color-surface);
   content: '';
 }
 
@@ -1039,7 +1045,7 @@ function start() {
 .knowledge-index__foot {
   justify-content: flex-start;
   gap: 21px;
-  border-top: 1px solid #4a5c6a;
+  border-top: 1px solid var(--color-text-secondary);
   letter-spacing: 0.06em;
 }
 
@@ -1144,7 +1150,7 @@ function start() {
   align-content: start;
   gap: 10px;
   padding: 0 18px;
-  border-left: 1px solid #4a5c6a;
+  border-left: 1px solid var(--color-text-secondary);
 }
 
 .practice-flow li:first-child {
@@ -1153,7 +1159,7 @@ function start() {
 }
 
 .practice-flow b {
-  color: #aebabc;
+  color: var(--color-border-strong);
   font-size: 11px;
   letter-spacing: 0.14em;
 }
@@ -1173,7 +1179,7 @@ function start() {
 }
 
 .practice-flow small {
-  color: #aebabc;
+  color: var(--color-border-strong);
   font-size: 12px;
   line-height: 1.7;
 }

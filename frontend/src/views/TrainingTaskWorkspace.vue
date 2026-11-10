@@ -1,4 +1,6 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -20,8 +22,10 @@ import {
 } from '@lucide/vue'
 import ResourceHistoryDrawer from '../components/ResourceHistoryDrawer.vue'
 import ResourceToolbar from '../components/ResourceToolbar.vue'
-import ResourceProfileAdaptation from '../components/ResourceProfileAdaptation.vue'
+import IncrementalMarkdownRenderer from '../components/IncrementalMarkdownRenderer.vue'
+import { trainingReportTemplate, trainingTaskPresentation } from '../utils/trainingTaskPresentation.js'
 import { compareM5ResourceVersions, getM5Resource, restoreM5ResourceVersion } from '../api/m5'
+import { createNote } from '../api/notes'
 
 const route = useRoute()
 const router = useRouter()
@@ -34,43 +38,42 @@ const historyError = ref('')
 const restoringId = ref('')
 const comparingId = ref('')
 const compareResult = ref(null)
+const reportSaving = ref(false)
 
 const resourceId = computed(() => String(route.params.resourceId || ''))
 const workspace = computed(() => detail.value?.training_task || {})
 const versions = computed(() => workspace.value.versions || [])
 const currentVersionId = computed(() => workspace.value.current_version_id || '')
-const historyItems = computed(() => versions.value.map(item => ({
-  ...item,
-  revision_origin: item.revision_origin || item.metadata?.revision_origin,
-  source_status: item.source_status || 'available',
-  content_format: item.content_format || 'json',
-})))
+const historyItems = computed(() => detail.value?.history?.items || [])
 const selectedVersion = computed(() => (
   versions.value.find(item => item.id === selectedVersionId.value)
   || versions.value.find(item => item.id === currentVersionId.value)
   || null
 ))
 const projection = computed(() => selectedVersion.value?.projection || workspace.value.current || null)
+const learningUnavailable = computed(() => projection.value?.learning_unavailable_reason ?? detail.value?.resource?.learning_unavailable_reason ?? '')
 const structured = computed(() => projection.value?.structured || null)
+const presented = computed(() => trainingTaskPresentation(structured.value))
 const legacy = computed(() => projection.value?.legacy || null)
 const catalog = computed(() => detail.value?.catalog || {})
 const sources = computed(() => projection.value?.source_refs || [])
 const linkedResources = computed(() => projection.value?.linked_resources || [])
 const sandbox = computed(() => linkedResources.value.find(item => item.type === 'code_sandbox') || null)
 const model = computed(() => linkedResources.value.find(item => item.type === 'interactive_model') || null)
-const completion = computed(() => catalog.value.completion || {})
+const completion = computed(() => projection.value?.progress || catalog.value.completion || {})
 const executionState = computed(() => {
   const status = completion.value.status || 'not_recorded'
   return ({
-    not_recorded: { label: '尚未开始', detail: '阅读任务书不会改变此状态。' },
-    partial: { label: '步骤进行中', detail: '继续完成尚未提交的工程步骤。' },
-    in_progress: { label: '步骤进行中', detail: '继续完成尚未提交的工程步骤。' },
-    submission_pending: { label: '提交待验证', detail: '提交物已保存，等待按评分标准核验。' },
-    completed: { label: '已完成', detail: '已存在有效完成证据，可继续查看任务书和运行记录。' },
-  })[status] || { label: '状态待确认', detail: '请依据当前任务记录继续处理。' }
+    not_recorded: { label: '尚未开始' },
+    partial: { label: '进行中' },
+    in_progress: { label: '进行中' },
+    submission_pending: { label: '报告已保存' },
+    practice_completed: { label: '配套练习已完成' },
+    completed: { label: '已完成' },
+  })[status] || { label: '状态待确认' }
 })
 const isCurrentVersion = computed(() => selectedVersion.value?.id === currentVersionId.value)
-const title = computed(() => structured.value?.title || legacy.value?.title || catalog.value.title || '实训任务书')
+const title = computed(() => (structured.value?.title || legacy.value?.title || catalog.value.title || '实训任务书').replace(/\btraining_task\b/g, '实训任务书'))
 const objective = computed(() => structured.value?.objective || legacy.value?.objective || '按任务说明完成工程实践。')
 const versionLabel = computed(() => selectedVersion.value ? `v${selectedVersion.value.number}` : '未记录')
 
@@ -84,7 +87,9 @@ async function loadResource() {
   try {
     detail.value = await getM5Resource(resourceId.value)
     if (!detail.value?.training_task) throw new Error('当前资源不是实训任务书。')
-    selectedVersionId.value = currentVersionId.value || versions.value.at(-1)?.id || ''
+    const requestedVersion = String(route.query.version_id || '')
+    selectedVersionId.value = versions.value.some(item => item.id === requestedVersion)
+      ? requestedVersion : currentVersionId.value || versions.value.at(-1)?.id || ''
   } catch (err) {
     error.value = message(err)
   } finally {
@@ -107,7 +112,30 @@ function openSource(source) {
 }
 
 function openLinked(resource) {
-  if (resource?.available && resource.route) router.push(resource.route)
+  if (learningUnavailable.value) return
+  if (resource?.available && resource.route) router.push({ path: resource.route, query: {
+    course_id: catalog.value.course?.id,
+    version_id: resource.resource_version_id || undefined,
+  } })
+}
+
+async function openReport() {
+  if (reportSaving.value || (learningUnavailable.value && !completion.value.report_note_id)) return
+  reportSaving.value = true
+  error.value = ''
+  try {
+    let noteId = completion.value.report_note_id
+    if (!noteId) {
+      const content = trainingReportTemplate(title.value, structured.value, linkedResources.value)
+      const note = await createNote(localStorage.getItem('edumatrix_student_id') || localStorage.getItem('edumatrix_username'), {
+        source_type: 'training_task', source_metadata: { resource_id: resourceId.value, resource_version_id: selectedVersion.value.id },
+        content, tags: ['实训报告'], concepts: [], idempotency_key: `training-report:${selectedVersion.value.id}`,
+      })
+      noteId = note.id
+    }
+    await router.push({name:'Notes',query:{note_id:noteId,course_id:catalog.value.course?.id}})
+  } catch (exception) { error.value = message(exception) }
+  finally { reportSaving.value = false }
 }
 
 function scrollToSection(id) {
@@ -174,22 +202,21 @@ onMounted(loadResource)
     <section v-if="loading" class="page-state" role="status">
       <Wrench :size="24" />
       <strong>正在打开实训任务书</strong>
-      <span>正在恢复任务版本、课程来源和关联工具。</span>
     </section>
 
     <section v-else-if="error" class="page-state page-state--error" role="alert">
       <AlertTriangle :size="24" />
       <strong>实训任务书暂时无法打开</strong>
-      <span>{{ error }}</span>
+      <span>{{ userMessage(error) }}</span>
       <button type="button" class="primary-button" @click="loadResource"><RefreshCw :size="17" /> 重新加载</button>
     </section>
 
     <template v-else>
       <ResourceToolbar
         :title="title"
-        :type-label="`${catalog.course?.title || '当前课程'} · ${catalog.knowledge_point?.title || '当前知识点'}`"
-        :version-label="versionLabel"
-        status-label="理解工程目标和检查点"
+        type-label=""
+        version-label=""
+        :status-label="detail?.archived ? '已归档' : ''"
         :history-count="historyItems.length"
         :history-disabled="!historyItems.length"
         :loading="loading"
@@ -198,12 +225,10 @@ onMounted(loadResource)
         @reload="loadResource"
       />
 
-      <ResourceProfileAdaptation
-        :plan="detail?.resource?.profile_adaptation_plan"
-        :summary="detail?.resource?.profile_adaptation || ''"
-        resource-type="training_task"
-      />
 
+      <div v-if="learningUnavailable" class="notice notice--warning" role="status">
+        <AlertTriangle :size="17" /> {{ learningUnavailable }}
+      </div>
       <div v-if="projection?.warnings?.length" class="notice notice--warning" role="status">
         <AlertTriangle :size="17" /> {{ projection.warnings[0] }}
       </div>
@@ -228,25 +253,24 @@ onMounted(loadResource)
           </div>
 
           <div v-if="!isCurrentVersion" class="historical-banner" role="status">
-            当前查看历史版本 {{ versionLabel }}。阅读历史内容不会改变当前版本或学习状态。
+            历史版本 {{ versionLabel }}
           </div>
 
           <article v-if="structured" class="task-document">
             <section class="document-lead">
               <div class="lead-icon"><Wrench :size="24" /></div>
               <div>
-                <span>工程任务目标</span>
-                <h2>{{ structured.objective }}</h2>
+                <h2>本次实训目标</h2>
+                <div class="task-objective"><IncrementalMarkdownRenderer :text="structured.objective" type="lesson" /></div>
               </div>
               <dl>
                 <div><dt>难度</dt><dd><Gauge :size="16" />{{ structured.difficulty }}</dd></div>
                 <div><dt>预计时长</dt><dd><Clock3 :size="16" />{{ structured.estimatedMinutes }} 分钟</dd></div>
-                <div><dt>当前版本</dt><dd>{{ versionLabel }}</dd></div>
               </dl>
             </section>
 
             <section id="preparation" class="document-section preparation-section">
-              <div class="section-heading"><span>开始前</span><h3>准备条件</h3></div>
+              <div class="section-heading"><h3>准备条件</h3></div>
               <div class="preparation-grid">
                 <section>
                   <BookOpen :size="19" />
@@ -264,47 +288,45 @@ onMounted(loadResource)
             </section>
 
             <section id="steps" class="document-section">
-              <div class="section-heading"><span>执行过程</span><h3>任务步骤</h3><p>按顺序完成。真实代码、输入和输出保存在代码沙盒，不在任务书中模拟。</p></div>
+              <div class="section-heading"><h3>任务步骤</h3></div>
               <ol class="step-list">
                 <li v-for="(step, index) in structured.steps" :key="step.id">
                   <span class="step-number">{{ String(index + 1).padStart(2, '0') }}</span>
                   <div class="step-body">
                     <h4>{{ step.title }}</h4>
-                    <p>{{ step.instruction }}</p>
-                    <dl>
-                      <div><dt>预期结果</dt><dd>{{ step.expectedResult }}</dd></div>
-                      <div><dt>出现问题时</dt><dd>{{ step.errorGuidance }}</dd></div>
-                    </dl>
+                    <IncrementalMarkdownRenderer :text="step.instruction" type="lesson" />
+                    <details class="step-guidance"><summary>需要提示</summary><IncrementalMarkdownRenderer :text="step.errorGuidance" type="lesson" /></details>
+                    <details class="step-answer"><summary>完成后核对</summary><IncrementalMarkdownRenderer :text="step.expectedResult" type="lesson" /></details>
                   </div>
                 </li>
               </ol>
             </section>
 
             <section id="checkpoints" class="document-section">
-              <div class="section-heading"><span>质量控制</span><h3>检查点</h3><p>检查点只说明如何核对，阅读或展开不会自动标记完成。</p></div>
+              <div class="section-heading"><h3>检查点</h3></div>
               <div class="checkpoint-list">
-                <section v-for="checkpoint in structured.checkpoints" :key="checkpoint.id">
+                <section v-for="checkpoint in presented.checkpoints" :key="checkpoint.id">
                   <CheckCircle2 :size="20" />
-                  <div><h4>{{ checkpoint.title }}</h4><p>{{ checkpoint.verification }}</p><strong>通过条件：{{ checkpoint.passCondition }}</strong></div>
+                  <div><h4>{{ checkpoint.title }}</h4><IncrementalMarkdownRenderer :text="checkpoint.verification" type="lesson" /><details class="step-answer"><summary>完成后核对</summary><IncrementalMarkdownRenderer :text="checkpoint.passCondition" type="lesson" /></details></div>
                 </section>
               </div>
             </section>
 
             <section id="deliverables" class="document-section">
-              <div class="section-heading"><span>提交要求</span><h3>提交物</h3></div>
+              <div class="section-heading"><h3>提交物</h3></div>
               <div class="deliverable-list">
-                <section v-for="item in structured.deliverables" :key="item.id">
+                <section v-for="item in presented.deliverables" :key="item.id">
                   <FileCheck2 :size="20" />
-                  <div><h4>{{ item.title }}</h4><p>{{ item.description }}</p><span>{{ item.format }}</span></div>
+                  <div><h4>{{ item.title }}</h4><p>{{ learningText(item.description) }}</p><span>{{ item.format }}</span></div>
                 </section>
               </div>
             </section>
 
             <section id="rubric" class="document-section rubric-section">
-              <div class="section-heading"><span>验收标准</span><h3>评分标准</h3><p>总分 100 分，评分依据必须来自真实提交物和运行证据。</p></div>
+              <div class="section-heading"><h3>评分标准</h3></div>
               <div class="rubric-table" role="table" aria-label="实训评分标准">
                 <div class="rubric-head" role="row"><span role="columnheader">评价项</span><span role="columnheader">证据要求</span><span role="columnheader">分值</span></div>
-                <div v-for="item in structured.rubric" :key="item.id" class="rubric-row" role="row">
+                <div v-for="item in presented.rubric" :key="item.id" class="rubric-row" role="row">
                   <strong role="cell">{{ item.criterion }}</strong><span role="cell">{{ item.evidence }}</span><b role="cell">{{ item.points }}</b>
                 </div>
               </div>
@@ -329,7 +351,7 @@ onMounted(loadResource)
           <section v-else class="invalid-state" role="alert">
             <AlertTriangle :size="26" />
             <h2>任务书结构不完整</h2>
-            <p>{{ projection?.warnings?.[0] || '当前内容无法安全展示，请返回资源中心选择其他版本。' }}</p>
+            <p>{{ projection?.warnings?.[0] || '请在版本历史中选择完整版本。' }}</p>
             <button type="button" class="secondary-button" @click="router.push({ name: 'WorkspaceResources' })">返回资源中心</button>
           </section>
         </div>
@@ -342,40 +364,40 @@ onMounted(loadResource)
               <strong v-if="completion.progress != null">{{ Math.round(Number(completion.progress) * 100) }}%</strong>
             </div>
             <div v-if="completion.progress != null" class="progress-track" aria-hidden="true"><span :style="{ width: `${Math.max(0, Math.min(100, Number(completion.progress) * 100))}%` }" /></div>
-            <p>{{ executionState.detail }}</p>
+            <button v-if="structured" class="report-entry" type="button" :disabled="reportSaving || (Boolean(learningUnavailable) && !completion.report_note_id)" @click="openReport">
+              <FileCheck2 :size="17" />{{ completion.report_note_id ? '继续整理实训报告' : '整理实训报告' }}
+            </button>
           </section>
 
           <section>
             <h2>来源</h2>
-            <div :class="['source-readiness', { ready: projection?.source_readiness?.publishable }]">
+            <div v-if="!projection?.source_readiness?.publishable" class="source-readiness">
               <CheckCircle2 v-if="projection?.source_readiness?.publishable" :size="17" />
               <AlertTriangle v-else :size="17" />
-              <span>{{ projection?.source_readiness?.reason || '未记录来源状态。' }}</span>
+              <span>{{ learningText(projection?.source_readiness?.reason || '未记录来源状态。') }}</span>
             </div>
             <button v-for="source in sources" :key="source.source_ref_id" type="button" class="source-row" :disabled="!source.available" @click="openSource(source)">
               <BookOpen :size="17" />
-              <span><strong>{{ source.title || '课程来源' }}</strong><small>{{ source.location_label || '位置未记录' }}</small></span>
+              <span><strong>{{ source.title || '课程来源' }}</strong><small v-if="source.location_label">{{ source.location_label }}</small></span>
               <ExternalLink v-if="source.available" :size="15" />
             </button>
-            <p v-if="!sources.length" class="panel-empty">当前版本没有登记可追溯来源。</p>
+            <p v-if="!sources.length" class="panel-empty">暂无来源</p>
           </section>
 
           <section class="tool-section">
-            <h2>进入实际操作</h2>
-            <p>任务书负责说明做什么；下面两个资源分别承担运行和参数探索。</p>
-            <button type="button" class="tool-entry tool-entry--primary" :disabled="!sandbox?.available || !sandbox?.route" @click="openLinked(sandbox)">
+            <h2>配套练习</h2>
+            <button type="button" class="tool-entry tool-entry--primary" :disabled="Boolean(learningUnavailable) || !sandbox?.available || !sandbox?.route" @click="openLinked(sandbox)">
               <Code2 :size="19" />
-              <span><strong>进入代码沙盒</strong><small>{{ sandbox?.available ? '编辑、运行、调试并保留真实输出' : '关联沙盒尚未生成或不可用' }}</small></span>
+              <span><strong>进入代码沙盒</strong><small v-if="!sandbox?.available">暂不可用</small></span>
               <ChevronRight :size="17" />
             </button>
-            <button type="button" class="tool-entry" :disabled="!model?.available || !model?.route" @click="openLinked(model)">
+            <button type="button" class="tool-entry" :disabled="Boolean(learningUnavailable) || !model?.available || !model?.route" @click="openLinked(model)">
               <SlidersHorizontal :size="19" />
-              <span><strong>打开可交互模型</strong><small>{{ model?.available ? '调节参数并观察图表与规律' : '关联模型尚未生成或不可用' }}</small></span>
+              <span><strong>打开可交互模型</strong><small v-if="!model?.available">暂不可用</small></span>
               <ChevronRight :size="17" />
             </button>
           </section>
 
-          <p class="evidence-boundary">阅读任务书、切换版本、展开内容和查看来源不会完成学习任务，也不会改变掌握度。只有后续提交真实运行、实验或其他规定证据后，系统才会更新学习状态。</p>
         </aside>
       </section>
     </template>
@@ -391,7 +413,7 @@ onMounted(loadResource)
       :compare-result="compareResult"
       :comparing-id="comparingId"
       :compare-disabled="Boolean(comparingId)"
-      :restore-disabled="Boolean(restoringId)"
+      :restore-disabled="Boolean(restoringId) || Boolean(detail?.archived)"
       @close="closeHistory"
       @select="selectHistoryVersion"
       @compare="compareHistory"
@@ -402,14 +424,15 @@ onMounted(loadResource)
 </template>
 
 <style scoped>
-.training-page{min-height:100%;padding:24px 28px 32px;background:var(--color-page);color:var(--color-text);font-family:var(--font-sans)}
+.report-entry{display:inline-flex;align-items:center;gap:8px;margin-top:14px;padding:8px 0;border:0;background:transparent;color:var(--color-accent);font:600 15px/1.5 var(--font-sans);text-align:left;cursor:pointer}.report-entry:focus-visible{outline:2px solid var(--color-accent);outline-offset:4px}.report-entry:disabled{opacity:.5;cursor:default}
+.training-page{min-height:100%;padding:24px 28px 32px;background:transparent;color:var(--color-text);font-family:var(--font-sans)}
 .back-link{display:inline-flex;align-items:center;gap:8px;margin:0 0 18px;padding:0;border:0;background:transparent;color:var(--color-text-secondary);font-size:14px;font-weight:650;cursor:pointer}.back-link:hover{color:var(--color-text)}
 .page-header{display:grid;grid-template-columns:minmax(0,1fr) minmax(500px,.85fr);gap:36px;align-items:end;padding-bottom:22px;border-bottom:1px solid var(--color-border)}
 .context-line{margin:0 0 6px;color:var(--color-text-secondary);font-size:14px;font-weight:650}.page-header h1{margin:0;font-family:var(--font-heading);font-size:34px;line-height:1.25;letter-spacing:0}.page-header>div>p:last-child{max-width:70ch;margin:9px 0 0;color:var(--color-text-secondary);font-size:15px;line-height:1.65}
-.header-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:hidden;border:1px solid var(--color-border);border-radius:8px;background:#fff}.header-meta>div{min-width:0;padding:13px 14px;border-right:1px solid var(--color-border)}.header-meta>div:last-child{border-right:0}.header-meta span,.header-meta strong{display:block}.header-meta span{color:var(--color-text-muted);font-size:14px}.header-meta strong{margin-top:4px;font-size:14px;line-height:1.45}
-.notice{display:flex;align-items:center;gap:8px;margin-top:14px;padding:10px 12px;border:1px solid var(--color-border);border-radius:6px;background:#fff;color:var(--color-text-secondary);font-size:14px}.notice--warning{border-color:#dfcfb4;background:var(--color-warning-soft);color:#6f501e}
-.workspace-shell{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:680px;margin-top:18px;overflow:hidden;border:1px solid var(--color-border-strong);border-radius:8px;background:#fff}.document-pane{min-width:0;border-right:1px solid var(--color-border)}
-.document-toolbar{position:sticky;z-index:3;top:0;display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:18px;padding:9px 18px;border-bottom:1px solid var(--color-border);background:#fff}.document-toolbar nav{display:flex;gap:4px}.document-toolbar nav button{min-height:36px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--color-text-secondary);font:650 14px/1.3 var(--font-sans);cursor:pointer}.document-toolbar nav button:hover,.document-toolbar nav button:focus-visible{background:var(--color-surface-subtle);color:var(--color-text);outline:none}
+.header-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:hidden;border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface)}.header-meta>div{min-width:0;padding:13px 14px;border-right:1px solid var(--color-border)}.header-meta>div:last-child{border-right:0}.header-meta span,.header-meta strong{display:block}.header-meta span{color:var(--color-text-muted);font-size:14px}.header-meta strong{margin-top:4px;font-size:14px;line-height:1.45}
+.notice{display:flex;align-items:center;gap:8px;margin-top:14px;padding:10px 12px;border:1px solid var(--color-border);border-radius:6px;background:var(--color-surface);color:var(--color-text-secondary);font-size:14px}.notice--warning{border-color:#dfcfb4;background:var(--color-warning-soft);color:#6f501e}
+.workspace-shell{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:680px;margin-top:18px;overflow:hidden;border:1px solid var(--color-border-strong);border-radius:8px;background:var(--color-surface)}.document-pane{min-width:0;border-right:1px solid var(--color-border)}
+.document-toolbar{position:sticky;z-index:3;top:0;display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:18px;padding:9px 18px;border-bottom:1px solid var(--color-border);background:var(--color-surface)}.document-toolbar nav{display:flex;gap:4px}.document-toolbar nav button{min-height:36px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--color-text-secondary);font:650 14px/1.3 var(--font-sans);cursor:pointer}.document-toolbar nav button:hover,.document-toolbar nav button:focus-visible{background:var(--color-surface-subtle);color:var(--color-text);outline:none}
 .version-control{position:relative;display:flex;align-items:center;gap:7px;height:38px;padding:0 9px 0 11px;border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-secondary);font-size:14px}.version-control select{appearance:none;min-width:58px;padding-right:20px;border:0;outline:0;background:transparent;color:var(--color-text);font:600 14px/1.4 var(--font-sans)}.version-control svg{position:absolute;right:8px;pointer-events:none}.historical-banner{padding:10px 24px;border-bottom:1px solid var(--color-border);background:var(--color-surface-subtle);color:var(--color-text-secondary);font-size:14px;text-align:center}
 .task-document{width:min(820px,calc(100% - 64px));margin-inline:auto}.document-lead{display:grid;grid-template-columns:48px minmax(0,1fr);gap:16px;padding:50px 0 38px;border-bottom:1px solid var(--color-border)}.lead-icon{display:grid;width:44px;height:44px;place-items:center;border:1px solid var(--color-border-strong);border-radius:8px;background:var(--color-surface-subtle)}.document-lead>div:nth-child(2)>span,.section-heading>span{color:var(--color-text-muted);font-size:14px;font-weight:650}.document-lead h2{max-width:28ch;margin:8px 0 0;font-family:var(--font-display);font-size:30px;line-height:1.38;letter-spacing:0}.document-lead dl{grid-column:2;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;margin:18px 0 0}.document-lead dl div{padding-top:12px;border-top:1px solid var(--color-border-strong)}.document-lead dt{color:var(--color-text-muted);font-size:14px}.document-lead dd{display:flex;align-items:center;gap:7px;margin:5px 0 0;font-size:14px;font-weight:650}
 .document-section{scroll-margin-top:70px;padding:40px 0;border-bottom:1px solid var(--color-border)}.section-heading h3{margin:6px 0 0;font-size:23px;line-height:1.35}.section-heading p{max-width:70ch;margin:8px 0 0;color:var(--color-text-secondary);font-size:15px;line-height:1.65}
@@ -419,9 +442,16 @@ onMounted(loadResource)
 .rubric-table{margin-top:22px;border:1px solid var(--color-border-strong);border-radius:8px;overflow:hidden}.rubric-head,.rubric-row{display:grid;grid-template-columns:minmax(150px,.75fr) minmax(0,1.5fr) 64px;align-items:center}.rubric-head{min-height:42px;background:var(--color-surface-subtle);color:var(--color-text-muted);font-size:14px;font-weight:650}.rubric-row{min-height:68px;border-top:1px solid var(--color-border)}.rubric-head>* ,.rubric-row>*{padding:10px 14px}.rubric-row strong,.rubric-row span,.rubric-row b{font-size:14px;line-height:1.55}.rubric-row span{color:var(--color-text-secondary)}.rubric-row b{font-variant-numeric:tabular-nums;text-align:right}
 .legacy-document>section>p{color:var(--color-text-secondary);font-size:15px;line-height:1.7}.legacy-content pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--color-text-secondary);font:15px/1.75 var(--font-sans)}
 .invalid-state{display:grid;min-height:570px;place-content:center;justify-items:center;gap:10px;padding:40px;text-align:center}.invalid-state h2{margin:0;font-size:23px}.invalid-state p{max-width:52ch;margin:0;color:var(--color-text-secondary);font-size:15px;line-height:1.65}
-.support-panel{min-width:0;padding:22px 18px;background:var(--color-surface-subtle);overflow-y:auto}.support-panel section+section{margin-top:28px;padding-top:24px;border-top:1px solid var(--color-border)}.support-panel h2{margin:0 0 10px;font-size:17px}.source-readiness{display:flex;align-items:flex-start;gap:8px;padding:10px;border:1px solid #dfcfb4;border-radius:6px;background:var(--color-warning-soft);color:#6f501e}.source-readiness.ready{border-color:var(--color-border-strong);background:var(--color-success-soft);color:var(--color-text-secondary)}.source-readiness span{font-size:14px;line-height:1.55}.source-row,.tool-entry{display:flex;width:100%;align-items:center;gap:10px;margin-top:8px;padding:10px;border:1px solid var(--color-border);border-radius:6px;background:#fff;color:var(--color-text);text-align:left;cursor:pointer}.source-row:disabled,.tool-entry:disabled{cursor:not-allowed;opacity:.62}.source-row>span,.tool-entry>span{min-width:0;flex:1}.source-row strong,.source-row small,.tool-entry strong,.tool-entry small{display:block;overflow-wrap:anywhere}.source-row strong,.tool-entry strong{font-size:14px}.source-row small,.tool-entry small{margin-top:3px;color:var(--color-text-muted);font-size:14px;line-height:1.45}.tool-section>p{margin:0 0 12px;color:var(--color-text-secondary);font-size:14px;line-height:1.6}.tool-entry--primary{border-color:var(--color-accent);background:var(--color-accent);color:#fff}.tool-entry--primary small{color:#e7ecee}.tool-entry--primary:disabled{border-color:var(--color-border);background:#fff;color:var(--color-text)}.tool-entry--primary:disabled small{color:var(--color-text-muted)}.panel-empty{margin:9px 0 0;color:var(--color-text-muted);font-size:14px;line-height:1.55}.evidence-boundary{margin:28px 0 0;padding-top:18px;border-top:1px solid var(--color-border);color:var(--color-text-muted);font-size:14px;line-height:1.6}
+.support-panel{min-width:0;padding:22px 18px;background:var(--color-surface-subtle);overflow-y:auto}.support-panel section+section{margin-top:28px;padding-top:24px;border-top:1px solid var(--color-border)}.support-panel h2{margin:0 0 10px;font-size:17px}.source-readiness{display:flex;align-items:flex-start;gap:8px;padding:10px;border:1px solid #dfcfb4;border-radius:6px;background:var(--color-warning-soft);color:#6f501e}.source-readiness.ready{border-color:var(--color-border-strong);background:var(--color-success-soft);color:var(--color-text-secondary)}.source-readiness span{font-size:14px;line-height:1.55}.source-row,.tool-entry{display:flex;width:100%;align-items:center;gap:10px;margin-top:8px;padding:10px;border:1px solid var(--color-border);border-radius:6px;background:var(--color-surface);color:var(--color-text);text-align:left;cursor:pointer}.source-row:disabled,.tool-entry:disabled{cursor:not-allowed;opacity:.62}.source-row>span,.tool-entry>span{min-width:0;flex:1}.source-row strong,.source-row small,.tool-entry strong,.tool-entry small{display:block;overflow-wrap:anywhere}.source-row strong,.tool-entry strong{font-size:14px}.source-row small,.tool-entry small{margin-top:3px;color:var(--color-text-muted);font-size:14px;line-height:1.45}.tool-section>p{margin:0 0 12px;color:var(--color-text-secondary);font-size:14px;line-height:1.6}.tool-entry--primary{border-color:var(--color-accent);background:var(--color-accent);color:#fff}.tool-entry--primary small{color:var(--color-surface-muted)}.tool-entry--primary:disabled{border-color:var(--color-border);background:var(--color-surface);color:var(--color-text)}.tool-entry--primary:disabled small{color:var(--color-text-muted)}.panel-empty{margin:9px 0 0;color:var(--color-text-muted);font-size:14px;line-height:1.55}.evidence-boundary{margin:28px 0 0;padding-top:18px;border-top:1px solid var(--color-border);color:var(--color-text-muted);font-size:14px;line-height:1.6}
 .progress-summary{display:flex;align-items:center;justify-content:space-between;gap:12px}.progress-summary span,.progress-summary strong{font-size:14px}.progress-summary span{font-weight:700}.progress-summary strong{font-variant-numeric:tabular-nums}.progress-track{height:5px;margin-top:10px;overflow:hidden;border-radius:3px;background:var(--color-surface-muted)}.progress-track span{display:block;height:100%;background:var(--color-accent)}.progress-section p{margin:9px 0 0;color:var(--color-text-secondary);font-size:14px;line-height:1.55}
-.primary-button,.secondary-button{display:inline-flex;min-height:40px;align-items:center;justify-content:center;gap:7px;padding:0 13px;border-radius:6px;font:650 14px/1.3 var(--font-sans);cursor:pointer}.primary-button{border:1px solid var(--color-accent);background:var(--color-accent);color:#fff}.secondary-button{border:1px solid var(--color-border-strong);background:#fff;color:var(--color-text)}button:focus-visible,select:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}.page-state{display:grid;min-height:calc(100vh - 150px);place-content:center;justify-items:center;gap:10px;color:var(--color-text-secondary)}.page-state strong{color:var(--color-text);font-size:18px}.page-state span{max-width:44ch;font-size:14px;text-align:center}.page-state .primary-button{margin-top:8px}.page-state--error{color:var(--color-danger)}
+.primary-button,.secondary-button{display:inline-flex;min-height:40px;align-items:center;justify-content:center;gap:7px;padding:0 13px;border-radius:6px;font:650 14px/1.3 var(--font-sans);cursor:pointer}.primary-button{border:1px solid var(--color-accent);background:var(--color-accent);color:#fff}.secondary-button{border:1px solid var(--color-border-strong);background:var(--color-surface);color:var(--color-text)}button:focus-visible,select:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}.page-state{display:grid;min-height:calc(100vh - 150px);place-content:center;justify-items:center;gap:10px;color:var(--color-text-secondary)}.page-state strong{color:var(--color-text);font-size:18px}.page-state span{max-width:44ch;font-size:14px;text-align:center}.page-state .primary-button{margin-top:8px}.page-state--error{color:var(--color-danger)}
 @media(max-width:1300px){.training-page{padding-inline:22px}.page-header{grid-template-columns:minmax(0,1fr) minmax(440px,.9fr);gap:24px}.workspace-shell{grid-template-columns:minmax(0,1fr) 288px}.task-document{width:min(760px,calc(100% - 44px))}.document-toolbar{padding-inline:12px}.document-toolbar nav button{padding-inline:8px}}
 .training-page .support-panel{max-height:calc(100vh - 280px);overflow-y:auto}
+.task-objective{margin:12px 0 0;font-size:16px;line-height:1.9;overflow-wrap:anywhere}
+.document-lead>div:nth-child(2),.step-body{min-width:0}
+.step-guidance,.step-answer{margin-top:14px;padding-left:14px;border-left:2px solid var(--color-border-strong)}
+.step-guidance summary,.step-answer summary{width:fit-content;cursor:pointer;color:var(--color-accent);font-size:15px;font-weight:600}
+.step-guidance summary:focus-visible,.step-answer summary:focus-visible{outline:2px solid var(--color-accent);outline-offset:4px}
+.progress-section .primary-button{display:flex;align-items:center;gap:7px;margin-top:12px;padding:10px 12px;border:1px solid var(--color-accent);border-radius:6px;background:var(--color-accent);color:white;font:600 14px/1.4 var(--font-sans);cursor:pointer}
 </style>
+

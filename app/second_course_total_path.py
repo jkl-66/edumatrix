@@ -9,6 +9,7 @@ written while a baseline is generated.
 """
 
 import json
+from graphlib import TopologicalSorter
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +45,10 @@ def _subject_nodes(
     start_sequence: int = 1,
 ) -> list[dict[str, Any]]:
     chapters = _chapter_by_code(manifest)
-    points = list(manifest.get("knowledge_points") or [])
+    points_by_code = {str(point["code"]): point for point in manifest.get("knowledge_points") or []}
+    ordered_codes = TopologicalSorter({code: list(point.get("prerequisites") or [])
+                                      for code, point in points_by_code.items()}).static_order()
+    points = [points_by_code[code] for code in ordered_codes]
     nodes: list[dict[str, Any]] = []
     for offset, point in enumerate(points):
         code = str(point["code"])
@@ -69,7 +73,7 @@ def _subject_nodes(
     return nodes
 
 
-def build_total_path_baseline(*, time_budget_minutes: int = 90, max_days: int = 40) -> dict[str, Any]:
+def build_total_path_baseline(*, time_budget_minutes: int = 90, max_days: int | None = None) -> dict[str, Any]:
     manifests = {_manifest(path)["course_id"]: _manifest(path) for path in ALL_CURATED_COURSE_MANIFESTS}
     master = manifests[MASTER_COURSE_ID]
     secondary = manifests[SECONDARY_COURSE_ID]
@@ -128,7 +132,7 @@ def build_total_path_baseline(*, time_budget_minutes: int = 90, max_days: int = 
     }
 
 
-def write_total_path_report(*, time_budget_minutes: int = 90, max_days: int = 40) -> dict[str, Any]:
+def write_total_path_report(*, time_budget_minutes: int = 90, max_days: int | None = None) -> dict[str, Any]:
     report = build_total_path_baseline(time_budget_minutes=time_budget_minutes, max_days=max_days)
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     TOTAL_PATH_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")

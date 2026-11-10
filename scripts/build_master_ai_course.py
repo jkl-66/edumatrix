@@ -8,6 +8,7 @@ repository, commit and source-path metadata for every imported chapter.
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 
@@ -40,10 +41,38 @@ def collect_dir(repo: Path, relative_dir: str) -> tuple[str, str]:
     )
     if not paths:
         raise ValueError(f"no markdown source files found under {relative_dir}")
-    parts = []
+    # D2L's index declares the teaching order. Filename order can start an
+    # introductory chapter with backpropagation and leave its overview halfway.
+    available = {p.resolve(): p for p in paths}
+    ordered: list[Path] = []
+    seen: set[Path] = set()
+
+    def append_with_toc(path: Path) -> None:
+        resolved = path.resolve()
+        if resolved not in available or resolved in seen:
+            return
+        seen.add(resolved)
+        path = available[resolved]
+        ordered.append(path)
+        for toc in re.findall(r"```toc\s*\n(.*?)```", read_utf8(path), re.DOTALL):
+            for line in toc.splitlines():
+                entry = line.strip()
+                if not entry or entry.startswith(":"):
+                    continue
+                child = path.parent / entry
+                if child.is_dir():
+                    child = child / "index.md"
+                elif child.suffix != ".md":
+                    child = child.with_suffix(".md")
+                append_with_toc(child)
+
+    append_with_toc(base / "index.md")
     for path in paths:
+        append_with_toc(path)
+    parts = []
+    for path in ordered:
         parts.append(f"\n\n<!-- 上游文件: {path.relative_to(repo).as_posix()} -->\n\n{read_utf8(path).strip()}")
-    return "\n".join(parts).strip() + "\n", ";".join(p.relative_to(repo).as_posix() for p in paths)
+    return "\n".join(parts).strip() + "\n", ";".join(p.relative_to(repo).as_posix() for p in ordered)
 
 
 def collect_files(repo: Path, paths: list[str]) -> tuple[str, str]:
@@ -77,6 +106,7 @@ KNOWLEDGE_POINTS = [
     ("AI-KP-18", "工具调用、ReAct 与 Agent", "advanced", ["AI-KP-15", "AI-KP-17"]),
     ("AI-KP-19", "Coding Agent、MCP 与 Skill", "advanced", ["AI-KP-18"]),
     ("AI-KP-20", "个性化学习智能体综合项目", "capstone", ["AI-KP-17", "AI-KP-18", "AI-KP-19"]),
+    ("AI-KP-21", "计算性能、异步计算与并行训练", "advanced", ["AI-KP-06", "AI-KP-07"]),
 ]
 
 
@@ -92,7 +122,7 @@ CHAPTERS = [
     ("D2L 循环神经网络", "d2l-zh", "chapter_recurrent-neural-networks", "D2L 中文第二版主教材", "Apache-2.0", ["AI-KP-09"]),
     ("D2L 现代循环网络与序列任务", "d2l-zh", "chapter_recurrent-modern", "D2L 中文第二版主教材", "Apache-2.0", ["AI-KP-09"]),
     ("D2L 注意力机制与 Transformer", "d2l-zh", "chapter_attention-mechanisms", "D2L 中文第二版主教材", "Apache-2.0", ["AI-KP-10"]),
-    ("D2L 无监督学习与表示", "d2l-zh", "chapter_computational-performance", "D2L 中文第二版主教材补充", "Apache-2.0", ["AI-KP-12"]),
+    ("D2L 计算性能与并行训练", "d2l-zh", "chapter_computational-performance", "D2L 中文第二版主教材补充", "Apache-2.0", ["AI-KP-21"]),
     ("D2L 计算机视觉应用", "d2l-zh", "chapter_computer-vision", "D2L 中文第二版主教材", "Apache-2.0", ["AI-KP-13"]),
     ("D2L 自然语言处理预训练", "d2l-zh", "chapter_natural-language-processing-pretraining", "D2L 中文第二版主教材", "Apache-2.0", ["AI-KP-14"]),
     ("D2L 自然语言处理应用", "d2l-zh", "chapter_natural-language-processing-applications", "D2L 中文第二版主教材", "Apache-2.0", ["AI-KP-14"]),
@@ -179,13 +209,18 @@ def build() -> dict:
                 f"> 上游文件：`{source_path}`  \\n"
                 f"> 许可标识：{spdx}；详见 `LICENSES.md`\n\n"
                 "## 本章学习目标\n\n"
-                f"围绕 {', '.join(kp_codes)} 建立可解释、可实践、可检索的知识单元；正文保留上游章节结构并由系统按知识点切分。\n\n"
+                + ("理解异步计算如何安排训练任务，辨别计算与存储瓶颈，并比较单设备和多设备训练的适用条件。\n\n"
+                   if kp_codes == ["AI-KP-21"] else
+                   f"围绕 {', '.join(kp_codes)} 建立可解释、可实践、可检索的知识单元；正文保留上游章节结构并由系统按知识点切分。\n\n") +
                 "## 教材正文\n\n"
             )
             transformed = (header + content).encode("utf-8")
             source_raw = content.encode("utf-8")
             extension = "md"
-        rel = f"chapters/{order:02d}_{title.replace('：', '_').replace(' ', '')}.{extension}"
+        # The stored path participates in document IDs. Preserve it when the
+        # chapter's display title is corrected, so reading/source links survive.
+        rel = ("chapters/11_D2L无监督学习与表示.md" if order == 11 else
+               f"chapters/{order:02d}_{title.replace('：', '_').replace(' ', '')}.{extension}")
         out_path = OUT / rel
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(transformed)
@@ -207,7 +242,7 @@ def build() -> dict:
             "path": rel,
             "bytes": len(transformed),
             "sha256": sha(transformed),
-            "parser_version": "edumatrix-course-source-v2",
+            "parser_version": "edumatrix-course-source-v3",
             "license_spdx": spdx,
             "license_file": "LICENSES.md",
             "license_sha256": license_hash,
@@ -217,8 +252,8 @@ def build() -> dict:
         })
     manifest = {
         "schema_version": "edumatrix.course-version-manifest.v1",
-        "manifest_version": "course-ai-deep-learning-agents-1.1.0",
-        "generated_at": "2026-08-31T00:00:00+08:00",
+        "manifest_version": "course-ai-deep-learning-agents-1.3.0",
+        "generated_at": "2026-10-31T00:00:00+08:00",
         "course_id": COURSE_ID,
         "title": "人工智能与深度学习：从机器学习基础到大模型智能体",
         "subject": "人工智能 / 深度学习 / 大模型与智能体",

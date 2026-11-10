@@ -30,7 +30,11 @@ const courseContext = useCourseContextStore()
 
 const role = ref('student')
 const displayName = ref('学习者')
+const avatarUrl = ref('')
 const studentId = ref('')
+const pageUpdateNeeded = ref(false)
+function showPageUpdate() { pageUpdateNeeded.value = true }
+function reloadPage() { window.location.reload() }
 
 const studentNav = [
   { path: '/', label: '首页', icon: Home },
@@ -104,6 +108,7 @@ const routeNotice = computed(() => {
 function syncSession() {
   role.value = localStorage.getItem('edumatrix_role') || 'student'
   displayName.value = localStorage.getItem('edumatrix_display_name') || localStorage.getItem('edumatrix_username') || '学习者'
+  avatarUrl.value = localStorage.getItem('edumatrix_avatar_url') || ''
   studentId.value = localStorage.getItem('edumatrix_student_id') || localStorage.getItem('edumatrix_username') || ''
 }
 
@@ -127,8 +132,29 @@ function handleCaptureError(event) {
   console.warn('[EduMatrix] 页面渲染异常', event)
 }
 
+function pageViewKey(currentRoute) {
+  // Calendar initialization/date navigation must not tear down an open
+  // flashcard request or the learner's current review tools.
+  if (currentRoute.path === '/workspace/review') {
+    const { month, date, ...scope } = currentRoute.query || {}
+    return `${currentRoute.path}:${JSON.stringify(scope)}`
+  }
+  // Graph focus and view are reading state, not a new learner/course page.
+  if (currentRoute.path === '/profile/learning') {
+    const { graph_view, knowledge_point_id, ...scope } = currentRoute.query || {}
+    return `${currentRoute.path}:${JSON.stringify(scope)}`
+  }
+  // Video choices belong to the same player; remounting interrupts segment playback.
+  // Choosing a wrong question updates its address, not the search workspace.
+  if (currentRoute.name === 'WrongQuestionBook') {
+    const { wrong_id, ...scope } = currentRoute.query || {}
+    return `${currentRoute.path}:${JSON.stringify(scope)}`
+  }
+  return currentRoute.name === 'VideoResource' ? currentRoute.path : currentRoute.fullPath
+}
+
 watch(
-  () => route.fullPath,
+  () => pageViewKey(route),
   () => {
     syncSession()
     nextTick(() => document.querySelector('.app-content')?.scrollTo({ top: 0, left: 0 }))
@@ -137,6 +163,12 @@ watch(
 )
 
 onMounted(() => window.addEventListener('beforeunload', abortAllStreams))
+onMounted(() => window.addEventListener('vite:preloadError', showPageUpdate))
+onUnmounted(() => window.removeEventListener('vite:preloadError', showPageUpdate))
+onMounted(() => window.addEventListener('edumatrix-identity-changed', syncSession))
+onMounted(() => window.addEventListener('storage', syncSession))
+onUnmounted(() => window.removeEventListener('edumatrix-identity-changed', syncSession))
+onUnmounted(() => window.removeEventListener('storage', syncSession))
 onUnmounted(() => window.removeEventListener('beforeunload', abortAllStreams))
 </script>
 
@@ -152,6 +184,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', abortAllStreams))
     :brand="roleUi.brand"
     :role-label="roleUi.roleLabel"
     :avatar="roleUi.avatar"
+    :avatar-url="avatarUrl"
     :display-name="displayName"
     :page-title="pageTitle"
     :page-section="pageSection"
@@ -163,10 +196,14 @@ onUnmounted(() => window.removeEventListener('beforeunload', abortAllStreams))
     @logout="logout"
     @dismiss-notice="dismissRouteNotice"
   >
-    <div @error.capture="handleCaptureError">
+    <div :class="{ 'reader-page-host': route.name === 'KnowledgeDocument' }" @error.capture="handleCaptureError">
+      <div v-if="pageUpdateNeeded" class="page-update-notice" role="alert">
+        <span>页面暂时没有加载完整。请先保留正在编辑的文字，检查连接后刷新继续。</span>
+        <button type="button" class="ui-button ui-button--secondary" @click="reloadPage">刷新页面</button>
+      </div>
       <router-view v-slot="{ Component, route: currentRoute }" :student-id="studentId">
-        <Transition name="page-fade" mode="out-in">
-          <component :is="Component" :key="currentRoute.fullPath" :student-id="studentId" />
+        <Transition name="page-fade" mode="out-in" @before-leave="element => { element.inert = true }">
+          <component :is="Component" :key="pageViewKey(currentRoute)" :student-id="studentId" />
         </Transition>
       </router-view>
     </div>
@@ -174,17 +211,23 @@ onUnmounted(() => window.removeEventListener('beforeunload', abortAllStreams))
 </template>
 
 <style scoped>
+.reader-page-host { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.page-update-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 12px 24px; padding: 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 8px; }
 .full-layout {
   width: 100vw;
   height: 100vh;
   min-width: 1180px;
   overflow: hidden;
-  background: var(--color-page);
+  background: transparent;
 }
 
 .page-fade-enter-active,
 .page-fade-leave-active {
   transition: opacity 120ms ease;
+}
+
+.page-fade-leave-active {
+  pointer-events: none;
 }
 
 .page-fade-enter-from,

@@ -86,6 +86,32 @@ def test_m5_gateway_persists_trace_without_raw_prompt_and_validates_json():
     assert len(row.output_hash) == 64
 
 
+def test_gateway_delivers_long_teaching_context_without_cutting_the_tail():
+    system = "完整教学约束。" * 3000 + "最后一项审核要求"
+    prompt = "已确认的课程与学习依据。" * 18000 + "最后一个完整教学任务"
+    request = GatewayRequest(
+        contract=_request().contract,
+        prompt=PromptSpec(key="long-path", version="1", system_prompt=system),
+        user_prompt=prompt,
+    )
+    received = []
+
+    class CapturingBackend:
+        async def generate(self, system_prompt, user_prompt, *, role):
+            received.append((system_prompt, user_prompt))
+            return '{"summary":"all supplied content received"}'
+
+    session = _session()
+    result = asyncio.run(M5ModelGateway().execute(
+        session, request=request, registration=_registration(),
+        backend=CapturingBackend(), response_model=Answer,
+    ))
+    assert len(system) > 20000 and len(prompt) > 200000
+    assert received == [(system, prompt)]
+    assert result.status == "completed"
+    assert session.query(DBModelCall).one().input_summary["user_prompt_chars"] == len(prompt)
+
+
 def test_m5_gateway_records_schema_failure_as_terminal_result():
     session = _session()
     with pytest.raises(M5CapabilityError, match="strict schema"):
@@ -112,6 +138,32 @@ def test_m5_gateway_does_not_misclassify_provider_value_errors():
         ))
     row = session.query(DBModelCall).one()
     assert (row.status, row.error_code) == ("failed", "provider_call_failed")
+
+
+def test_gateway_preserves_wrapped_failure_type_and_status_without_sensitive_details():
+    import httpx
+    import json
+
+    class WrappedFailureBackend:
+        async def generate(self, system_prompt, user_prompt, *, role):
+            request = httpx.Request('POST', 'https://example.invalid/models?token=private-token',
+                                    headers={'Authorization': 'Bearer private-key'})
+            response = httpx.Response(429, request=request, text='private-response-content')
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError('retries exhausted: private-request-content') from exc
+
+    session = _session()
+    with pytest.raises(M5CapabilityError, match='provider call failed'):
+        asyncio.run(M5ModelGateway().execute(session, request=_request(),
+            registration=_registration(), backend=WrappedFailureBackend(), response_model=Answer))
+    row = session.query(DBModelCall).one()
+    assert row.input_summary['provider_failure'] == {
+        'exception_types': ['RuntimeError', 'HTTPStatusError'], 'http_statuses': [429]}
+    assert 'private-' not in json.dumps(row.input_summary)
+    assert 'example.invalid' not in json.dumps(row.input_summary)
+    assert row.status == 'failed' and row.completed_at is not None
 
 
 def test_m5_gateway_closes_cancelled_provider_call():

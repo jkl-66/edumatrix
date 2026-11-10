@@ -374,6 +374,49 @@ def _demo_configuration(key: str = "f6-exam-generation-key") -> dict:
     return configuration
 
 
+@pytest.mark.parametrize("with_draft", [True, False])
+def test_expired_exam_does_not_turn_missing_choices_into_zero_and_keeps_drafts(with_draft):
+    from app.database import DBAssessmentQuestion, DBAssessmentQuestionVersion
+    from app.m5_exam_core import (
+        ExamCreateInput, ExamItemInput, FormalExamError, FormalResponseInput,
+        assign_sitting, create_exam, exam_payload, finalize_formal_response_drafts,
+        save_formal_response_draft, start_sitting,
+    )
+    session, engine, learner, _ = _fixture()
+    try:
+        question = session.query(DBAssessmentQuestion).filter_by(question_type="single_choice").first()
+        version = session.get(DBAssessmentQuestionVersion, question.current_version_id)
+        exam, _, items = create_exam(session, owner_public_id=question.owner_public_id,
+            payload=ExamCreateInput(course_id=question.course_id, title="缺失旧选项测试", items=(
+                ExamItemInput(question_version_id=version.id, points=100),)))
+        exam.status = "open"
+        sitting, _ = assign_sitting(session, exam=exam, learner_public_id=learner.public_id,
+            actor_public_id=question.owner_public_id)
+        start_sitting(session, sitting=sitting, owner_public_id=learner.public_id, expected_lock_version=sitting.lock_version)
+        draft = None
+        if with_draft:
+            draft, _ = save_formal_response_draft(session, sitting=sitting, owner_public_id=learner.public_id,
+                payload=FormalResponseInput(exam_item_id=items[0].id, idempotency_key="legacy-formal-363", answer={"choice": "A"}))
+        # Simulate reading a historical incomplete row without updating an
+        # immutable question or disabling the production database trigger.
+        from sqlalchemy.orm.attributes import set_committed_value
+        set_committed_value(version, "options", [])
+        sitting.due_at = datetime.utcnow() - timedelta(seconds=1)
+        session.flush()
+        projected = exam_payload(session, exam)["items"][0]
+        assert projected["options"] == [] and "选项" in projected["content_issue"]
+        counts = session.query(DBAssessmentAttempt).count()
+        with pytest.raises(FormalExamError) as error:
+            finalize_formal_response_drafts(session, sitting=sitting, owner_public_id=learner.public_id)
+        assert error.value.code == "question_content_incomplete"
+        assert draft is None or draft.answer == {"choice": "A"}
+        assert sitting.status == "in_progress"
+        assert session.query(DBAssessmentAttempt).count() == counts
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_f6_t06_contextual_exam_drafts_submission_and_recovery(monkeypatch):
     session, engine, learner, completion = _fixture()
 

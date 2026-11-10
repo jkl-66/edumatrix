@@ -22,7 +22,13 @@ def _key(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex}"
 
 
-def test_resource_message_fields_are_frozen_and_idempotent() -> None:
+def test_resource_message_fields_are_frozen_and_idempotent(monkeypatch) -> None:
+    # This API test isolates message fields and retry identity. The resource
+    # POST-to-worker handoff with a full learner profile is covered in
+    # test_chat_resource_answer_binding.
+    import app.chat_api as chat_api
+    monkeypatch.setattr(chat_api, "execute_resource_chat_run", lambda db, actor, message_id:
+        {"message": chat_api.message_payload(db.get(DBChatMessage, message_id))})
     with TestClient(app) as client:
         headers = auth_headers(client, _key("b35-b08"))
         conversation = client.post(

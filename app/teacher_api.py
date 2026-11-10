@@ -188,13 +188,22 @@ def _profile_projection(db: Any, *, course_id: str, learner: DBUser) -> dict[str
     profile = build_profile_summary(db, current_user=learner, course_id=course_id)
     graph = profile["knowledge_graph"]
     priority = {"conflict": 0, "weak": 1, "developing": 2}
+    def needs_support(node: dict[str, Any]) -> bool:
+        # A recorded difficulty remains useful without an invented score.
+        # A newer measured result takes precedence over an old weak label.
+        return bool(node.get("learningNeeds")) or node["masteryBand"] in priority or (
+            node["mastery"] is None and any(
+                item.get("sourceType") == "profile_snapshot" and item.get("value") == "当前薄弱"
+                for item in node.get("evidence", [])
+            )
+        )
     weak_nodes = sorted(
         (
             node for node in graph["nodes"]
-            if node["masteryBand"] in priority
+            if needs_support(node)
         ),
         key=lambda node: (
-            priority[node["masteryBand"]],
+            0 if node.get("learningNeeds") else priority.get(node["masteryBand"], 3),
             node["mastery"] if node["mastery"] is not None else 1.0,
             node["name"],
         ),
@@ -209,6 +218,7 @@ def _profile_projection(db: Any, *, course_id: str, learner: DBUser) -> dict[str
             "evidenceCount": node["evidenceCount"],
             "sourceEventIds": list(node["sourceEventIds"]),
             "judgement": node["judgement"],
+            "learningNeeds": node.get("learningNeeds", []),
             "nextAction": node["nextAction"],
         }
         for node in weak_nodes[:6]
@@ -315,7 +325,8 @@ def _student_item(db: Any, *, course_id: str, learner: DBUser) -> dict[str, Any]
     weakest = profile["weakPoints"][0] if profile["weakPoints"] else None
     needs_attention = (
         profile["evidenceState"] != "sufficient"
-        or bool(weakest and weakest["masteryBand"] in {"weak", "conflict"})
+        or bool(weakest and (weakest["masteryBand"] in {"weak", "conflict"}
+                            or weakest["mastery"] is None or weakest.get("learningNeeds")))
         or (
             path["completionRate"] is not None
             and path["completionRate"] < 0.5

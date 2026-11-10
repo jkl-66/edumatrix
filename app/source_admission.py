@@ -137,10 +137,16 @@ async def _generate_profile_query(
     llm: Any,
     owner_public_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    from llm_client import AsyncOpenAIChatLLM, build_async_llm
+    if isinstance(llm, AsyncOpenAIChatLLM):
+        llm = build_async_llm(model="deepseek-v4-flash", thinking_mode="enabled",
+                              reasoning_effort="max", allow_fallback=False)
     model_meta = _profile_query_model(llm)
     system_prompt = (
         "你是 EduMatrix 的画像驱动联网检索 Query Planner。只根据给定的课程快照、学习画像快照和用户检索意图，"
         "生成适合公开互联网搜索的一个 query 和若干关注词；不要回答课程问题，不要编造画像事实，不要加入未提供的个人信息。"
+        "用户当前想学的领域和任务优先；用已确认的基础、讲解语言和设备条件选择资料的起点与形式，不能把非编程学习默认改成编程课程。"
+        "不把姓名、账号、具体身份经历或全部画像照搬进公开搜索词；只使用完成检索所需的领域、目标、语言和资料类型。"
         "只输出一个 JSON 对象，字段必须是 query（字符串）、focus_terms（字符串数组）、rationale（简短中文字符串）。"
     )
     user_prompt = json.dumps(
@@ -213,6 +219,34 @@ def _rank_discovery_results(
     return ranked, duplicate_count
 
 
+_SITE_OPERATOR = re.compile(r"(?<!\S)(-?)site:([^\s]+)", re.IGNORECASE)
+
+
+def _site_constraints(query: str) -> list[tuple[bool, str, str]]:
+    scopes = []
+    for sign, raw in _SITE_OPERATOR.findall(query):
+        value = raw.strip('\"\'，,。;；')
+        parsed = urlparse(value if '://' in value else 'https://' + value)
+        if parsed.hostname:
+            scopes.append((sign == '-', parsed.hostname.lower().removeprefix('www.'), unquote(parsed.path).rstrip('/')))
+    return scopes
+
+
+def _matches_sites(url: str, scopes: list[tuple[bool, str, str]]) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower().removeprefix('www.')
+    path = unquote(parsed.path).rstrip('/')
+    def matches(scope: tuple[bool, str, str]) -> bool:
+        _, domain, prefix = scope
+        return (host == domain or host.endswith('.' + domain)) and (
+            not prefix or path == prefix or path.startswith(prefix + '/')
+        )
+    included = [scope for scope in scopes if not scope[0]]
+    return (not included or any(matches(scope) for scope in included)) and not any(
+        matches(scope) for scope in scopes if scope[0]
+    )
+
+
 async def search_web_materials(
     query: str,
     max_results: int,
@@ -256,6 +290,15 @@ async def search_web_materials(
                 },
             ) from exc
     search_query = query_plan["query"]
+    site_constraints = _site_constraints(normalized_query)
+    if site_constraints:
+        # Personalization may add topic terms, but cannot change an explicit
+        # original-site restriction or rely on the provider to enforce it.
+        search_query = ' '.join((_SITE_OPERATOR.sub('', search_query).strip(), *(
+            ('-' if excluded else '') + 'site:' + domain + path
+            for excluded, domain, path in site_constraints
+        )))
+        query_plan["query"] = search_query
     try:
         raw_results = await _perform_web_search(search_query, max_results=max_results * 2)
     except HTTPException:
@@ -278,9 +321,9 @@ async def search_web_materials(
     )
     items = []
     seen_urls: set[str] = set()
-    for result in ranked_results[:max_results]:
+    for result in ranked_results:
         url = _public_http_url(result.get("url"))
-        if not url or url in seen_urls:
+        if not url or url in seen_urls or not _matches_sites(url, site_constraints):
             continue
         seen_urls.add(url)
         domain = urlparse(url).hostname or ""
@@ -313,6 +356,8 @@ async def search_web_materials(
             "matchedFocusTerms": result.get("matchedFocusTerms", []),
             "recommendationReason": result.get("recommendationReason", ""),
         })
+        if len(items) >= max_results:
+            break
     if search_status not in {"ready", "no_results", "provider_failed"}:
         search_status = "ready" if items else "no_results"
     if search_status == "ready" and not items:
@@ -345,11 +390,12 @@ async def search_web_materials(
         "message": (
             "联网搜索提供方暂时不可用，搜索词和画像条件已保留，请稍后重试。"
             if search_status == "provider_failed"
+            else "未找到符合指定网站或目录的资料，可调整范围后重试。" if site_constraints and search_status == "no_results"
             else "未找到带真实原站地址的结果。"
             if search_status == "no_results"
             else ""
         ),
-        "authorityBoundary": "搜索结果只进入候选区；无真实原站地址、许可未确认或未经准入的资料不会进入课程图谱、检索或资源生成。推荐本身不会改变 mastery/path。",
+        "authorityBoundary": ("结果已按你指定的网站和目录筛选。" if site_constraints else "") + "搜索结果先供检查，确认并导入后才用于课程学习。查找资料不会改变知识掌握程度或学习路径。",
     }
 
 
@@ -363,6 +409,7 @@ def create_candidate(session: Any, current_user: DBUser, payload: CandidateCreat
         url_sha256=url_sha256,
     ).first()
     created = candidate is None
+    reopened = bool(candidate and candidate.review_status in {"rejected", "withdrawn"})
     if candidate is None:
         file_format, format_detection = _infer_format_details(
             url,
@@ -383,8 +430,18 @@ def create_candidate(session: Any, current_user: DBUser, payload: CandidateCreat
         )
         session.add(candidate)
         session.flush()
+    elif reopened:
+        candidate.review_status = "pending_review"
+        candidate.query = " ".join(payload.query.split())[:500]
+        _update_pipeline(
+            candidate,
+            download={"status": "not_started", "code": "", "message": "等待重新下载"},
+            parse={"status": "not_started", "code": "", "message": "等待重新读取资料"},
+            citation={"status": "blocked", "code": "", "message": "请重新确认资料后用于学习"},
+            admission={"status": "pending", "code": "", "message": "请重新确认用途并选择课程"},
+        )
     session.commit()
-    return {"created": created, "candidate": serialize_candidate(candidate)}
+    return {"created": created, "reopened": reopened, "candidate": serialize_candidate(candidate)}
 
 
 def list_candidates(session: Any, current_user: DBUser, review_status: str | None = None) -> dict[str, Any]:
@@ -458,7 +515,7 @@ def complete_candidate_import(
     candidate = _owned_candidate(session, current_user, candidate_id)
     created = candidate.review_status != "imported"
     candidate.review_status = "imported"
-    candidate.imported_version = candidate.imported_version or f"{source_document_id}-v1"
+    candidate.imported_version = f"{source_document_id}-v1"
     _update_pipeline(
         candidate,
         download={"status": "completed", "code": "", "message": "原站文件已下载"},
@@ -550,7 +607,8 @@ def serialize_candidate(candidate: DBWebSourceCandidate) -> dict[str, Any]:
         "failure": pipeline.get("failure"),
         "trustLevel": candidate.trust_level,
         "reviewStatus": candidate.review_status,
-        "importedVersion": candidate.imported_version,
+        "importedVersion": (f"{impact['import']['source_document_id']}-v1"
+                            if (impact.get("import") or {}).get("source_document_id") else candidate.imported_version),
         "importResult": dict(impact.get("import") or {}),
         "canAdmit": candidate.review_status in {"pending_review", "license_required"} and not blockers,
         "blockers": blockers,
@@ -719,9 +777,10 @@ def _pipeline_for(candidate: DBWebSourceCandidate, impact: dict[str, Any]) -> di
         None,
     )
     pipeline["overall_status"] = (
-        "failed" if failure else "admitted" if pipeline["admission"]["status"] == "admitted" else "in_progress" if any(status in {"pending", "in_progress", "completed", "ready"} for status in statuses) else "candidate"
+        candidate.review_status if candidate.review_status in {"rejected", "withdrawn"}
+        else "failed" if failure else "admitted" if pipeline["admission"]["status"] == "admitted" else "in_progress" if any(status in {"pending", "in_progress", "completed", "ready"} for status in statuses) else "candidate"
     )
-    pipeline["retryable"] = bool(failure) or candidate.review_status in {"pending_review", "license_required"}
+    pipeline["retryable"] = candidate.review_status in {"pending_review", "license_required"}
     pipeline["failure"] = failure
     return pipeline
 

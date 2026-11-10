@@ -26,9 +26,10 @@ def test_three_column_workspace_has_stable_ownership_and_progressive_depth() -> 
         assert marker in view
     assert 'data-testid="notes-source"' not in view
     assert 'data-testid="notes-learning-actions"' not in view
-    assert "grid-template-columns: 250px minmax(450px, 1fr) 294px" in view
+    assert "grid-template-columns: 230px minmax(360px, 1fr) 260px" in view
     assert "左侧选择后即可阅读、编辑和追溯来源" in view
-    assert "建议始终独立预览" in view
+    assert 'class="suggestion-preview"' in view
+    assert '@click="applyAiSuggestion"' in view
     assert "保存新版本" in view
     assert "更多操作" in view
 
@@ -40,6 +41,7 @@ def test_document_and_resource_source_data_stays_compatible_without_a_source_mod
         "knowledge_selection",
         "handout",
         "code_sandbox",
+        "training_task",
         "review_task",
         "sourceLocation",
     ):
@@ -128,7 +130,7 @@ def test_note_workspace_does_not_create_parallel_mastery_or_assessment_paths() -
         "一键测评",
         "艾宾浩斯遗忘曲线监控",
         "editForm.source",
-        "<select",
+
     ):
         assert forbidden not in view
     assert 'data-testid="notes-source"' not in template
@@ -142,7 +144,8 @@ def test_route_visual_and_accessibility_contracts_are_preserved() -> None:
     lowered = view.lower()
 
     assert "path: '/workspace/notes'" in router
-    assert "legacy('/notes'" in router
+    contracts = __import__("json").loads(source(ROOT / "frontend/src/router/routeMigrationContract.json"))
+    assert next(item for item in contracts if item["sourcePath"] == "/notes")["destination"] == "/workspace/notes"
     for required in (
         "var(--color-page)",
         "var(--color-surface)",

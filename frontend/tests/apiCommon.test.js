@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { buildHeaders } from '../src/api/common.js'
 import { api, authConfig, clearAuthSession, EduMatrixApiError, request } from '../src/api/common.js'
-import { listM5Resources, exportM5Deck } from '../src/api/m5.js'
+import { listM5Resources, exportM5Deck, createM5ResourceVersion, restoreM5ResourceVersion } from '../src/api/m5.js'
 import { startCodeSandboxRun } from '../src/api/codeSandbox.js'
-import { createFeynmanSession } from '../src/api/feynman.js'
+import { createFeynmanSession, listFeynmanSessions } from '../src/api/feynman.js'
 import { getDiagnosticPreflight } from '../src/api/diagnostics.js'
 import { getAdminAccounts } from '../src/api/admin.js'
 import { getIntegrationFaultDrills } from '../src/api/integrationFaultDrill.js'
@@ -22,7 +23,7 @@ function setup(t, adapter) {
   const priorStorage = globalThis.localStorage
   const priorWindow = globalThis.window
   const priorAdapter = api.defaults.adapter
-  globalThis.localStorage = { getItem: (key) => values.get(key) ?? null, removeItem: (key) => values.delete(key) }
+  globalThis.localStorage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key) }
   globalThis.window = { location: { pathname: '/login', assign() {} } }
   api.defaults.adapter = adapter
   t.after(() => {
@@ -34,6 +35,37 @@ function setup(t, adapter) {
 }
 
 const response = (config, data = { ok: true }) => ({ data, status: 200, statusText: 'OK', headers: {}, config })
+
+test('saved answer depth reaches chat requests and ignores unsupported values', t => {
+  const values = setup(t, async config => response(config))
+  values.set('edumatrix_response_depth', 'detailed')
+  assert.equal(buildHeaders()['X-EduMatrix-Response-Depth'], 'detailed')
+  values.set('edumatrix_response_depth', 'unexpected')
+  assert.equal(buildHeaders()['X-EduMatrix-Response-Depth'], undefined)
+})
+
+test('editing or restoring a resource refreshes its context without losing the selected course', async t => {
+  const values = setup(t, async config => response(config))
+  for (const action of [createM5ResourceVersion, restoreM5ResourceVersion]) {
+    values.set('edumatrix_context_ref', JSON.stringify({courseId:'course-1',resourceId:'resource-1',version:'old'}))
+    await action('resource-1', {version_id:'historical'})
+    const current = JSON.parse(values.get('edumatrix_context_ref'))
+    assert.equal(current.version,null)
+    assert.equal(current.courseId,'course-1')
+    assert.equal(current.resourceId,'resource-1')
+    values.set('edumatrix_context_ref', JSON.stringify({courseId:'course-2',resourceId:'resource-2',version:'keep'}))
+    await action('resource-1', {})
+    assert.equal(JSON.parse(values.get('edumatrix_context_ref')).version,'keep')
+  }
+})
+
+test('a failed resource restore retains the previous learning context', async t => {
+  const values = setup(t, async () => { throw {response:{status:409,data:{detail:'版本已更新'}}} })
+  const stored = JSON.stringify({courseId:'course-1',resourceId:'resource-1',version:'old'})
+  values.set('edumatrix_context_ref',stored)
+  await assert.rejects(restoreM5ResourceVersion('resource-1',{}))
+  assert.equal(values.get('edumatrix_context_ref'),stored)
+})
 
 test('common configuration reads current authentication and teaching style for each request', (t) => {
   const values = setup(t)
@@ -62,6 +94,16 @@ test('resource, sandbox, Feynman and diagnostic clients preserve request contrac
     assert.equal(config.headers.Authorization, 'Bearer synthetic-test-token')
     assert.equal(config.headers['X-EduMatrix-Teaching-Style'], 'guided')
   }
+})
+
+test('Feynman session creation and history retain the selected material version', async (t) => {
+  const calls = []
+  setup(t, async config => { calls.push(config); return response(config) })
+  await createFeynmanSession('resource-1', 'attempt-key', 'old-version')
+  await listFeynmanSessions('resource-1', 'old-version')
+  assert.deepEqual(JSON.parse(calls[0].data), { source_resource_id: 'resource-1',
+    source_resource_version_id: 'old-version', idempotency_key: 'attempt-key' })
+  assert.deepEqual(calls[1].params, { source_resource_id: 'resource-1', source_resource_version_id: 'old-version' })
 })
 
 test('remaining migrated clients keep their endpoints and query shapes', async (t) => {
@@ -96,13 +138,35 @@ test('shared data handling preserves structured API errors and existing normaliz
 })
 
 test('migrated client errors still pass through the common authentication interceptor', async (t) => {
-  const values = setup(t, async () => { throw { response: { status: 401, data: { detail: '已过期' } } } })
+  const values = setup(t, async config => { throw { config, response: { status: 401, data: { detail: '已过期' } } } })
   values.set('edumatrix_context_ref', JSON.stringify({ userId: 'previous-user', sourceRefId: 'previous-source' }))
   values.set('edumatrix_course_id', 'previous-course')
+  const redirects = []
+  globalThis.window.location = { pathname: '/workspace/resources/handouts/example', search: '?course_id=math&version_id=v2', hash: '#quiz', assign: url => redirects.push(url) }
   await assert.rejects(getAdminAccounts(), (error) => error instanceof EduMatrixApiError && error.kind === 'unauthorized')
   assert.equal(values.has('edumatrix_token'), false)
   assert.equal(values.has('edumatrix_context_ref'), false)
   assert.equal(values.has('edumatrix_course_id'), false)
+  assert.equal(new URL(redirects[0], 'http://localhost').searchParams.get('redirect'), '/workspace/resources/handouts/example?course_id=math&version_id=v2#quiz')
+})
+
+test('late unauthorized responses cannot turn logout into expiry or clear a newly signed-in account', async t => {
+  let rejectPending
+  const values = setup(t, config => new Promise((resolve, reject) => {
+    rejectPending = () => reject({config,response:{status:401,data:{detail:'已过期'}}})
+  }))
+  const redirects = []
+  globalThis.window.location = {pathname:'/landing',assign:url=>redirects.push(url)}
+  for (const nextToken of [null, 'new-account-token']) {
+    values.set('edumatrix_token','old-account-token')
+    const pending = getAdminAccounts()
+    clearAuthSession()
+    if (nextToken) values.set('edumatrix_token', nextToken)
+    rejectPending()
+    await assert.rejects(pending, error=>error.kind === 'unauthorized')
+    assert.equal(values.get('edumatrix_token') || null, nextToken)
+  }
+  assert.deepEqual(redirects, [])
 })
 
 test('account changes clear previous learning position and chat state while preserving local display preferences', (t) => {

@@ -132,7 +132,7 @@ def test_profile_subscription_updates_and_revokes_existing_context_projection():
         assert subscribed.status_code == 200
         subscription = subscribed.json()
         assert subscription["status"] == "active"
-        assert subscription["memories_changed"] >= 1
+        assert subscription["memories_changed"] == 0  # Empty initial fields are not memories.
 
         updated_profile = client.post(
             "/api/profile/memory_profile_owner/update",

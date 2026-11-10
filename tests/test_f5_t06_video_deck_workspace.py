@@ -178,6 +178,15 @@ def test_video_and_deck_schemas_reject_ambiguous_or_duplicate_structure():
     assert deck_error.value.code == "deck_content_incomplete"
 
 
+def test_long_deck_keeps_later_pages_and_complete_code_explanation():
+    deck = _deck_content("ref-media")
+    deck['slides'] = [{**deck['slides'][1], 'id':f'page-{i}', 'title':f'第{i+1}节',
+                      'body':('完整推导与代码说明。'*1000 if i==34 else '本节内容')} for i in range(35)]
+    parsed = parse_deck_content(json.dumps(deck,ensure_ascii=False))
+    assert len(parsed.slides)==35
+    assert parsed.slides[-1].body==deck['slides'][-1]['body']
+
+
 def test_resource_detail_projects_traceable_video_and_artifact_deck_without_writes():
     session = _session()
     video, _, deck, _, source_ref = _artifacts(session)
@@ -229,6 +238,38 @@ def test_invalid_and_empty_video_states_are_honest():
     assert projection["warnings"] == ["当前视频推荐无法解析，请恢复有效版本或重新生成该资源。"]
 
 
+def test_video_description_removes_promotion_without_rewriting_original_version():
+    from app.learner_output import video_recommendation_reason
+
+    session = _session()
+    video, version, _, _, _ = _artifacts(session)
+    saved = json.loads(version.content)
+    saved["recommendations"][0]["reason"] = "演示二维数组的行列选择。制作不易，跪求三连！评论统计后赠书抽奖。"
+    version.content = json.dumps(saved, ensure_ascii=False)
+    original = version.content
+    session.commit()
+
+    visible = resource_detail(session, video)["video"]["current"]["structured"]["recommendations"][0]
+    assert visible["reason"] == "演示二维数组的行列选择。"
+    assert visible["url"] == saved["recommendations"][0]["url"]
+    assert version.content == original
+    assert video_recommendation_reason("见置顶评论。") == ""
+    assert video_recommendation_reason("用评论情感分类学习决策树。") == "用评论情感分类学习决策树。"
+    assert video_recommendation_reason(
+        "辨析有监督与无监督学习。关于课程报名，欢迎咨询客服（微信号：课程测试账号）。"
+    ) == "辨析有监督与无监督学习。"
+    assert video_recommendation_reason("演示微信小程序的图像分类。") == "演示微信小程序的图像分类。"
+    assert video_recommendation_reason(
+        "讲解数组切片与布尔筛选。\n来 源：https://youtube.com/example\n"
+        "原视频：NumPy Tutorial\n原作者：Example\n【资源见评论区】\n字幕配音由AI完成。"
+    ) == "讲解数组切片与布尔筛选。"
+    assert video_recommendation_reason("【资源见评论区】 字幕配音由AI完成。") == ""
+    assert video_recommendation_reason("课程咨询+我：示例账号，手把手带学，保证不走弯路。听话必出分！") == ""
+    for raw in ("v=Gc-dwloxNFE 发布日期：2025-07-22 有需要的在【评论区留言】。 如有不准确之", "🔢 如有不准确之", r"第五阶段 数据分析\\03.模块三 Numpy科学计算库"):
+        reason = video_recommendation_reason(raw, title="NumPy数组创建")
+        assert reason == ""
+
+
 def test_video_edit_creates_new_version_and_failed_deck_save_preserves_current_version():
     session = _session()
     video, video_version, deck, deck_version, source_ref = _artifacts(session)
@@ -273,6 +314,7 @@ def test_deck_edit_creates_new_artifact_version_and_exports_real_files():
     session = _session()
     _, _, deck, first, source_ref = _artifacts(session)
     revised = _deck_content(source_ref.id, title="梯度下降课件修订版")
+    revised['slides'][0]['bullets'].append('运行 `print(1 < 2)` 检查结果')
     detail = create_resource_version(
         session,
         artifact=deck,
@@ -296,12 +338,17 @@ def test_deck_edit_creates_new_artifact_version_and_exports_real_files():
     )
     assert html_type.startswith("text/html") and html_name.endswith(".html")
     assert b"<!doctype html>" in html_bytes
+    assert '<code>print(1 &lt; 2)</code>' in html_bytes.decode('utf-8')
+    assert source_ref.id not in html_bytes.decode('utf-8')
+    assert '优化算法课程讲义' in html_bytes.decode('utf-8')
     assert pptx_name.endswith(".pptx") and pptx_type.endswith("presentationml.presentation")
     assert pptx_bytes[:2] == b"PK"
     presentation = Presentation(io.BytesIO(pptx_bytes))
     assert len(presentation.slides) == 2
     assert "梯度下降" in presentation.slides[0].shapes[0].text
     assert "冻结合成教学示例" in presentation.slides[0].notes_slide.notes_text_frame.text
+    assert source_ref.id not in presentation.slides[0].notes_slide.notes_text_frame.text
+    assert '优化算法课程讲义' in presentation.slides[0].notes_slide.notes_text_frame.text
 
 
 def test_deterministic_generation_uses_legal_video_catalog_and_structured_deck():

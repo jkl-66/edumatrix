@@ -1,4 +1,7 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
+import { readPreference, writePreference } from '../utils/learningPreferenceStorage.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -22,7 +25,6 @@ import {
 import ResourceHistoryDrawer from '../components/ResourceHistoryDrawer.vue'
 import ResourceToolbar from '../components/ResourceToolbar.vue'
 import ResourceFloatingQa from '../components/ResourceFloatingQa.vue'
-import ResourceProfileAdaptation from '../components/ResourceProfileAdaptation.vue'
 import { compareM5ResourceVersions, getM5Resource, getM5VideoMedia, restoreM5ResourceVersion } from '../api/m5'
 
 const route = useRoute()
@@ -42,6 +44,7 @@ const videoElement = ref(null)
 const mediaUrl = ref('')
 const embeddedSourceUrl = ref('')
 const embeddedSourceLabel = ref('')
+const selectedAlternativeId = ref('')
 const autoplayOnMetadata = ref(false)
 const restoringContext = ref(false)
 const historyOpen = ref(false)
@@ -55,12 +58,7 @@ const resourceId = computed(() => String(route.params.resourceId || ''))
 const workspace = computed(() => detail.value?.video || {})
 const versions = computed(() => workspace.value.versions || [])
 const currentVersionId = computed(() => workspace.value.current_version_id || '')
-const historyItems = computed(() => versions.value.map(item => ({
-  ...item,
-  revision_origin: item.revision_origin || item.metadata?.revision_origin,
-  source_status: item.source_status || 'available',
-  content_format: item.content_format || 'json',
-})))
+const historyItems = computed(() => detail.value?.history?.items || [])
 const selectedVersion = computed(() => (
   versions.value.find(item => item.id === selectedVersionId.value)
   || versions.value.find(item => item.id === currentVersionId.value)
@@ -79,24 +77,32 @@ const selectedSegment = computed(() => (
   selectedRecommendation.value?.segments?.find(item => item.id === selectedSegmentId.value)
   || null
 ))
+const selectedAlternative = computed(() => selectedRecommendation.value?.alternatives?.find(item => item.id === selectedAlternativeId.value) || null)
 const sources = computed(() => projection.value?.source_refs || [])
 const title = computed(() => structured.value?.title || projection.value?.legacy?.title || catalog.value.title || '视频推荐')
 const summary = computed(() => structured.value?.summary || '查看与当前知识点相关、来源边界明确的视频资源。')
 const isCurrentVersion = computed(() => selectedVersion.value?.id === currentVersionId.value)
 const versionLabel = computed(() => selectedVersion.value ? `v${selectedVersion.value.number}` : '未记录')
-const playable = computed(() => selectedRecommendation.value?.playback?.available === true)
+const playable = computed(() => !selectedAlternative.value && selectedRecommendation.value?.playback?.available === true)
 const externalOnly = computed(() => selectedRecommendation.value?.playback?.external_only === true)
 const embeddedUrl = computed(() => toEmbeddedPlayerUrl(
   embeddedSourceUrl.value || (externalOnly.value ? selectedRecommendation.value?.url : ''),
 ))
 const embeddedTitle = computed(() => embeddedSourceLabel.value || selectedRecommendation.value?.title || '视频来源')
+const originalSourceUrl = computed(() => toOriginalSourceUrl(embeddedSourceUrl.value || selectedRecommendation.value?.url))
 const durationLabel = computed(() => {
+  if (selectedAlternative.value) return '替代来源未提供可验证时长'
   const seconds = selectedRecommendation.value?.durationSeconds
   if (!seconds) return '来源未提供可验证时长'
   const minutes = Math.floor(seconds / 60)
   const rest = seconds % 60
   return `${minutes}:${String(rest).padStart(2, '0')}`
 })
+const licenseLabel = computed(() => ({
+  platform_link_only: '在原平台观看', open_permissive: '允许按来源许可使用',
+  personal_use_allowed: '可用于个人学习', restricted: '使用需遵循来源限制',
+  unknown: '请查看来源使用说明',
+})[selectedRecommendation.value?.licenseStatus] || learningText(selectedRecommendation.value?.licenseStatus, '请查看来源使用说明'))
 
 function message(exception, fallback) {
   const detailMessage = exception?.response?.data?.detail?.message || exception?.detail?.message
@@ -139,6 +145,22 @@ function toEmbeddedPlayerUrl(rawUrl) {
   return url
 }
 
+function toOriginalSourceUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl)
+    if (url.protocol !== 'https:') return ''
+    if (url.hostname === 'player.bilibili.com') {
+      const bvid = url.searchParams.get('bvid')
+      const aid = url.searchParams.get('aid')
+      const part = url.searchParams.get('p') || url.searchParams.get('page')
+      const suffix = part && /^\d+$/.test(part) ? `?p=${part}` : ''
+      if (/^BV[a-zA-Z0-9]{10}$/.test(bvid || '')) return `https://www.bilibili.com/video/${bvid}${suffix}`
+      if (/^\d+$/.test(aid || '')) return `https://www.bilibili.com/video/av${aid}${suffix}`
+    }
+    return url.href
+  } catch { return '' }
+}
+
 async function syncSelectionQuery() {
   const query = { ...route.query }
   if (selectedVersionId.value) query.version_id = selectedVersionId.value
@@ -147,10 +169,13 @@ async function syncSelectionQuery() {
   else delete query.recommendation_id
   if (selectedSegmentId.value) query.segment_id = selectedSegmentId.value
   else delete query.segment_id
+  if (selectedAlternativeId.value) query.alternative_id = selectedAlternativeId.value
+  else delete query.alternative_id
   if (
     query.version_id !== route.query.version_id
     || query.recommendation_id !== route.query.recommendation_id
     || query.segment_id !== route.query.segment_id
+    || query.alternative_id !== route.query.alternative_id
   ) {
     await router.replace({ query })
   }
@@ -159,17 +184,17 @@ async function syncSelectionQuery() {
 function noteKey() {
   return [
     'edumatrix-video-note', resourceId.value, selectedVersionId.value,
-    selectedRecommendation.value?.id || 'empty', selectedSegmentId.value || 'whole',
+    selectedRecommendation.value?.id || 'empty', selectedAlternativeId.value || selectedSegmentId.value || 'whole',
   ].join(':')
 }
 
 function restoreNote() {
-  noteDraft.value = localStorage.getItem(noteKey()) || ''
+  noteDraft.value = readPreference(noteKey(), '')
   noteSaved.value = Boolean(noteDraft.value)
 }
 
 function saveNote() {
-  localStorage.setItem(noteKey(), noteDraft.value)
+  writePreference(noteKey(), noteDraft.value)
   noteSaved.value = true
   notice.value = '学习笔记草稿已保存在当前浏览器。'
 }
@@ -184,6 +209,7 @@ function clearMedia() {
 function clearEmbeddedSource() {
   embeddedSourceUrl.value = ''
   embeddedSourceLabel.value = ''
+  selectedAlternativeId.value = ''
 }
 
 function applySelectedSegmentPosition() {
@@ -239,6 +265,14 @@ async function loadResource({ preserveVersion = false } = {}) {
     selectedSegmentId.value = selectedRecommendation.value?.segments?.some(item => item.id === requestedSegmentId)
       ? requestedSegmentId
       : selectedRecommendation.value?.segments?.[0]?.id || ''
+    clearEmbeddedSource()
+    const alternative = selectedRecommendation.value?.alternatives?.find(item => item.id === queryValue('alternative_id'))
+    if (alternative) {
+      selectedAlternativeId.value = alternative.id
+      embeddedSourceUrl.value = alternative.url
+      embeddedSourceLabel.value = alternative.title
+      selectedSegmentId.value = ''
+    }
     await syncSelectionQuery()
     restoreNote()
     await loadMedia()
@@ -250,33 +284,67 @@ async function loadResource({ preserveVersion = false } = {}) {
   }
 }
 
-function selectRecommendation(item) {
+async function selectRecommendation(item) {
+  if (restoringContext.value || selectedRecommendationId.value === item.id) return
+  restoringContext.value = true
   selectedRecommendationId.value = item.id
   selectedSegmentId.value = item.segments?.[0]?.id || ''
   clearEmbeddedSource()
+  try {
+    await syncSelectionQuery()
+    restoreNote()
+    await loadMedia()
+  } finally { restoringContext.value = false }
 }
 
 async function jumpToSegment(segment) {
+  const wasAlternative = Boolean(selectedAlternativeId.value)
+  clearEmbeddedSource()
   selectedSegmentId.value = segment.id
   if (!playable.value) return
+  if (wasAlternative) await loadMedia()
   await nextTick()
   autoplayOnMetadata.value = true
   if (videoElement.value?.readyState >= 1) applySelectedSegmentPosition()
 }
 
-function openInAppSource(url, label = '来源') {
+async function openInAppSource(url, label = '来源') {
   if (!/^https:\/\//i.test(String(url || '').trim())) {
     notice.value = '该来源地址不可用，系统没有打开外部页面。'
     return
   }
   embeddedSourceUrl.value = String(url).trim()
   embeddedSourceLabel.value = label
-  notice.value = `${label}已在当前页面打开。若来源禁止嵌入，请更换推荐来源。`
+  if (selectedAlternative.value && selectedAlternative.value.url !== embeddedSourceUrl.value) {
+    selectedAlternativeId.value = ''
+    await syncSelectionQuery()
+    restoreNote()
+  }
+  notice.value = `${label}已在当前页面打开。如果这里不能播放，可以在原网站观看或更换来源。`
 }
 
-function closeEmbeddedSource() {
+async function openAlternative(alternative) {
+  restoringContext.value = true
+  selectedAlternativeId.value = alternative.id
+  selectedSegmentId.value = ''
+  clearMedia()
+  await openInAppSource(alternative.url, alternative.title)
+  try {
+    await syncSelectionQuery()
+    restoreNote()
+    await loadMedia()
+  } finally { restoringContext.value = false }
+}
+
+async function closeEmbeddedSource() {
+  restoringContext.value = true
   clearEmbeddedSource()
   notice.value = ''
+  try {
+    await syncSelectionQuery()
+    restoreNote()
+    await loadMedia()
+  } finally { restoringContext.value = false }
 }
 
 function openSource(source) {
@@ -303,7 +371,8 @@ function openNotebook() {
       version_id: selectedVersionId.value,
       recommendation_id: selectedRecommendation.value?.id || undefined,
       segment_id: selectedSegmentId.value || undefined,
-      search: selectedRecommendation.value?.title || title.value,
+      alternative_id: selectedAlternativeId.value || undefined,
+      search: selectedAlternative.value?.title || selectedRecommendation.value?.title || title.value,
     },
   })
 }
@@ -376,16 +445,19 @@ async function restoreHistory(versionId) {
 
 watch(selectedVersionId, async () => {
   if (restoringContext.value) return
+  restoringContext.value = true
   selectedRecommendationId.value = recommendations.value[0]?.id || ''
   selectedSegmentId.value = recommendations.value[0]?.segments?.[0]?.id || ''
   clearEmbeddedSource()
   await syncSelectionQuery()
   restoreNote()
   await loadMedia()
+  restoringContext.value = false
 })
 
 watch(selectedRecommendationId, async () => {
   if (restoringContext.value) return
+  restoringContext.value = true
   if (!selectedRecommendation.value?.segments?.some(item => item.id === selectedSegmentId.value)) {
     selectedSegmentId.value = selectedRecommendation.value?.segments?.[0]?.id || ''
   }
@@ -393,14 +465,24 @@ watch(selectedRecommendationId, async () => {
   await syncSelectionQuery()
   restoreNote()
   await loadMedia()
+  restoringContext.value = false
 })
 
 watch(selectedSegmentId, async () => {
   if (restoringContext.value) return
+  restoringContext.value = true
   await syncSelectionQuery()
   restoreNote()
+  restoringContext.value = false
 })
 watch(noteDraft, () => { noteSaved.value = false })
+watch(() => [route.query.version_id, route.query.recommendation_id, route.query.segment_id, route.query.alternative_id], () => {
+  if (restoringContext.value || loading.value) return
+  if (queryValue('version_id') !== selectedVersionId.value
+    || queryValue('recommendation_id') !== selectedRecommendationId.value
+    || queryValue('segment_id') !== selectedSegmentId.value
+    || queryValue('alternative_id') !== selectedAlternativeId.value) void loadResource()
+})
 watch(resourceId, loadResource)
 onMounted(loadResource)
 onBeforeUnmount(clearMedia)
@@ -421,13 +503,14 @@ onBeforeUnmount(clearMedia)
     <section v-else-if="error" class="page-state page-state--error" role="alert">
       <AlertTriangle :size="25" />
       <strong>视频推荐暂时无法打开</strong>
-      <span>{{ error }}</span>
+      <span>{{ userMessage(error) }}</span>
       <button type="button" class="primary-button" @click="loadResource"><RefreshCw :size="17" /> 重新加载</button>
     </section>
 
     <template v-else>
       <ResourceToolbar
         :title="title"
+        :back-label="route.query.return_to ? '返回原学习位置' : '返回资源中心'"
         :type-label="`${catalog.course?.title || '当前课程'} · ${catalog.knowledge_point?.title || '当前知识点'}`"
         :version-label="versionLabel"
         status-label="选择可信来源并观看"
@@ -456,7 +539,7 @@ onBeforeUnmount(clearMedia)
       </div>
       <div v-if="notice" class="notice" role="status"><Check :size="17" /> {{ notice }}</div>
       <div v-if="!isCurrentVersion" class="notice" role="status">
-        <RotateCcw :size="17" /> 当前查看历史版本 {{ versionLabel }}，观看和记笔记不会改变当前资源版本或学习状态。
+        <RotateCcw :size="17" /> 历史版本 {{ versionLabel }}
       </div>
 
       <section class="workspace-shell">
@@ -489,7 +572,7 @@ onBeforeUnmount(clearMedia)
           <div v-if="!recommendations.length" class="empty-list">
             <FileVideo2 :size="24" />
             <strong>暂无可核验的视频来源</strong>
-            <span>系统不会生成或伪造视频文件。请稍后重试或使用其他学习资源。</span>
+            <span>请稍后重试，或选择其他学习资源。</span>
           </div>
         </aside>
 
@@ -526,7 +609,7 @@ onBeforeUnmount(clearMedia)
                 <Link2 v-else-if="externalOnly" :size="25" />
                 <FileVideo2 v-else :size="25" />
                 <strong>{{ mediaError ? '站内视频暂时不可读取' : externalOnly ? '该来源暂不允许站内嵌入' : '当前来源不可播放' }}</strong>
-                <span>{{ mediaError || (externalOnly ? '系统已尝试在当前页面嵌入该来源；若平台禁止嵌入，请更换推荐来源。' : selectedRecommendation.playback?.reason || '请更换一个可在系统内播放的来源。') }}</span>
+                <span>{{ userMessage(mediaError || (externalOnly ? '系统已尝试在当前页面嵌入该来源；若平台禁止嵌入，请更换推荐来源。' : selectedRecommendation.playback?.reason || '请更换一个可在系统内播放的来源。')) }}</span>
                 <button
                   v-if="selectedRecommendation.url"
                   type="button"
@@ -546,16 +629,16 @@ onBeforeUnmount(clearMedia)
               </button>
             </div>
 
+            <div v-if="originalSourceUrl" class="source-fallback">
+              <span>这里无法播放时</span>
+              <a :href="originalSourceUrl" target="_blank" rel="noopener noreferrer"><ExternalLink :size="15" />在原网站观看</a>
+            </div>
+
             <div class="player-title">
-              <div><span>{{ versionLabel }} · {{ selectedRecommendation.language }}</span><h2>{{ selectedRecommendation.title }}</h2></div>
+              <div><span>{{ versionLabel }} · {{ selectedAlternative ? '替代来源' : selectedRecommendation.language }}</span><h2>{{ selectedAlternative?.title || selectedRecommendation.title }}</h2></div>
               <div><Clock3 :size="17" /><span>{{ durationLabel }}</span></div>
             </div>
 
-            <ResourceProfileAdaptation
-              :summary="structured?.adaptationSummary || ''"
-              :plan="detail?.resource?.profile_adaptation_plan"
-              resource-type="video"
-            />
 
             <section class="segment-section">
               <div class="section-heading"><span>分段播放</span><strong>{{ selectedRecommendation.segments?.length || 0 }} 个已核验分段</strong></div>
@@ -585,7 +668,7 @@ onBeforeUnmount(clearMedia)
           <template v-if="selectedRecommendation">
             <section class="detail-section detail-section--lead">
               <span>推荐理由</span>
-              <p>{{ selectedRecommendation.reason }}</p>
+              <p v-if="selectedRecommendation.reason">{{ learningText(selectedRecommendation.reason) }}</p>
               <dl class="learning-context">
                 <div><dt>学习目标</dt><dd>{{ structured.learningGoal || '当前推荐未登记学习目标。' }}</dd></div>
               </dl>
@@ -594,11 +677,11 @@ onBeforeUnmount(clearMedia)
             <section class="detail-section">
               <div class="section-heading"><span>来源与许可</span><ShieldCheck :size="17" /></div>
               <dl class="source-facts">
-                <div><dt>作者/维护者</dt><dd>{{ selectedRecommendation.author }}</dd></div>
-                <div><dt>许可状态</dt><dd>{{ selectedRecommendation.licenseStatus }}</dd></div>
-                <div><dt>观看方式</dt><dd>{{ playable ? '站内已登记素材' : externalOnly ? '站内嵌入来源' : '暂不可用' }}</dd></div>
+                <div><dt>作者/维护者</dt><dd>{{ selectedAlternative ? '请查看当前来源页面' : selectedRecommendation.author }}</dd></div>
+                <div><dt>使用说明</dt><dd>{{ selectedAlternative ? '请遵循替代来源的使用说明' : licenseLabel }}</dd></div>
+                <div><dt>观看方式</dt><dd>{{ selectedAlternative ? '替代来源 · 站内嵌入' : playable ? '站内已登记素材' : externalOnly ? '站内嵌入来源' : '暂不可用' }}</dd></div>
               </dl>
-              <p class="license-copy">{{ selectedRecommendation.licenseLabel }}</p>
+              <p class="license-copy">{{ selectedAlternative ? '当前观看的是替代课程，作者与使用要求以该来源页面为准。' : selectedRecommendation.licenseLabel }}</p>
               <div class="inline-actions">
                 <button v-if="selectedRecommendation.url" type="button" @click="openInAppSource(selectedRecommendation.url, '视频来源')"><Link2 :size="16" /> 打开来源（站内）</button>
                 <button v-if="selectedRecommendation.licenseUrl" type="button" @click="openInAppSource(selectedRecommendation.licenseUrl, '许可页')"><ShieldCheck :size="16" /> 查看许可页（站内）</button>
@@ -624,9 +707,9 @@ onBeforeUnmount(clearMedia)
                 :key="alternative.id"
                 type="button"
                 class="alternative-row"
-                @click="openInAppSource(alternative.url, '替代来源')"
+                @click="openAlternative(alternative)"
               >
-                <span><strong>{{ alternative.title }}</strong><small>{{ alternative.reason }}</small></span>
+                <span><strong>{{ alternative.title }}</strong><small>{{ learningText(alternative.reason) }}</small></span>
                 <Link2 :size="15" />
               </button>
               <p v-if="!selectedRecommendation.alternatives?.length" class="empty-copy">暂无已登记替代来源。</p>
@@ -634,8 +717,8 @@ onBeforeUnmount(clearMedia)
 
             <section class="detail-section note-section">
               <div class="section-heading"><span>写学习笔记</span><NotebookPen :size="17" /></div>
-              <p>{{ selectedSegment ? `当前分段：${selectedSegment.title}` : '当前笔记关联整条视频推荐。' }}</p>
-              <textarea v-model="noteDraft" rows="5" placeholder="记录关键概念、疑问和下一步验证方式" aria-label="视频学习笔记草稿" />
+              <p>{{ selectedAlternative ? `当前来源：${selectedAlternative.title}` : selectedSegment ? `当前分段：${selectedSegment.title}` : '当前笔记关联整条视频推荐。' }}</p>
+              <textarea v-model="noteDraft" :disabled="restoringContext" rows="5" placeholder="记录关键概念、疑问和下一步验证方式" aria-label="视频学习笔记草稿" />
               <div class="note-actions">
                 <button type="button" class="primary-button primary-button--auto" @click="saveNote"><Check :size="16" /> {{ noteSaved ? '再次保存' : '保存草稿' }}</button>
                 <button type="button" class="secondary-button" @click="openNotebook"><NotebookPen :size="16" /> 打开笔记本</button>
@@ -644,7 +727,7 @@ onBeforeUnmount(clearMedia)
               <button type="button" class="question-button" @click="goBack"><RotateCcw :size="16" /> 返回资源中心重新生成</button>
             </section>
 
-            <p class="evidence-boundary">浏览、站内嵌入、分段播放和保存本地笔记草稿不会自动改变掌握度或解锁智能组卷。</p>
+            
           </template>
         </aside>
       </section>
@@ -655,8 +738,11 @@ onBeforeUnmount(clearMedia)
       :course-id="catalog.course?.id || route.query.course_id || ''"
       :knowledge-point-id="catalog.knowledge_point?.id || ''"
       :resource-id="resourceId"
-      :resource-title="selectedRecommendation?.title || title"
-      :source-ref-ids="sources.map(item => item.source_ref_id || item.sourceRefId || item.id).filter(Boolean)"
+      :resource-version-id="selectedVersionId"
+      :resource-part-id="selectedAlternative?.id || selectedRecommendation?.id || ''"
+      :resource-segment-id="selectedSegment?.id || ''"
+      :resource-title="selectedAlternative?.title || selectedRecommendation?.title || title"
+      :source-ref-ids="selectedRecommendation?.sourceRefIds || []"
       @close="qaOpen = false"
     />
 
@@ -682,21 +768,23 @@ onBeforeUnmount(clearMedia)
 </template>
 
 <style scoped>
-.video-page{min-height:100%;padding:24px 28px 32px;background:var(--color-page);color:var(--color-text);font-family:var(--font-sans)}
+.video-page{container-type:inline-size;min-height:100%;padding:24px 28px 32px;background:transparent;color:var(--color-text);font-family:var(--font-sans)}
+.source-fallback{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin:10px 0;color:var(--color-text-secondary);font-size:14px}.source-fallback a{display:inline-flex;align-items:center;gap:5px;color:var(--color-accent);text-underline-offset:3px}
 .back-link{display:inline-flex;align-items:center;gap:8px;margin:0 0 18px;padding:0;border:0;background:transparent;color:var(--color-text-secondary);font-size:14px;font-weight:650;cursor:pointer}.back-link:hover{color:var(--color-text)}
 .video-page>.back-link{display:none}
 .video-page>.page-header{display:none}
 .page-header{display:grid;grid-template-columns:minmax(0,1fr) minmax(500px,.85fr);gap:36px;align-items:end;padding:0 0 22px;border-bottom:1px solid var(--color-border)}.context-line{margin:0 0 6px;color:var(--color-text-secondary);font-size:14px;font-weight:650}.page-header h1{margin:0;font-family:var(--font-heading);font-size:34px;line-height:1.25;letter-spacing:0}.page-header>div>p:last-child{max-width:70ch;margin:9px 0 0;color:var(--color-text-secondary);font-size:15px;line-height:1.65}
-.header-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--color-border);border-radius:8px;background:#fff;overflow:hidden}.header-meta>div{min-width:0;padding:13px 14px;border-right:1px solid var(--color-border)}.header-meta>div:last-child{border-right:0}.header-meta span,.header-meta strong{display:block}.header-meta span{color:var(--color-text-muted);font-size:14px}.header-meta strong{margin-top:4px;font-size:14px;line-height:1.45}
-.notice{display:flex;align-items:center;gap:8px;margin:14px 0 0;padding:10px 12px;border:1px solid var(--color-border);border-radius:6px;background:#fff;color:var(--color-text-secondary);font-size:14px}.notice--warning{border-color:#dfcfb4;background:var(--color-warning-soft);color:#6f501e}
-.workspace-shell{display:grid;grid-template-columns:minmax(235px,20fr) minmax(520px,52fr) minmax(300px,28fr);min-height:650px;margin-top:18px;border:1px solid var(--color-border-strong);border-radius:8px;background:#fff;overflow:hidden}.recommendation-pane,.player-pane{border-right:1px solid var(--color-border)}.recommendation-pane,.detail-pane{min-width:0;background:var(--color-surface-subtle)}
-.pane-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:62px;padding:10px 12px;border-bottom:1px solid var(--color-border);background:#fff}.pane-heading>div span,.pane-heading>div strong{display:block}.pane-heading>div span{color:var(--color-text-muted);font-size:14px}.pane-heading>div strong{margin-top:3px;font-size:14px}.version-control{position:relative;display:flex;align-items:center;gap:6px;height:38px;padding:0 8px;border:1px solid var(--color-border);border-radius:6px;background:#fff;color:var(--color-text-secondary);font-size:14px}.version-control select{appearance:none;min-width:50px;padding:0 18px 0 0;border:0;outline:0;background:transparent;color:var(--color-text);font:650 14px/1.4 var(--font-sans)}.version-control svg{position:absolute;right:7px;pointer-events:none}
-.recommendation-row{display:grid;grid-template-columns:28px minmax(0,1fr);gap:9px;width:100%;padding:14px 12px;border:0;border-bottom:1px solid var(--color-border);background:transparent;color:var(--color-text);text-align:left;cursor:pointer}.recommendation-row:hover,.recommendation-row:focus-visible{background:#fff;outline:none}.recommendation-row.active{background:#fff;box-shadow:inset 3px 0 0 var(--color-accent)}.row-index{padding-top:2px;color:var(--color-text-muted);font-size:14px;font-weight:700}.row-copy strong,.row-copy small,.row-copy em{display:block}.row-copy strong{font-size:15px;line-height:1.45}.row-copy small{margin-top:4px;color:var(--color-text-secondary);font-size:14px;line-height:1.45}.row-copy em{width:max-content;margin-top:8px;padding:2px 6px;border:1px solid var(--color-border);border-radius:4px;color:var(--color-text-secondary);font-size:14px;font-style:normal}.empty-list{display:grid;min-height:340px;place-items:center;align-content:center;gap:8px;padding:24px;text-align:center}.empty-list strong{font-size:16px}.empty-list span{color:var(--color-text-secondary);font-size:14px;line-height:1.6}
-.player-pane{min-width:0;padding:18px;background:#fff}.player-stage{position:relative;display:grid;width:100%;aspect-ratio:16/9;place-items:center;overflow:hidden;border:1px solid var(--color-border-strong);border-radius:6px;background:#07131a}.player-stage video,.player-stage iframe{width:100%;height:100%;border:0;background:#07131a}.player-state{display:grid;max-width:430px;place-items:center;gap:9px;padding:24px;color:#fff;text-align:center}.player-state strong{font-size:18px}.player-state span{color:#c9d1d4;font-size:14px;line-height:1.6}.player-state--error svg{color:#e0a890}.player-state--large{min-height:560px;color:var(--color-text)}.player-state--large span{color:var(--color-text-secondary)}.embedded-close{position:absolute;top:10px;right:10px;display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 9px;border:1px solid rgb(255 255 255 / 35%);border-radius:5px;background:rgb(7 19 26 / 82%);color:#fff;font:650 13px/1.3 var(--font-sans);cursor:pointer}.embedded-close:hover{background:rgb(7 19 26 / 95%)}.spin{animation:spin 1s linear infinite}
+.header-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface);overflow:hidden}.header-meta>div{min-width:0;padding:13px 14px;border-right:1px solid var(--color-border)}.header-meta>div:last-child{border-right:0}.header-meta span,.header-meta strong{display:block}.header-meta span{color:var(--color-text-muted);font-size:14px}.header-meta strong{margin-top:4px;font-size:14px;line-height:1.45}
+.notice{display:flex;align-items:center;gap:8px;margin:14px 0 0;padding:10px 12px;border:1px solid var(--color-border);border-radius:6px;background:var(--color-surface);color:var(--color-text-secondary);font-size:14px}.notice--warning{border-color:#dfcfb4;background:var(--color-warning-soft);color:#6f501e}
+.workspace-shell{display:grid;grid-template-columns:minmax(235px,20fr) minmax(520px,52fr) minmax(300px,28fr);min-height:650px;margin-top:18px;border:1px solid var(--color-border-strong);border-radius:8px;background:var(--color-surface);overflow:hidden}.recommendation-pane,.player-pane{border-right:1px solid var(--color-border)}.recommendation-pane,.detail-pane{min-width:0;background:var(--color-surface-subtle)}
+.pane-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:62px;padding:10px 12px;border-bottom:1px solid var(--color-border);background:var(--color-surface)}.pane-heading>div span,.pane-heading>div strong{display:block}.pane-heading>div span{color:var(--color-text-muted);font-size:14px}.pane-heading>div strong{margin-top:3px;font-size:14px}.version-control{position:relative;display:flex;align-items:center;gap:6px;height:38px;padding:0 8px;border:1px solid var(--color-border);border-radius:6px;background:var(--color-surface);color:var(--color-text-secondary);font-size:14px}.version-control select{appearance:none;min-width:50px;padding:0 18px 0 0;border:0;outline:0;background:transparent;color:var(--color-text);font:650 14px/1.4 var(--font-sans)}.version-control svg{position:absolute;right:7px;pointer-events:none}
+.recommendation-row{display:grid;grid-template-columns:28px minmax(0,1fr);gap:9px;width:100%;padding:14px 12px;border:0;border-bottom:1px solid var(--color-border);background:transparent;color:var(--color-text);text-align:left;cursor:pointer}.recommendation-row:hover,.recommendation-row:focus-visible{background:var(--color-surface);outline:none}.recommendation-row.active{background:var(--color-surface);box-shadow:inset 3px 0 0 var(--color-accent)}.row-index{padding-top:2px;color:var(--color-text-muted);font-size:14px;font-weight:700}.row-copy strong,.row-copy small,.row-copy em{display:block}.row-copy strong{font-size:15px;line-height:1.45}.row-copy small{margin-top:4px;color:var(--color-text-secondary);font-size:14px;line-height:1.45}.row-copy em{width:max-content;margin-top:8px;padding:2px 6px;border:1px solid var(--color-border);border-radius:4px;color:var(--color-text-secondary);font-size:14px;font-style:normal}.empty-list{display:grid;min-height:340px;place-items:center;align-content:center;gap:8px;padding:24px;text-align:center}.empty-list strong{font-size:16px}.empty-list span{color:var(--color-text-secondary);font-size:14px;line-height:1.6}
+.player-pane{min-width:0;padding:18px;background:var(--color-surface)}.player-stage{position:relative;display:grid;width:100%;aspect-ratio:16/9;place-items:center;overflow:hidden;border:1px solid var(--color-border-strong);border-radius:6px;background:#07131a}.player-stage video,.player-stage iframe{width:100%;height:100%;border:0;background:#07131a}.player-state{display:grid;max-width:430px;place-items:center;gap:9px;padding:24px;color:#fff;text-align:center}.player-state strong{font-size:18px}.player-state span{color:#c9d1d4;font-size:14px;line-height:1.6}.player-state--error svg{color:#e0a890}.player-state--large{min-height:560px;color:var(--color-text)}.player-state--large span{color:var(--color-text-secondary)}.embedded-close{position:absolute;top:10px;right:10px;display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 9px;border:1px solid rgb(255 255 255 / 35%);border-radius:5px;background:rgb(7 19 26 / 82%);color:#fff;font:650 13px/1.3 var(--font-sans);cursor:pointer}.embedded-close:hover{background:rgb(7 19 26 / 95%)}.spin{animation:spin 1s linear infinite}
 .player-title{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:16px 0;border-bottom:1px solid var(--color-border)}.player-title span{color:var(--color-text-secondary);font-size:14px}.player-title h2{margin:5px 0 0;font-size:22px;line-height:1.35}.player-title>div:last-child{display:flex;align-items:center;gap:7px;white-space:nowrap}
-.segment-section{padding-top:18px}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.section-heading span,.section-heading strong{font-size:14px}.section-heading span{font-weight:700}.section-heading strong{color:var(--color-text-muted)}.segment-row{display:grid;grid-template-columns:24px minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;margin-top:8px;padding:10px 11px;border:1px solid var(--color-border);border-radius:6px;background:#fff;color:var(--color-text);text-align:left;cursor:pointer}.segment-row:hover,.segment-row:focus-visible,.segment-row.active{border-color:var(--color-accent);background:var(--color-accent-soft);outline:none}.segment-row strong,.segment-row small{display:block}.segment-row strong{font-size:14px}.segment-row small{margin-top:3px;color:var(--color-text-secondary);font-size:14px;line-height:1.45}.segment-row time{color:var(--color-text-muted);font-size:14px}
-.detail-pane{padding:18px;overflow-y:auto}.detail-section{padding:18px 0;border-bottom:1px solid var(--color-border)}.detail-section:first-child{padding-top:0}.detail-section>span,.detail-section .section-heading>span{font-size:15px;font-weight:750}.detail-section--lead>p{margin:9px 0 0;font-size:15px;line-height:1.65}.learning-context{display:grid;gap:9px;margin:14px 0 0}.learning-context>div{padding:10px;border:1px solid var(--color-border);border-radius:6px;background:#fff}.learning-context dt{color:var(--color-text-muted);font-size:14px}.learning-context dd{margin:4px 0 0;color:var(--color-text-secondary);font-size:14px;line-height:1.55}.source-facts{margin:12px 0 0}.source-facts>div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px;padding:7px 0;border-bottom:1px solid var(--color-border)}.source-facts dt{color:var(--color-text-muted);font-size:14px}.source-facts dd{margin:0;font-size:14px;line-height:1.5;overflow-wrap:anywhere}.license-copy,.note-section>p,.empty-copy{color:var(--color-text-secondary);font-size:14px;line-height:1.6}.inline-actions,.note-actions{display:flex;gap:7px;flex-wrap:wrap}.inline-actions button,.source-row,.alternative-row,.secondary-button{display:flex;align-items:center;gap:7px;min-height:38px;padding:0 10px;border:1px solid var(--color-border-strong);border-radius:6px;background:#fff;color:var(--color-text);font:650 14px/1.35 var(--font-sans);cursor:pointer}.source-row,.alternative-row{width:100%;height:auto;margin-top:8px;padding:9px 10px;text-align:left}.source-row>span,.alternative-row>span{flex:1;min-width:0}.source-row strong,.source-row small,.alternative-row strong,.alternative-row small{display:block}.source-row strong,.alternative-row strong{font-size:14px}.source-row small,.alternative-row small{margin-top:3px;color:var(--color-text-muted);font-size:14px;line-height:1.45}.source-row:disabled{cursor:not-allowed;opacity:.6}.note-section textarea{box-sizing:border-box;width:100%;margin:8px 0 10px;padding:10px 11px;border:1px solid var(--color-border-strong);border-radius:6px;background:#fff;color:var(--color-text);font:14px/1.6 var(--font-sans);resize:vertical}.note-section textarea:focus{border-color:var(--color-accent);outline:2px solid rgb(17 33 45 / 10%)}
-.primary-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:40px;padding:0 13px;border:1px solid var(--color-accent);border-radius:6px;background:var(--color-accent);color:#fff;font:650 14px/1.3 var(--font-sans);cursor:pointer}.primary-button--auto{width:auto}.secondary-button{justify-content:center}.question-button{display:flex;width:100%;min-height:40px;align-items:center;justify-content:center;gap:7px;margin-top:8px;border:1px solid var(--color-border-strong);border-radius:6px;background:#fff;color:var(--color-text);font:650 14px/1.3 var(--font-sans);cursor:pointer}.question-button:hover{background:var(--color-surface-subtle)}.evidence-boundary{margin:16px 0 0;color:var(--color-text-muted);font-size:14px;line-height:1.55}.page-state{display:grid;min-height:560px;place-items:center;align-content:center;gap:8px;border:1px solid var(--color-border);border-radius:8px;background:#fff;text-align:center}.page-state strong{font-size:18px}.page-state span{color:var(--color-text-secondary);font-size:15px}.page-state .primary-button{margin-top:8px}.page-state--error svg{color:var(--color-danger)}
+.segment-section{padding-top:18px}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.section-heading span,.section-heading strong{font-size:14px}.section-heading span{font-weight:700}.section-heading strong{color:var(--color-text-muted)}.segment-row{display:grid;grid-template-columns:24px minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;margin-top:8px;padding:10px 11px;border:1px solid var(--color-border);border-radius:6px;background:var(--color-surface);color:var(--color-text);text-align:left;cursor:pointer}.segment-row:hover,.segment-row:focus-visible,.segment-row.active{border-color:var(--color-accent);background:var(--color-accent-soft);outline:none}.segment-row strong,.segment-row small{display:block}.segment-row strong{font-size:14px}.segment-row small{margin-top:3px;color:var(--color-text-secondary);font-size:14px;line-height:1.45}.segment-row time{color:var(--color-text-muted);font-size:14px}
+.detail-pane{padding:18px;overflow-y:auto}.detail-section{padding:18px 0;border-bottom:1px solid var(--color-border)}.detail-section:first-child{padding-top:0}.detail-section>span,.detail-section .section-heading>span{font-size:15px;font-weight:750}.detail-section--lead>p{margin:9px 0 0;font-size:15px;line-height:1.65}.learning-context{display:grid;gap:9px;margin:14px 0 0}.learning-context>div{padding:10px;border:1px solid var(--color-border);border-radius:6px;background:var(--color-surface)}.learning-context dt{color:var(--color-text-muted);font-size:14px}.learning-context dd{margin:4px 0 0;color:var(--color-text-secondary);font-size:14px;line-height:1.55}.source-facts{margin:12px 0 0}.source-facts>div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px;padding:7px 0;border-bottom:1px solid var(--color-border)}.source-facts dt{color:var(--color-text-muted);font-size:14px}.source-facts dd{margin:0;font-size:14px;line-height:1.5;overflow-wrap:anywhere}.license-copy,.note-section>p,.empty-copy{color:var(--color-text-secondary);font-size:14px;line-height:1.6}.inline-actions,.note-actions{display:flex;gap:7px;flex-wrap:wrap}.inline-actions button,.source-row,.alternative-row,.secondary-button{display:flex;align-items:center;gap:7px;min-height:38px;padding:0 10px;border:1px solid var(--color-border-strong);border-radius:6px;background:var(--color-surface);color:var(--color-text);font:650 14px/1.35 var(--font-sans);cursor:pointer}.source-row,.alternative-row{width:100%;height:auto;margin-top:8px;padding:9px 10px;text-align:left}.source-row>span,.alternative-row>span{flex:1;min-width:0}.source-row strong,.source-row small,.alternative-row strong,.alternative-row small{display:block}.source-row strong,.alternative-row strong{font-size:14px}.source-row small,.alternative-row small{margin-top:3px;color:var(--color-text-muted);font-size:14px;line-height:1.45}.source-row:disabled{cursor:not-allowed;opacity:.6}.note-section textarea{box-sizing:border-box;width:100%;margin:8px 0 10px;padding:10px 11px;border:1px solid var(--color-border-strong);border-radius:6px;background:var(--color-surface);color:var(--color-text);font:14px/1.6 var(--font-sans);resize:vertical}.note-section textarea:focus{border-color:var(--color-accent);outline:2px solid rgb(17 33 45 / 10%)}
+.primary-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:40px;padding:0 13px;border:1px solid var(--color-accent);border-radius:6px;background:var(--color-accent);color:#fff;font:650 14px/1.3 var(--font-sans);cursor:pointer}.primary-button--auto{width:auto}.secondary-button{justify-content:center}.question-button{display:flex;width:100%;min-height:40px;align-items:center;justify-content:center;gap:7px;margin-top:8px;border:1px solid var(--color-border-strong);border-radius:6px;background:var(--color-surface);color:var(--color-text);font:650 14px/1.3 var(--font-sans);cursor:pointer}.question-button:hover{background:var(--color-surface-subtle)}.evidence-boundary{margin:16px 0 0;color:var(--color-text-muted);font-size:14px;line-height:1.55}.page-state{display:grid;min-height:560px;place-items:center;align-content:center;gap:8px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface);text-align:center}.page-state strong{font-size:18px}.page-state span{color:var(--color-text-secondary);font-size:15px}.page-state .primary-button{margin-top:8px}.page-state--error svg{color:var(--color-danger)}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (max-width:1380px){.video-page{padding:20px 22px 28px}.page-header{grid-template-columns:minmax(0,1fr) 520px;gap:24px}.workspace-shell{grid-template-columns:minmax(220px,19fr) minmax(480px,51fr) minmax(292px,30fr)}.player-pane{padding:14px}.detail-pane{padding:14px}}
+@container (max-width:1060px){.workspace-shell{grid-template-columns:minmax(190px,25fr) minmax(0,75fr)}.player-pane{border-right:0}.detail-pane{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:0 24px;border-top:1px solid var(--color-border)}.detail-section:first-child{padding-top:18px}.detail-pane>.evidence-boundary{grid-column:1/-1}}
 </style>

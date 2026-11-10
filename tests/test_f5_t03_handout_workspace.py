@@ -300,11 +300,15 @@ def test_handout_frontend_contract_has_dedicated_route_full_sections_and_no_mast
     assert "name: 'HandoutResource', component: HandoutWorkspace" in router
     assert "grid-template-columns: 220px minmax(500px, 1fr) 300px" in view
     for label in (
-        "适配摘要", "关键概念", "图表或公式标题", "应用示例", "边界与反例",
-        "代码阅读", "学习检查", "来源脚注", "AI 学习伙伴", "阅读位置",
+        "适配摘要", "关键概念", "图表或公式标题",
+        "学习检查", "来源脚注", "AI 学习伙伴", "阅读位置",
         "保存为新版本", "与当前版本比较", "导出 HTML", "导出版本数据",
     ):
         assert label in view
+    assert 'v-for="item in readingSections"' in view
+    order = (ROOT / 'frontend/src/utils/handoutReadingOrder.js').read_text(encoding='utf-8')
+    for kind in ('concepts', 'figures', 'examples', 'counterExamples', 'codeBlocks', 'miniQuiz'):
+        assert kind in order
     assert "prompt: question" in view
     assert "version: selectedVersion.value?.number, question" not in view
     for forbidden in ("createLearningEvent", "mastery", "profileSnapshot", "completePath"):

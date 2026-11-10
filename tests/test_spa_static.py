@@ -15,10 +15,11 @@ def test_spa_history_routes_fallback_without_hiding_missing_assets_or_api(tmp_pa
     app.mount("/", SPAStaticFiles(directory=tmp_path, html=True), name="frontend")
     client = TestClient(app)
 
-    for route in ("/", "/login", "/learning-path", "/knowledge/course-rag"):
+    for route in ("/", "/index.html", "/login", "/learning-path", "/knowledge/course-rag"):
         response = client.get(route)
         assert response.status_code == 200
         assert "EduMatrix SPA" in response.text
+        assert response.headers['cache-control'] == 'no-store'
     assert client.get("/assets/app.js").status_code == 200
     assert client.get("/assets/missing.js").status_code == 404
     assert client.get("/api/missing").status_code == 404

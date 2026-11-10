@@ -63,11 +63,8 @@ class TestVisualDocumentRAG(unittest.TestCase):
         self.assertIsInstance(evidence_list, list)
         try:
             import fitz
-            # fitz 可用时应该有至少 1 条 evidence
-            self.assertGreater(len(evidence_list), 0)
-            ev = evidence_list[0]
-            self.assertEqual(ev.modality.value, "image")
-            self.assertIn("test.pdf", ev.title)
+            # Rendering alone is not recognition; no owner/model result is supplied.
+            self.assertEqual(evidence_list, [])
         except ImportError:
             # 无 fitz 时返回空列表
             pass

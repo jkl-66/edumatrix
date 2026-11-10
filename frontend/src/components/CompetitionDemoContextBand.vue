@@ -1,4 +1,5 @@
 <script setup>
+import { displayLabel } from '../utils/learningCopy.js'
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowRight, BookOpenCheck, ShieldCheck } from '@lucide/vue'
@@ -26,9 +27,9 @@ function openPrimaryAction() {
     <div class="demo-context-band__body">
       <div class="demo-context-band__meta">
         <span>{{ context.course?.title || 'EduMatrix 比赛演示上下文' }}</span>
-        <small><ShieldCheck :size="11" />冻结合成演示数据 · {{ context.manifest_version }}</small>
+        <small><ShieldCheck :size="11" />预先准备的模拟演示数据 · {{ context.manifest_version }}</small>
       </div>
-      <strong>{{ contract.status }}</strong>
+      <strong>{{ displayLabel(contract.status) }}</strong>
       <p>{{ contract.next_step }}</p>
     </div>
     <button type="button" @click="openPrimaryAction">

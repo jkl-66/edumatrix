@@ -13,39 +13,39 @@ from app.m5_capabilities import M5CapabilityError
 
 class TrainingTaskStep(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
-    instruction: str = Field(min_length=1, max_length=8_000)
-    expectedResult: str = Field(min_length=1, max_length=4_000)
-    errorGuidance: str = Field(min_length=1, max_length=4_000)
+    title: str = Field(min_length=1)
+    instruction: str = Field(min_length=1)
+    expectedResult: str = Field(min_length=1)
+    errorGuidance: str = Field(min_length=1)
     sourceRefIds: list[str] = Field(default_factory=list, max_length=40)
 
 
 class TrainingTaskCheckpoint(StrictModel):
     id: str = Field(min_length=1, max_length=96)
     afterStepId: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
-    verification: str = Field(min_length=1, max_length=4_000)
-    passCondition: str = Field(min_length=1, max_length=4_000)
+    title: str = Field(min_length=1)
+    verification: str = Field(min_length=1)
+    passCondition: str = Field(min_length=1)
 
 
 class TrainingTaskDeliverable(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    title: str = Field(min_length=1, max_length=160)
-    description: str = Field(min_length=1, max_length=4_000)
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
     format: str = Field(min_length=1, max_length=80)
 
 
 class TrainingTaskRubricItem(StrictModel):
     id: str = Field(min_length=1, max_length=96)
-    criterion: str = Field(min_length=1, max_length=240)
-    evidence: str = Field(min_length=1, max_length=4_000)
-    points: int = Field(ge=1, le=100)
+    criterion: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+    points: int = Field(ge=0, le=100)
 
 
 class TrainingTaskContent(StrictModel):
     schemaVersion: Literal["f5.training-task.v1"] = "f5.training-task.v1"
-    title: str = Field(min_length=1, max_length=256)
-    objective: str = Field(min_length=1, max_length=4_000)
+    title: str = Field(min_length=1)
+    objective: str = Field(min_length=1)
     difficulty: str = Field(min_length=1, max_length=64)
     estimatedMinutes: int = Field(ge=1, le=960)
     prerequisites: list[str] = Field(min_length=1, max_length=20)

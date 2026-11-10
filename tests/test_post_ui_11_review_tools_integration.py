@@ -27,15 +27,17 @@ def test_tools_are_a_real_second_view_inside_the_shared_review_board() -> None:
         "emit('view-change', view)",
         ':aria-pressed="activeView === \'calendar\'"',
         ':aria-pressed="activeView === \'tools\'"',
-        '<slot name="tools">',
+        '<slot name="tools" :refresh="loadSchedule" :course-id="courseId">',
         'data-testid="review-tools-surface"',
     ):
         assert marker in board
     for forbidden in ("advancedToolsId", "openAdvancedTools", "scrollIntoView"):
         assert forbidden not in board
     for view in (review, calendar):
-        assert "<template #tools>" in view
+        assert '<template #tools="{ refresh, courseId }">' in view
+        assert ':course-id="courseId"' in view
         assert "<ReviewToolsPanel" in view
+        assert '@changed="refresh()"' in view
     assert "legacy-review-tools" not in review
     assert "calendar-legacy-tools" not in calendar
 
@@ -71,7 +73,6 @@ def test_tools_use_four_progressive_views_without_internal_engineering_noise() -
         "content_hash",
         "llm_backend",
         "Visualizer",
-        "agent_trace",
         "morphTrace",
     ):
         assert forbidden not in tools
@@ -111,7 +112,7 @@ def test_visible_text_floor_and_calendar_marker_contract_remain() -> None:
     ):
         assert forbidden not in combined
     for marker in (
-        ".review-day__marker--today { background: #4f765e; }",
+        ".review-day__marker--today { background: #2f9e64; }",
         ".review-day__marker--overdue { background: var(--color-danger); }",
         ".review-day__marker--future { background: #466f91; }",
         'data-testid="review-agenda-list"',

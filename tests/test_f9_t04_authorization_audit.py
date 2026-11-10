@@ -14,7 +14,10 @@ from app.auth import enforce_student_access, get_current_teacher
 from app.authorization import ObjectAccess, can_access_object
 from app.competition_demo_seed import seed_competition_demo
 from app.content_review import _can_review, _can_submit
-from app.database import Base, DBAuditLog, DBLearningPath, DBPlanDraft, DBUser
+from app.database import (
+    Base, DBAuditLog, DBLearningPath, DBPlanDraft, DBUser,
+    DBChapter, DBChapterKnowledgePoint, DBKnowledgePoint, DBStudentProfile,
+)
 import app.m6_teacher as teacher_service
 
 
@@ -141,6 +144,16 @@ def test_teacher_intervention_rolls_back_when_required_audit_fails(monkeypatch) 
         seed_competition_demo(session)
         teacher = session.query(DBUser).filter_by(username="teacher").one()
         learner = session.query(DBUser).filter_by(username="lzz").one()
+        # This isolated audit test needs a course-specific synthetic weak point;
+        # the demo's overall score is not evidence for a particular chapter.
+        point = (session.query(DBKnowledgePoint)
+                 .join(DBChapterKnowledgePoint, DBChapterKnowledgePoint.knowledge_point_id == DBKnowledgePoint.id)
+                 .join(DBChapter, DBChapter.id == DBChapterKnowledgePoint.chapter_id)
+                 .filter(DBChapter.course_id == "demo-course-rag-trust-v1").first())
+        assert point is not None
+        profile = session.query(DBStudentProfile).filter_by(student_id=learner.username).one()
+        profile.concept_mastery = {**dict(profile.concept_mastery or {}), point.id: 0.28}
+        session.commit()
         before = {
             "plans": session.query(DBPlanDraft).count(),
             "paths": session.query(DBLearningPath).count(),

@@ -1,10 +1,12 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
   Ban,
   BookMarked,
+  BookOpen,
   CheckCircle2,
   ExternalLink,
   FileSearch,
@@ -36,6 +38,7 @@ const query = ref(String(route.query.q || ''))
 const activeView = ref('results')
 const searchStatus = ref('idle')
 const searchError = ref('')
+const searchEmptyMessage = ref('')
 const searchResults = ref([])
 const searchBoundary = ref('')
 const filteredResultCount = ref(0)
@@ -134,7 +137,7 @@ const parsingEntries = computed(() => {
   const impact = selectedItem.value?.parsingImpact
   if (!impact || typeof impact !== 'object') return []
   return Object.entries(impact)
-    .filter(([key]) => !['summary', 'pipeline'].includes(key))
+    .filter(([key, value]) => ['text', 'images', 'tables', 'formulas', 'code', 'outputs', 'metadata', 'transcript', 'dynamic_content'].includes(key) && typeof value !== 'object')
     .map(([key, value]) => ({ key, label: parsingLabel(key), value: parsingValue(value) }))
 })
 
@@ -174,6 +177,8 @@ function processingStatusLabel(status) {
     in_progress: '处理中',
     failed: '处理失败，可重试',
     admitted: '已准入且可引用',
+    rejected: '已拒绝',
+    withdrawn: '已撤回，课程资料仍保留',
   }[status] || status || '待确认'
 }
 
@@ -220,7 +225,12 @@ function trustLabel(level) {
 }
 
 function formatLabel(format) {
-  return String(format || 'html').toUpperCase()
+  return { html: '网页', md: '文字资料', txt: '纯文本', unknown: '下载后确认' }[format] || String(format || '资料').toUpperCase()
+}
+
+function formatBasis(item) {
+  if (item.formatConfidence !== 'high') return '暂按资料信息判断，下载后确认'
+  return { url_extension: '根据文件后缀判断', content_type: '根据原站说明判断', binary_signature: '已核对文件内容' }[item.formatDetection] || '已根据资料信息判断'
 }
 
 function parsingLabel(key) {
@@ -233,6 +243,7 @@ function parsingLabel(key) {
     outputs: '运行输出',
     metadata: '媒体信息',
     transcript: '转写',
+    dynamic_content: '动态内容',
   }[key] || key
 }
 
@@ -240,14 +251,14 @@ function parsingValue(value) {
   if (value === true) return '可解析'
   if (value === false) return '暂不解析'
   if (value === 'best_effort') return '尽力解析，需复核'
-  if (value === 'metadata_only') return '仅元数据，不作为正文'
-  if (value === 'metadata_and_authorized_ocr') return '图片地址/说明，授权后 OCR'
+  if (value === 'metadata_only') return '仅保留文件说明，不作为正文'
+  if (value === 'metadata_and_authorized_ocr') return '保留图片及说明，可用时识别图片文字'
   if (value === 'when_authorized') return '取得授权后可用'
   if (value === 'when_available') return '有字幕时可用'
   if (value === 'pending_download') return '下载后确认'
   if (value === 'not_guaranteed') return '不保证'
   if (value === 'not_applicable') return '不适用'
-  return String(value || '未说明')
+  return typeof value === 'string' && /[\u3400-\u9fff]/u.test(value) ? learningText(value) : '需读取后确认'
 }
 
 function resetFeedback() {
@@ -306,6 +317,7 @@ async function searchMaterials() {
     })
     searchResults.value = payload.items || []
     searchBoundary.value = payload.authorityBoundary || ''
+    searchEmptyMessage.value = payload.message || ''
     filteredResultCount.value = Number(payload.filteredResultCount || 0)
     searchQueryUsed.value = payload.generatedQuery || payload.query || normalized
     queryPlan.value = payload.queryPlan || null
@@ -350,9 +362,12 @@ async function loadCourses() {
   try {
     const payload = await listKnowledgeCourseShelf()
     const selectable = selectableCourseOptions(payload)
-    courseCatalog.value = selectable
-    courseOptions.value = selectable.filter(course => course.can_manage)
-    if (contextCourseId.value && !selectable.some((course) => String(course.id) === String(contextCourseId.value))) {
+    courseOptions.value = [...(payload.shelf || []), ...(payload.recommendations || [])]
+      .filter((course, index, courses) => course.can_manage
+        && !['withdrawn', 'archived'].includes(course.status)
+        && courses.findIndex(item => item.id === course.id) === index)
+    courseCatalog.value = [...selectable, ...courseOptions.value]
+    if (contextCourseId.value && !courseCatalog.value.some((course) => String(course.id) === String(contextCourseId.value))) {
       contextCourseId.value = ''
     }
     if (!contextCourseId.value) {
@@ -380,7 +395,9 @@ async function saveCandidate(result) {
     })
     replaceCandidate(payload.candidate)
     activeView.value = 'candidates'
-    actionNotice.value = payload.created
+    actionNotice.value = payload.reopened
+      ? '该资料已重新放回待确认列表，请核对用途后再导入。'
+      : payload.created
       ? '已保存到候选区。请核对许可与用途后再决定是否准入。'
       : '该原站地址已在候选区，已打开现有记录。'
     candidatesStatus.value = 'ready'
@@ -479,10 +496,10 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
         </label>
         <div class="context-summary">
           <span>推荐依据</span>
-          <strong v-if="profileBasis?.status === 'available'">当前画像快照：课程目标、学习目标和薄弱方向</strong>
-          <strong v-else-if="profileBasis?.status === 'missing'">尚无画像快照，将保留用户搜索词并明确提示</strong>
+          <strong v-if="profileBasis?.status === 'available'">当前学习情况记录：课程目标、学习目标和薄弱方向</strong>
+          <strong v-else-if="profileBasis?.status === 'missing'">尚无学习情况记录，将保留用户搜索词并明确提示</strong>
           <strong v-else>{{ selectedContextCourse?.title || '搜索前选择课程' }}</strong>
-          <small v-if="profileSnapshotId">画像版本：{{ profileSnapshotId }}</small>
+
         </div>
       </div>
       <div class="search-row">
@@ -514,7 +531,7 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
       <div class="query-plan-heading">
         <div>
           <span>画像驱动联网推荐</span>
-          <h2>{{ profileBasis?.status === 'available' ? '已按当前课程画像生成搜索词' : '当前没有可用画像快照' }}</h2>
+          <h2>{{ profileBasis?.status === 'available' ? '已按当前课程画像生成搜索词' : '当前没有可用学习情况记录' }}</h2>
         </div>
         <span class="query-plan-status">{{ rankingSummary?.scoredCount || 0 }} 条候选 · 去重 {{ rankingSummary?.deduplicatedCount || 0 }} 条</span>
       </div>
@@ -522,9 +539,9 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
         <div><dt>实际搜索词</dt><dd>{{ queryPlan?.query || searchQueryUsed || query }}</dd></div>
         <div><dt>关注方向</dt><dd>{{ queryPlan?.focus_terms?.join('、') || '未形成画像关注词' }}</dd></div>
         <div><dt>课程</dt><dd>{{ profileBasis?.courseTitle || selectedContextCourse?.title || '未指定' }}</dd></div>
-        <div><dt>模型</dt><dd>{{ queryPlan?.model?.model || '未调用（画像缺失）' }}<span v-if="queryPlan?.model"> · reasoning max</span></dd></div>
+        <div><dt>推荐方式</dt><dd>{{ profileBasis?.status === 'available' ? '结合当前学习情况查找' : '按你填写的关键词查找' }}</dd></div>
       </dl>
-      <p class="query-plan-rationale">{{ queryPlan?.rationale || '画像快照缺失时不把普通搜索伪装成画像推荐；完成画像后可重新搜索。' }}</p>
+      <p class="query-plan-rationale">{{ learningText(queryPlan?.rationale || '填写学习目标后，可获得更合适的资料推荐。') }}</p>
     </section>
 
     <TaskState
@@ -539,7 +556,7 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
       v-else-if="searchStatus === 'empty'"
       state="info"
       title="没有找到带真实原站地址的结果"
-      :message="filteredResultCount ? `已过滤 ${filteredResultCount} 条无法核验原站的结果，可更换关键词重试。` : '可增加课程名称、学校或资料格式后重试。'"
+      :message="searchEmptyMessage || (filteredResultCount ? `已过滤 ${filteredResultCount} 条不符合来源要求的结果，可更换关键词重试。` : '可增加课程名称、学校或资料格式后重试。')"
     />
 
     <section class="source-toolbar" aria-label="发现结果与候选筛选">
@@ -594,7 +611,7 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
           v-if="activeView === 'candidates' && candidatesStatus === 'loading'"
           state="loading"
           title="正在读取候选来源"
-          message="已保存的搜索词和审核状态不会改变。"
+          message="请重试搜索。"
         />
         <TaskState
           v-else-if="activeView === 'candidates' && candidatesStatus === 'failed'"
@@ -607,7 +624,7 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
         <div v-else-if="activeView === 'results' && searchStatus === 'idle'" class="list-empty">
           <FileSearch :size="26" aria-hidden="true" />
           <strong>输入主题开始查找</strong>
-          <span>搜索结果先供检查，不会自动加入书架或课程知识库。</span>
+          <span>选择资料，查看内容后加入课程。</span>
         </div>
         <div v-else-if="activeItems.length === 0" class="list-empty">
           <FileText :size="26" aria-hidden="true" />
@@ -657,7 +674,7 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
       <aside class="source-preview" data-testid="discovery-source-preview">
         <div v-if="!selectedItem" class="preview-empty">
           <Globe2 :size="28" aria-hidden="true" />
-          <h2>查看来源证据</h2>
+          <h2>资料来源</h2>
           <p>选择左侧资料后，这里会显示原站、格式、许可、用途和解析影响。</p>
         </div>
 
@@ -676,7 +693,7 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
             <div><dt>原站</dt><dd>{{ selectedItem.sourceDomain || '原站未提供' }}</dd></div>
             <div><dt>作者或机构</dt><dd>{{ selectedItem.authorOrOrganization || '原站未提供' }}</dd></div>
             <div><dt>资料格式</dt><dd>{{ formatLabel(selectedItem.fileFormat) }}</dd></div>
-            <div><dt>识别方式</dt><dd>{{ selectedItem.formatDetection || '等待下载确认' }} · {{ selectedItem.formatConfidence || '未知置信度' }}</dd></div>
+            <div><dt>格式判断</dt><dd>{{ formatBasis(selectedItem) }}</dd></div>
             <div><dt>许可状态</dt><dd>{{ licenseLabel(selectedItem.licenseStatus) }}</dd></div>
             <div><dt>可信等级</dt><dd>{{ trustLabel(selectedItem.trustLevel) }}</dd></div>
             <div><dt>审核状态</dt><dd>{{ statusLabel(selectedItem.reviewStatus) }}</dd></div>
@@ -691,7 +708,7 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
           </section>
           <section class="evidence-section">
             <h3>解析影响</h3>
-            <p>{{ selectedItem.parsingImpact?.summary || '原站没有提供可解析范围。' }}</p>
+            <p>{{ learningText(selectedItem.parsingImpact?.summary || '原站没有提供可解析范围。') }}</p>
             <ul v-if="parsingEntries.length" class="parsing-list">
               <li v-for="entry in parsingEntries" :key="entry.key"><span>{{ entry.label }}</span><strong>{{ entry.value }}</strong></li>
             </ul>
@@ -703,7 +720,6 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
               <li v-for="entry in pipelineEntries" :key="entry.key" :data-status="entry.status">
                 <div><strong>{{ stageLabel(entry.key) }}</strong><span>{{ stageStatusLabel(entry.status) }}</span></div>
                 <p>{{ entry.message || '暂无阶段说明。' }}</p>
-                <small v-if="entry.code">错误码：{{ entry.code }}</small>
               </li>
             </ol>
           </section>
@@ -788,7 +804,11 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
               </button>
             </div>
             <div v-else-if="selectedItem.reviewStatus === 'imported'" class="admission-actions">
-              <div class="imported-version"><CheckCircle2 :size="17" /><span>已导入课程 · {{ selectedItem.importedVersion }}</span></div>
+              <div class="imported-version"><CheckCircle2 :size="17" /><span>已加入目标课程</span></div>
+              <button v-if="selectedItem.importResult?.source_document_id" type="button" class="admit-action"
+                @click="router.push({ path: `/knowledge/documents/${encodeURIComponent(selectedItem.importResult.source_document_id)}`, query: { course_id: selectedItem.importResult.course_id, return_to: route.fullPath } })">
+                <BookOpen :size="17" />阅读已导入资料
+              </button>
               <button type="button" class="withdraw-action" @click="withdrawCandidate">
                 <Ban :size="16" aria-hidden="true" />撤回个人参考
               </button>
@@ -812,7 +832,7 @@ onMounted(() => Promise.all([loadCandidates(), loadCourses()]))
   gap: 18px;
   padding: 24px;
   color: var(--color-text);
-  background: var(--color-page);
+  background: transparent;
 }
 
 .workspace-header {

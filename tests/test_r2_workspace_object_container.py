@@ -30,7 +30,7 @@ def test_workspace_projects_four_switchable_learning_object_types():
         seed_competition_demo(session)
         learner = session.query(DBUser).filter_by(username="lzz").one()
 
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         objects = payload["learning_objects"]
         by_type = {item["object_type"]: item for item in objects}
 
@@ -41,7 +41,9 @@ def test_workspace_projects_four_switchable_learning_object_types():
         assert "hybrid_search" in by_type["code"]["render"]["content"]
         assert "未执行" in by_type["code"]["truth_boundary"]
         assert by_type["experiment"]["version"]["id"]
-        assert by_type["exercise"]["render"]["options"] == ["是", "否"]
+        assert by_type["exercise"]["render"]["question_type"] == "true_false"
+        # Boolean questions use their dedicated answer control, not ABCD choices.
+        assert by_type["exercise"]["render"]["options"] == []
         assert all("version" in item and "source" in item for item in by_type.values())
     finally:
         session.close()
@@ -57,7 +59,7 @@ def test_workspace_object_projection_contains_a_visible_error_boundary():
         version.content = "not-json"
         session.flush()
 
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         experiment = next(item for item in payload["learning_objects"] if item["object_type"] == "experiment")
 
         assert experiment["render"]["kind"] == "experiment"

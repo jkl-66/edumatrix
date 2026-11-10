@@ -1,4 +1,7 @@
 <script setup>
+import { projectCourseMasteryNode } from '../utils/courseGraphProjection.js'
+import { referenceTitle, learningText, displayLabel } from '../utils/learningCopy.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import { useRoute, useRouter } from 'vue-router'
@@ -18,6 +21,7 @@ import {
 import MasteryRadar from '../components/MasteryRadar.vue'
 import ProfileSummaryPanel from '../components/ProfileSummaryPanel.vue'
 import KnowledgeGraphExplorer from '../components/KnowledgeGraphExplorer.vue'
+import IncrementalMarkdownRenderer from '../components/IncrementalMarkdownRenderer.vue'
 import AggregationStatus from '../components/AggregationStatus.vue'
 import { useCourseContextStore } from '../stores/courseContext'
 import { selectableCourseOptions } from '../utils/assessmentConfiguration'
@@ -46,6 +50,10 @@ let courseGraphRequestSequence = 0
 let activeGraphCourseId = ''
 let profileAnalysisRequestSequence = 0
 const selectedKnowledgeNode = ref(null)
+const graphView = computed(() => route.query.graph_view === 'structure' ? 'structure' : 'mastery')
+function changeGraphView(view) {
+  router.replace({ path: route.path, query: { ...route.query, graph_view: view } })
+}
 const profileUpdate = ref(null)
 const profileUpdateOpen = ref(false)
 const profileUpdateBusy = ref(false)
@@ -129,18 +137,20 @@ onMounted(async () => {
 })
 
 const background = computed(() => analysis.value?.background || {})
+const currentLearningState = computed(() => analysis.value?.learning_state || analysis.value?.raw_profile?.learning_state || {})
+function currentStateLabel(key) {
+  const state = currentLearningState.value[key]
+  if (state?.description) return state.description
+  return state?.value == null || profileAwaitingEvidence.value ? '待了解' : `${Math.round(state.value * 100)}%`
+}
 const dimensions = computed(() => analysis.value?.dimensions || {})
-const causes = computed(() => analysis.value?.causes || {})
+const causes = computed(() => Object.fromEntries(Object.entries(analysis.value?.causes || {}).map(([key, cause]) => [
+  key, { ...cause, label: ({ cognitive_load: '学习负荷', affective_barrier: '受挫感受' })[key] || cause.label },
+])))
 const weakAnalysis = computed(() => analysis.value?.weak_analysis || [])
 const suggestions = computed(() => analysis.value?.suggestions || [])
 const profileAwaitingEvidence = computed(() => analysis.value?.profile_initialization_state === 'awaiting_learning_evidence')
-const profileCourseId = computed(() => String(
-  selectedGraphCourseId.value
-  || courseContext.course?.id
-  || courseContext.contextRef?.courseId
-  || route.query.course_id
-  || ''
-))
+const profileCourseId = computed(() => String(selectedGraphCourseId.value || ''))
 const selectedGraphCourse = computed(() => graphCourseOptions.value.find((course) => String(course.id) === profileCourseId.value) || null)
 const pendingProfileUpdateTurn = computed(() => {
   const turns = profileUpdate.value?.turns || []
@@ -161,17 +171,7 @@ const knowledgeGraph = computed(() => {
     .map((node) => {
       const id = String(node.knowledgePointId || node.id || '')
       const legacy = legacyKnowledgeNodesById.value.get(id)
-      const score = node.masteryScore != null ? Number(node.masteryScore) : legacy?.mastery ?? null
-      const status = String(node.masteryStatus || '')
-      const masteryBand = status === 'conflict'
-        ? 'conflict'
-        : status === 'mastered' || (score != null && score >= 0.75)
-          ? 'mastered'
-          : status === 'weak' || (score != null && score < 0.55)
-            ? 'weak'
-            : score == null
-              ? 'unknown'
-              : 'developing'
+      const learning = projectCourseMasteryNode(node, legacy)
       const chapter = chaptersById.get(String(node.chapterId || ''))
       return {
         ...(legacy || {}),
@@ -200,15 +200,7 @@ const knowledgeGraph = computed(() => {
           : legacy?.chapter || { id: node.chapterId || '', title: '当前课程', position: 0 },
         category: node.category,
         categoryName: node.categoryName,
-        mastery: Number.isFinite(score) ? score : null,
-        masteryBand,
-        evidenceCount: Number(node.masteryEvidenceCount || legacy?.evidenceCount || 0),
-        confidence: legacy?.confidence || 0,
-        judgement: legacy?.judgement || (score == null ? '尚无可用于判断掌握度的学习证据。' : '当前课程快照已提供掌握度证据。'),
-        evidence: legacy?.evidence || [],
-        behaviors: legacy?.behaviors || [],
-        behaviorCount: legacy?.behaviorCount || 0,
-        sourceRefIds: node.masterySourceRefIds || legacy?.sourceRefIds || [],
+        ...learning,
         // Canonical graph nodes may not have a historical next action yet. Keep
         // the evidence rail usable instead of dereferencing a null action while
         // the course graph is settling or when a new node has no prior activity.
@@ -274,6 +266,8 @@ const knowledgeGraphCategories = computed(() => (knowledgeGraph.value?.categorie
   itemStyle: { color: ['#11212d', '#253745', '#4a5c6a', '#60727c'][index % 4] },
 })))
 const activeKnowledgeNode = computed(() => {
+  const restored = knowledgeGraphNodes.value.find(node => node.id === route.query.knowledge_point_id)
+  if (restored) return restored
   if (selectedKnowledgeNode.value) return selectedKnowledgeNode.value
   const lastChapter = Math.max(...knowledgeGraphNodes.value.map((node) => Number(node.chapter?.position || 0)), 0)
   return knowledgeGraphNodes.value.find((node) => Number(node.chapter?.position || 0) === lastChapter && node.masteryBand === 'unknown')
@@ -387,10 +381,7 @@ async function loadGraphCourses() {
     const payload = await listKnowledgeCourseShelf()
     graphCourseOptions.value = selectableCourseOptions(payload)
     if (selectedGraphCourseId.value && !graphCourseOptions.value.some((course) => String(course.id) === String(selectedGraphCourseId.value))) {
-      selectedGraphCourseId.value = String(graphCourseOptions.value[0]?.id || '')
-    }
-    if (!selectedGraphCourseId.value && graphCourseOptions.value.length) {
-      selectedGraphCourseId.value = String(graphCourseOptions.value[0].id)
+      selectedGraphCourseId.value = ''
     }
     graphCourseStatus.value = graphCourseOptions.value.length ? 'ready' : 'empty'
   } catch {
@@ -402,18 +393,20 @@ async function changeGraphCourse() {
   courseGraph.value = null
   await router.replace({
     path: route.path,
-    query: { ...route.query, course_id: selectedGraphCourseId.value || undefined },
+    query: { ...route.query, course_id: selectedGraphCourseId.value || undefined, knowledge_point_id: undefined },
   })
   await refreshCourseGraph(selectedGraphCourseId.value)
 }
 
 watch(() => route.query.course_id, (courseId) => {
   const next = String(courseId || '')
-  if (next && next !== selectedGraphCourseId.value) selectedGraphCourseId.value = next
+  if (next !== selectedGraphCourseId.value) selectedGraphCourseId.value = next
 })
 
 function selectKnowledgeNode(node) {
+  if (!node) return
   selectedKnowledgeNode.value = node
+  router.replace({ path: route.path, query: { ...route.query, knowledge_point_id: node.id } })
 }
 
 function openKnowledgeAction(node) {
@@ -595,22 +588,18 @@ const dimensionList = computed(() => {
 })
 
 const conceptMastery = computed(() => {
-  const raw = analysis.value?.raw_profile?.concept_mastery || {}
-  const errs = analysis.value?.raw_profile?.concept_p_err || {}
-  return Object.entries(raw)
-    .filter(([name]) => name && name !== '未知' && name !== '未知概念' && name !== '未知主题')
-    .map(([name, score]) => ({
-      name,
-      mastery: score,
-      p_err: errs[name] !== undefined ? errs[name] : 0.1
+  return (knowledgeGraph.value?.nodes || [])
+    .filter(node => node.mastery != null && Number.isFinite(Number(node.mastery)))
+    .map(node => ({
+      name: node.name,
+      mastery: Number(node.mastery),
     }))
 })
 
 const avgMastery = computed(() => {
-  const m = analysis.value?.raw_profile?.concept_mastery
-  if (!m || Object.keys(m).length === 0) return 0
-  const v = Object.values(m)
-  return Math.round(v.reduce((a, b) => a + b, 0) / v.length * 100)
+  const values = conceptMastery.value
+  if (!values.length) return null
+  return Math.round(values.reduce((total, item) => total + item.mastery, 0) / values.length * 100)
 })
 
 // 数字孪生画像沿用旧版的真实数据入口：只读当前画像 API，不用演示数据填充空历史。
@@ -621,9 +610,11 @@ let kalmanChartInstance = null
 let mentalResizeObserver = null
 let kalmanResizeObserver = null
 
-function getEbbinghausRetention(mastery) {
-  return Math.min(100, Math.round(30 + (Number(mastery) || 0) * 70))
-}
+const memoryRetention = computed(() => (analysis.value?.memory_retention || []).map(item => ({
+  ...item,
+  percent: Math.round(item.retention * 100),
+  lastLearned: new Date(item.last_learned_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+})))
 
 function retentionLabel(retention) {
   if (retention >= 75) return '记忆保持良好'
@@ -688,12 +679,6 @@ const kalmanHistory = computed(() => (Array.isArray(analysis.value?.kalman_histo
 const kalmanConcept = computed(() => analysis.value?.kalman_concept || '当前知识点')
 const lastKalman = computed(() => kalmanHistory.value.at(-1) || null)
 
-function metricText(value, digits = 2) {
-  return value === null || value === undefined || !Number.isFinite(Number(value))
-    ? '—'
-    : Number(value).toFixed(digits)
-}
-
 function buildMentalChartOption() {
   return {
     tooltip: { trigger: 'axis' },
@@ -710,14 +695,14 @@ function buildMentalChartOption() {
 
 function buildKalmanChartOption() {
   return {
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['原始掌握度', '平滑掌握度'], textStyle: { color: '#4a5c6a', fontSize: 12 } },
+    tooltip: { trigger: 'axis', valueFormatter: value => `${Math.round(Number(value) * 100)}%` },
+    legend: { data: ['本次学习表现', '累计掌握判断'], textStyle: { color: '#4a5c6a', fontSize: 12 } },
     grid: { top: 30, left: 42, right: 20, bottom: 34, containLabel: true },
-    xAxis: { type: 'category', data: kalmanHistory.value.map(item => item.time || item.timestamp) },
+    xAxis: { type: 'category', data: kalmanHistory.value.map(item => new Date(item.time || item.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })) },
     yAxis: { type: 'value', min: 0, max: 1, axisLabel: { formatter: value => `${Math.round(value * 100)}%` } },
     series: [
-      { name: '原始掌握度', type: 'line', data: kalmanHistory.value.map(item => Number(item.raw) || 0), itemStyle: { color: '#9ba8ab' }, lineStyle: { color: '#9ba8ab', type: 'dashed' } },
-      { name: '平滑掌握度', type: 'line', smooth: true, data: kalmanHistory.value.map(item => Number(item.smoothed) || 0), itemStyle: { color: '#253745' }, lineStyle: { color: '#253745', width: 2 } },
+      { name: '本次学习表现', type: 'line', data: kalmanHistory.value.map(item => Number(item.raw) || 0), itemStyle: { color: '#9ba8ab' }, lineStyle: { color: '#9ba8ab', type: 'dashed' } },
+      { name: '累计掌握判断', type: 'line', data: kalmanHistory.value.map(item => Number(item.smoothed) || 0), itemStyle: { color: '#253745' }, lineStyle: { color: '#253745', width: 2 } },
     ],
   }
 }
@@ -762,6 +747,7 @@ function formatMasteryPercent(score) {
 }
 
 function levelBadge(level) {
+  if (level === 'qualitative') return { text: '已了解', cls: 'bg-[#edf1f2] text-[#4a5c6a]' }
   if (level === 'high') return { text: '良好', cls: 'bg-[#e7ecee] text-[#11212d]' }
   if (level === 'medium') return { text: '待加强', cls: 'bg-[#edf1f2] text-[#4a5c6a]' }
   if (level === 'pending') return { text: '等待评估', cls: 'bg-[#f3f6f6] text-[#60727c]' }
@@ -901,60 +887,18 @@ let causesPieChartInstance = null
 let causesPieResizeObserver = null
 
 function buildCausesPieChartOption(useZeroValues = false) {
-  const pieData = Object.entries(causes.value).map(([key, val]) => ({
-    name: val.label,
-    value: useZeroValues ? 0 : val.percentage
-  }))
-
+  const entries = Object.values(causes.value)
   return {
-    tooltip: {
-      trigger: 'item',
-      backgroundColor: 'rgba(6, 20, 27, 0.95)',
-      borderWidth: 0,
-      textStyle: { color: '#fff', fontSize: 14 },
-      formatter: (params) => {
-        return `<div style="padding: 4px 8px; font-size: 14px;">
-          <span style="font-weight:600; color:#dce2e3;">${params.name}</span>:
-          <b style="color:#9ba8ab; font-family:monospace;">${params.value}%</b>
-        </div>`
-      }
-    },
-    legend: {
-      orient: 'horizontal',
-      bottom: 0,
-      left: 'center',
-      textStyle: { color: '#4a5c6a', fontSize: 14 }
-    },
-    color: ['#11212d', '#253745', '#9b3f36', '#60727c', '#4a5c6a', '#9ba8ab'],
-    series: [
-      {
-        name: '成因占比',
-        type: 'pie',
-        radius: ['38%', '65%'],
-        center: ['50%', '42%'],
-        avoidLabelOverlap: true,
-        itemStyle: {
-          borderRadius: 8,
-          borderColor: '#fff',
-          borderWidth: 2
-        },
-        label: {
-          show: true,
-          position: 'outside',
-          formatter: '{b}\n{d}%',
-          fontSize: 14,
-          color: '#4a5c6a'
-        },
-        emphasis: {
-          label: {
-            show: true,
-            fontSize: 14,
-            fontWeight: 'bold'
-          }
-        },
-        data: pieData
-      }
-    ]
+    tooltip: { trigger: 'axis', valueFormatter: value => `${value}%` },
+    grid: { top: 16, bottom: 30, left: 140, right: 50 },
+    xAxis: { type: 'value', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
+    yAxis: { type: 'category', inverse: true, data: entries.map(cause => cause.label) },
+    series: [{
+      name: '学习状态参考', type: 'bar', barMaxWidth: 28,
+      data: entries.map(cause => useZeroValues ? 0 : Number(cause.percentage) || 0),
+      itemStyle: { color: '#253745', borderRadius: [0, 5, 5, 0] },
+      label: { show: true, position: 'right', formatter: '{c}%' },
+    }],
   }
 }
 
@@ -1103,18 +1047,18 @@ onUnmounted(() => {
   <div v-if="loading" class="flex items-center justify-center h-64">
     <div class="animate-spin w-5 h-5 border-2 border-[#11212d] border-t-transparent rounded-full" />
   </div>
-  <div v-else-if="error" class="text-center py-12 text-red-500 text-sm">{{ error }}</div>
+  <div v-else-if="error" class="text-center py-12 text-red-500 text-sm">{{ userMessage(error) }}</div>
   <div v-else class="profile-page max-w-6xl mx-auto space-y-6">
 
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
         <div class="profile-avatar">
-          {{ (background.display_name || background.student_id || '?')[0] }}
+          {{ (background.display_name || '学习者' || '?')[0] }}
         </div>
         <div>
           <h1>学习画像分析</h1>
-          <p class="profile-subtitle">{{ background.display_name || background.student_id }} ({{ background.student_id }}) · {{ background.major }}</p>
+          <p class="profile-subtitle">{{ background.display_name || '学习者' }} · {{ background.major }}</p>
         </div>
       </div>
       <div class="flex items-center gap-2">
@@ -1145,7 +1089,7 @@ onUnmounted(() => {
         </div>
         <button type="button" class="continuous-update-close" @click="profileUpdateOpen = false"><X :size="16" />关闭</button>
       </header>
-      <div v-if="profileUpdateError" class="continuous-update-message error" role="alert">{{ profileUpdateError }}</div>
+      <div v-if="profileUpdateError" class="continuous-update-message error" role="alert">{{ userMessage(profileUpdateError) }}</div>
       <div v-if="profileUpdateNotice" class="continuous-update-message" role="status">{{ profileUpdateNotice }}</div>
       <div v-if="profileUpdateBusy || profileUpdateStatus === 'success' || profileUpdateStatus === 'error'" class="continuous-update-progress" role="status" aria-live="polite">
         <div class="continuous-update-progress__headline">
@@ -1187,7 +1131,7 @@ onUnmounted(() => {
           <header>
             <div>
               <strong>十维画像变化</strong>
-              <small>每轮原话都会先形成候选，确认后才写入正式画像</small>
+              
             </div>
             <span>{{ profileUpdateDimensionPreview.length }}/10</span>
           </header>
@@ -1197,7 +1141,7 @@ onUnmounted(() => {
                 <strong>{{ continuousDimensionLabels[item.key] || item.label || item.key }}</strong>
                 <span v-if="item.score !== null && item.score !== undefined">{{ Math.round(Number(item.score) * 100) }}%</span>
               </div>
-              <p>{{ item.value || item.status || item.summary }}</p>
+              <p>{{ learningText(item.value || item.summary, displayLabel(item.status)) }}</p>
               <small v-if="item.evidence">依据：{{ item.evidence }}</small>
               <small v-if="item.confidence !== undefined">置信度：{{ Math.round(Number(item.confidence) * 100) }}%</small>
             </article>
@@ -1219,10 +1163,13 @@ onUnmounted(() => {
     <section v-if="!isTeacher" class="profile-map-section" data-testid="profile-knowledge-map">
       <header class="profile-map-header">
         <div>
-          <h2><GitBranch :size="20" />知识掌握图谱</h2>
-          <p>按课程章节查看掌握判断。选择节点后，右侧只展示可追溯依据和下一步动作。</p>
+          <h2><GitBranch :size="20" />课程知识</h2>
         </div>
         <div class="profile-map-controls">
+          <div class="graph-view-switch" aria-label="课程知识视图">
+            <button type="button" :aria-pressed="graphView === 'structure'" @click="changeGraphView('structure')">课程结构</button>
+            <button type="button" :aria-pressed="graphView === 'mastery'" @click="changeGraphView('mastery')">个人掌握</button>
+          </div>
           <label class="profile-map-course-picker" for="profile-graph-course">
             <span>选择课程</span>
             <select id="profile-graph-course" v-model="selectedGraphCourseId" :disabled="graphCourseStatus === 'loading'" @change="changeGraphCourse">
@@ -1251,7 +1198,20 @@ onUnmounted(() => {
         <BookOpen :size="17" />当前课程还没有可展示的知识节点。
       </div>
       <div v-else class="profile-map-layout">
-        <KnowledgeGraphExplorer
+        <div v-if="graphView === 'structure'" class="profile-course-structure" data-testid="profile-course-structure">
+          <details v-for="(chapter, index) in courseGraph.hierarchy" :key="chapter.chapterId"
+            :open="index === 0 || chapter.knowledgePoints.some(point => point.id === activeKnowledgeNode?.id)">
+            <summary>{{ chapter.title }}</summary>
+            <div class="structure-branch">
+              <button v-for="point in chapter.knowledgePoints" :key="point.id" type="button"
+                :aria-current="point.id === activeKnowledgeNode?.id ? 'true' : undefined"
+                @click="selectKnowledgeNode(knowledgeGraphNodes.find(node => node.id === point.id))">
+                {{ point.title }}
+              </button>
+            </div>
+          </details>
+        </div>
+        <KnowledgeGraphExplorer v-else
           class="profile-map-canvas"
           :nodes="knowledgeGraphNodes"
           :edges="knowledgeGraphEdges"
@@ -1263,8 +1223,8 @@ onUnmounted(() => {
           :layout-decision="knowledgeGraphLayoutDecision"
           :topic-clusters="knowledgeGraphTopicClusters"
           :height="knowledgeGraphCanvasHeight"
-          chart-title="课程知识结构"
-          chart-subtitle="按章节查看掌握判断；选择节点查看证据与下一步"
+          chart-title="个人掌握"
+          chart-subtitle=""
           @node-select="selectKnowledgeNode"
           @reset="selectedKnowledgeNode = null"
         />
@@ -1275,7 +1235,6 @@ onUnmounted(() => {
               <span :class="['node-band', graphBandMeta(activeKnowledgeNode.masteryBand).className]">
                 {{ graphBandMeta(activeKnowledgeNode.masteryBand).label }}
               </span>
-              <span>{{ activeKnowledgeNode.code }}</span>
             </div>
             <h3>{{ activeKnowledgeNode.name }}</h3>
             <p class="node-chapter">{{ activeKnowledgeNode.chapter.title }}</p>
@@ -1327,27 +1286,26 @@ onUnmounted(() => {
                   <button v-if="item.source?.available" type="button" class="evidence-link" @click="openEvidenceSource(item)">
                     {{ item.source.label }}<ArrowRight :size="13" />
                   </button>
-                  <small v-else>{{ item.sourceLabel || '课程学习证据' }} · 来源暂不可用</small>
+                  <small v-else>{{ item.sourceLabel || '课程学习记录' }} · 来源暂不可用</small>
                 </article>
               </div>
               <div v-else class="node-evidence-empty">
-                当前没有可用于判断掌握度的学习证据。普通浏览不会被算作掌握。
+                完成诊断或练习后，可在这里查看判断依据。
               </div>
             </section>
 
             <div class="node-next-action">
               <span>下一步建议</span>
               <strong>{{ activeKnowledgeNode.nextAction.title }}</strong>
-              <p>{{ activeKnowledgeNode.nextAction.reason }}</p>
+              <p>{{ learningText(activeKnowledgeNode.nextAction.reason) }}</p>
               <button type="button" @click="openKnowledgeAction(activeKnowledgeNode)">
                 {{ activeKnowledgeNode.nextAction.title }}<ArrowRight :size="16" />
               </button>
             </div>
           </template>
-          <div v-else class="node-evidence-empty">课程暂无知识节点，原版画像能力仍保留在下方。</div>
+          <div v-else class="node-evidence-empty">请选择一个知识点。</div>
         </aside>
       </div>
-      <p v-if="knowledgeGraph" class="profile-map-boundary"><Info :size="15" />{{ knowledgeGraph.boundary }}</p>
     </section>
 
     <!-- Tab navigation -->
@@ -1356,7 +1314,6 @@ onUnmounted(() => {
         <div>
           <h2><BrainCircuit :size="20" />详细画像与历史分析</h2>
         </div>
-        <p>十维画像、趋势、薄弱点归因、成因分析、建议和可编辑偏好均保留。</p>
       </header>
     <div class="profile-tabs overflow-x-auto" role="tablist" aria-label="详细画像视图">
       <button role="tab" :aria-selected="activeTab === 'overview'"
@@ -1392,11 +1349,11 @@ onUnmounted(() => {
       <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
         <div class="flex items-center gap-4">
           <div class="w-14 h-14 rounded-lg bg-[#11212d] flex items-center justify-center text-white text-lg font-bold">
-            {{ (background.display_name || background.student_id || '?')[0] }}
+            {{ (background.display_name || '学习者' || '?')[0] }}
           </div>
           <div class="flex-1">
             <div class="flex items-center gap-2">
-              <h2 class="text-lg font-bold text-gray-800">{{ background.display_name || background.student_id }}</h2>
+              <h2 class="text-lg font-bold text-gray-800">{{ background.display_name || '学习者' }}</h2>
               <button @click="openEdit" class="text-[#253745] hover:text-[#11212d] transition-colors p-1 rounded-lg hover:bg-[#edf1f2] flex items-center gap-0.5 text-sm font-medium" title="编辑学情设置">
                 <Edit2 :size="10" />编辑画像
               </button>
@@ -1411,12 +1368,12 @@ onUnmounted(() => {
               </span>
               <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-sm font-medium"
                 :class="background.frustration_index > 0.3 ? 'bg-amber-50 text-amber-700' : 'bg-[#edf1f2] text-[#253745]'">
-                <Heart :size="10" /> 挫败感: {{ profileAwaitingEvidence ? '待评估' : `${Math.round(background.frustration_index * 100)}%` }}
+                <Heart :size="10" /> 学习感受: {{ currentStateLabel('frustration_index') }}
               </span>
             </div>
           </div>
           <div class="text-right">
-             <p class="text-3xl font-bold" :class="profileAwaitingEvidence ? 'text-[#60727c]' : avgMastery >= 60 ? 'text-[#253745]' : avgMastery >= 30 ? 'text-amber-600' : 'text-red-600'">{{ profileAwaitingEvidence ? '待评估' : `${avgMastery}%` }}</p>
+             <p class="text-3xl font-bold" :class="profileAwaitingEvidence ? 'text-[#60727c]' : avgMastery >= 60 ? 'text-[#253745]' : avgMastery >= 30 ? 'text-amber-600' : 'text-red-600'">{{ avgMastery == null ? '待评估' : `${avgMastery}%` }}</p>
             <p class="text-sm text-gray-400">平均掌握度</p>
           </div>
         </div>
@@ -1438,15 +1395,14 @@ onUnmounted(() => {
       <div class="bg-[#f3f6f6] border border-[#dce2e3] rounded-lg p-6 relative overflow-hidden">
         <Sparkles class="absolute right-4 top-4 text-amber-200/30 w-16 h-16 pointer-events-none" />
         <h3 class="text-xs font-semibold text-amber-800 mb-3 flex items-center gap-1.5">
-          <Heart :size="14" class="text-amber-600 animate-pulse" /> 个性化成长信笺 (StoryLensEdu)
+          <Heart :size="14" class="text-amber-600 animate-pulse" /> 个性化成长信笺
         </h3>
+        <p class="text-xs text-gray-500 mb-3">这是综合此前学习信息写成的回顾，可能涉及其他课程；当前课程的掌握情况请看本页图谱和练习依据。</p>
         <div v-if="narrativeLoading" class="flex items-center gap-2 text-xs text-amber-700/80 py-2">
           <div class="animate-spin rounded-full h-3.5 w-3.5 border-2 border-amber-600 border-t-transparent"></div>
           <span>智能助教正在为您撰写成长信笺...</span>
         </div>
-        <div v-else class="text-xs text-amber-900/90 leading-relaxed whitespace-pre-wrap">
-          {{ narrative.replace('### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n', '') }}
-        </div>
+        <IncrementalMarkdownRenderer v-else :text="narrative.replace('### 📬 智教矩阵个性化成长信笺 (StoryLensEdu)\n\n', '')" />
       </div>
 
       <!-- Radar chart -->
@@ -1477,19 +1433,19 @@ onUnmounted(() => {
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
           <p class="text-xs text-gray-500">知识点数</p>
-          <p class="text-xl font-bold text-gray-800 mt-1">{{ Object.keys(analysis?.raw_profile?.concept_mastery || {}).length }}</p>
+          <p class="text-xl font-bold text-gray-800 mt-1">{{ conceptMastery.length }}</p>
         </div>
         <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
           <p class="text-xs text-gray-500">薄弱点数</p>
           <p class="text-xl font-bold text-rose-600 mt-1">{{ weakAnalysis.length }}</p>
         </div>
         <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
-          <p class="text-xs text-gray-500">认知负荷</p>
-           <p class="text-xl font-bold mt-1" :class="profileAwaitingEvidence ? 'text-[#60727c]' : (analysis?.raw_profile?.cognitive_load || 0) > 0.5 ? 'text-amber-600' : 'text-[#253745]'">{{ profileAwaitingEvidence ? '待评估' : `${Math.round((analysis?.raw_profile?.cognitive_load || 0) * 100)}%` }}</p>
+          <p class="text-xs text-gray-500">理解与专注</p>
+          <p class="text-sm leading-relaxed mt-1 text-[#253745]">{{ currentStateLabel('cognitive_load') }}</p>
         </div>
-        <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
-          <p class="text-xs text-gray-500">参与度</p>
-           <p class="text-xl font-bold mt-1" :class="profileAwaitingEvidence ? 'text-[#60727c]' : (analysis?.raw_profile?.focus_level || 0) > 0.5 ? 'text-[#253745]' : 'text-amber-600'">{{ profileAwaitingEvidence ? '待评估' : `${Math.round((analysis?.raw_profile?.focus_level || 0) * 100)}%` }}</p>
+        <div v-if="currentLearningState.focus_level?.value != null" class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
+          <p class="text-xs text-gray-500">专注状态</p>
+          <p class="text-xl font-bold mt-1 text-[#253745]">{{ currentStateLabel('focus_level') }}</p>
         </div>
       </div>
     </div>
@@ -1500,22 +1456,24 @@ onUnmounted(() => {
           <header class="digital-twin-card__heading">
             <div>
               <p class="section-kicker">记忆保持</p>
-              <h3><CalendarDays :size="18" /> 已学知识点的记忆残留</h3>
+              <h3><CalendarDays :size="18" /> 已学知识点的记忆保持估计</h3>
             </div>
-            <span>{{ conceptMastery.length }} 个知识点</span>
+            <span>{{ memoryRetention.length }} 个知识点</span>
           </header>
-          <div v-if="conceptMastery.length" class="retention-list">
-            <article v-for="concept in conceptMastery" :key="concept.name" class="retention-item">
+          <div v-if="memoryRetention.length" class="retention-list">
+            <article v-for="concept in memoryRetention" :key="concept.name" class="retention-item">
               <div class="retention-item__heading">
                 <strong>{{ concept.name }}</strong>
-                <span>{{ getEbbinghausRetention(concept.mastery) }}% · {{ retentionLabel(getEbbinghausRetention(concept.mastery)) }}</span>
+                <span>{{ concept.percent }}% · {{ retentionLabel(concept.percent) }}</span>
               </div>
-              <div class="retention-track" role="progressbar" :aria-valuenow="getEbbinghausRetention(concept.mastery)" aria-valuemin="0" aria-valuemax="100">
-                <span :style="{ width: `${getEbbinghausRetention(concept.mastery)}%` }" />
+              <p class="digital-twin-note">上次有效学习：{{ concept.lastLearned }}</p>
+              <div class="retention-track" role="progressbar" :aria-valuenow="concept.percent" aria-valuemin="0" aria-valuemax="100">
+                <span :style="{ width: `${concept.percent}%` }" />
               </div>
             </article>
           </div>
-          <div v-else class="digital-twin-empty">完成一次有效学习后，这里会显示真实的记忆保持估计。</div>
+          <div v-else class="digital-twin-empty">完成一次有效学习后，这里会显示根据学习结果和间隔计算的记忆保持估计。</div>
+          <p class="digital-twin-note">根据上次练习表现和间隔时间安排复习。</p>
         </article>
 
         <article class="digital-twin-card">
@@ -1531,7 +1489,7 @@ onUnmounted(() => {
               <div class="retention-track"><span :style="{ width: `${conceptMastery.length ? (level.count / conceptMastery.length) * 100 : 0}%` }" /></div>
             </div>
           </div>
-          <p class="digital-twin-note">层级按当前掌握度估计，随新的有效学习证据更新。</p>
+          <p class="digital-twin-note">层级按当前掌握度估计，随新的有效学习记录更新。</p>
         </article>
       </section>
 
@@ -1541,12 +1499,12 @@ onUnmounted(() => {
             <p class="section-kicker">学习状态历史</p>
             <h3><Activity :size="18" /> 心智负荷与受挫感受</h3>
           </div>
-          <span>真实历史记录</span>
+          <span>综合各课程的学习表现估计</span>
         </header>
         <dl v-if="formattedHistory.length" class="mental-state-summary" data-testid="mental-state-summary">
-          <div><dt>当前认知负荷</dt><dd>{{ mentalSummary.load }}% <small>{{ signedPercent(mentalSummary.loadDelta) }}</small></dd></div>
-          <div><dt>当前受挫感受</dt><dd>{{ mentalSummary.frustration }}% <small>{{ signedPercent(mentalSummary.frustrationDelta) }}</small></dd></div>
-          <div><dt>当前参与度</dt><dd>{{ mentalSummary.focus }}% <small>{{ signedPercent(mentalSummary.focusDelta) }}</small></dd></div>
+          <div><dt>最近记录的认知负荷</dt><dd>{{ mentalSummary.load }}% <small>{{ signedPercent(mentalSummary.loadDelta) }}</small></dd></div>
+          <div><dt>最近记录的受挫感受</dt><dd>{{ mentalSummary.frustration }}% <small>{{ signedPercent(mentalSummary.frustrationDelta) }}</small></dd></div>
+          <div><dt>最近记录的专注状态</dt><dd>{{ mentalSummary.focus }}% <small>{{ signedPercent(mentalSummary.focusDelta) }}</small></dd></div>
           <div><dt>历史记录</dt><dd>{{ mentalSummary.records }} 条</dd></div>
         </dl>
         <div v-if="formattedHistory.length" ref="mentalChartRef" class="digital-twin-chart" data-testid="mental-state-chart" />
@@ -1556,27 +1514,25 @@ onUnmounted(() => {
       <section class="digital-twin-card">
         <header class="digital-twin-card__heading">
           <div>
-            <p class="section-kicker">掌握度去噪</p>
-            <h3><Activity :size="18" /> {{ kalmanConcept }}的卡尔曼估计</h3>
+            <p class="section-kicker">学习变化</p>
+            <h3><Activity :size="18" /> {{ kalmanConcept }}的学习变化</h3>
           </div>
           <span>{{ kalmanHistory.length }} 条记录</span>
         </header>
         <div v-if="kalmanHistory.length" class="digital-twin-kalman-layout">
           <div ref="kalmanChartRef" class="digital-twin-chart" />
           <dl class="kalman-metrics">
-            <div><dt>卡尔曼增益</dt><dd>{{ metricText(lastKalman?.gain) }}</dd></div>
-            <div><dt>系统噪声</dt><dd>{{ metricText(lastKalman?.q, 4) }}</dd></div>
-            <div><dt>观测噪声</dt><dd>{{ metricText(lastKalman?.r) }}</dd></div>
-            <div><dt>估计协方差</dt><dd>{{ metricText(lastKalman?.p, 3) }}</dd></div>
+            <div><dt>最近一次学习表现</dt><dd>{{ formatMasteryPercent(lastKalman?.raw) }}</dd></div>
+            <div><dt>当时的累计掌握判断</dt><dd>{{ formatMasteryPercent(lastKalman?.smoothed) }}</dd></div>
           </dl>
         </div>
-        <div v-else class="digital-twin-empty">当前还没有卡尔曼估计历史记录。</div>
+        <div v-else class="digital-twin-empty">当前还没有可展示的学习变化，完成练习或测评后再来查看。</div>
       </section>
     </div>
 
     <!-- Tab: Dimensions -->
     <div v-if="activeTab === 'dimensions'" class="space-y-4">
-      <p class="text-xs text-gray-500">基于 10 个学习维度的综合诊断，每个维度包含评分、诊断文本和建议措施</p>
+      <p class="text-xs text-gray-500">综合各课程的学习记录与已确认的信息，从十个方面了解你的学习情况；依据不足时继续观察。</p>
       <div v-for="dim in dimensionList" :key="dim.key" class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         <div class="flex items-center justify-between mb-2">
           <h3 class="text-sm font-semibold text-gray-800">{{ dim.label }}</h3>
@@ -1584,16 +1540,16 @@ onUnmounted(() => {
             {{ levelBadge(dim.level).text }}
           </span>
         </div>
-         <div v-if="dim.score === null || dim.score === undefined" class="profile-dimension-pending mb-3" role="status">
-           等待有效学习证据，暂不评分
+         <div v-if="(dim.score === null || dim.score === undefined) && dim.level !== 'qualitative'" class="profile-dimension-pending mb-3" role="status">
+           等待有效学习记录，暂不评分
          </div>
-         <div v-else class="flex items-center gap-3 mb-3">
+         <div v-else-if="dim.score !== null && dim.score !== undefined" class="flex items-center gap-3 mb-3">
            <div class="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
              <div class="h-full rounded-full transition-all" :class="dimColor(dim.score)" :style="{ width: (dim.score * 100) + '%' }" />
            </div>
            <span class="text-xs font-mono" :class="dimTextColor(dim.score)">{{ Math.round(dim.score * 100) }}%</span>
          </div>
-        <p class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">{{ dim.diagnosis }}</p>
+        <p class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">{{ learningText(dim.diagnosis) }}</p>
         <div v-if="dim.suggestions?.length" class="mt-2 space-y-1">
           <p class="text-sm font-semibold text-gray-500 flex items-center gap-1"><Sparkles :size="10" /> 建议</p>
           <div v-for="(s, i) in dim.suggestions" :key="i" class="flex items-start gap-2 text-sm text-gray-600">
@@ -1603,7 +1559,7 @@ onUnmounted(() => {
         </div>
         <div v-if="dim.evidence?.length" class="mt-2">
           <p class="text-sm font-semibold text-gray-400 flex items-center gap-1"><FileText :size="10" /> 证据片段</p>
-          <div v-for="(ev, i) in dim.evidence" :key="i" class="text-sm text-gray-400 italic ml-3">"{{ ev }}"</div>
+          <div v-for="(ev, i) in dim.evidence" :key="i" class="text-sm text-gray-400 italic ml-3">"{{ learningText(ev) }}"</div>
         </div>
       </div>
     </div>
@@ -1611,7 +1567,7 @@ onUnmounted(() => {
     <!-- Tab: Weakness -->
     <div v-if="activeTab === 'weakness'" class="space-y-4">
       <p class="text-xs text-gray-500">薄弱知识点及其根因分析，帮助理解"为什么不会"</p>
-      <div v-if="!weakAnalysis.length" class="digital-twin-empty" role="status">完成入学诊断或一次有效学习后，这里会显示有依据的薄弱点归因。</div>
+      <div v-if="!weakAnalysis.length" class="digital-twin-empty" role="status">当前没有明确的薄弱点记录，新的诊断或练习会帮助进一步判断。</div>
       <div v-for="wa in weakAnalysis" :key="wa.concept" class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
@@ -1644,13 +1600,13 @@ onUnmounted(() => {
 
     <!-- Tab: Causes -->
     <div v-if="activeTab === 'causes'" class="space-y-4">
-      <p class="text-xs text-gray-500">学习不会的成因分析，按占比排序</p>
+      <p class="text-xs text-gray-500">这些数值用于了解当前学习状态，彼此独立，不相加为100%。</p>
       
       <!-- 彩色成因占比饼图 (做动态效果) -->
       <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         <h3 class="text-xs font-semibold text-gray-700 mb-4 flex items-center gap-1.5">
           <BarChart3 :size="14" class="text-[#253745]" />
-          薄弱成因分布占比 (ECharts 环形动态饼图)
+          学习状态参考
         </h3>
         <div class="h-64 relative">
           <div ref="causesPieChartRef" class="w-full h-full" />
@@ -1715,7 +1671,7 @@ onUnmounted(() => {
           <div>
             <label class="block text-sm font-semibold text-gray-600 mb-1">专业/方向</label>
             <input v-model="editForm.major" type="text" class="w-full px-3 py-2 text-sm text-slate-800 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#11212d] focus:border-[#11212d] bg-white" placeholder="例如：人工智能实践、计算机科学与技术" />
-            <p class="text-sm text-gray-400 mt-0.5">将影响教学案例领域的选择（例如金融、医疗等跨学科领域）</p>
+            
           </div>
 
           <!-- Target Course -->
@@ -1730,7 +1686,7 @@ onUnmounted(() => {
             <select v-model="editForm.cognitive_style" class="w-full px-3 py-2 text-sm text-slate-800 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#11212d] focus:border-[#11212d] bg-white">
               <option v-for="opt in styleOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
-            <p class="text-sm text-gray-400 mt-0.5">更改此项将改变大模型回答时的排版优先级与可视化呈现策略</p>
+            
           </div>
 
           <!-- Motivation Type -->
@@ -1785,19 +1741,19 @@ onUnmounted(() => {
 }
 
 :global(.app-content:has(.profile-page)) {
-  background: var(--color-surface);
+  background: transparent;
 }
 
 .profile-page,
 .profile-summary-panel {
-  --profile-ink: #06141b;
-  --profile-text: #253745;
-  --profile-muted: #4a5c6a;
-  --profile-accent: #253745;
-  --profile-accent-dark: #11212d;
-  --profile-line: #ccd0cf;
+  --profile-ink: var(--color-text);
+  --profile-text: var(--color-text);
+  --profile-muted: var(--color-text-secondary);
+  --profile-accent: var(--color-text);
+  --profile-accent-dark: var(--color-text);
+  --profile-line: var(--color-border-strong);
   --profile-surface: #ffffff;
-  --profile-soft: #f3f6f6;
+  --profile-soft: var(--color-surface-subtle);
   color: var(--profile-text);
 }
 
@@ -1866,7 +1822,7 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
-.profile-primary-action:hover { background: #06141b; }
+.profile-primary-action:hover { background: var(--color-text); }
 
 .profile-primary-action:disabled,
 .profile-secondary-action:disabled { cursor: wait; opacity: .55; }
@@ -1879,7 +1835,7 @@ onUnmounted(() => {
   color: var(--profile-ink);
   border: 1px solid var(--profile-line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--color-surface);
   font-size: 14px;
   font-weight: 700;
 }
@@ -1906,7 +1862,7 @@ onUnmounted(() => {
   padding: 14px;
   border: 1px solid #d4e0e2;
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-surface);
 }
 .continuous-update-dimensions > header {
   display: flex;
@@ -1914,43 +1870,43 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 10px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #e7ecee;
+  border-bottom: 1px solid var(--color-surface-muted);
 }
 .continuous-update-dimensions > header div { display: grid; gap: 4px; min-width: 0; }
-.continuous-update-dimensions > header strong { color: #11212d; font-size: 15px; }
-.continuous-update-dimensions > header small { color: #60727c; font-size: 14px; line-height: 1.45; }
-.continuous-update-dimensions > header > span { flex: none; color: #253745; font-size: 14px; font-weight: 700; }
+.continuous-update-dimensions > header strong { color: var(--color-text); font-size: 15px; }
+.continuous-update-dimensions > header small { color: var(--color-text-muted); font-size: 14px; line-height: 1.45; }
+.continuous-update-dimensions > header > span { flex: none; color: var(--color-text); font-size: 14px; font-weight: 700; }
 .continuous-update-dimension-list { display: grid; gap: 8px; max-height: 360px; overflow-y: auto; padding-right: 3px; }
-.continuous-update-dimension-list article { display: grid; gap: 4px; padding: 9px 0; border-bottom: 1px solid #edf1f2; }
+.continuous-update-dimension-list article { display: grid; gap: 4px; padding: 9px 0; border-bottom: 1px solid var(--color-surface-subtle); }
 .continuous-update-dimension-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.continuous-update-dimension-heading strong { color: #11212d; font-size: 14px; }
-.continuous-update-dimension-heading span { color: #4a5c6a; font-size: 14px; font-weight: 700; }
-.continuous-update-dimension-list p { margin: 0; color: #253745; font-size: 14px; line-height: 1.5; }
-.continuous-update-dimension-list small { color: #60727c; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
-.continuous-update-dimensions-empty { padding: 18px 4px; color: #60727c; font-size: 14px; line-height: 1.6; }
-.continuous-update-history { display: grid; gap: 7px; padding-top: 10px; border-top: 1px solid #e7ecee; }
-.continuous-update-history > strong { color: #11212d; font-size: 14px; }
+.continuous-update-dimension-heading strong { color: var(--color-text); font-size: 14px; }
+.continuous-update-dimension-heading span { color: var(--color-text-secondary); font-size: 14px; font-weight: 700; }
+.continuous-update-dimension-list p { margin: 0; color: var(--color-text); font-size: 14px; line-height: 1.5; }
+.continuous-update-dimension-list small { color: var(--color-text-muted); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.continuous-update-dimensions-empty { padding: 18px 4px; color: var(--color-text-muted); font-size: 14px; line-height: 1.6; }
+.continuous-update-history { display: grid; gap: 7px; padding-top: 10px; border-top: 1px solid var(--color-surface-muted); }
+.continuous-update-history > strong { color: var(--color-text); font-size: 14px; }
 .continuous-update-history ol { display: grid; gap: 7px; max-height: 180px; margin: 0; padding: 0 0 0 18px; overflow-y: auto; }
-.continuous-update-history li { padding-left: 2px; color: #60727c; font-size: 14px; line-height: 1.45; }
-.continuous-update-history li > span { color: #4a5c6a; font-weight: 650; }
-.continuous-update-history li p { margin: 2px 0 0; color: #253745; overflow-wrap: anywhere; }
+.continuous-update-history li { padding-left: 2px; color: var(--color-text-muted); font-size: 14px; line-height: 1.45; }
+.continuous-update-history li > span { color: var(--color-text-secondary); font-weight: 650; }
+.continuous-update-history li p { margin: 2px 0 0; color: var(--color-text); overflow-wrap: anywhere; }
 .continuous-update-progress {
   display: grid;
   gap: 10px;
   padding: 12px 14px;
   border: 1px solid #c9d8dc;
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--color-surface);
 }
 .continuous-update-progress__headline {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #11212d;
+  color: var(--color-text);
   font-size: 14px;
   line-height: 1.5;
 }
-.continuous-update-progress__headline svg { flex: none; color: #253745; }
+.continuous-update-progress__headline svg { flex: none; color: var(--color-text); }
 .continuous-update-progress__steps { display: flex; flex-wrap: wrap; gap: 8px; }
 .continuous-update-progress__steps span {
   padding: 5px 9px;
@@ -1961,7 +1917,7 @@ onUnmounted(() => {
   font-size: 14px;
   line-height: 1.35;
 }
-.continuous-update-progress__steps span.is-active { color: #245965; border-color: #a9c9d0; background: #e8f3f5; }
+.continuous-update-progress__steps span.is-active { color: var(--color-accent); border-color: #a9c9d0; background: #e8f3f5; }
 .continuous-update-progress__steps span.is-current { box-shadow: 0 0 0 2px rgba(37, 55, 69, .12); }
 .profile-retry-action {
   display: inline-flex;
@@ -1970,36 +1926,36 @@ onUnmounted(() => {
   gap: 7px;
   min-height: 38px;
   padding: 7px 11px;
-  color: #8f3f38;
+  color: var(--color-danger);
   border: 1px solid #dfbdb7;
   border-radius: 6px;
-  background: #fff;
+  background: var(--color-surface);
   font-size: 14px;
   font-weight: 650;
 }
 .profile-retry-action:hover { background: #f8ece9; }
 .continuous-update-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.continuous-update-card__header p { margin: 0; color: #60727c; font-size: 14px; }
-.continuous-update-card__header h2 { margin: 5px 0; color: #11212d; font-size: 21px; }
-.continuous-update-card__header span { color: #4a5c6a; font-size: 14px; line-height: 1.6; }
-.continuous-update-close { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; color: #60727c; border: 0; background: transparent; font-size: 14px; cursor: pointer; }
+.continuous-update-card__header p { margin: 0; color: var(--color-text-muted); font-size: 14px; }
+.continuous-update-card__header h2 { margin: 5px 0; color: var(--color-text); font-size: 21px; }
+.continuous-update-card__header span { color: var(--color-text-secondary); font-size: 14px; line-height: 1.6; }
+.continuous-update-close { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; color: var(--color-text-muted); border: 0; background: transparent; font-size: 14px; cursor: pointer; }
 .continuous-update-flow { display: flex; flex-wrap: wrap; gap: 8px; }
-.continuous-update-flow span { padding: 5px 9px; color: #60727c; border: 1px solid #d3dfe2; border-radius: 999px; background: #fff; font-size: 14px; }
+.continuous-update-flow span { padding: 5px 9px; color: var(--color-text-muted); border: 1px solid #d3dfe2; border-radius: 999px; background: var(--color-surface); font-size: 14px; }
 .continuous-update-flow span.is-done { color: #1f5360; border-color: #a9c9d0; background: #e8f3f5; }
 .continuous-update-compose { display: grid; gap: 9px; }
 .continuous-update-compose textarea,
 .continuous-update-fields input,
-.continuous-update-manual input { width: 100%; box-sizing: border-box; padding: 10px 11px; color: #11212d; border: 1px solid #cfdcdf; border-radius: 7px; background: #fff; font: 14px/1.6 var(--font-sans); resize: vertical; }
-.continuous-update-message { padding: 9px 11px; color: #245965; border-radius: 6px; background: #e8f3f5; font-size: 14px; }
-.continuous-update-message.error { color: #8f3f38; background: #f8ece9; }
-.continuous-update-review { display: grid; gap: 11px; padding: 14px; border: 1px solid #d4e0e2; border-radius: 8px; background: #fff; }
+.continuous-update-manual input { width: 100%; box-sizing: border-box; padding: 10px 11px; color: var(--color-text); border: 1px solid #cfdcdf; border-radius: 7px; background: var(--color-surface); font: 14px/1.6 var(--font-sans); resize: vertical; }
+.continuous-update-message { padding: 9px 11px; color: var(--color-accent); border-radius: 6px; background: #e8f3f5; font-size: 14px; }
+.continuous-update-message.error { color: var(--color-danger); background: #f8ece9; }
+.continuous-update-review { display: grid; gap: 11px; padding: 14px; border: 1px solid #d4e0e2; border-radius: 8px; background: var(--color-surface); }
 .continuous-update-review header { display: grid; gap: 4px; }
-.continuous-update-review header strong { color: #11212d; font-size: 15px; }
-.continuous-update-review header small { color: #60727c; font-size: 14px; line-height: 1.5; }
-.continuous-update-understanding { margin: 0; color: #253745; font-size: 14px; line-height: 1.65; }
+.continuous-update-review header strong { color: var(--color-text); font-size: 15px; }
+.continuous-update-review header small { color: var(--color-text-muted); font-size: 14px; line-height: 1.5; }
+.continuous-update-understanding { margin: 0; color: var(--color-text); font-size: 14px; line-height: 1.65; }
 .continuous-update-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .continuous-update-fields label,
-.continuous-update-manual { display: grid; gap: 5px; color: #4a5c6a; font-size: 14px; }
+.continuous-update-manual { display: grid; gap: 5px; color: var(--color-text-secondary); font-size: 14px; }
 .continuous-update-review-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .continuous-update-review-actions > span { color: #8a5c37; font-size: 14px; }
 @media (max-width: 760px) {
@@ -2056,6 +2012,20 @@ onUnmounted(() => {
   font-size: 14px;
   line-height: 1.6;
 }
+
+.graph-view-switch { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: var(--color-surface-subtle); }
+.graph-view-switch button { border: 0; padding: 8px 12px; border-radius: 7px; background: transparent; color: var(--color-text-secondary); font: inherit; cursor: pointer; }
+.graph-view-switch button[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
+.graph-view-switch button:focus-visible, .profile-course-structure button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.profile-course-structure { min-width: 0; max-height: 740px; overflow-y: auto; padding: 24px; background: var(--color-surface); border-radius: var(--radius-panel); }
+.profile-course-structure details + details { margin-top: 20px; }
+.profile-course-structure summary { color: var(--color-text); font-size: 17px; font-weight: 600; line-height: 1.7; cursor: pointer; }
+.structure-branch { position: relative; margin: 8px 0 6px 7px; padding-left: 22px; }
+.structure-branch::before { content: ''; position: absolute; top: -8px; bottom: 20px; left: 0; width: 1px; background: var(--color-border-strong, #b5bfc4); opacity: .7; }
+.profile-course-structure button { position: relative; display: block; max-width: 100%; min-height: 40px; border: 0; margin: 4px 0 0; padding: 7px 12px; border-radius: 7px; background: transparent; color: var(--color-text-secondary); font: inherit; text-align: left; cursor: pointer; }
+.profile-course-structure button::before { content: ''; position: absolute; left: -22px; top: 50%; width: 16px; height: 1px; background: var(--color-border-strong, #b5bfc4); opacity: .7; }
+.profile-course-structure button[aria-current]::before { background: var(--color-accent); opacity: 1; }
+.profile-course-structure button:hover, .profile-course-structure button[aria-current] { background: var(--color-accent-soft); color: var(--color-accent); }
 
 .profile-map-controls {
   display: flex;
@@ -2150,7 +2120,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 6px 2px;
-  border-top: 1px solid #edf1f2;
+  border-top: 1px solid var(--color-surface-subtle);
 }
 
 .profile-radar-dot {
@@ -2159,8 +2129,8 @@ onUnmounted(() => {
   border-radius: 50%;
 }
 
-.profile-radar-dot.is-high { background: #11212d; }
-.profile-radar-dot.is-developing { background: #60727c; }
+.profile-radar-dot.is-high { background: var(--color-text); }
+.profile-radar-dot.is-developing { background: var(--color-text-muted); }
 .profile-radar-dot.is-weak { background: #9b3f36; }
 
 .profile-radar-concept-name {
@@ -2246,15 +2216,15 @@ onUnmounted(() => {
   align-items: start;
   gap: 14px;
   padding: 18px 20px;
-  border: 1px solid #dce2e3;
+  border: 1px solid var(--color-border);
   border-left: 1px solid var(--profile-accent-dark);
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .profile-suggestion-item.is-detail {
-  border-left-color: #ccd0cf;
-  background: #f8fafb;
+  border-left-color: var(--color-border-strong);
+  background: var(--color-surface-subtle);
 }
 
 .profile-suggestion-index {
@@ -2273,7 +2243,7 @@ onUnmounted(() => {
 .profile-suggestion-index.is-detail {
   color: var(--profile-muted);
   border: 1px solid var(--profile-line);
-  background: #ffffff;
+  background: var(--color-surface);
   font-size: 18px;
 }
 
@@ -2358,11 +2328,11 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
-.node-band.mastered { color: #11212d; background: #e7ecee; }
-.node-band.developing { color: #253745; background: #edf1f2; }
-.node-band.weak { color: #3f5361; background: #eef2f3; }
-.node-band.conflict { color: #8f3f38; border-color: #dfbdb7; background: #f8eae7; }
-.node-band.unknown { color: #4a5c6a; background: #f1f4f4; }
+.node-band.mastered { color: var(--color-text); background: var(--color-surface-muted); }
+.node-band.developing { color: var(--color-text); background: var(--color-surface-subtle); }
+.node-band.weak { color: #3f5361; background: var(--color-surface-subtle); }
+.node-band.conflict { color: var(--color-danger); border-color: #dfbdb7; background: #f8eae7; }
+.node-band.unknown { color: var(--color-text-secondary); background: var(--color-surface-subtle); }
 
 .profile-evidence-rail > h3 {
   margin: 16px 0 0;
@@ -2380,7 +2350,7 @@ onUnmounted(() => {
   gap: 10px;
   margin-top: 20px;
   padding-top: 16px;
-  border-top: 1px solid #dce2e3;
+  border-top: 1px solid var(--color-border);
 }
 
 .node-mastery span { color: var(--profile-muted); font-size: 14px; }
@@ -2395,7 +2365,7 @@ onUnmounted(() => {
 .node-relation-list > header span { display: inline-flex; align-items: center; gap: 7px; color: var(--profile-ink); font-size: 15px; font-weight: 700; }
 .node-behavior-list > header strong,
 .node-relation-list > header strong { color: var(--profile-muted); font-size: 14px; }
-.node-behavior-list article { padding: 11px 0; border-top: 1px solid #e7ecee; }
+.node-behavior-list article { padding: 11px 0; border-top: 1px solid var(--color-surface-muted); }
 .behavior-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .behavior-heading strong { color: var(--profile-ink); font-size: 14px; }
 .behavior-heading small,
@@ -2420,7 +2390,7 @@ onUnmounted(() => {
 .evidence-link:hover,
 .evidence-link:focus-visible { text-decoration: underline; }
 .node-relation-list ul { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
-.node-relation-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid #e7ecee; color: var(--profile-text); font-size: 14px; }
+.node-relation-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--color-surface-muted); color: var(--profile-text); font-size: 14px; }
 .node-relation-list li small { color: var(--profile-muted); }
 
 .node-evidence-list { margin-top: 20px; }
@@ -2428,7 +2398,7 @@ onUnmounted(() => {
 .node-evidence-list > header span { display: inline-flex; align-items: center; gap: 7px; color: var(--profile-ink); font-size: 15px; font-weight: 700; }
 .node-evidence-list > header strong { color: var(--profile-muted); font-size: 14px; }
 .node-evidence-list > div { max-height: 230px; margin-top: 10px; overflow-y: auto; }
-.node-evidence-list article { padding: 11px 0; border-top: 1px solid #e7ecee; }
+.node-evidence-list article { padding: 11px 0; border-top: 1px solid var(--color-surface-muted); }
 .node-evidence-list article strong,
 .node-evidence-list article p,
 .node-evidence-list article span,
@@ -2436,14 +2406,14 @@ onUnmounted(() => {
 .node-evidence-list article strong { color: var(--profile-ink); }
 .node-evidence-list article p { margin: 3px 0; color: var(--profile-text); }
 .node-evidence-list article span { display: flex; align-items: center; gap: 5px; color: var(--profile-muted); }
-.node-evidence-list article small { margin-top: 3px; overflow-wrap: anywhere; color: #60727c; }
+.node-evidence-list article small { margin-top: 3px; overflow-wrap: anywhere; color: var(--color-text-muted); }
 
 .node-evidence-empty {
   padding: 16px;
   color: var(--profile-muted);
-  border: 1px dashed #ccd0cf;
+  border: 1px dashed var(--color-border-strong);
   border-radius: 6px;
-  background: #f3f6f6;
+  background: var(--color-surface-subtle);
   font-size: 14px;
   line-height: 1.65;
 }
@@ -2451,7 +2421,7 @@ onUnmounted(() => {
 .node-next-action {
   margin-top: 20px;
   padding-top: 16px;
-  border-top: 1px solid #dce2e3;
+  border-top: 1px solid var(--color-border);
 }
 
 .node-next-action > span,
@@ -2489,7 +2459,7 @@ onUnmounted(() => {
 
 .profile-map-boundary { margin: 12px 0 0; }
 .profile-map-state { min-height: 180px; align-items: center; justify-content: center; border: 1px solid var(--profile-line); background: var(--profile-soft); }
-.profile-map-state.error { color: #8f3f38; }
+.profile-map-state.error { color: var(--color-danger); }
 .profile-map-state > span { max-width: 70%; }
 .profile-map-retry { display: inline-flex; min-height: 34px; align-items: center; gap: 6px; margin-left: 4px; padding: 6px 10px; color: var(--profile-ink); border: 1px solid var(--profile-line); border-radius: 5px; background: var(--profile-surface); font-size: 14px; font-weight: 650; cursor: pointer; }
 .profile-map-retry:hover { background: var(--profile-soft); }
@@ -2517,13 +2487,13 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.profile-tabs button:hover { color: var(--profile-ink); background: #edf1f2; }
+.profile-tabs button:hover { color: var(--profile-ink); background: var(--color-surface-subtle); }
 .profile-tabs button.active { color: #ffffff; border-color: var(--profile-accent-dark); background: var(--profile-accent-dark); }
 
 /* The original detailed profile remains intact; these rules only normalize its visual language. */
 .profile-detail-section :deep([class*='bg-gradient']) {
   background-image: none !important;
-  background-color: #f1f4f4 !important;
+  background-color: var(--color-surface-subtle) !important;
 }
 
 .profile-detail-section :deep(.rounded-2xl) { border-radius: 8px !important; }
@@ -2558,10 +2528,10 @@ onUnmounted(() => {
 .bloom-row strong { min-width: 0; color: var(--profile-ink); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .retention-item__heading span,
 .bloom-row > div:first-child span { flex: none; color: var(--profile-muted); font-size: 14px; line-height: 1.5; }
-.retention-track { height: 8px; overflow: hidden; border-radius: 999px; background: #edf1f2; }
+.retention-track { height: 8px; overflow: hidden; border-radius: 999px; background: var(--color-surface-subtle); }
 .retention-track > span { display: block; height: 100%; border-radius: inherit; background: var(--profile-accent); }
 .bloom-row { display: grid; gap: 7px; }
-.bloom-row .retention-track > span { background: #60727c; }
+.bloom-row .retention-track > span { background: var(--color-text-muted); }
 .digital-twin-empty { display: grid; min-height: 130px; place-items: center; padding: 18px; color: var(--profile-muted); border: 1px dashed var(--profile-line); border-radius: 6px; background: var(--profile-soft); font-size: 14px; line-height: 1.6; text-align: center; }
 .profile-dimension-pending { padding: 12px 14px; color: var(--profile-muted); border: 1px dashed var(--profile-line); border-radius: 6px; background: var(--profile-soft); font-size: 14px; line-height: 1.5; }
 .digital-twin-note { margin: 16px 0 0; color: var(--profile-muted); font-size: 14px; line-height: 1.6; }
@@ -2573,7 +2543,7 @@ onUnmounted(() => {
 .mental-state-summary dd small { margin-left: 5px; color: var(--profile-muted); font-size: 14px; font-weight: 600; }
 .digital-twin-kalman-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, 28%); gap: 20px; align-items: stretch; }
 .kalman-metrics { display: grid; align-content: start; gap: 10px; margin: 0; padding: 16px; border: 1px solid var(--profile-line); border-radius: 6px; background: var(--profile-soft); }
-.kalman-metrics div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 9px; border-bottom: 1px solid #e7ecee; }
+.kalman-metrics div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 9px; border-bottom: 1px solid var(--color-surface-muted); }
 .kalman-metrics div:last-child { padding-bottom: 0; border-bottom: 0; }
 .kalman-metrics dt { color: var(--profile-muted); font-size: 14px; line-height: 1.5; }
 .kalman-metrics dd { margin: 0; color: var(--profile-ink); font-family: var(--font-mono, monospace); font-size: 14px; font-weight: 700; }
@@ -2585,7 +2555,7 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1100px) {
-  .profile-map-layout { grid-template-columns: minmax(0, 68fr) minmax(290px, 32fr); }
+  .profile-map-layout { grid-template-columns: minmax(0, 1fr); }
   .profile-map-header,
   .profile-detail-heading { align-items: flex-start; }
   .profile-map-controls { align-items: flex-start; }

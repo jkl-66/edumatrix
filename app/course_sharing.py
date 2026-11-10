@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from app.source_refs import current_chapter_clause
+
+import copy as copy_module
 import hashlib
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from app.course_governance import require_manager
 from app.database import (
     DBAuditLog, DBCourse, DBCourseDerivedCopy, DBCourseDocument, DBCourseShareDecision,
     DBCourseShareRelease, DBCourseWithdrawal, DBOrganization, DBOrganizationMembership,
-    DBSourceDocument, DBTeachingClass, DBTeachingClassMember, DBUser,
+    DBSourceDocument, DBSourceRef, DBChapter, DBChapterKnowledgePoint,
+    DBTeachingClass, DBTeachingClassMember, DBUser, DBKnowledgeDocument,
 )
 from app.identity import new_public_id, normalize_role
 
@@ -83,11 +88,29 @@ def _require_target_read(db: Any, target_type: str, target_id: str, actor: DBUse
 def _snapshot(db: Any, course: DBCourse) -> tuple[dict[str, Any], dict[str, Any]]:
     docs = db.query(DBCourseDocument).filter_by(course_id=course.id).order_by(DBCourseDocument.chapter_order, DBCourseDocument.id).all()
     sources = db.query(DBSourceDocument).filter_by(course_id=course.id).order_by(DBSourceDocument.id).all()
+    # Uploads store their parsed body in knowledge_documents. Freeze that body
+    # too, so a recipient does not depend on the author's original upload file.
+    document_ids = {row.id for row in docs}
+    for source in sources:
+        if not source.legacy_document_id or source.legacy_document_id in document_ids:
+            continue
+        uploaded = db.get(DBKnowledgeDocument, source.legacy_document_id)
+        if uploaded is None:
+            continue
+        docs.append(SimpleNamespace(
+            id=uploaded.id, chapter_order=len(docs)+1, filename=uploaded.filename,
+            file_type=uploaded.file_type, file_size=uploaded.file_size, title=uploaded.title,
+            content=uploaded.content, tags=uploaded.tags, chunk_count=uploaded.chunk_count,
+            content_hash=source.processed_sha256 or source.content_hash,
+            source_path=source.source_path, license_text=source.license_text, status="published",
+        ))
+        document_ids.add(uploaded.id)
     data = {
         "schema_version": "next.course-share-snapshot.v1",
         "course": {key: getattr(course, key) for key in ("id", "version", "title", "subject", "description", "domain_pack", "language", "content_origin", "visibility", "status", "manifest_version", "manifest_data")},
         "documents": [{key: getattr(row, key) for key in ("chapter_order", "filename", "file_type", "file_size", "title", "content", "tags", "chunk_count", "content_hash", "source_path", "license_text", "status")} for row in docs],
         "sources": [{key: getattr(row, key) for key in ("title", "filename", "file_format", "content_hash", "source_sha256", "processed_sha256", "file_size", "source_url", "source_path", "license_text", "parser_version", "parser_metadata", "parse_warnings", "processing_error_code", "processing_status")} for row in sources],
+        "source_graph": _source_graph(db, docs, sources),
     }
     licenses = {
         "schema_version": "next.course-license-snapshot.v1", "course_license": course.license_text,
@@ -98,6 +121,175 @@ def _snapshot(db: Any, course: DBCourse) -> tuple[dict[str, Any], dict[str, Any]
         "legal_review_state": "not_automatically_determined",
     }
     return data, licenses
+
+
+def _source_graph(db: Any, docs: list, sources: list) -> dict[str, Any]:
+    source_ids = [row.id for row in sources]
+    chapters = db.query(DBChapter).filter(DBChapter.source_document_id.in_(source_ids), current_chapter_clause()).order_by(DBChapter.position, DBChapter.id).all()
+    refs = db.query(DBSourceRef).filter(DBSourceRef.source_document_id.in_(source_ids)).order_by(DBSourceRef.id).all()
+    return {
+        "documents": [{"id": row.id, "filename": row.filename, "content_hash": row.content_hash} for row in docs],
+        "sources": [{"id": row.id, "filename": row.filename, "content_hash": row.content_hash, "legacy_document_id": row.legacy_document_id} for row in sources],
+        "chapters": [{key: getattr(row, key) for key in ("id", "source_document_id", "parent_id", "stable_key", "title", "position", "heading_level", "char_start", "char_end")} for row in chapters],
+        "source_refs": [{key: getattr(row, key) for key in ("id", "source_document_id", "chapter_id", "parser_version", "page_number", "char_start", "char_end", "image_region", "location_kind", "location_index", "location_label", "location_metadata", "content_hash", "quote")} for row in refs],
+        "knowledge_points": [{"chapter_id": row.chapter_id, "knowledge_point_id": row.knowledge_point_id, "relation_type": row.relation_type}
+                             for row in db.query(DBChapterKnowledgePoint).filter(DBChapterKnowledgePoint.chapter_id.in_([ch.id for ch in chapters]))],
+    }
+
+
+def snapshot_source_graph(db: Any, snapshot: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(snapshot.get("source_graph"), dict):
+        return snapshot["source_graph"]
+    # Old releases did not freeze locators. Reuse only sources whose complete
+    # parsed content still matches the released material, never a newer text.
+    original_course_id = snapshot.get("course", {}).get("id")
+    docs = []
+    for item in snapshot.get("documents", []):
+        row = db.query(DBCourseDocument).filter_by(course_id=original_course_id, filename=item["filename"]).first()
+        if row is not None and row.content == item.get("content") and row.content_hash == item.get("content_hash"):
+            docs.append(row)
+    filenames = {row.filename for row in docs}
+    sources = []
+    for item in snapshot.get("sources", []):
+        row = db.query(DBSourceDocument).filter_by(course_id=original_course_id, filename=item["filename"]).first()
+        keys = ("content_hash", "source_sha256", "processed_sha256", "parser_version")
+        if row is not None and row.filename in filenames and all(getattr(row, key) == item.get(key) for key in keys):
+            sources.append(row)
+    return _source_graph(db, docs, sources)
+
+
+def _material_entries(snapshot: dict[str, Any], graph: dict[str, Any], section: str) -> list[tuple[dict, dict]]:
+    """Pair frozen content with its identity, including old snapshots without hashes."""
+    remaining = list(graph.get(section, [])); entries = []
+    for item in snapshot.get(section, []):
+        candidates = [entry for entry in remaining if entry['filename'] == item['filename']]
+        identity = next((entry for entry in candidates if entry.get('content_hash') == item.get('content_hash')), None)
+        identity = identity or (candidates[0] if candidates else {})
+        if identity: remaining.remove(identity)
+        entries.append((item, identity))
+    return entries
+
+
+def _material_mapping(db: Any, course: DBCourse, snapshot: dict[str, Any], *, actor: DBUser | None = None) -> dict[str, str]:
+    """Copy each frozen body once; filenames are labels, not version identities."""
+    graph = snapshot_source_graph(db, snapshot)
+    mapping = {snapshot['course']['id']: course.id}
+    documents = list(db.query(DBCourseDocument).filter_by(course_id=course.id))
+    copied_docs = []
+    for item, identity in _material_entries(snapshot, graph, 'documents'):
+        row = next((row for row in documents if row.filename == item['filename']
+                    and row.content == item.get('content') and row.content_hash == item.get('content_hash')), None)
+        if row is None and actor is not None:
+            row = DBCourseDocument(id=_stable('cdoc', course.id, identity.get('id') or item['filename'], _hash(item.get('content') or '')),
+                                   course_id=course.id)
+            db.add(row); documents.append(row)
+        if row is None: continue
+        if actor is not None:
+            for key, value in item.items(): setattr(row, key, value)
+        copied_docs.append(row)
+        if identity: mapping[identity['id']] = row.id
+    sources = list(db.query(DBSourceDocument).filter_by(course_id=course.id))
+    for item, identity in _material_entries(snapshot, graph, 'sources'):
+        document_id = mapping.get(identity.get('legacy_document_id'))
+        if document_id is None:
+            candidates = [doc for doc in copied_docs if doc.filename == item['filename']]
+            exact = [doc for doc in candidates if doc.content_hash in {item.get('processed_sha256'), item.get('content_hash')}]
+            document_id = exact[0].id if len(exact) == 1 else (candidates[0].id if len(candidates) == 1 else None)
+        keys = ('filename', 'content_hash', 'processed_sha256', 'source_sha256', 'parser_version')
+        row = next((row for row in sources if all(getattr(row, key) == item.get(key) for key in keys)
+                    and row.legacy_document_id == document_id), None)
+        # Older copies may not yet have their document link attached.
+        if row is None:
+            row = next((row for row in sources if row.legacy_document_id is None
+                        and all(getattr(row, key) == item.get(key) for key in keys)), None)
+        if row is None and actor is not None:
+            row = DBSourceDocument(id=_stable('src', course.id, identity.get('id') or item['filename'],
+                _hash([document_id, *[item.get(key) for key in keys]])), course_id=course.id, uploader_public_id=actor.public_id)
+            db.add(row); sources.append(row)
+        if row is None: continue
+        if actor is not None:
+            for key, value in item.items(): setattr(row, key, value)
+            row.legacy_document_id = document_id
+        if identity: mapping[identity['id']] = row.id
+    if actor is not None: db.flush()
+    return mapping
+
+
+def _copied_chapter(db: Any, course_id: str, item: dict, source_id: str) -> tuple[str, str]:
+    # Keep already-issued links when their source version still matches.
+    previous = db.query(DBChapter).filter_by(course_id=course_id, stable_key=item['stable_key'], source_document_id=source_id).first()
+    if previous: return previous.id, previous.stable_key
+    key = _stable('chapter', source_id, item['stable_key'])
+    return _stable('ch', course_id, key), key
+
+
+def _copied_ref(db: Any, course_id: str, item: dict, source_id: str) -> str:
+    previous = db.get(DBSourceRef, _stable('ref', course_id, item['id']))
+    if previous and previous.source_document_id == source_id and previous.content_hash == item['content_hash']:
+        return previous.id
+    return _stable('ref', course_id, source_id, item['id'], _hash(item))
+
+
+def copied_source_mapping(db: Any, course: DBCourse, snapshot: dict[str, Any]) -> dict[str, str]:
+    """Resolve frozen links without overwriting recipient content or old citations."""
+    graph = snapshot_source_graph(db, snapshot)
+    mapping = _material_mapping(db, course, snapshot)
+    for item in graph.get('chapters', []):
+        source_id = mapping.get(item['source_document_id'])
+        if source_id:
+            chapter_id, _ = _copied_chapter(db, course.id, item, source_id)
+            if db.get(DBChapter, chapter_id): mapping[item['id']] = chapter_id
+    for item in graph.get('source_refs', []):
+        source_id = mapping.get(item['source_document_id'])
+        if source_id:
+            ref_id = _copied_ref(db, course.id, item, source_id)
+            if db.get(DBSourceRef, ref_id): mapping[item['id']] = ref_id
+    return mapping
+
+
+def apply_source_graph(db: Any, course: DBCourse, snapshot: dict[str, Any]) -> dict[str, str]:
+    graph = snapshot_source_graph(db, snapshot)
+    mapping = _material_mapping(db, course, snapshot)
+    chapters = [item for item in graph.get("chapters", []) if item["source_document_id"] in mapping]
+    chapter_keys = {}
+    for item in chapters:
+        chapter_id, key = _copied_chapter(db, course.id, item, mapping[item['source_document_id']])
+        mapping[item['id']], chapter_keys[item['id']] = chapter_id, key
+    for item in chapters:
+        row = db.get(DBChapter, mapping[item["id"]])
+        if row is None:
+            row = DBChapter(id=mapping[item["id"]], course_id=course.id)
+            db.add(row)
+        for key, value in item.items():
+            if key not in {"id", "source_document_id", "parent_id", "stable_key"}:
+                setattr(row, key, value)
+        row.stable_key = chapter_keys[item['id']]
+        row.source_document_id = mapping[item["source_document_id"]]
+        row.parent_id = None
+    db.flush()
+    for item in chapters:
+        db.get(DBChapter, mapping[item["id"]]).parent_id = mapping.get(item.get("parent_id"))
+    for item in graph.get("source_refs", []):
+        if item["source_document_id"] not in mapping:
+            continue
+        ref_id = _copied_ref(db, course.id, item, mapping[item['source_document_id']])
+        row = db.get(DBSourceRef, ref_id)
+        if row is None:
+            row = DBSourceRef(id=ref_id)
+            db.add(row)
+        for key, value in item.items():
+            if key not in {"id", "source_document_id", "chapter_id"}:
+                setattr(row, key, value)
+        row.source_document_id = mapping[item["source_document_id"]]
+        row.chapter_id = mapping.get(item.get("chapter_id"))
+        mapping[item["id"]] = row.id
+    db.flush()
+    for item in graph.get("knowledge_points", []):
+        chapter_id = mapping.get(item["chapter_id"])
+        if chapter_id and not db.query(DBChapterKnowledgePoint).filter_by(chapter_id=chapter_id, knowledge_point_id=item["knowledge_point_id"], relation_type=item["relation_type"]).first():
+            db.add(DBChapterKnowledgePoint(chapter_id=chapter_id, knowledge_point_id=item["knowledge_point_id"], relation_type=item["relation_type"]))
+    db.flush()
+    return mapping
 
 
 def publish_release(db: Any, *, actor: DBUser, course_id: str, target_type: str, target_id: str, title: str) -> dict[str, Any]:
@@ -141,21 +333,8 @@ def _apply_snapshot(db: Any, course: DBCourse, snapshot: dict[str, Any], license
     for key in ("version", "title", "subject", "description", "domain_pack", "language", "content_origin", "manifest_version", "manifest_data"):
         setattr(course, key, src[key])
     course.license_text = licenses.get("course_license", ""); course.status = "published"
-    existing_docs = {row.filename: row for row in db.query(DBCourseDocument).filter_by(course_id=course.id).all()}
-    seen = set()
-    for item in snapshot["documents"]:
-        seen.add(item["filename"]); row = existing_docs.get(item["filename"])
-        if row is None:
-            row = DBCourseDocument(id=_stable("cdoc", course.id, item["filename"]), course_id=course.id); db.add(row)
-        for key, value in item.items(): setattr(row, key, value)
-    for name, row in existing_docs.items():
-        if name not in seen: row.status = "withdrawn"
-    existing_sources = {row.filename: row for row in db.query(DBSourceDocument).filter_by(course_id=course.id).all()}
-    for item in snapshot["sources"]:
-        row = existing_sources.get(item["filename"])
-        if row is None:
-            row = DBSourceDocument(id=_stable("src", course.id, item["filename"]), course_id=course.id, uploader_public_id=actor.public_id); db.add(row)
-        for key, value in item.items(): setattr(row, key, value)
+    _material_mapping(db, course, snapshot, actor=actor)
+    apply_source_graph(db, course, snapshot)
 
 
 def create_derived_copy(db: Any, *, actor: DBUser, release_id: str) -> dict[str, Any]:
@@ -181,7 +360,12 @@ def create_derived_copy(db: Any, *, actor: DBUser, release_id: str) -> dict[str,
     return copy_payload(db, row, actor)
 
 
-def _local_snapshot(db: Any, copy: DBCourseDerivedCopy) -> dict[str, Any]: return _snapshot(db, _course(db, copy.derived_course_id))[0]
+def _local_snapshot(db: Any, copy: DBCourseDerivedCopy) -> dict[str, Any]:
+    snapshot = _snapshot(db, _course(db, copy.derived_course_id))[0]
+    original_title = copy.baseline_snapshot['course']['title']
+    if snapshot['course']['title'] == f'{original_title}（派生副本）':
+        snapshot['course']['title'] = original_title
+    return snapshot
 
 
 def _changes(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
@@ -190,7 +374,11 @@ def _changes(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
         before, after = base["course"].get(key), candidate["course"].get(key)
         if before != after: result[f"course.{key}"] = {"before": before, "after": after}
     for section in ("documents", "sources"):
-        left = {x["filename"]: x for x in base[section]}; right = {x["filename"]: x for x in candidate[section]}
+        def grouped(snapshot):
+            result = {}
+            for item in snapshot[section]: result.setdefault(item['filename'], []).append(item)
+            return {name: sorted(items, key=_canonical) for name, items in result.items()}
+        left, right = grouped(base), grouped(candidate)
         for name in sorted(set(left) | set(right)):
             if left.get(name) != right.get(name): result[f"{section}.{name}"] = {"before_hash": _hash(left.get(name)), "after_hash": _hash(right.get(name))}
     return result
@@ -208,7 +396,32 @@ def update_preview(db: Any, copy: DBCourseDerivedCopy, actor: DBUser) -> dict[st
     local_changes, upstream_changes = _changes(base, local), _changes(base, upstream)
     conflicts = sorted(set(local_changes) & set(upstream_changes))
     copy.upstream_status = "withdrawn" if latest.status == "withdrawn" else ("current" if decided else "update_available")
+    details = []
+    labels = {"title":"课程名称", "subject":"学习方向", "description":"课程说明", "version":"课程版本", "language":"资料语言", "content_origin":"课程来源说明"}
+    for path in upstream_changes:
+        section, key = path.split('.', 1)
+        if section == 'course':
+            if key not in labels:
+                continue
+            label = labels[key]
+            values = [str(s['course'].get(key) or '未填写') for s in (base, local, upstream)]
+        elif section == 'documents':
+            label = f'资料：{key}'
+            values = []
+            for snapshot in (base, local, upstream):
+                documents = [item for item in snapshot['documents'] if item['filename'] == key]
+                values.append('\n\n—— 同名的另一份资料 ——\n\n'.join(str(document.get('content') or '这份资料暂无正文') for document in documents) if documents else '尚未包含这份资料')
+        elif section == 'sources' and f'documents.{key}' not in upstream_changes:
+            label = f'来源说明：{key}'
+            values = []
+            for snapshot in (base, local, upstream):
+                source = next((item for item in snapshot['sources'] if item['filename'] == key), None)
+                values.append('\n'.join(str(source.get(field) or '') for field in ('title','source_url','license_text')).strip() or '课程内资料' if source else '尚未包含这份来源')
+        else:
+            continue
+        details.append({'label':label, 'before':values[0], 'local':values[1], 'after':values[2], 'conflict':path in conflicts})
     return {"release": release_payload(latest), "local_changes": local_changes, "upstream_changes": upstream_changes,
+        "change_details": details,
         "conflicts": conflicts, "conflict_count": len(conflicts), "decision": decision_payload(decided) if decided else None}
 
 
@@ -266,8 +479,16 @@ def decide_update(db: Any, *, actor: DBUser, copy_id: str, upstream_release_id: 
     if action == "accept":
         release = db.get(DBCourseShareRelease, upstream_release_id)
         if release.status != "published": _fail("course_share_release_withdrawn", "withdrawn update cannot be applied")
-        _apply_snapshot(db, _course(db, copy.derived_course_id), release.snapshot_data, release.license_snapshot, actor)
-        _course(db, copy.derived_course_id).title = f"{release.snapshot_data['course']['title']}（派生副本）"
+        merged = copy_module.deepcopy(release.snapshot_data)
+        # Accept the teacher's changes while retaining unrelated personal edits.
+        for path in preview['local_changes']:
+            if path in preview['upstream_changes']: continue
+            section, key = path.split('.', 1)
+            if section == 'course': merged['course'][key] = frozen['local']['course'].get(key)
+        _apply_snapshot(db, _course(db, copy.derived_course_id), merged, release.license_snapshot, actor)
+        title = merged['course']['title']
+        if title == release.snapshot_data['course']['title']: title = f'{title}（派生副本）'
+        _course(db, copy.derived_course_id).title = title
         copy.applied_release_id, copy.baseline_snapshot, copy.baseline_hash = release.id, release.snapshot_data, release.snapshot_hash
         copy.upstream_status = "current"
     elif action == "ignore": copy.upstream_status = "current"

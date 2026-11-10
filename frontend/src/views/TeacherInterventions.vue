@@ -1,4 +1,5 @@
 <script setup>
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, onMounted, ref } from 'vue'
 import {
   AlertCircle,
@@ -145,7 +146,7 @@ async function publish() {
       idempotency_key: `teacher-intervention-${selectedCourseId.value}-${studentId}`,
     })
     notice.value = result.created
-      ? '干预任务已加入学生路径，等待学生完成并提交学习证据。'
+      ? '干预任务已加入学生路径，等待学生完成并提交学习记录。'
       : '该干预任务已经存在，没有重复创建。'
     data.value = await getM6TeacherInterventions(selectedCourseId.value)
     await loadDetail(studentId, { clear: false })
@@ -179,7 +180,7 @@ onMounted(load)
     <header class="page-heading">
       <div>
         <h1>干预任务</h1>
-        <p>依据学生的真实学习证据安排下一步任务。发布只增加学习路径任务，不会直接改变掌握度。</p>
+        <p></p>
       </div>
       <button class="icon-button" type="button" title="刷新当前课程" aria-label="刷新干预任务" :disabled="loading" @click="load">
         <RefreshCw :size="18" :class="{ spin: loading }" />
@@ -200,12 +201,12 @@ onMounted(load)
       </div>
     </section>
 
-    <div v-if="error" class="feedback error" role="alert"><AlertCircle :size="18" />{{ error }}</div>
+    <div v-if="error" class="feedback error" role="alert"><AlertCircle :size="18" />{{ userMessage(error) }}</div>
     <div v-if="notice" class="feedback notice" role="status"><CheckCircle2 :size="18" />{{ notice }}</div>
 
     <section v-if="loading" class="state-panel" aria-live="polite">
       <RefreshCw class="spin" :size="21" />
-      <div><strong>正在核对授权课程与学生证据</strong><span>页面会保留当前课程和已完成结果。</span></div>
+      <div><strong>正在加载学生学情</strong><span>页面会保留当前课程和已完成结果。</span></div>
     </section>
 
     <section v-else-if="!courses.length" class="state-panel empty">
@@ -215,14 +216,14 @@ onMounted(load)
 
     <section v-else-if="!students.length" class="state-panel empty">
       <UserCheck :size="28" />
-      <div><strong>{{ selectedCourse?.title }} 暂无在读学生</strong><span>学生加入课程并形成学习证据后，会出现在这里。</span></div>
+      <div><strong>{{ selectedCourse?.title }} 暂无在读学生</strong><span>学生加入课程并形成学习记录后，会出现在这里。</span></div>
     </section>
 
     <template v-else>
       <section class="evidence-workspace">
         <aside class="student-list" aria-label="课程学生">
           <div class="pane-heading">
-            <div><h2>选择学生</h2><p>先看证据，再安排干预。</p></div>
+            <div><h2>选择学生</h2><p></p></div>
             <span>{{ students.length }} 人</span>
           </div>
           <button
@@ -244,10 +245,10 @@ onMounted(load)
         </aside>
 
         <section class="student-detail" aria-live="polite">
-          <div v-if="detailLoading" class="detail-loading"><RefreshCw class="spin" :size="20" />正在读取该学生的学习证据</div>
+          <div v-if="detailLoading" class="detail-loading"><RefreshCw class="spin" :size="20" />正在读取该学生的学习记录</div>
           <template v-else-if="detail && selectedStudent">
             <header class="detail-heading">
-              <div><span>当前学生</span><h2>{{ selectedStudent.display_name }}</h2><p>{{ detail.profile?.evidenceMessage || '正在等待更多可信学习证据。' }}</p></div>
+              <div><span>当前学生</span><h2>{{ selectedStudent.display_name }}</h2><p>{{ detail.profile?.evidenceMessage || '正在等待更多可信学习记录。' }}</p></div>
               <span class="evidence-state">{{ detail.profile?.evidenceState === 'sufficient' ? '证据充分' : '证据待补充' }}</span>
             </header>
 
@@ -283,8 +284,8 @@ onMounted(load)
 
             <footer class="intervention-action">
               <div>
-                <strong>{{ selectedIntervention ? '该学生已有干预任务' : '将当前证据转成学习任务' }}</strong>
-                <span>{{ selectedIntervention ? '等待学生提交证据，之后由教师确认完成。' : '任务进入学生路径；只有后续可信学习行为才能更新掌握度。' }}</span>
+                <strong>{{ selectedIntervention ? '该学生已有干预任务' : '安排补充学习' }}</strong>
+                <span>{{ selectedIntervention ? '等待学生提交学习结果，再确认完成。' : '任务将加入学生的学习路径。' }}</span>
               </div>
               <span v-if="selectedIntervention" class="completed-mark"><Check :size="17" />{{ statusLabel(selectedIntervention.node_status) }}</span>
               <button v-else class="primary-button" type="button" :disabled="busy.startsWith('publish-') || !detail.profile?.weakPoints?.length" @click="publish">
@@ -298,10 +299,10 @@ onMounted(load)
 
       <section class="intervention-list">
         <div class="section-heading">
-          <div><h2>执行与复核</h2><p>学生完成任务并提交学习证据后，教师才能确认完成。</p></div>
+          <div><h2>执行与复核</h2><p>学生完成任务并提交学习记录后，教师才能确认完成。</p></div>
           <span>{{ interventions.length }} 项</span>
         </div>
-        <div class="table-head" aria-hidden="true"><span>学生</span><span>干预任务</span><span>路径状态</span><span>学习证据</span><span>下一步</span></div>
+        <div class="table-head" aria-hidden="true"><span>学生</span><span>干预任务</span><span>路径状态</span><span>学习记录</span><span>下一步</span></div>
         <article v-for="item in interventions" :key="item.path_id" class="intervention-row">
           <strong>{{ item.learner_name }}</strong>
           <span>{{ item.title }}</span>
@@ -334,7 +335,7 @@ onMounted(load)
 .student-detail{min-width:0;padding:24px}.detail-loading{display:flex;min-height:340px;align-items:center;justify-content:center;gap:10px;color:var(--color-text-muted);font-size:14px}.detail-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding-bottom:20px;border-bottom:1px solid var(--color-border)}.detail-heading>div>span{color:var(--color-text-secondary);font-size:14px;font-weight:700}.detail-heading h2{margin:4px 0 6px;font-size:23px}.detail-heading p{max-width:620px;margin:0;color:var(--color-text-muted);font-size:14px}
 .evidence-state,.status-label{display:inline-flex;min-height:30px;align-items:center;border:1px solid var(--color-border-strong);border-radius:999px;background:var(--color-surface-subtle);padding:4px 9px;color:var(--color-text-secondary);font-size:14px;white-space:nowrap}.weak-points{padding:20px 0}.weak-points h3{margin:0 0 10px;font-size:17px}.weak-list{display:grid}.weak-list article{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:18px;min-height:70px;border-top:1px solid var(--color-border);padding:11px 2px}.weak-list article>div:first-child{display:grid;gap:3px}.weak-list strong{font-size:15px}.weak-list span,.point-evidence small{color:var(--color-text-muted);font-size:14px}.point-evidence{display:grid;text-align:right}.point-evidence b{font-size:17px}
 .agent-audit{border-top:1px solid var(--color-border);border-bottom:1px solid var(--color-border)}.agent-audit summary{display:grid;grid-template-columns:minmax(0,1fr) auto 18px;align-items:center;gap:10px;padding:14px 2px;cursor:pointer;list-style:none}.agent-audit summary::-webkit-details-marker{display:none}.agent-audit summary>span:first-child{display:flex;align-items:center;gap:8px}.agent-audit summary>span:nth-child(2){color:var(--color-text-muted);font-size:14px}.agent-audit[open] summary>svg{transform:rotate(180deg)}.agent-list{display:grid;gap:0;padding-bottom:12px}.agent-list article{border-top:1px solid var(--color-border);padding:14px 2px}.agent-list header{display:flex;justify-content:space-between;gap:12px}.agent-list header span{color:var(--color-text-muted);font-size:14px}.agent-list p{margin:7px 0 0;color:var(--color-text-secondary);font-size:14px}.agent-list b{color:var(--color-text)}.inline-empty{margin:0;padding:14px 2px;color:var(--color-text-muted);font-size:14px}
-.intervention-action{display:flex;align-items:center;justify-content:space-between;gap:24px;padding-top:20px}.intervention-action>div{display:grid;gap:3px}.intervention-action strong{font-size:16px}.intervention-action span{color:var(--color-text-muted);font-size:14px}.primary-button,.secondary-button{display:inline-flex;min-height:42px;align-items:center;justify-content:center;gap:8px;border-radius:6px;padding:9px 15px;font-size:14px;font-weight:700;cursor:pointer}.primary-button{border:1px solid var(--color-accent);background:var(--color-accent);color:#fff}.primary-button:hover:not(:disabled){background:#06141b}.secondary-button{border:1px solid var(--color-border-strong);background:var(--color-surface);color:var(--color-accent)}.secondary-button:hover:not(:disabled){background:var(--color-surface-subtle)}.primary-button:disabled,.secondary-button:disabled{color:var(--color-text-muted);border-color:var(--color-border);background:var(--color-surface-muted);cursor:not-allowed}
+.intervention-action{display:flex;align-items:center;justify-content:space-between;gap:24px;padding-top:20px}.intervention-action>div{display:grid;gap:3px}.intervention-action strong{font-size:16px}.intervention-action span{color:var(--color-text-muted);font-size:14px}.primary-button,.secondary-button{display:inline-flex;min-height:42px;align-items:center;justify-content:center;gap:8px;border-radius:6px;padding:9px 15px;font-size:14px;font-weight:700;cursor:pointer}.primary-button{border:1px solid var(--color-accent);background:var(--color-accent);color:#fff}.primary-button:hover:not(:disabled){background:var(--color-text)}.secondary-button{border:1px solid var(--color-border-strong);background:var(--color-surface);color:var(--color-accent)}.secondary-button:hover:not(:disabled){background:var(--color-surface-subtle)}.primary-button:disabled,.secondary-button:disabled{color:var(--color-text-muted);border-color:var(--color-border);background:var(--color-surface-muted);cursor:not-allowed}
 .intervention-list{margin-top:28px;border-top:1px solid var(--color-border-strong);border-bottom:1px solid var(--color-border-strong);background:var(--color-surface)}.table-head,.intervention-row{display:grid;grid-template-columns:minmax(110px,.8fr) minmax(220px,1.6fr) minmax(100px,.7fr) minmax(110px,.7fr) minmax(150px,1fr);align-items:center;gap:14px;padding:12px 20px}.table-head{border-top:1px solid var(--color-border);background:var(--color-surface-subtle);color:var(--color-text-secondary);font-size:14px;font-weight:700}.intervention-row{min-height:70px;border-top:1px solid var(--color-border);font-size:14px}.intervention-row>span:nth-child(2){color:var(--color-text-secondary)}.list-empty{min-height:120px;display:grid;place-items:center;border-top:1px solid var(--color-border);color:var(--color-text-muted);font-size:14px}
 .spin{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 </style>

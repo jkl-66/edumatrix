@@ -45,7 +45,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_legacy_inventory_is_registered_and_no_deletion_is_claimed():
     summary = legacy_governance_summary(ROOT)
-    assert summary["consumer_count"] == 43
+    # Profile history now reads actual aggregated learning events directly.
+    assert summary["consumer_count"] == 41
     assert summary["consumer_file_count"] == 8
     assert summary["repository_method_count"] == 41
     assert summary["dormant_model_call_count"] == 5

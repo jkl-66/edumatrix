@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from fastapi import HTTPException
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from zipfile import ZipFile
 
@@ -20,6 +21,16 @@ from app.source_admission import (
 from tests.api_test_helpers import auth_headers
 
 
+def test_downloaded_html_prefers_article_body_and_preserves_python_indentation():
+    code = "values = []\nfor number in range(3):\n    values.append(number)\nprint(values)"
+    html = ('<html><body><nav>Navigation</nav><main><div class="article-intro"><h1>Python 列表</h1>'
+                '<p>' + '循环按顺序处理列表中的每一项。' * 8 + '</p><pre>' + code + '</pre></div>'
+                '<aside>Advertising</aside></main><footer>Footer links</footer></body></html>')
+    text = knowledge_api.extract_web_material(html)['markdown']
+    assert code in text
+    assert 'Navigation' not in text and 'Advertising' not in text and 'Footer links' not in text
+
+
 def _candidate(file_format: str = "html") -> DBWebSourceCandidate:
     return DBWebSourceCandidate(
         owner_public_id="b26-owner",
@@ -29,6 +40,7 @@ def _candidate(file_format: str = "html") -> DBWebSourceCandidate:
         source_domain="example.org",
         file_format=file_format,
         license_status="open_permissive",
+        review_status="pending_review",
         usage_hint="isolated test use",
         parsing_impact=_parsing_impact(file_format),
     )
@@ -185,3 +197,32 @@ def test_canonical_admission_persists_download_failure_for_retry(monkeypatch: py
         assert item["processingStatus"] == "failed"
         assert item["retryable"] is True
         assert item["failure"]["code"] == "download_timeout"
+        async def corrupt_pdf(**_kwargs):
+            return b'not a PDF', 'synthetic-corrupt.pdf', 'https://open.example.org/course/lesson.pdf'
+        monkeypatch.setattr(knowledge_api, '_download_remote_material', corrupt_pdf)
+        parse_failed = client.post(f'/api/knowledge/discovery/candidates/{candidate_id}/admit',
+            headers=headers, json={'course_id': course_id, 'license_status': 'open_permissive', 'usage_hint': '合成测试材料'})
+        assert parse_failed.status_code == 422
+        after = client.get('/api/knowledge/discovery/candidates', headers=headers).json()
+        updated = next(row for row in after['items'] if row['id'] == candidate_id)
+        assert updated['processingPipeline']['download']['status'] == 'completed'
+        assert updated['processingPipeline']['parse']['status'] == 'failed'
+        assert updated['reviewStatus'] == 'pending_review' and updated['retryable']
+
+
+def test_empty_owned_course_can_search_for_its_first_material():
+    from app.database import DBCourse, DBUser, SessionLocal
+    from knowledge_api import _profile_conditioned_discovery_context
+    with TestClient(app) as client:
+        headers=auth_headers(client,"b26-empty-course-search")
+        created=client.post("/api/knowledge/courses",headers=headers,json={"title":"尚未导入的课程","subject":"NumPy"})
+        assert created.status_code==201
+        course_id=created.json()["course"]["id"]
+        with SessionLocal() as db:
+            actor=db.query(DBUser).filter_by(username="b26-empty-course-search").one()
+            context=_profile_conditioned_discovery_context(db,actor,course_id=course_id)
+            assert context["course"]["course_id"]==course_id
+            course=db.get(DBCourse,course_id);course.status="archived";db.commit()
+            with pytest.raises(HTTPException) as error:
+                _profile_conditioned_discovery_context(db,actor,course_id=course_id)
+            assert error.value.status_code==409

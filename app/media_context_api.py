@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import Field
+from pydantic import Field, StringConstraints
 
 from app.auth import get_current_user
 from app.authorization import require_course_access
@@ -23,7 +25,7 @@ class ResourceInput(StrictModel):
     course_id: str | None = Field(default=None, max_length=128)
     language: str = Field(default="", max_length=32)
     locator: str = Field(default="", max_length=2048)
-    content: str = Field(default="", max_length=200000)
+    content: Annotated[str, StringConstraints(strip_whitespace=False)] = ""
     duration_ms: int = Field(default=0, ge=0, le=86_400_000)
 
 

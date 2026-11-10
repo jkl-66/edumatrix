@@ -113,7 +113,7 @@ def evaluate_tactical_pathway(
             "description": "针对新接触或前置依赖欠缺的概念，开启低负荷概念锚定与拓扑解构机制。",
             "difficulty_rating": 1
         }
-    elif (is_code_style or has_code_pref) and any(kw in major_lower for kw in ["计算机", "软件", "cs", "software", "信息", "开发", "技术"]):
+    elif is_code_style or has_code_pref:
         return {
             "code": "PRACTITIONER",
             "name": "实战极客线",
@@ -122,7 +122,7 @@ def evaluate_tactical_pathway(
             "description": "契合您的技术背景与代码直觉，首选代码逻辑与单元测试沙箱实操。",
             "difficulty_rating": 4
         }
-    elif (is_theory_style or has_theory_pref) and any(kw in major_lower for kw in ["数学", "math", "统计", "物理", "physics", "理论"]):
+    elif is_theory_style or has_theory_pref:
         return {
             "code": "EXPLORER",
             "name": "学术探究线",
@@ -306,12 +306,12 @@ def get_smart_recommendations(
     if not profile:
         # 兜底 fallback 画像
         class DummyProfile:
-            concept_mastery = {"机器学习": 0.35, "线性回归": 0.40}
-            learning_goals = ["机器学习", "线性回归"]
-            weak_points = ["机器学习"]
-            interaction_preferences = ["图示演示"]
-            cognitive_style = "图示型"
-            major = "计算机"
+            concept_mastery = {}
+            learning_goals = []
+            weak_points = []
+            interaction_preferences = []
+            cognitive_style = ""
+            major = ""
             frustration_index = 0.0
             learning_state_causes = {}
         profile = DummyProfile()
@@ -330,7 +330,7 @@ def get_smart_recommendations(
     if causes:
         for k, v in causes.items():
             percentage = getattr(v, "percentage", 0) if not isinstance(v, dict) else v.get("percentage", 0)
-            if percentage > top_cause_percentage:
+            if percentage >= 30 and percentage > top_cause_percentage:
                 top_cause = k
                 top_cause_percentage = percentage
 
@@ -347,7 +347,7 @@ def get_smart_recommendations(
     has_code_pref = "code" in pref_str or "代码" in pref_str
     has_visual_pref = "visual" in pref_str or "图示" in pref_str or "图形" in pref_str
     has_video_pref = "video" in pref_str or "视频" in pref_str or "微课" in pref_str
-    has_theory_pref = "theory" in pref_str or "理论" in pref_str or "讲义" in pref_str
+    has_theory_pref = any(word in pref_str for word in ("theory", "理论", "讲义", "公式", "推导", "反例"))
     has_quiz_pref = "quiz" in pref_str or "做题" in pref_str or "练习" in pref_str or "测验" in pref_str
 
     # 2. 确定待推荐的目标概念
@@ -460,6 +460,8 @@ def get_smart_recommendations(
 
     # 3. 加载该学生所有的笔记缓存，用于判断 5 维资源是否已生成
     student_notes = db.query(DBNote).filter(DBNote.student_id == student_id).all()
+    from app.profile_adaptation import build_profile_adaptation
+    adaptation = build_profile_adaptation({}, profile=profile)
 
     results = []
     for c_node in target_concepts:
@@ -639,81 +641,36 @@ def get_smart_recommendations(
         elif top_cause == "affective_barrier":
             cause_desc = "挫败感偏高"
 
-        reason = (
-            f"分析您在【{c_node}】上的最新学情：当前掌握度为 {int(concept_mastery_val * 100)}%。"
-            f"结合您的【{style_desc}】风格、【{cause_desc}】诊断主因及【{pathway_meta['name']}】策略，"
-            f"系统已首选为您定制推送了【{top_res_name}】。"
-        )
-
-        # === 专属学情诊断与改进意见（细节分析、原因、意见） ===
-        bloom_level = "记忆" if concept_mastery_val < 0.20 else "理解" if concept_mastery_val < 0.40 else "应用" if concept_mastery_val < 0.60 else "分析" if concept_mastery_val < 0.75 else "评价" if concept_mastery_val < 0.90 else "创造"
-        
-        detail_analysis = f"当前掌握度为 {int(concept_mastery_val * 100)}%，在知识点认知上处于【{bloom_level}】阶段。"
-        if concept_mastery_val < 0.35:
-            detail_analysis += f"对【{c_node}】的基本定义和核心逻辑建立尚不完整，存在明显的认知薄弱。"
-        elif concept_mastery_val < 0.65:
-            detail_analysis += f"已掌握【{c_node}】的表层概念，但在计算推导或实际应用中仍存在困难。"
-        else:
-            detail_analysis += f"已基本掌握【{c_node}】的核心要义，具备较好的分析与迁移能力。"
-            
-        reason_desc = f"诊断主因为【{cause_desc}】。"
-        if top_cause == "prerequisite_gap":
-            reason_desc += "前置依赖概念掌握不足，导致在理解当前概念时遇到了理解断层。"
-        elif top_cause == "misconception":
-            reason_desc += "存在概念混淆（如正反例区分不清），在概念辨析时容易产生混淆。"
-        elif top_cause == "cognitive_load":
-            reason_desc += "概念本身的数学或逻辑复杂度高，导致单步推理时产生过载。"
-        elif top_cause == "affective_barrier":
-            reason_desc += "近期连续答错或受阻，产生了明显的学习挫败感。"
-        else:
-            reason_desc += "常规学习状态推演，未发现显性阻碍漏洞。"
-            
-        advice_desc = f"建议采取【{pathway_meta['name']}】战术路线进行针对性强化。"
-        if pathway_code == "ICE_BREAKER":
-            advice_desc += "建议优先看讲义和思维导图，建立物理直觉，暂时不建议强攻代码和复杂数学题。"
-        elif pathway_code == "PRACTITIONER":
-            advice_desc += "建议直接阅读工程级代码实现并进行沙箱编写，以源码和单元测试驱动概念理解。"
-        elif pathway_code == "EXPLORER":
-            advice_desc += "建议深入研究 LaTeX 公式推导和收敛界限证明，用数学的严谨性稳固知识结构。"
-        elif pathway_code == "RESCUE":
-            advice_desc += "建议先阅读易错考点反思卡片，然后做 3 道自适应辨析题以巩固记忆、对抗遗忘。"
-        else:
-            advice_desc += "建议将概念应用到实际场景中，建立多学科知识融合连接。"
-            
+        mastery_text = (f"当前掌握判断约为{round(concept_mastery_val * 100)}%，请结合具体作答与实践记录理解。"
+                        if c_node in mastery else "这个知识点还没有足够的掌握依据，可先学习再通过练习确认。")
+        reason = f"围绕{c_node}，结合你已记录的{style_desc}学习偏好，建议先使用{top_res_name}。{mastery_text}"
         learning_state_overview = {
-            "detail_analysis": detail_analysis,
-            "reason": reason_desc,
-            "advice": advice_desc
+            "detail_analysis": mastery_text,
+            "reason": (f"画像记录中提到了{cause_desc}，可据此调整学习节奏；这不是本知识点困难原因的确定结论。"
+                       if top_cause else "目前没有足够依据判断具体困难原因，先结合学习目标和偏好安排。"),
+            "advice": adaptation["practice_strategy"],
         }
 
         # --- 战术路线大纲编译器 (Overview Compiler) ---
         resources_map = {}
 
         # 针对每个资源维度，动态或定制化地编译 overview，使其根据知识点内容和路线有所不同
-        lecture_overview = get_concept_specific_overview(c_node, "lecture", pathway_code)
-        mindmap_overview = get_concept_specific_overview(c_node, "mindmap", pathway_code)
-        code_overview = get_concept_specific_overview(c_node, "code", pathway_code)
-        quiz_overview = get_concept_specific_overview(c_node, "quiz", pathway_code)
-        video_overview = get_concept_specific_overview(c_node, "video", pathway_code)
-
+        # Recommendations describe a proposed learning action, not an already generated asset.
+        lecture_overview = f"围绕{c_node}，{adaptation['explanation_style']}；{adaptation['content_focus']}。"
+        mindmap_overview = f"梳理{c_node}的关键概念、前提和联系，并用一个例子检查理解。"
+        code_overview = f"用可运行的{c_node}案例验证关键机制，再比较一个参数或输入变化。{adaptation['practice_strategy']}。"
+        quiz_overview = f"用{c_node}练习检查理解。{adaptation['hint_policy']}。"
+        video_overview = f"查找与{c_node}及当前学习目标相符的讲解，观看后记录一个理解或疑问。"
         res_meta = {
-            "lecture": ("10分钟", 2, "核心概念第一直觉"),
-            "mindmap": ("4分钟", 1, "核心定义与依赖分级"),
-            "code": ("12分钟", 2, "极简代码逐行精读"),
-            "quiz": ("8分钟", 2, "单步定义极速自测"),
-            "video": ("3分钟", 1, "物理运行动画直觉")
+            "lecture": ("10分钟", 2, "理解概念与条件"),
+            "mindmap": ("4分钟", 1, "梳理概念联系"),
+            "code": ("12分钟", 2, "运行与比较"),
+            "quiz": ("8分钟", 2, "练习与反馈"),
+            "video": ("3分钟", 1, "观看与回顾"),
         }
-
-        # 个性化大纲编译器后处理：根据专业背景与心理学脚手架动态修饰 overview
-        if any(kw in major_lower for kw in ["计算机", "软件", "cs", "software", "技术"]):
-            code_overview += " (代码采用规范工程级写法，便于集成)"
-        elif any(kw in major_lower for kw in ["数学", "math", "统计", "物理"]):
-            lecture_overview += " (公式经严谨排版与严格证明校验)"
-
         if frustration >= 0.70:
-            code_overview += " （针对您的挫败感，已提供简易数据输入案例以降低上手难度）"
-            lecture_overview += " （内容已精简，重点难点有通俗类比，降低理解负荷）"
-            quiz_overview += " （配备了渐进式解题提示，助您平稳度过难关）"
+            code_overview += "建议先用简易输入完成第一步，再逐步增加难度。"
+            lecture_overview += "建议缩短每轮内容，遇到困难时先补一个例子。"
 
         # 收集 5 维维度数据
         DIMENSIONS = [
@@ -752,7 +709,7 @@ def get_smart_recommendations(
 
         results.append({
             "concept": c_node,
-            "mastery": round(concept_mastery_val, 2),
+            "mastery": round(concept_mastery_val, 2) if c_node in mastery else None,
             "badge": badge,
             "reason": reason,
             "learning_state_overview": learning_state_overview,

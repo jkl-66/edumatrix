@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -10,7 +10,7 @@ from app.m5_assessment_core import (
     MisconceptionDecisionInput, QuestionVersionInput, create_question_version,
     decide_misconception, ensure_legacy_misconception_candidate,
     learner_attempt_payload, learner_question_payload, propose_misconception,
-    record_attempt, record_legacy_quiz_attempt, review_queue, schedule_delayed_retest,
+    learner_explanation_has_content, record_attempt, record_legacy_quiz_attempt, review_queue, schedule_delayed_retest,
     RetestAttemptInput, submit_delayed_retest,
 )
 
@@ -54,6 +54,40 @@ def test_learner_payload_never_exposes_answer_or_explanation():
     assert "answer_key" not in payload and "explanation" not in payload and "scoring_rule" not in payload
 
 
+def test_explanation_quality_gate_keeps_concise_teaching_and_code():
+    question = {
+        "prompt": "选择 model.fit 的正确作用",
+        "options": ("A. 训练模型", "B. 只显示图形"),
+        "answer_key": {"choice": "A"},
+        "question_type": "single_choice",
+        "knowledge_point": "模型训练",
+    }
+    assert not learner_explanation_has_content("", **question)
+    assert not learner_explanation_has_content(
+        "答案已依据课程来源核验。生成蓝图已经确认。", **question,
+    )
+    assert learner_explanation_has_content(
+        "正确答案是A。model.fit(X, y)会根据训练样本拟合参数，model.predict(X)则用于产生预测。",
+        **question,
+    )
+    assert learner_explanation_has_content(
+        "正确答案是A。执行 `model.fit(X, y)` 后，模型会得到训练出的参数。",
+        **question,
+    )
+    assert learner_explanation_has_content("参考答案：A。因为2+3=5。", **question)
+    assert learner_explanation_has_content("```python\nsource_ref = [1, 2]\nprint(sum(source_ref))  # 3\n```", **question)
+
+
+@pytest.mark.parametrize("stamp", [datetime(2026, 10, 25, 13, 27), datetime(2026, 10, 25, 21, 27, tzinfo=timezone(timedelta(hours=8)))])
+def test_attempt_history_time_keeps_the_instant_for_local_display(stamp):
+    attempt = DBAssessmentAttempt(id="time-test", question_version_id="question-test", submitted_at=stamp)
+    returned = datetime.fromisoformat(learner_attempt_payload(attempt)["submitted_at"])
+    assert returned.tzinfo is not None
+    assert returned.astimezone(timezone(timedelta(hours=8))).hour == 21
+    assert returned.minute == 27
+    assert attempt.submitted_at == stamp
+
+
 def test_attempt_is_version_bound_idempotent_and_conflict_safe():
     session = _session()
     version = _version(session)
@@ -67,6 +101,56 @@ def test_attempt_is_version_bound_idempotent_and_conflict_safe():
     assert first.question_version_id == version.id
     with pytest.raises(AssessmentCoreError, match="another attempt"):
         record_attempt(session, owner_public_id="owner", attempt=attempt.model_copy(update={"answer": {"choice": "B"}}))
+
+
+def test_incomplete_legacy_choices_do_not_create_grades_or_mastery_but_keep_history():
+    from app.database import DBAssessmentAbilityState, DBAssessmentGradingResult
+
+    session = _session()
+    version = _version(session)
+    attempt = AttemptInput(question_version_id=version.id, idempotency_key="legacy-history-363", answer={"choice": "B"})
+    original, _ = record_attempt(session, owner_public_id="owner", attempt=attempt)
+    # Model an old stored version with missing option content, not a new question.
+    version.options = ["A. 有效内容", "B. source_ref: src-old-material"]
+    session.flush()
+    stored = (version.options[:], version.answer_key.copy(), version.content_hash, original.score)
+    counts = [session.query(model).count() for model in (DBAssessmentAttempt, DBAssessmentGradingResult)]
+    ability = session.query(DBAssessmentAbilityState).one()
+    state = (ability.response_count, list(ability.theta), ability.lock_version)
+    payload = learner_question_payload(version, session.get(DBAssessmentQuestion, version.question_id))
+    assert payload["options"] == [] and "选项" in payload["content_issue"]
+    with pytest.raises(AssessmentCoreError) as error:
+        record_attempt(session, owner_public_id="owner", attempt=attempt.model_copy(update={"idempotency_key": "legacy-new-attempt-363"}))
+    assert error.value.code == "question_content_incomplete"
+    replay, created = record_attempt(session, owner_public_id="owner", attempt=attempt)
+    assert replay.id == original.id and not created
+    assert counts == [session.query(model).count() for model in (DBAssessmentAttempt, DBAssessmentGradingResult)]
+    assert state == (ability.response_count, list(ability.theta), ability.lock_version)
+    assert stored == (version.options, version.answer_key, version.content_hash, original.score)
+
+
+@pytest.mark.parametrize("bad_option", ["B. ", "B. source_ref: src-old-material"])
+def test_new_questions_require_actual_option_bodies(bad_option):
+    session = _session()
+    with pytest.raises(AssessmentCoreError) as error:
+        create_question_version(session, owner_public_id="owner", course_id=None,
+            question_type="single_choice", origin="manual", version=QuestionVersionInput(
+                prompt="哪项正确？", options=("A. 实际选项", bad_option),
+                answer_key={"choice": "A"}, scoring_rule={"type": "exact"}))
+    assert error.value.code == "question_options_invalid"
+    assert session.query(DBAssessmentQuestionVersion).count() == 0
+
+
+def test_adaptive_selection_skips_incomplete_legacy_question():
+    from app.m5_assessment_core import select_cat_question
+    session = _session()
+    bad = _version(session)
+    good = _version(session)
+    bad.options = []
+    selected, trace, _ = select_cat_question(session, owner_public_id="owner", course_id=None,
+        candidates=[(session.get(DBAssessmentQuestion, version.question_id), version) for version in (bad, good)])
+    assert selected.id == good.id
+    assert [item["question_version_id"] for item in trace.candidate_metrics] == [good.id]
 
 
 def test_misconception_requires_owner_decision_before_review_queue():
@@ -163,7 +247,8 @@ def test_review_queue_merges_confirmed_misconceptions_and_legacy_sm2():
     session.add(DBUser(public_id="owner", username="learner", hashed_password="x"))
     session.add(DBStudentProfile(student_id="learner"))
     session.flush()
-    session.add(DBReviewPlan(student_id="learner", concept="retrieval", priority=0.8))
+    session.add(DBReviewPlan(student_id="learner", concept="retrieval", priority=0.8,
+                             course_id="course-1", next_review_at=datetime(2026, 10, 25, 23, 30)))
     version = _version(session)
     attempt, _ = record_attempt(session, owner_public_id="owner", attempt=AttemptInput(
         question_version_id=version.id, idempotency_key="attempt-key-007", answer={"choice": "A"},
@@ -179,6 +264,10 @@ def test_review_queue_merges_confirmed_misconceptions_and_legacy_sm2():
     queue = review_queue(session, owner_public_id="owner")
     assert {item["source_type"] for item in queue} == {"misconception_review", "sm2_review_plan"}
     assert all(item["stable_mastery"] is False for item in queue)
+    plan = next(item for item in queue if item["source_type"] == "sm2_review_plan")
+    assert plan["due_at"] == "2026-10-25T23:30:00Z"
+    assert plan["course_id"] == "course-1"
+    assert "SM-2" not in plan["reason"]
 
 
 def test_legacy_quiz_bridge_freezes_one_question_version_and_is_idempotent():

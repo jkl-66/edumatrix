@@ -15,6 +15,8 @@ from app.database import (
     Base,
     DBAssessmentQuestion,
     DBAssessmentQuestionVersion,
+    DBChapter,
+    DBChapterKnowledgePoint,
     DBCourse,
     DBKnowledgePoint,
     DBLearningEvent,
@@ -25,6 +27,7 @@ from app.database import (
     DBPlanVersion,
     DBProfileSnapshot,
     DBReviewPlan,
+    DBSourceDocument,
     DBStudentProfile,
     DBUser,
     DBWrongQuestion,
@@ -196,6 +199,217 @@ def _graded_event(name: str) -> DBLearningEvent:
         payload={"graded": True, "correct": correct, "score": 1.0 if correct else 0.0},
         occurred_at=BASE_TIME + (timedelta(minutes=10) if correct else timedelta()),
     )
+
+
+@pytest.mark.parametrize("quality", [2, 4, 5])
+def test_flashcard_familiarity_changes_schedule_without_changing_measured_mastery(quality):
+    from app.crud import apply_review_feedback
+
+    session, owner, _ = _session()
+    profile = session.get(DBStudentProfile, owner.username)
+    profile.weak_points = [CONCEPT]
+    session.commit()
+    before = dict(profile.concept_mastery)
+    plan = apply_review_feedback(session, owner.username, CONCEPT, quality)
+    session.refresh(profile)
+    assert plan.review_count == 1 and plan.next_review_at is not None
+    assert plan.mastery != 0.3
+    assert profile.concept_mastery == before
+    assert profile.weak_points == [CONCEPT]
+
+
+@pytest.mark.parametrize("legacy_trace", [False, True])
+def test_legacy_self_rating_repair_keeps_grades_and_old_snapshots_and_is_repeatable(legacy_trace):
+    from app.learning_aggregation import repair_self_rated_mastery
+
+    session, owner, _ = _session()
+    event = _graded_event("correct")
+    session.add(event)
+    session.flush()
+    aggregate_learning_event(session, event=event)
+    session.commit()
+    profile = session.get(DBStudentProfile, owner.username)
+    actual = dict(profile.concept_mastery)
+    if legacy_trace:
+        trace = dict(profile.knowledge_traces[CONCEPT])
+        trace.pop("source_event_id")
+        profile.knowledge_traces = {CONCEPT: trace}
+    snapshots = {row.id: row.content_hash for row in session.query(DBProfileSnapshot).all()}
+    count = session.query(DBLearningEvent).count()
+    # Isolated historical fixture: the old flashcard code wrote familiarity
+    # directly into mastery while leaving the accepted trace and grade intact.
+    profile.concept_mastery = {CONCEPT: 0.34}
+    session.add(DBReviewPlan(student_id=owner.username, concept=CONCEPT, mastery=0.34, review_count=1, last_quality=4))
+    session.commit()
+    assert repair_self_rated_mastery(session) == 1
+    session.commit()
+    assert profile.concept_mastery == actual
+    assert session.query(DBLearningEvent).count() == count
+    assert event.payload["score"] == 1.0
+    assert all(session.get(DBProfileSnapshot, key).content_hash == value for key, value in snapshots.items())
+    correction = session.query(DBProfileSnapshot).filter_by(profile_version="flashcard-score-repair-v1").one()
+    assert correction.snapshot["concept_mastery"] == actual
+    assert correction.snapshot["source_event_id"] == event.id
+    assert repair_self_rated_mastery(session) == 0
+    session.commit()
+    assert session.query(DBProfileSnapshot).count() == len(snapshots) + 1
+
+
+def test_self_rating_repair_does_not_guess_without_a_frozen_graded_trace():
+    from app.learning_aggregation import repair_self_rated_mastery
+
+    session, owner, _ = _session()
+    profile = session.get(DBStudentProfile, owner.username)
+    session.add(DBReviewPlan(student_id=owner.username, concept=CONCEPT, mastery=0.4, review_count=1, last_quality=4))
+    session.commit()
+    assert repair_self_rated_mastery(session) == 0
+    assert profile.concept_mastery == {CONCEPT: 0.4}
+
+
+def test_missed_retests_repair_current_feedback_without_rewriting_old_learning(monkeypatch):
+    import app.learning_aggregation as aggregation
+
+    session, owner, _ = _session()
+    original_resolver = aggregation._event_concept
+    monkeypatch.setattr(aggregation, "_event_concept", lambda db, event:
+                        None if event.event_type == "delayed_retest_passed"
+                        else original_resolver(db, event))
+    events = []
+    for index in range(2):
+        event = _graded_event("correct")
+        event.id = f"delayed-{index}"
+        event.idempotency_key = event.id
+        event.event_type = "delayed_retest_passed"
+        event.object_type = "assessment"
+        event.context_ref = {"courseId": COURSE}
+        event.payload = {"correct": True, "stable_retest": True, "delay_hours": 24}
+        event.occurred_at = BASE_TIME + timedelta(days=1, minutes=index)
+        session.add(event)
+        session.flush()
+        aggregation.aggregate_learning_event(session, event=event)
+        events.append(event)
+    profile = session.get(DBStudentProfile, owner.username)
+    assert profile.concept_mastery == {CONCEPT: 0.4}
+    # A later real observation must remain part of the corrected calculation.
+    later = _graded_event("correct")
+    later.occurred_at = BASE_TIME + timedelta(days=2)
+    session.add(later)
+    session.flush()
+    aggregation.aggregate_learning_event(session, event=later)
+    old_mastery = dict(profile.concept_mastery)
+    snapshots = {row.id: (row.content_hash, dict(row.snapshot))
+                 for row in session.query(DBProfileSnapshot).all()}
+    original_events = [(row.id, dict(row.payload), row.occurred_at)
+                       for row in session.query(DBLearningEvent).order_by(DBLearningEvent.id)]
+    monkeypatch.setattr(aggregation, "_event_concept", original_resolver)
+    assert aggregation.repair_delayed_retest_projection(session) == 2
+    session.commit()
+    corrected_mastery = dict(profile.concept_mastery)
+    assert corrected_mastery[CONCEPT] > old_mastery[CONCEPT]
+    assert profile.knowledge_traces[CONCEPT]["attempts"] == 3
+    assert profile.knowledge_traces[CONCEPT]["source_event_id"] == later.id
+    plan = session.query(DBReviewPlan).filter_by(student_id=owner.username).one()
+    assert plan.review_count == 2
+
+    assert plan.next_review_at == later.occurred_at + timedelta(days=plan.interval_days)
+    correction = session.query(DBProfileSnapshot).filter_by(profile_version="delayed-retest-repair-v1").one()
+    assert correction.snapshot["corrected_event_ids"] == [event.id for event in events]
+    assert correction.snapshot["concept_mastery"] == corrected_mastery
+    feedback = aggregation.get_learning_aggregation(session, event_id=later.id)
+    assert feedback.result["steps"]["profile_snapshot"]["profile_snapshot_id"] == correction.id
+    assert all(session.get(DBProfileSnapshot, key).content_hash == value[0]
+               and session.get(DBProfileSnapshot, key).snapshot == value[1] for key, value in snapshots.items())
+    assert [(row.id, dict(row.payload), row.occurred_at)
+            for row in session.query(DBLearningEvent).order_by(DBLearningEvent.id)] == original_events
+    assert aggregation.repair_delayed_retest_projection(session) == 0
+    assert profile.concept_mastery == corrected_mastery
+    assert plan.review_count == 2
+
+
+def test_removed_wrong_question_stays_removed_until_a_new_wrong_answer():
+    session, owner, _ = _session()
+    wrong = _graded_event("wrong")
+    session.add(wrong)
+    session.flush()
+    aggregate_learning_event(session, event=wrong)
+    session.delete(session.query(DBWrongQuestion).one())
+    session.commit()
+    correct = _graded_event("correct")
+    session.add(correct)
+    session.flush()
+    aggregate_learning_event(session, event=correct)
+    assert session.query(DBWrongQuestion).count() == 0
+    assert session.get(DBLearningEvent, wrong.id).payload["score"] == 0.0
+    aggregate_learning_event(session, event=correct)
+    assert session.query(DBWrongQuestion).count() == 0
+    wrong_again = _graded_event("wrong")
+    wrong_again.id = "wrong-again"
+    wrong_again.idempotency_key = "wrong-again"
+    wrong_again.occurred_at = BASE_TIME + timedelta(minutes=20)
+    session.add(wrong_again)
+    session.flush()
+    aggregate_learning_event(session, event=wrong_again)
+    assert session.query(DBWrongQuestion).one().source_event_id == wrong_again.id
+
+
+@pytest.mark.parametrize("mastery,weak_ids,expected", [
+    ({"status": "known", "score": 0.95, "evidence_item_count": 2}, [], "completed"),
+    ({"status": "known", "score": 0.95}, [], "in_progress"),
+    ({"status": "unknown", "score": 0.95}, [], "in_progress"),
+    ({"status": "known", "score": 0.95, "evidence_item_count": 2}, ["kp-prerequisite"], "in_progress"),
+])
+@pytest.mark.parametrize("explicit_context", [True, False])
+def test_diagnosed_prerequisite_allows_real_completion_without_faking_prior_learning(mastery, weak_ids, expected, explicit_context):
+    from app.learning_aggregation import _project_path
+    from app.m5_learning import _completed_node_ids_today
+    from app.migrations import _repair_path_completion_projection
+
+    session, owner, _ = _session()
+    session.add(DBKnowledgePoint(id="kp-prerequisite", domain_pack="test", code="prior", version="1", title="Prior"))
+    session.add(DBSourceDocument(id="src-prerequisite", course_id=COURSE, title="Prerequisite source",
+                                 filename="source.md", file_format="md", content_hash="d" * 64))
+    session.add_all([
+        DBChapter(id="chapter-prior", course_id=COURSE, source_document_id="src-prerequisite", stable_key="prior", title="Prior", position=0),
+        DBChapter(id="chapter-current", course_id=COURSE, source_document_id="src-prerequisite", stable_key="current", title="Current", position=1),
+    ])
+    session.flush()
+    session.add_all([
+        DBChapterKnowledgePoint(chapter_id="chapter-prior", knowledge_point_id="kp-prerequisite"),
+        DBChapterKnowledgePoint(chapter_id="chapter-current", knowledge_point_id="kp-gradient-descent"),
+        DBPathNode(id="node-prior", learning_path_id="path-f2-aggregation", node_key="prior", sequence=0,
+                   node_type="chapter", target_object_id="chapter-prior", title="Prior", status="pending"),
+        DBProfileSnapshot(owner_public_id=OWNER, profile_version="diagnostic", trace_id="diagnostic",
+            content_hash="e" * 64, snapshot={"course_id": COURSE,
+                "mastery_by_knowledge_point": {"kp-prerequisite": mastery}, "weak_knowledge_point_ids": weak_ids}),
+    ])
+    node = session.get(DBPathNode, "node-f2-aggregation")
+    node.node_type = "chapter"
+    node.target_object_id = "chapter-current"
+    node.prerequisites = ["prior"]
+    event = _graded_event("correct")
+    if not explicit_context:
+        event.context_ref = {"courseId": COURSE}
+    event.occurred_at = datetime.utcnow()
+    session.add(event)
+    session.commit()
+    before_mastery = dict(session.query(DBStudentProfile).filter_by(student_id=owner.username).one().concept_mastery)
+    _project_path(session, event)
+    session.commit()
+    assert node.status == expected
+    assert session.get(DBPathNode, "node-prior").status == "pending"
+    assert _completed_node_ids_today(session, owner_public_id=OWNER, course_id=COURSE, nodes=[node]) == (
+        {node.id} if expected == "completed" else set()
+    )
+    # Repair a previously blocked projection, including idempotent startup replay.
+    node.status = "in_progress"
+    session.commit()
+    with session.bind.begin() as connection:
+        _repair_path_completion_projection(connection)
+        _repair_path_completion_projection(connection)
+    session.expire_all()
+    assert node.status == expected
+    assert session.query(DBLearningEvent).count() == 1
+    assert session.query(DBStudentProfile).filter_by(student_id=owner.username).one().concept_mastery == before_mastery
 
 
 def _projection(order: tuple[str, ...]) -> dict:

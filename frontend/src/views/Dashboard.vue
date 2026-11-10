@@ -1,4 +1,5 @@
 <script setup>
+import { learningText, displayLabel } from '../utils/learningCopy.js'
 import { ref, onMounted, onUnmounted, computed, nextTick, watch, createApp, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useCourseContextStore } from '../stores/courseContext'
@@ -80,7 +81,7 @@ const focus = computed(() => dashboardSummary.value?.focus || {
   title: activeLearningTarget.value || '继续当前学习安排',
   strategy: '按已确认路径完成当前任务，达到完成标准后再进入下一知识点。',
   reason: '来自当前学习路径。',
-  completion_criteria: '完成当前任务并保存有效学习证据。',
+  completion_criteria: '完成当前任务并保存有效学习记录。',
   estimated_minutes: todayTasks.value[0]?.estimate_minutes || [],
   source_refs: [],
 })
@@ -115,8 +116,8 @@ const hasProfileSnapshot = computed(() => Boolean(
   || workspaceOverview.value?.profile?.snapshot_id
 ))
 const weakSummaryEmptyCopy = computed(() => hasProfileSnapshot.value
-  ? '当前画像快照没有确认的薄弱点；继续学习后，系统会用新的证据更新。'
-  : '当前没有可用的画像快照，完成诊断或确认画像后才会显示薄弱点。')
+  ? '目前没有需要优先强化的知识点。'
+  : '完成诊断，了解需要重点学习的内容。')
 const trendPoints = computed(() => dashboardSummary.value?.trend || [])
 const activitySummary = computed(() => dashboardSummary.value?.activity_summary || { event_count: 0, active_days: 0 })
 const aggregationNotice = computed(() => dashboardSummary.value?.aggregation?.message || dashboardSummaryError.value)
@@ -193,7 +194,7 @@ function buildDashboardFallback(overview) {
     metrics: [
       { label: '路径进度', value: nodes.length ? `${completed}/${nodes.length}` : '暂无', detail: '已完成任务 / 路径任务', source_refs: [] },
       { label: '到期复习', value: String(overview?.review?.due_count || 0), detail: '来自当前课程复习队列', source_refs: [] },
-      { label: '需强化', value: String(overview?.profile?.weak_knowledge_points?.length || 0), detail: '来自最近画像快照', source_refs: [] },
+      { label: '需强化', value: String(overview?.profile?.weak_knowledge_points?.length || 0), detail: '来自最近学习情况记录', source_refs: [] },
       { label: '最近更新', value: '待同步', detail: '保留当前路径继续学习', source_refs: [] },
     ],
     review_summary: overview?.review || { due_count: 0, items: [] },
@@ -204,7 +205,7 @@ function buildDashboardFallback(overview) {
       mastery: null,
       mastery_status: 'unknown',
       mastery_label: '未知（暂无掌握证据）',
-      weak_reason: '当前画像快照记录该知识点需要优先强化；具体原因待确认。',
+      weak_reason: '当前学习情况记录记录该知识点需要优先强化；具体原因待确认。',
       weak_reason_status: 'unknown',
       profile_dimensions: [{ key: 'unknown', label: '关联画像维度', status: '待确认' }],
       course_snapshot: {
@@ -214,7 +215,7 @@ function buildDashboardFallback(overview) {
         snapshot_id: overview?.profile?.snapshot_id || null,
         snapshot_version: overview?.profile?.profile_version || null,
       },
-      source_refs: overview?.profile?.snapshot_id ? [{ type: 'profile_snapshot', id: overview.profile.snapshot_id, label: '当前画像快照' }] : [],
+      source_refs: overview?.profile?.snapshot_id ? [{ type: 'profile_snapshot', id: overview.profile.snapshot_id, label: '当前学习情况记录' }] : [],
       event_refs: [],
       next_action: {
         label: item?.id ? '开始强化' : '路径待确认',
@@ -1110,13 +1111,13 @@ function renderAllDiagrams() {
         <summary>
           <span>{{ item.label }}</span>
           <strong>{{ item.value }}</strong>
-          <small>{{ item.detail }}</small>
+          <small v-if="item.label === '路径进度'">已完成 / 总任务</small>
         </summary>
         <div class="dashboard-metric__sources">
           <template v-if="item.source_refs?.length">
             <span v-for="source in item.source_refs" :key="`${source.type}-${source.id}`">{{ sourceLabel(source) }}</span>
           </template>
-          <span v-else>暂无可追溯学习记录</span>
+          <span v-else>还没有学习记录</span>
         </div>
       </details>
     </section>
@@ -1129,19 +1130,19 @@ function renderAllDiagrams() {
       <article class="dashboard-focus" data-testid="dashboard-primary-task">
         <div class="dashboard-focus__meta">
           <span>{{ dashboardSummary?.primary_task?.task_kind === 'review' ? '今日复习' : '今日主任务' }}</span>
-          <span>{{ estimateLabel(focus.estimated_minutes) }}</span>
+          <span v-if="focus.estimated_minutes?.length">{{ estimateLabel(focus.estimated_minutes) }}</span>
         </div>
         <div class="dashboard-focus__copy">
           <h2>{{ focus.title }}</h2>
           <p class="dashboard-focus__strategy">{{ focus.strategy }}</p>
         </div>
-        <dl class="dashboard-focus__facts">
-          <div><dt>为什么现在做</dt><dd>{{ focus.reason }}</dd></div>
+        <dl v-if="todayTasks.length" class="dashboard-focus__facts">
+          <div><dt>为什么现在做</dt><dd>{{ learningText(focus.reason) }}</dd></div>
           <div><dt>完成条件</dt><dd>{{ focus.completion_criteria }}</dd></div>
           <div><dt>建议资源</dt><dd>{{ dashboardSummary?.primary_task?.recommended_resource || '当前学习空间' }}</dd></div>
         </dl>
         <div class="dashboard-focus__footer">
-          <details class="dashboard-source-disclosure">
+          <details v-if="focus.source_refs?.length && todayTasks.length" class="dashboard-source-disclosure">
             <summary>查看决策依据</summary>
             <div>
               <span v-for="source in focus.source_refs" :key="`${source.type}-${source.id}`">{{ sourceLabel(source) }}</span>
@@ -1170,13 +1171,13 @@ function renderAllDiagrams() {
           <ol v-if="weakSummary.length">
             <li v-for="item in weakSummary.slice(0, 3)" :key="item.id || item.title" class="dashboard-weak-item" data-testid="dashboard-weak-item">
               <div class="dashboard-weak-item__heading">
-                <strong>{{ item.title || item.id || '未命名知识点' }}</strong>
+                <strong>{{ item.title || '未命名知识点' }}</strong>
                 <span>{{ weakMasteryLabel(item) }}</span>
               </div>
               <p class="dashboard-weak-item__reason">{{ item.weak_reason || '薄弱原因待确认。' }}</p>
               <div class="dashboard-weak-item__dimensions">
                 <span v-for="dimension in (item.profile_dimensions || [])" :key="`${item.id || item.title}-${dimension.key}`">
-                  {{ dimension.label || '关联画像维度' }}：{{ dimension.status || '待确认' }}
+                  {{ dimension.label || '关联画像维度' }}：{{ displayLabel(dimension.status || '待确认') }}
                 </span>
               </div>
               <p class="dashboard-weak-item__snapshot">{{ weakSnapshotLabel(item) }}</p>
@@ -1203,7 +1204,7 @@ function renderAllDiagrams() {
           <div v-else class="dashboard-weak-empty">
             <p>{{ weakSummaryEmptyCopy }}</p>
             <button type="button" @click="router.push(hasProfileSnapshot ? '/profile/learning' : '/onboarding')">
-              {{ hasProfileSnapshot ? '查看画像证据' : '完成画像/诊断' }} <ArrowRight :size="14" />
+              {{ hasProfileSnapshot ? '查看学习画像' : '完成画像/诊断' }} <ArrowRight :size="14" />
             </button>
           </div>
         </section>
@@ -1212,7 +1213,7 @@ function renderAllDiagrams() {
 
     <details v-if="summaryStrategies.length > 1" class="dashboard-next-tasks" data-testid="dashboard-next-tasks">
       <summary>
-        <span><strong>接下来还有 {{ summaryStrategies.length - 1 }} 项安排</strong><small>当前任务完成后再进入，不与主动作竞争。</small></span>
+        <span><strong>接下来还有 {{ summaryStrategies.length - 1 }} 项安排</strong></span>
         <ChevronDown :size="18" />
       </summary>
       <ol>
@@ -1225,11 +1226,11 @@ function renderAllDiagrams() {
 
     <section class="dashboard-trend-summary">
       <header>
-        <div><h2>最近学习变化</h2><p>只显示有效学习事件形成的掌握变化。</p></div>
+        <div><h2>最近学习变化</h2></div>
         <button type="button" @click="router.push('/profile')">前往个人中心 <ArrowRight :size="14" /></button>
       </header>
       <LearningTrendChart :points="trendPoints" />
-      <p class="dashboard-trend-activity">近 30 天记录 {{ activitySummary.event_count }} 条有效学习活动，分布在 {{ activitySummary.active_days }} 天。掌握度曲线只显示已处理的有效证据。</p>
+      <p class="dashboard-trend-activity">近 30 天记录 {{ activitySummary.event_count }} 条有效学习活动，分布在 {{ activitySummary.active_days }} 天。</p>
     </section>
 
     <details class="dashboard-detail" data-testid="dashboard-detail">
@@ -1263,7 +1264,7 @@ function renderAllDiagrams() {
           <h3>诊断摘要</h3>
             <p>{{ profileAnalysis.dashboard_report || '诊断结果正在生成，完成后会保留在学习画像中。' }}</p>
             <p class="dashboard-analysis-source">
-              画像快照：{{ dashboardSummary?.profile_alignment?.profile_snapshot?.version || '未知' }}
+              学习情况记录：{{ dashboardSummary?.profile_alignment?.profile_snapshot?.version || '未知' }}
             </p>
         </article>
 
@@ -1304,9 +1305,9 @@ function renderAllDiagrams() {
         <section class="dashboard-modal dashboard-resource-modal" role="dialog" aria-modal="true" aria-labelledby="resource-modal-title" @click.stop>
           <header class="dashboard-modal__header">
             <div>
-              <span class="dashboard-status-label">{{ activeResource.res.resource_type }}</span>
+              <span class="dashboard-status-label">{{ displayLabel(activeResource.res.resource_type) }}</span>
               <h3 id="resource-modal-title">{{ activeResource.concept }}</h3>
-              <p>生成智能体：{{ activeResource.res.role }}</p>
+              <p>生成智能体：{{ displayLabel(activeResource.res.role) }}</p>
             </div>
             <button type="button" class="dashboard-icon-action" aria-label="关闭资源预览" title="关闭" @click="closeResourceViewer"><X :size="18" /></button>
           </header>
@@ -1321,7 +1322,7 @@ function renderAllDiagrams() {
 
             <div v-else-if="isGenerating" class="dashboard-resource-state">
               <span class="dashboard-spinner dashboard-spinner--large" />
-              <div><h4>资源正在生成</h4><p>{{ activeResource.res.role }}正在整理内容，完成后会自动归档。</p></div>
+              <div><h4>资源正在生成</h4><p>{{ displayLabel(activeResource.res.role) }}正在整理内容，完成后会自动归档。</p></div>
             </div>
 
             <div v-else-if="activeResource.res.status === 'generated'" class="dashboard-resource-content">
@@ -1353,14 +1354,20 @@ function renderAllDiagrams() {
 }
 
 .dashboard-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
-.dashboard-heading h1 { margin: 0; color: var(--color-text); font-family: var(--font-heading); font-size: 30px; font-weight: 620; line-height: 1.2; }
+.dashboard-heading h1 { margin: 0; color: var(--color-text); font-family: var(--font-editorial); font-size: 34px; font-weight: 400; line-height: 1.2; }
 .dashboard-heading p { margin: 6px 0 0; color: var(--color-text-secondary); font-size: 15px; }
 .dashboard-course-alignment { display: block; margin-top: 4px; color: var(--color-text-muted); font-size: 14px; line-height: 1.45; }
 .dashboard-analysis-source { margin-top: 8px; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
 .dashboard-updated-at { flex: 0 0 auto; color: var(--color-text-muted); font-size: 14px; }
 
-.dashboard-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 1px solid var(--color-border); }
-.dashboard-metric { min-width: 0; border-left: 1px solid var(--color-border); }
+.dashboard-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 0; 
+  gap: 16px;
+}
+.dashboard-metric { min-width: 0; border-left: 0; 
+  background: rgb(255 255 255 / 65%);
+
+  border-radius: var(--radius-panel);
+}
 .dashboard-metric:first-child { border-left: 0; }
 .dashboard-metric summary { display: grid; min-height: 96px; align-content: center; gap: 3px; padding: 14px 18px; cursor: pointer; list-style: none; }
 .dashboard-metric summary::-webkit-details-marker { display: none; }
@@ -1369,28 +1376,34 @@ function renderAllDiagrams() {
 .dashboard-metric summary strong { color: var(--color-text); font-size: 23px; font-weight: 680; font-variant-numeric: tabular-nums; }
 .dashboard-metric__sources { display: grid; gap: 5px; padding: 12px 18px 16px; color: var(--color-text-secondary); border-top: 1px solid var(--color-border); font-size: 14px; line-height: 1.45; }
 
-.dashboard-sync-notice { display: flex; min-height: 42px; align-items: center; gap: 9px; margin: 0; padding: 10px 14px; color: #344957; border: 1px solid #ccd0cf; background: #f1f4f4; font-size: 14px; line-height: 1.5; }
+.dashboard-sync-notice { display: flex; min-height: 42px; align-items: center; gap: 9px; margin: 0; padding: 10px 14px; color: var(--color-text-secondary); border: 1px solid var(--color-border-strong); background: var(--color-surface-subtle); font-size: 14px; line-height: 1.5; }
 
 .dashboard-decision-grid { display: grid; grid-template-columns: minmax(0, 2.55fr) minmax(280px, 1fr); gap: 28px; }
-.dashboard-focus { display: flex; min-width: 0; min-height: 400px; flex-direction: column; padding: 34px; color: #f3f6f6; border-radius: var(--radius-panel); background: #11212d; }
-.dashboard-focus__meta { display: flex; align-items: center; justify-content: space-between; gap: 20px; color: #ccd0cf; font-size: 14px; }
-.dashboard-focus__meta span:first-child { color: #ffffff; font-weight: 700; }
-.dashboard-focus__copy { margin-top: 42px; }
-.dashboard-focus__copy h2 { max-width: 22ch; margin: 0; overflow-wrap: anywhere; color: #ffffff; font-family: var(--font-display); font-size: 34px; font-weight: 620; line-height: 1.23; }
-.dashboard-focus__strategy { max-width: 67ch; margin: 16px 0 0; color: #dce2e3; font-size: 16px; line-height: 1.7; }
-.dashboard-focus__facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin: 34px 0 0; padding: 22px 0; border-block: 1px solid #4a5c6a; }
+.dashboard-focus { display: flex; min-width: 0; min-height: 310px; flex-direction: column; padding: 32px; color: var(--color-text); border-radius: var(--radius-panel); background: var(--gradient-highlight); 
+  box-shadow: var(--shadow-panel);
+}
+.dashboard-focus__meta { display: flex; align-items: center; justify-content: space-between; gap: 20px; color: var(--color-text-secondary); font-size: 14px; }
+.dashboard-focus__meta span:first-child { color: var(--color-accent); font-weight: 700; }
+.dashboard-focus__copy { margin-top: 28px; }
+.dashboard-focus__copy h2 { max-width: 22ch; margin: 0; overflow-wrap: anywhere; color: var(--color-text); font-family: var(--font-heading); font-size: 28px; font-weight: 600; line-height: 1.45; }
+.dashboard-focus__strategy { max-width: 67ch; margin: 16px 0 0; color: var(--color-text-secondary); font-size: 16px; line-height: 1.7; }
+.dashboard-focus__facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin: 22px 0 0; padding: 12px 0; border-block: 0; }
 .dashboard-focus__facts div { min-width: 0; }
-.dashboard-focus__facts dt { color: #9ba8ab; font-size: 14px; }
-.dashboard-focus__facts dd { margin: 7px 0 0; color: #edf1f2; font-size: 14px; line-height: 1.55; }
+.dashboard-focus__facts dt { color: var(--color-text-muted); font-size: 14px; }
+.dashboard-focus__facts dd { margin: 7px 0 0; color: var(--color-text); font-size: 14px; line-height: 1.55; }
 .dashboard-focus__footer { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-top: auto; padding-top: 24px; }
-.dashboard-source-disclosure { min-width: 0; color: #ccd0cf; font-size: 14px; }
+.dashboard-source-disclosure { min-width: 0; color: var(--color-border-strong); font-size: 14px; }
 .dashboard-source-disclosure summary { width: fit-content; cursor: pointer; }
 .dashboard-source-disclosure div { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 9px; }
-.dashboard-primary-action { display: inline-flex; min-height: 46px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 9px; padding: 0 18px; color: #11212d; border: 1px solid #ffffff; border-radius: var(--radius-control); background: #ffffff; font-size: 15px; font-weight: 700; cursor: pointer; }
-.dashboard-primary-action:hover { color: #000000; background: #edf1f2; }
+.dashboard-primary-action { display: inline-flex; min-height: 46px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 9px; padding: 0 18px; color: #fff; border: 0; border-radius: var(--radius-control); background: var(--color-accent); font-size: 15px; font-weight: 700; cursor: pointer; }
+.dashboard-primary-action:hover { color: #fff; background: var(--color-accent-hover); }
 
-.dashboard-side-summary { display: grid; min-width: 0; align-content: start; gap: 0; border-block: 1px solid var(--color-border); }
-.dashboard-side-summary > section { padding: 24px 18px; border-bottom: 1px solid var(--color-border); }
+.dashboard-side-summary { display: grid; min-width: 0; align-content: start; gap: 12px; border-block: 0; }
+.dashboard-side-summary > section { padding: 24px 18px; border-bottom: 0; 
+  background: rgb(255 255 255 / 60%);
+
+  border-radius: var(--radius-panel);
+}
 .dashboard-side-summary > section:last-child { border-bottom: 0; }
 .dashboard-side-summary header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .dashboard-side-summary header > div { display: flex; align-items: center; gap: 8px; }
@@ -1414,8 +1427,8 @@ function renderAllDiagrams() {
 .dashboard-weak-item__evidence summary { width: fit-content; color: var(--color-accent); cursor: pointer; }
 .dashboard-weak-item__evidence ul { display: grid; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; line-height: 1.45; }
 .dashboard-weak-item__evidence li { display: block; padding: 0; border: 0; overflow-wrap: anywhere; }
-.dashboard-weak-item__action { display: inline-flex; min-height: 36px; align-items: center; gap: 5px; margin-top: 12px; padding: 0 11px; color: #ffffff; border: 1px solid #11212d; border-radius: var(--radius-control); background: #11212d; font-size: 14px; font-weight: 650; cursor: pointer; }
-.dashboard-weak-item__action:hover { background: #253745; }
+.dashboard-weak-item__action { display: inline-flex; min-height: 36px; align-items: center; gap: 5px; margin-top: 12px; padding: 0 11px; color: #ffffff; border: 1px solid var(--color-text); border-radius: var(--radius-control); background: var(--color-text); font-size: 14px; font-weight: 650; cursor: pointer; }
+.dashboard-weak-item__action:hover { background: var(--color-text); }
 .dashboard-weak-item__pending { display: inline-block; margin-top: 12px; color: var(--color-text-muted); font-size: 14px; }
 .dashboard-weak-empty { display: grid; gap: 12px; }
 .dashboard-weak-empty p { margin: 15px 0 0; }
@@ -1482,7 +1495,7 @@ function renderAllDiagrams() {
 .dashboard-detail__body {
   padding: 0 22px 24px;
   border-top: 1px solid var(--color-border);
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .dashboard-detail-section {
@@ -1591,7 +1604,7 @@ function renderAllDiagrams() {
 .dashboard-modal__footer { display: flex; justify-content: flex-end; padding: 14px 22px; border-top: 1px solid var(--color-border); background: var(--color-surface-subtle); }
 .dashboard-button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 0 15px; border: 1px solid transparent; border-radius: var(--radius-control); font-size: 14px; font-weight: 680; cursor: pointer; }
 .dashboard-button--compact { min-height: 36px; padding-inline: 12px; }
-.dashboard-button--primary { color: #ffffff; border-color: #11212d; background: #11212d; }
+.dashboard-button--primary { color: #ffffff; border-color: var(--color-text); background: var(--color-text); }
 .dashboard-button--primary:hover { background: #000000; }
 .dashboard-button--secondary { color: var(--color-text-secondary); border-color: var(--color-border-strong); background: var(--color-surface); }
 .dashboard-button--secondary:hover { color: var(--color-text); background: var(--color-surface-subtle); }
@@ -1633,15 +1646,15 @@ function renderAllDiagrams() {
 .dashboard-markdown :deep(.mermaid) { display: flex; width: 100%; justify-content: center; }
 .dashboard-markdown :deep(.resource-rendering) { display: flex; min-height: 120px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--color-text-secondary); font-size: 14px; }
 .dashboard-markdown :deep(.resource-code-block) { position: relative; margin: 16px 0; }
-.dashboard-markdown :deep(.resource-code-block pre) { margin: 0; padding: 18px; overflow-x: auto; color: #f1f4f4; border-radius: var(--radius-panel); background: #11212d; font-family: var(--font-mono); font-size: 14px; line-height: 1.65; }
-.dashboard-markdown :deep(.resource-code-block__action) { position: absolute; top: 10px; right: 10px; min-height: 34px; padding: 0 10px; color: #ffffff; border: 1px solid #4a5c6a; border-radius: var(--radius-control); background: #253745; font-size: 14px; font-weight: 650; cursor: pointer; }
+.dashboard-markdown :deep(.resource-code-block pre) { margin: 0; padding: 18px; overflow-x: auto; color: var(--color-surface-subtle); border-radius: var(--radius-panel); background: var(--color-text); font-family: var(--font-mono); font-size: 14px; line-height: 1.65; }
+.dashboard-markdown :deep(.resource-code-block__action) { position: absolute; top: 10px; right: 10px; min-height: 34px; padding: 0 10px; color: #ffffff; border: 1px solid var(--color-text-secondary); border-radius: var(--radius-control); background: var(--color-text); font-size: 14px; font-weight: 650; cursor: pointer; }
 .dashboard-markdown :deep(.resource-inline-code) { padding: 2px 5px; color: var(--color-danger); border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface-subtle); font-family: var(--font-mono); font-size: 14px; }
 .dashboard-markdown :deep(.resource-math) { color: var(--color-text); font-family: var(--font-display); }
 .dashboard-markdown :deep(.resource-math--block) { margin: 16px 0; padding: 16px; overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-surface-subtle); text-align: center; }
 .dashboard-markdown :deep(.resource-math--inline) { padding: 1px 4px; border-bottom: 1px solid var(--color-border-strong); }
 .dashboard-markdown :deep(.resource-callout) { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 16px; color: var(--color-text-secondary); font-size: 14px; }
 .dashboard-markdown :deep(.resource-callout strong) { color: var(--color-text); }
-.dashboard-markdown :deep(.resource-callout__action) { min-height: 36px; flex: 0 0 auto; padding: 0 12px; color: #ffffff; border: 1px solid #11212d; border-radius: var(--radius-control); background: #11212d; font-size: 14px; font-weight: 650; cursor: pointer; }
+.dashboard-markdown :deep(.resource-callout__action) { min-height: 36px; flex: 0 0 auto; padding: 0 12px; color: #ffffff; border: 1px solid var(--color-text); border-radius: var(--radius-control); background: var(--color-text); font-size: 14px; font-weight: 650; cursor: pointer; }
 .dashboard-markdown :deep(.resource-list-item) { margin: 6px 0 6px 20px; color: var(--color-text-secondary); font-size: 15px; line-height: 1.65; }
 .dashboard-markdown :deep(.resource-table-wrap) { margin: 16px 0; overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-panel); }
 .dashboard-markdown :deep(.resource-table) { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -1653,7 +1666,7 @@ function renderAllDiagrams() {
 .dashboard-markdown :deep(.resource-heading-4) { margin: 22px 0 7px; color: var(--color-text); font-size: 16px; font-weight: 680; line-height: 1.4; }
 
 .dashboard-skeleton { max-width: 1380px; margin: 0 auto; }
-.dashboard-skeleton__hero, .dashboard-skeleton__grid span { position: relative; overflow: hidden; border-radius: 8px; background: #dce2e3; }
+.dashboard-skeleton__hero, .dashboard-skeleton__grid span { position: relative; overflow: hidden; border-radius: 8px; background: var(--color-border); }
 .dashboard-skeleton__hero { height: 318px; }
 .dashboard-skeleton__grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 18px; }
 .dashboard-skeleton__grid span { height: 150px; }

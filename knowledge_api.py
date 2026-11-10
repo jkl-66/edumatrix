@@ -7,7 +7,7 @@ import ipaddress
 import os
 import socket
 import shutil
-from html.parser import HTMLParser
+from app.web_content import extract_web_material
 from io import BytesIO
 from pathlib import Path
 from typing import Annotated, Any
@@ -48,6 +48,11 @@ from app.m2_contracts import StrictModel
 from app.m5_gateway import StreamingModelCallLifecycle
 from app.m5_legacy_calls import audited_legacy_text_call, model_identity
 from app.knowledge_graph import build_course_graph
+from app.course_structure import (StructureSave, StructureConfirm, read_course_structure,
+                                  save_course_structure, confirm_course_structure, reset_course_structure,
+                                  prepare_structure_analysis, save_structure_analysis)
+from app.course_structure_suggestions import analyze_structure
+from app.source_refs import current_source_clause, current_chapter_clause, current_structure_ref_clause
 from course_catalog import MASTER_COURSE_ID, course_is_selectable
 from app.source_admission import (
     CandidateAdmission,
@@ -71,6 +76,8 @@ from document_parser import (
     parse_document,
     parse_pptx_slides,
     parse_pdf_visually,
+    parse_pptx_visually,
+    merge_document_visual_reading,
 )
 from app.media_ocr import detect_sensitive_categories
 from rag_engine import hybrid_rag
@@ -113,6 +120,8 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 SUPPORTED_EXTENSIONS = {
     ".md": "markdown",
+    ".html": "document",
+    ".htm": "document",
     ".txt": "text",
     ".pdf": "pdf",
     ".ppt": "presentation",
@@ -145,34 +154,6 @@ class CourseCreateInput(StrictModel):
     description: str = Field(default="", max_length=1000)
 
 
-class _ReadableHtml(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-        self._ignored_depth = 0
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        if tag in {"script", "style", "noscript", "svg"}:
-            self._ignored_depth += 1
-        elif not self._ignored_depth and tag in {"p", "div", "section", "article", "li", "h1", "h2", "h3", "h4", "br"}:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in {"script", "style", "noscript", "svg"} and self._ignored_depth:
-            self._ignored_depth -= 1
-        elif not self._ignored_depth and tag in {"p", "div", "section", "article", "li", "h1", "h2", "h3", "h4"}:
-            self.parts.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        if not self._ignored_depth:
-            clean = " ".join(data.split())
-            if clean:
-                self.parts.append(clean)
-
-    def text(self) -> str:
-        return "\n".join(line.strip() for line in " ".join(self.parts).splitlines() if line.strip())
-
-
 def _ensure_personal_course(
     session,
     *,
@@ -182,7 +163,9 @@ def _ensure_personal_course(
 ) -> DBCourse:
     target_id = course_id.strip() or _personal_course_id(owner_public_id)
     course = session.get(DBCourse, target_id)
-    if course is None and course_id.strip():
+    # Upload target resolution already expands an omitted course to this ID.
+    # The owner's implicit personal boundary must still be bootstrapped here.
+    if course is None and course_id.strip() and target_id != _personal_course_id(owner_public_id):
         raise HTTPException(status_code=404, detail="目标课程不存在")
     if course is None:
         course = DBCourse(
@@ -270,7 +253,7 @@ def _validated_public_url(value: str) -> str:
 
 def _remote_extension(url: str, hinted_format: str, content_type: str) -> str:
     if "text/html" in content_type.lower():
-        return ".md"
+        return ".html"
     hint = hinted_format.strip().lower().lstrip(".")
     if hint and f".{hint}" in SUPPORTED_EXTENSIONS:
         return f".{hint}"
@@ -328,7 +311,7 @@ async def _download_remote_bytes(
                         code = f"download_http_{response.status_code}"
                         raise _remote_download_error(
                             code,
-                            f"资料下载失败，HTTP 状态码 {response.status_code}；已自动重试 {max(0, attempt)} 次，请稍后重试。",
+                            f"原资料网站暂时无法提供文件；已自动重试 {max(0, attempt)} 次，请稍后重试或打开原网页查看。",
                         )
                     declared = response.headers.get("content-length")
                     if declared:
@@ -339,13 +322,13 @@ async def _download_remote_bytes(
                                 "download_content_length_invalid",
                                 "资料下载响应的大小信息无效，请重试或更换来源。",
                             ) from exc
-                        if declared_size > CONFIG.max_upload_bytes:
+                        if CONFIG.max_upload_bytes > 0 and declared_size > CONFIG.max_upload_bytes:
                             raise HTTPException(status_code=413, detail=f"资料超过大小限制 ({CONFIG.max_upload_bytes} bytes)")
                     chunks: list[bytes] = []
                     total = 0
                     async for chunk in response.aiter_bytes(64 * 1024):
                         total += len(chunk)
-                        if total > CONFIG.max_upload_bytes:
+                        if CONFIG.max_upload_bytes > 0 and total > CONFIG.max_upload_bytes:
                             raise HTTPException(status_code=413, detail=f"资料超过大小限制 ({CONFIG.max_upload_bytes} bytes)")
                         chunks.append(chunk)
                     raw = b"".join(chunks)
@@ -368,20 +351,18 @@ async def _download_remote_bytes(
             if attempt + 1 < max_attempts:
                 await asyncio.sleep(0.4)
                 continue
-            detail = str(exc).strip() or type(exc).__name__
             raise _remote_download_error(
                 "download_connection_error",
-                f"资料连接失败（{detail}）；已自动重试 {max(0, attempt)} 次，请稍后重试。",
+                f"暂时无法连接原资料网站；已自动重试 {max(0, attempt)} 次，请稍后重试或打开原网页查看。",
             ) from exc
         except Exception as exc:
             last_error = exc
             if attempt + 1 < max_attempts:
                 await asyncio.sleep(0.4)
                 continue
-            detail = str(last_error).strip() or type(last_error).__name__
             raise _remote_download_error(
                 "download_failed",
-                f"资料下载失败（{detail}）；已自动重试 {max(0, attempt)} 次，请稍后重试。",
+                f"资料尚未下载完成；已自动重试 {max(0, attempt)} 次，请稍后重试或更换来源。",
             ) from exc
     if not raw:
         raise _remote_download_error(
@@ -400,19 +381,20 @@ async def _download_remote_material(*, url: str, hinted_format: str, title: str)
     raw, final_url, content_type = await _download_remote_bytes(url=url, headers=headers)
     extension = _remote_extension(final_url, hinted_format, content_type)
     safe_title = re.sub(r'[\\/*?:"<>|]', "", title).strip()[:80] or "联网资料"
-    if extension == ".md" and "text/html" in content_type.lower():
+    if extension in {'.html', '.htm'}:
         charset_match = re.search(r"charset=([\w-]+)", content_type, re.IGNORECASE)
         charset = charset_match.group(1) if charset_match else "utf-8"
         try:
             html = raw.decode(charset, errors="replace")
         except LookupError:
             html = raw.decode("utf-8", errors="replace")
-        parser = _ReadableHtml()
-        parser.feed(html)
-        body = parser.text()
+        body = extract_web_material(html, url=final_url)['markdown']
         if len(body) < 80:
             raise HTTPException(status_code=422, detail="网页没有提取到足够的公开正文")
-        raw = f"# {safe_title}\n\n来源：{final_url}\n\n{body}\n".encode("utf-8")
+        # Retain the HTML so upload and local HTML use one parser, including
+        # image/author/source metadata. Do not flatten it into a second format.
+        raw = html.encode('utf-8')
+        extension = '.html'
     return raw, f"{safe_title}{extension}", final_url
 
 
@@ -423,6 +405,58 @@ def _visual_page_externalization_allowed(parsed: ParsedDocument) -> bool:
     if not isinstance(report, dict) or report.get("status") in {"unavailable", "failed"}:
         return False
     return int(report.get("sensitive_region_count") or 0) == 0
+
+
+async def _read_course_images(
+    parsed: ParsedDocument, raw: bytes, *, owner_public_id: str,
+    course_id: str, asset_dir: Path, existing: list | None = None,
+) -> tuple[ParsedDocument, list]:
+    if parsed.file_format not in {"pdf", "pptx"}:
+        return parsed, []
+    context = {"course_id": course_id, "asset_dir": str(asset_dir),
+               "trace_id": f"course-image-reading-{uuid.uuid4().hex}"}
+    evidence = list(existing or [])
+    if parsed.file_format == "pdf":
+        pages = []
+        for location in parsed.locations:
+            if location.kind != "page" or not location.page_number:
+                continue
+            text = re.sub(r"---\s*Page\s+\d+\s*---", "", parsed.text[location.char_start:location.char_end], flags=re.I)
+            if (len(re.sub(r"\W", "", text)) < 24 or location.metadata.get("image_count")
+                    or location.metadata.get("vector_graphics") or location.metadata.get("formula_content")
+                    or location.metadata.get("table_count")):
+                pages.append(location.page_number)
+        parsed = replace(parsed, metadata={**parsed.metadata, "visual_requested_pages": pages})
+        if pages and _visual_page_externalization_allowed(parsed):
+            evidence = await asyncio.to_thread(
+                parse_pdf_visually, raw, parsed.filename, owner_public_id=owner_public_id,
+                model_call_context=context, page_numbers=pages, existing=evidence,
+            )
+    elif parsed.metadata.get("visual_expected_units", parsed.metadata.get("image_count")) and not detect_sensitive_categories(parsed.text):
+        evidence = await asyncio.to_thread(
+            parse_pptx_visually, raw, parsed.filename, owner_public_id=owner_public_id,
+            model_call_context=context, existing=evidence,
+        )
+    return merge_document_visual_reading(parsed, evidence), evidence
+
+
+def _saved_visual_evidence(session, source: DBSourceDocument) -> list:
+    from models import Evidence, EvidenceModality
+
+    document = session.get(DBKnowledgeDocument, source.legacy_document_id)
+    if document is None:
+        return []
+    results = []
+    for ref in session.query(DBSourceRef).filter_by(source_document_id=source.id, location_kind="visual_region").all():
+        metadata = dict(ref.location_metadata or {})
+        content = document.content[ref.char_start:ref.char_end]
+        content = re.sub(r"^\[第 \d+ 页图片内容\]\s*", "", content)
+        results.append(Evidence(
+            id=metadata.get("evidence_id") or ref.id, title=ref.location_label,
+            content=content, modality=EvidenceModality.IMAGE, source=source.filename,
+            tags=(), anchors=(), metadata={**metadata, "page": ref.page_number},
+        ))
+    return results
 
 
 def _resolve_upload_target(session, *, student_id: str, current_user: DBUser, course_id: str) -> tuple[str, str]:
@@ -440,7 +474,7 @@ def _resolve_upload_target(session, *, student_id: str, current_user: DBUser, co
     return owner_public_id, course.id
 
 
-_SEMANTIC_DOCUMENT_FORMATS = {"docx", "pdf"}
+_SEMANTIC_DOCUMENT_FORMATS = {"docx", "pdf", "md", "html", "htm"}
 
 
 def _resource_structure_model(llm: Any) -> dict[str, Any]:
@@ -487,17 +521,86 @@ def _clamp_range(start: Any, end: Any, text_length: int) -> tuple[int, int]:
     return lower, upper
 
 
-def _anchor_offset(text: str, value: Any, *, default: int) -> int:
-    anchor = " ".join(str(value or "").split())
-    if not anchor:
-        return default
-    compact_text = re.sub(r"\s+", " ", text)
-    index = compact_text.find(anchor)
-    if index >= 0:
-        # The compacted offset is only an anchor; use the original text when possible.
-        direct = text.find(anchor)
-        return direct if direct >= 0 else default
-    return default
+def _source_anchor(text: str, value: Any, *, after: int = 0):
+    tokens = str(value or "").split()
+    if not tokens:
+        return None
+    return re.compile(r"\s+".join(re.escape(token) for token in tokens)).search(text, after)
+
+
+def _structure_source_blocks(text: str) -> list[dict[str, Any]]:
+    """Give the model stable paragraph labels; offsets remain a local concern."""
+    blocks = []
+    for match in re.finditer(r"\S.*?(?=\n[ \t]*\n|\Z)", text, re.S):
+        start = match.start()
+        while start < match.end():
+            end = min(start + 8000, match.end())
+            if end < match.end():
+                boundary = max(text.rfind('\n', start + 4000, end), text.rfind('。', start + 4000, end))
+                if boundary >= 0:
+                    end = boundary + 1
+            blocks.append({"id": f"b{len(blocks)+1:05d}", "char_start": start, "char_end": end, "text": text[start:end]})
+            start = end
+    return blocks
+
+
+def _structure_batches(blocks: list[dict[str, Any]], *, batch_chars: int = 24000,
+                       locations=()) -> list[list[dict[str, Any]]]:
+    """Keep a physical page's statement, figures and questions in one request.
+
+    The character count is a batching target, not a document cutoff. Only an
+    unusually long page needs paragraph-level splitting and adjacent context.
+    """
+    page_ranges = {}
+    for location in locations:
+        page = location.page_number or location.slide_number
+        if page:
+            start, end = page_ranges.get(page, (location.char_start, location.char_end))
+            page_ranges[page] = (min(start, location.char_start), max(end, location.char_end))
+    ranges = sorted(page_ranges.values())
+    units, last_page, position = [], None, 0
+    for block in blocks:
+        while position < len(ranges) and ranges[position][1] <= block['char_start']:
+            position += 1
+        page = (position if position < len(ranges)
+                and ranges[position][0] <= block['char_start'] < ranges[position][1] else None)
+        if page is not None and page == last_page:
+            units[-1].append(block)
+        else:
+            units.append([block])
+        last_page = page
+    # A page longer than a request still gets completely analyzed.
+    units = [part for unit in units for part in (
+        [[block] for block in unit] if sum(len(block['text']) for block in unit) > batch_chars else [unit]
+    )]
+    remaining = sum(len(block['text']) for block in blocks)
+    batches, current, size = [], [], 0
+    for unit in units:
+        unit_size = sum(len(block['text']) for block in unit)
+        # Avoid a tiny final request containing only the end of an example.
+        if current and size + unit_size > batch_chars and size + remaining > batch_chars * 1.15:
+            batches.append(current)
+            current, size = [], 0
+        current.extend(unit)
+        size += unit_size
+        remaining -= unit_size
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _structure_adjacent_context(blocks, first: int, last: int, *, context_chars: int = 6000):
+    """Neighboring source is context only; it cannot expand a part's citations."""
+    def window(candidates):
+        selected, size = [], 0
+        for block in candidates:
+            if selected and size + len(block['text']) > context_chars:
+                break
+            selected.append({'id': block['id'], 'text': block['text']})
+            size += len(block['text'])
+        return selected
+    return {'before': list(reversed(window(reversed(blocks[:first])))),
+            'after': window(blocks[last + 1:])}
 
 
 def _normalize_knowledge_points(value: Any, *, source_id: str = "") -> list[dict[str, Any]]:
@@ -527,15 +630,16 @@ def _normalize_knowledge_points(value: Any, *, source_id: str = "") -> list[dict
             continue
         seen.add(key)
         points.append(point)
-    return points[:80]
+    return points
 
 
-def _normalize_structure_payload(value: Any, *, parsed: ParsedDocument, model_meta: dict[str, Any]) -> dict[str, Any]:
+def _normalize_structure_payload(value: Any, *, parsed: ParsedDocument, model_meta: dict[str, Any], source_blocks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("资料结构模型输出必须是 JSON 对象")
     chapters_value = value.get("chapters") or value.get("sections")
     root_points = _normalize_knowledge_points(value.get("knowledge_points") or value.get("knowledgePoints"))
     text_length = len(parsed.text)
+    blocks_by_id = {block["id"]: block for block in (source_blocks or [])}
     chapters: list[dict[str, Any]] = []
     if isinstance(chapters_value, list):
         for index, item in enumerate(chapters_value, 1):
@@ -545,11 +649,22 @@ def _normalize_structure_payload(value: Any, *, parsed: ParsedDocument, model_me
             if not title:
                 continue
             start, end = _clamp_range(item.get("char_start", item.get("start")), item.get("char_end", item.get("end")), text_length)
+            if "start_block" in item or "end_block" in item:
+                first = blocks_by_id.get(str(item.get("start_block") or ""))
+                last = blocks_by_id.get(str(item.get("end_block") or ""))
+                if first is None or last is None or last["char_start"] < first["char_start"]:
+                    raise ValueError("章节对应的原文段落未找到，请重新整理。")
+                start, end = first["char_start"], last["char_end"]
             if item.get("char_start") is None and item.get("start_text") is not None:
-                start = _anchor_offset(parsed.text, item.get("start_text"), default=start)
+                anchor = _source_anchor(parsed.text, item.get("start_text"))
+                if anchor is None:
+                    raise ValueError("章节开头未在原文中找到，请重新整理。")
+                start = anchor.start()
             if item.get("char_end") is None and item.get("end_text") is not None:
-                end = _anchor_offset(parsed.text, item.get("end_text"), default=end)
-                end = min(text_length, end + len(str(item.get("end_text") or "")))
+                anchor = _source_anchor(parsed.text, item.get("end_text"), after=start)
+                if anchor is None:
+                    raise ValueError("章节结尾未在原文中找到，请重新整理。")
+                end = anchor.end()
             if end <= start:
                 continue
             chapters.append({
@@ -558,6 +673,7 @@ def _normalize_structure_payload(value: Any, *, parsed: ParsedDocument, model_me
                 "char_end": end,
                 "heading_level": max(1, min(6, int(item.get("heading_level") or 1))),
                 "knowledge_points": _normalize_knowledge_points(item.get("knowledge_points") or item.get("knowledgePoints")),
+                "continues_previous": item.get("continues_previous") is True,
             })
     if not chapters:
         raise ValueError("资料结构模型没有返回有效语义章节")
@@ -602,40 +718,99 @@ async def _extract_resource_structure(
     llm: Any,
     owner_public_id: str,
     course_id: str,
+    previous_structure: dict | None = None,
 ) -> dict[str, Any]:
     """Extract resource knowledge with the governed model; never fabricate content."""
+    from llm_client import AsyncOpenAIChatLLM, build_async_llm
+    if isinstance(llm, AsyncOpenAIChatLLM):
+        llm = build_async_llm(model="deepseek-v4-flash", thinking_mode="enabled",
+                              reasoning_effort="max", allow_fallback=False, max_tokens=max(CONFIG.llm_max_tokens, 65536))
     model_meta: dict[str, Any] | None = None
     try:
         model_meta = _resource_structure_model(llm)
         system_prompt = (
             "你是 EduMatrix 课程资料结构抽取 Agent。只根据给定的资料原文和格式，捕捉真实语义章节并提取可追溯知识点。"
-            "文档必须按真实章节边界返回 char_start/char_end 或 start_text/end_text；不要按每个段落机械切分。"
+            "原文已经分段，每段都有固定id。章节位置只用 start_block/end_block，直接选择首尾段的id（包含首尾段）。"
+            "不要计算字符数、抄写原文来定位或返回字符偏移。不要推导公式、求解练习或补写教学内容。"
+            "按现有主题划分章节，不要按每个段落机械切分；相同知识点不要重复。"
+            "覆盖blocks中的所有原文段落。adjacent_context只供理解跨批衔接，不属于本批的章节位置范围。"
+            "同一道题的题设、图表条件、提问应在同一章节，不要只因处理分批就拆成不同知识单元。"
+            "仅当本批第一章明确接续前批同一道题或未结束的原章节时，令continues_previous=true；"
+            "遇到新的独立主题、例题或练习应为false，不能仅因主题相关就合并。后续章均为false。"
+            "先修条件使用知识点名称；保留术语缩写及其完整含义，同名译法统一，不把不同计量口径的概念合并。"
             "非文档资源仍需返回一个覆盖全文的章节。只输出 JSON："
-            "{chapters:[{title,char_start,char_end,start_text,end_text,heading_level,knowledge_points:[{code,title,level,prerequisites}]}]}。"
+            '{"chapters":[{"title":"章节名","start_block":"b00001","end_block":"b00008","heading_level":1,"continues_previous":false,'
+            '"knowledge_points":[{"code":"KP-001","title":"知识点","level":"core","prerequisites":[]}]}]}。'
             "不要输出解释、Markdown、prompt 或 reasoning。"
         )
-        user_prompt = json.dumps({
-            "filename": parsed.filename,
-            "file_format": parsed.file_format,
-            "parser_metadata": {
-                "heading_candidates": (parsed.metadata or {}).get("heading_candidates", []),
-                "location_count": len(parsed.locations),
-            },
-            "content": parsed.text[:32000],
-        }, ensure_ascii=False)
-        raw = await audited_legacy_text_call(
-            llm,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            role="课程资料结构与知识点提取 Agent",
-            operation="course_resource_structure_extraction",
-            capability="course_resource_structure_extraction",
-            owner_public_id=owner_public_id,
-            course_id=course_id or None,
-            input_summary={"filename": parsed.filename, "file_format": parsed.file_format, "content_chars": len(parsed.text)},
-            response_validator=lambda value: parse_json_object(value),
-        )
-        payload = _normalize_structure_payload(parse_json_object(raw), parsed=parsed, model_meta=model_meta)
+        source_blocks = _structure_source_blocks(parsed.text)
+        batches = _structure_batches(source_blocks, locations=parsed.locations)
+        block_positions = {block['id']: index for index, block in enumerate(source_blocks)}
+        previous = previous_structure or {}
+        reusable = {part['key']: part for part in previous.get('analysis_segments', []) if part.get('status') == 'ready'}
+        semaphore = asyncio.Semaphore(max(1, min(4, CONFIG.max_concurrent_llm)))
+
+        async def analyze_part(index, blocks):
+            start, end = blocks[0]['char_start'], blocks[-1]['char_end']
+            adjacent = _structure_adjacent_context(source_blocks, block_positions[blocks[0]['id']], block_positions[blocks[-1]['id']])
+            user_prompt = json.dumps({
+                'filename': parsed.filename, 'file_format': parsed.file_format,
+                'part': index + 1, 'total_parts': len(batches),
+                'blocks': [{'id': block['id'], 'text': block['text']} for block in blocks],
+                'adjacent_context': adjacent,
+            }, ensure_ascii=False)
+            # Reuse only when the actual instructions, source, neighbors and
+            # coordinates match. A change elsewhere need not rerun this part.
+            key = hashlib.sha256(json.dumps([start, end, model_meta, system_prompt, user_prompt],
+                                            ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+            if key in reusable:
+                return {**reusable[key], 'reused': True}
+            result = {'key': key, 'char_start': start, 'char_end': end, 'status': 'failed', 'chapters': []}
+            try:
+                async with semaphore:
+                    raw = await audited_legacy_text_call(
+                        llm, system_prompt=system_prompt, user_prompt=user_prompt,
+                        role='课程资料结构与知识点提取 Agent', operation='course_resource_structure_extraction',
+                        capability='course_resource_structure_extraction', owner_public_id=owner_public_id,
+                        course_id=course_id or None,
+                        input_summary={'filename': parsed.filename, 'file_format': parsed.file_format,
+                                       'content_chars': end-start, 'part': index+1, 'total_parts': len(batches)},
+                        response_validator=lambda value: parse_json_object(value),
+                    )
+                part = _normalize_structure_payload(parse_json_object(raw), parsed=parsed, model_meta=model_meta, source_blocks=blocks)
+                if any(chapter['char_start'] < start or chapter['char_end'] > end for chapter in part['chapters']):
+                    raise ValueError('章节位置超出本段原文，请重新整理。')
+                result.update(status='ready', chapters=part['chapters'])
+            except Exception as exc:
+                result['error'] = str(exc)[:500]
+            return result
+
+        segments = await asyncio.gather(*(analyze_part(index, blocks) for index, blocks in enumerate(batches)))
+        progress = {'analyzed_content_sha256': parsed.processed_sha256, 'analysis_segments': segments,
+                    'total_parts': len(segments), 'completed_parts': sum(part['status']=='ready' for part in segments),
+                    'content_chars': len(parsed.text)}
+        if not segments or any(part['status'] != 'ready' for part in segments):
+            failed = [str(index+1) for index, part in enumerate(segments) if part['status'] != 'ready']
+            pending = _pending_structure(parsed, model_meta=model_meta, error_code='course_resource_structure_extraction_failed',
+                                         message=f'第 {"、".join(failed)} 部分未整理完成，请重试。已完成的部分会保留。')
+            return {**pending, **progress}
+        chapters = []
+        for index, part in enumerate(segments):
+            for chapter_index, original in enumerate(part['chapters']):
+                chapter = {**original, 'knowledge_points': [dict(point) for point in original.get('knowledge_points', [])]}
+                if len(segments) > 1:
+                    for point in chapter['knowledge_points']:
+                        point['code'] = f'P{index+1}-{point["code"]}'
+                continuation = chapter_index == 0 and index > 0 and chapter.get('continues_previous') is True
+                if chapters and (chapters[-1]['title'] == chapter['title'] or continuation) and not parsed.text[chapters[-1]['char_end']:chapter['char_start']].strip():
+                    chapters[-1]['char_end'] = chapter['char_end']
+                    chapters[-1]['knowledge_points'] = _normalize_knowledge_points(chapters[-1]['knowledge_points'] + chapter['knowledge_points'])
+                else:
+                    chapter['position'] = len(chapters)+1
+                    chapters.append(chapter)
+        payload = {'status': 'ready', 'chapter_strategy': 'llm_semantic_sections', 'model': dict(model_meta),
+                   'chapters': chapters, 'knowledge_point_count': sum(len(chapter['knowledge_points']) for chapter in chapters),
+                   'error': None, **progress}
         if parsed.file_format not in _SEMANTIC_DOCUMENT_FORMATS:
             # P079: non-document resources are exactly one chapter; only their points come from the model.
             points = _normalize_knowledge_points([
@@ -673,6 +848,7 @@ def _persist_personal_canonical_source(
     course_id: str = "",
     structure: dict[str, Any] | None = None,
     source_path: Path | str | None = None,
+    previous_source_id: str = "",
 ) -> tuple[DBSourceDocument, list[DBSourceRef]]:
     course = _ensure_personal_course(
         session,
@@ -689,13 +865,8 @@ def _persist_personal_canonical_source(
     ))
     source_parser_metadata = {
         **dict(parsed.metadata or {}),
-        "resource_structure": {
-            "status": structure_payload.get("status"),
-            "chapter_strategy": structure_payload.get("chapter_strategy"),
-            "model": structure_payload.get("model") or {},
-            "knowledge_point_count": int(structure_payload.get("knowledge_point_count") or 0),
-            "error": structure_payload.get("error"),
-        },
+        "resource_structure": structure_payload,
+        "chapter_reference_version": 2,
     }
     structure_status = str(structure_payload.get("status") or "failed")
     structure_error = structure_payload.get("error") or {}
@@ -767,9 +938,9 @@ def _persist_personal_canonical_source(
         midpoint = (int(location.char_start or 0) + int(location.char_end or 0)) // 2
         chapter = next((item for item in chapters if item.char_start <= midpoint <= item.char_end), chapters[0])
         stable_key = f"personal:{document.id}:{location.kind}:{location.index}"
-        parser_version = parsed.parser_version if not any(
+        parser_version = parsed.parser_version if parsed.file_format not in _SEMANTIC_DOCUMENT_FORMATS and not any(
             ref.chapter_id == chapter.id for ref in refs
-        ) else f"{parsed.parser_version}:location-{location.index}"
+        ) else f"{parsed.parser_version}:location-{ordinal}"
         quote = parsed.text[location.char_start:location.char_end][:300]
         ref = DBSourceRef(
             id=_stable_id("ref", source.id, parsed.parser_version, stable_key),
@@ -795,26 +966,66 @@ def _persist_personal_canonical_source(
         session.add(ref)
         refs.append(ref)
 
+    # Physical pages/cells and semantic chapters are different locators. A page
+    # can contain several chapters; every chapter needs its own exact range.
+    if parsed.file_format in _SEMANTIC_DOCUMENT_FORMATS:
+        for chapter in chapters:
+            opening = next((location for location in parsed.locations
+                            if location.char_start <= chapter.char_start < location.char_end), None)
+            ref = DBSourceRef(
+                id=_stable_id('ref', source.id, 'chapter', chapter.id),
+                source_document_id=source.id, chapter_id=chapter.id,
+                parser_version=parsed.parser_version,
+                page_number=opening.page_number if opening else None,
+                char_start=chapter.char_start, char_end=chapter.char_end,
+                location_kind='chapter', location_index=chapter.position,
+                location_label=chapter.title, location_metadata={},
+                content_hash=parsed.processed_sha256,
+                quote=parsed.text[chapter.char_start:chapter.char_end][:300],
+            )
+            session.add(ref)
+            refs.append(ref)
+
+    # A successful image retry is still the same material. Reuse unchanged
+    # concepts so existing learning evidence remains attached to those nodes.
+    previous_points = {}
+    if previous_source_id:
+        for point in session.query(DBKnowledgePoint).join(
+            DBChapterKnowledgePoint, DBChapterKnowledgePoint.knowledge_point_id == DBKnowledgePoint.id,
+        ).join(DBChapter, DBChapter.id == DBChapterKnowledgePoint.chapter_id).join(
+            DBSourceDocument, DBSourceDocument.id == DBChapter.source_document_id,
+        ).filter(
+            DBSourceDocument.course_id == course.id,
+            DBSourceDocument.source_sha256 == parsed.source_sha256,
+            DBSourceDocument.processing_status == "ready",
+        ).order_by(DBSourceDocument.created_at.desc()).all():
+            previous_points.setdefault(" ".join(point.title.split()).casefold(), point)
     point_counter = 0
     for chapter, spec in zip(chapters, chapter_specs):
         for point in _normalize_knowledge_points(spec.get("knowledge_points")):
             point_counter += 1
             code = re.sub(r"[^0-9A-Za-z一-龥_-]+", "-", str(point.get("code") or "").strip())[:64] or f"KP-{point_counter:03d}"
             point_id = _stable_id("kp", source.id, code)
-            knowledge = session.get(DBKnowledgePoint, point_id)
+            title = str(point.get("title") or code)[:256]
+            knowledge = previous_points.get(" ".join(title.split()).casefold()) or session.get(DBKnowledgePoint, point_id)
+            if knowledge is not None and " ".join(knowledge.title.split()).casefold() != " ".join(title.split()).casefold():
+                code = f'{code[:48]}-{hashlib.sha256(title.encode()).hexdigest()[:10]}'
+                point_id = _stable_id('kp', source.id, code)
+                knowledge = session.get(DBKnowledgePoint, point_id)
             if knowledge is None:
                 knowledge = DBKnowledgePoint(
                     id=point_id,
                     domain_pack=f"resource:{source.id}",
                     code=code,
                     version=parsed.processed_sha256[:16],
-                    title=str(point.get("title") or code)[:256],
+                    title=title,
                     level=str(point.get("level") or "core")[:32],
                     prerequisites=list(point.get("prerequisites") or []),
                     status="active",
                 )
                 session.add(knowledge)
                 session.flush()
+            previous_points.setdefault(" ".join(title.split()).casefold(), knowledge)
             relation_id = _stable_id("ckp", chapter.id, knowledge.id, "teaches")
             if session.get(DBChapterKnowledgePoint, relation_id) is None:
                 session.add(DBChapterKnowledgePoint(
@@ -858,6 +1069,16 @@ def _index_canonical_chunks(
     except Exception:
         return ["rag_index_deferred"]
     return []
+
+
+async def _prepare_course_search(source_document_id: str, source_status: str, warnings: list[str]) -> None:
+    if source_status != 'ready':
+        return
+    from app.canonical_retrieval import prepare_canonical_embeddings
+    try:
+        await run_db_op(lambda db: prepare_canonical_embeddings(db, source_document_ids=[source_document_id]))
+    except Exception:
+        warnings.append('semantic_index_deferred')
 
 
 def _personal_source_provenance(
@@ -929,9 +1150,10 @@ def _course_manifest_provenance(course, document) -> dict[str, Any]:
 
 
 def _canonical_course_provenance(course, document, source, source_ref, chapter) -> dict[str, Any]:
+    from app.source_refs import document_original_location
     return {
         **_course_manifest_provenance(course, document),
-        "source_url": source.source_url if source else "",
+        "source_url": document_original_location(source.source_url, source.source_path)["url"] if source else "",
         "source_document_id": source.id if source else "",
         "source_parser_version": source.parser_version if source else "",
         "processed_sha256": (
@@ -969,7 +1191,8 @@ def build_canonical_course_source_detail(session, current_user: DBUser, source_d
         and course.visibility == "public"
         and course.status == "published"
     )
-    if current_user.role != "admin" and membership is None and not default_shelf_access:
+    if (current_user.role != "admin" and membership is None and not default_shelf_access
+            and course.owner_public_id != current_user.public_id):
         raise HTTPException(status_code=403, detail="无权读取该课程来源")
 
     course_document = (
@@ -987,7 +1210,11 @@ def build_canonical_course_source_detail(session, current_user: DBUser, source_d
     if (
         course_document is not None
         and course_document.course_id == course.id
-        and course_document.status == "published"
+        and (course_document.status == "published" or (
+            course_document.status == "retired" and source.processing_status == "ready"
+            and ((source.parser_metadata or {}).get("replaced_by_source_id")
+                 or (source.parser_metadata or {}).get("retired_from_catalog"))
+        ))
     ):
         content = course_document.content or ""
         raw = content.encode("utf-8")
@@ -1019,8 +1246,13 @@ def build_canonical_course_source_detail(session, current_user: DBUser, source_d
             raise HTTPException(status_code=409, detail="课程来源文件哈希与冻结记录不一致")
         content = raw.decode("utf-8", errors="replace")
 
-    refs = session.query(DBSourceRef).filter_by(source_document_id=source.id).order_by(
-        DBSourceRef.location_index, DBSourceRef.id,
+    archived = bool((source.parser_metadata or {}).get("replaced_by_source_id") or
+                    (source.parser_metadata or {}).get("retired_from_catalog"))
+    reader_refs = ((DBSourceRef.parser_version == source.parser_version)
+                   & DBSourceRef.location_kind.not_in(('selection', 'reader_document'))
+                   if archived else current_structure_ref_clause())
+    refs = session.query(DBSourceRef).filter_by(source_document_id=source.id).filter(reader_refs).order_by(
+        (DBSourceRef.location_kind == 'chapter').desc(), DBSourceRef.location_index, DBSourceRef.id,
     ).all()
     source_ref = refs[0] if refs else None
     chapter = session.get(DBChapter, source_ref.chapter_id) if source_ref and source_ref.chapter_id else None
@@ -1079,8 +1311,13 @@ async def upload_document(
     student_id: str = "default",
     course_id: str = "",
     current_user=Depends(get_current_user),
+    source_base_url: str = "",
 ) -> dict[str, Any]:
-    student_id = enforce_student_access(student_id, current_user)
+    # The course shelf also serves teachers uploading their own materials.
+    # Only this personal upload entry resolves an omitted learner to the owner;
+    # teacher access to a student's records still requires an explicit target.
+    upload_owner = current_user.username if student_id in ("", "default", None) else student_id
+    student_id = enforce_student_access(upload_owner, current_user)
     owner_public_id, target_course_id = await run_db_op(
         lambda session: _resolve_upload_target(
             session,
@@ -1097,19 +1334,19 @@ async def upload_document(
         allowed = ", ".join(SUPPORTED_EXTENSIONS.keys())
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext}，支持 {allowed}")
 
-    raw = await file.read(CONFIG.max_upload_bytes + 1)
+    raw = await file.read(CONFIG.max_upload_bytes + 1) if CONFIG.max_upload_bytes > 0 else await file.read()
     file_size = len(raw)
-    if file_size > CONFIG.max_upload_bytes:
+    if CONFIG.max_upload_bytes > 0 and file_size > CONFIG.max_upload_bytes:
         raise HTTPException(status_code=413, detail=f"文件超过大小限制 ({CONFIG.max_upload_bytes} bytes)")
 
     source_sha256 = hashlib.sha256(raw).hexdigest()
 
     def find_existing(session):
-        source = session.query(DBSourceDocument).filter_by(
+        sources = session.query(DBSourceDocument).filter_by(
             course_id=target_course_id,
             source_sha256=source_sha256,
-            processing_status="ready",
-        ).first()
+        ).filter(DBSourceDocument.processing_status.in_(["ready", "failed"])).order_by(DBSourceDocument.created_at.desc()).all()
+        source = next((item for item in sources if not (item.parser_metadata or {}).get("replaced_by_source_id")), None)
         if source is None or not source.legacy_document_id:
             return None
         document = session.get(DBKnowledgeDocument, source.legacy_document_id)
@@ -1142,8 +1379,16 @@ async def upload_document(
         }
 
     existing = await run_db_op(find_existing)
-    if existing is not None:
+    incomplete_images = bool(existing and existing["source_parser_metadata"].get("visual_reading", {}).get("status") in {"partial", "unavailable"})
+    outdated_chapters = bool(existing and ext.lstrip('.') in _SEMANTIC_DOCUMENT_FORMATS
+                             and existing["source_parser_metadata"].get("chapter_reference_version") != 2)
+    incomplete = incomplete_images or outdated_chapters
+    if existing is not None and existing["source_processing_status"] == "ready" and not incomplete:
         return existing
+    previous_source_id = existing["source_document_id"] if existing else ""
+    previous_evidence = await run_db_op(lambda session: _saved_visual_evidence(
+        session, session.get(DBSourceDocument, previous_source_id),
+    )) if previous_source_id else []
 
     doc_id = _stable_id("kdoc", target_course_id, source_sha256)
     # A failed extraction is retained for audit/retry, but must not block a new
@@ -1164,11 +1409,12 @@ async def upload_document(
     )
     ocr_dir = _ocr_asset_dir(student_id=student_id, document_id=doc_id)
     try:
-        parsed = parse_document(
+        parsed = await asyncio.to_thread(parse_document,
             raw,
             filename,
             offline_ocr=ext == ".pdf",
             ocr_asset_dir=ocr_dir if ext == ".pdf" else None,
+            base_url=source_base_url,
         )
     except DocumentParseError as exc:
         if ocr_dir.parent.exists():
@@ -1200,6 +1446,32 @@ async def upload_document(
                 "retryable": True,
             },
         ) from exc
+    # Audited structure extraction references the course before source
+    # persistence. Bootstrap the implicit personal course before that call.
+    def prepare_upload_course(session):
+        if session.get(DBStudentProfile, student_id) is None:
+            # Legacy document storage references this row even for a teacher's
+            # own uploads. It carries no inferred mastery or learning results.
+            session.add(DBStudentProfile(student_id=student_id))
+        _ensure_personal_course(
+            session, owner_public_id=owner_public_id,
+            uploader_public_id=current_user.public_id, course_id=target_course_id,
+        )
+        session.commit()
+
+    await run_db_op(prepare_upload_course)
+
+    parsed, visual_evidence = await _read_course_images(
+        parsed, raw, owner_public_id=current_user.public_id, course_id=target_course_id,
+        asset_dir=ocr_dir.parent / "visual", existing=previous_evidence,
+    )
+    if incomplete_images and not outdated_chapters and existing["source_processing_status"] == "ready" and len(visual_evidence) <= len(previous_evidence):
+        # Keep the readable version, its selections and citations when no new
+        # page was recovered. Model call records still retain this attempt.
+        doc_file_path.unlink(missing_ok=True)
+        if ocr_dir.parent.exists():
+            shutil.rmtree(ocr_dir.parent)
+        return {**existing, "visual_retry": "unchanged"}
     text_content = parsed.text
     evidence_chunks = chunk_document(text_content, source=filename)
 
@@ -1212,6 +1484,7 @@ async def upload_document(
             llm=resource_llm.llm,
             owner_public_id=current_user.public_id,
             course_id=target_course_id,
+            previous_structure=(existing or {}).get('source_parser_metadata', {}).get('resource_structure'),
         )
     except Exception as exc:
         resource_structure = _pending_structure(
@@ -1220,22 +1493,6 @@ async def upload_document(
             error_code="course_resource_structure_model_unavailable",
             message=exc,
         )
-
-    # ── 成员 3 任务 1: PDF 多模态视觉解析 ──
-    visual_evidence: list = []
-    if ext == ".pdf" and _visual_page_externalization_allowed(parsed):
-        try:
-            visual_evidence = parse_pdf_visually(
-                raw,
-                filename,
-                owner_public_id=current_user.public_id,
-                model_call_context={"trace_id": f"m5-pdf-upload-{uuid.uuid4().hex}"},
-            )
-            if visual_evidence:
-                # 注册视觉证据到 VisRAG 索引
-                hybrid_rag.visual_index.index.upsert(tuple(visual_evidence))
-        except Exception as e:
-            print(f"  [knowledge_api] PDF 视觉解析失败（非致命）: {e}")
 
     # ── 成员 3 任务 2: 增量图谱自生长（句级别 diff + 三元组提取）──
     graph_report = build_graph_after_upload(evidence_chunks, source=filename, previous_text="")
@@ -1277,7 +1534,22 @@ async def upload_document(
             course_id=target_course_id,
             structure=resource_structure,
             source_path=doc_file_path,
+            previous_source_id=previous_source_id,
         )
+        if previous_source_id:
+            previous = session.get(DBSourceDocument, previous_source_id)
+            source.parser_metadata = {**source.parser_metadata, "previous_source_id": previous.id}
+            source.source_url = previous.source_url
+            source.license_text = previous.license_text
+            if source.processing_status == "ready":
+                # A failed intermediate attempt must not leave an older readable
+                # copy active after this retry succeeds. Frozen citations remain.
+                for older in session.query(DBSourceDocument).filter(
+                    DBSourceDocument.course_id == source.course_id,
+                    DBSourceDocument.source_sha256 == source.source_sha256,
+                    DBSourceDocument.id != source.id,
+                ).all():
+                    older.parser_metadata = {**older.parser_metadata, "replaced_by_source_id": source.id}
         session.commit()
         return (
             source.id,
@@ -1309,6 +1581,8 @@ async def upload_document(
         source_status=source_processing_status,
         owner_id=student_id,
     )
+
+    await _prepare_course_search(source_document_id, source_processing_status, indexing_warnings)
 
     try:
         from learning_strategy import invalidate_graph_cache
@@ -1382,6 +1656,38 @@ def _estimate_video_duration(raw: bytes) -> float:
     return 0.0
 
 
+@router.post("/sources/{source_id}/retry-reading")
+async def retry_source_reading(
+    source_id: str, request: Request, background_tasks: BackgroundTasks,
+    current_user: DBUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    def original(session):
+        source = session.get(DBSourceDocument, source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="这份资料已不存在。")
+        _resolve_upload_target(session, student_id=current_user.username,
+                               current_user=current_user, course_id=source.course_id)
+        document = session.get(DBKnowledgeDocument, source.legacy_document_id)
+        if document is None:
+            raise HTTPException(status_code=409, detail="请重新选择这份资料的原文件。")
+        path = Path(source.source_path)
+        path = (path if path.is_absolute() else PROJECT_ROOT / path).resolve()
+        if PROJECT_ROOT.resolve() not in path.parents or not path.is_file():
+            raise HTTPException(status_code=409, detail="原文件暂不可用，请重新选择文件上传。")
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != source.source_sha256:
+            raise HTTPException(status_code=409, detail="原文件已变化，请重新选择文件上传。")
+        return raw, source.filename, source.course_id, source.source_url or ''
+
+    raw, filename, course_id, source_url = await run_db_op(original)
+    return await upload_document(
+        request=request, background_tasks=background_tasks,
+        file=UploadFile(filename=filename, file=BytesIO(raw)),
+        student_id=current_user.username, course_id=course_id, current_user=current_user,
+        source_base_url=source_url,
+    )
+
+
 @router.post("/upload-batch")
 async def upload_document_batch(
     request: Request,
@@ -1394,8 +1700,6 @@ async def upload_document_batch(
     """Process each document independently and report sanitized per-item outcomes."""
     if not files:
         raise HTTPException(status_code=400, detail="至少需要一个文件")
-    if len(files) > 20:
-        raise HTTPException(status_code=413, detail="单批最多上传 20 个文件")
     results: list[dict[str, Any]] = []
     for file in files:
         filename = file.filename or "unnamed"
@@ -1774,7 +2078,7 @@ def _course_catalog_payload(session, current_user: DBUser) -> dict[str, Any]:
     )
     visible_courses = []
     for course in published_courses:
-        if course.visibility != "public" and course.id not in membership_by_course:
+        if course.visibility != "public" and course.id not in membership_by_course and course.owner_public_id != current_user.public_id:
             continue
         manifest = course.manifest_data if isinstance(course.manifest_data, dict) else {}
         is_owned_empty_personal = (
@@ -1797,7 +2101,7 @@ def _course_catalog_payload(session, current_user: DBUser) -> dict[str, Any]:
     )
     sources = (
         session.query(DBSourceDocument)
-        .filter(DBSourceDocument.course_id.in_(course_ids))
+        .filter(DBSourceDocument.course_id.in_(course_ids), current_source_clause())
         .order_by(DBSourceDocument.course_id, DBSourceDocument.filename)
         .all()
         if course_ids
@@ -1814,7 +2118,8 @@ def _course_catalog_payload(session, current_user: DBUser) -> dict[str, Any]:
     personal_document_by_id = {document.id: document for document in personal_documents}
     chapters = (
         session.query(DBChapter)
-        .filter(DBChapter.course_id.in_(course_ids))
+        .join(DBSourceDocument, DBChapter.source_document_id == DBSourceDocument.id)
+        .filter(DBChapter.course_id.in_(course_ids), current_source_clause(), current_chapter_clause())
         .order_by(DBChapter.course_id, DBChapter.position)
         .all()
         if course_ids
@@ -1847,7 +2152,7 @@ def _course_catalog_payload(session, current_user: DBUser) -> dict[str, Any]:
         course.id == DEFAULT_SHELF_COURSE_ID and course.visibility == "public"
         for course in visible_courses
     ) else next((course.id for course in visible_courses if course.visibility == "public"), "")
-    shelf_ids = set(membership_by_course)
+    shelf_ids = set(membership_by_course) | {course.id for course in visible_courses if course.owner_public_id == current_user.public_id}
     if default_course_id:
         shelf_ids.add(default_course_id)
     shelf_courses = [course for course in visible_courses if course.id in shelf_ids]
@@ -1937,7 +2242,7 @@ def _course_catalog_payload(session, current_user: DBUser) -> dict[str, Any]:
             ),
             "in_shelf": course.id in shelf_ids,
             "shelf_origin": (
-                "team_preloaded" if course.id == default_course_id else "membership" if membership else ""
+                "team_preloaded" if course.id == default_course_id else "owner" if course.owner_public_id == current_user.public_id else "membership" if membership else ""
             ),
             "membership_role": membership.role if membership else None,
             "can_manage": course.owner_public_id == current_user.public_id,
@@ -2011,7 +2316,9 @@ def _profile_conditioned_discovery_context(
     if requested_course_id and course is None:
         raise HTTPException(status_code=404, detail="当前课程不存在")
     from course_catalog import course_is_selectable
-    if course is not None and not course_is_selectable(session, course):
+    own_import_target = bool(course is not None and course.owner_public_id == current_user.public_id
+                             and course.status in {"draft", "published"})
+    if course is not None and not own_import_target and not course_is_selectable(session, course):
         raise HTTPException(status_code=409, detail="当前课程已停止发布或没有可用学习资料")
     if course is not None and course.visibility != "public" and course.owner_public_id != current_user.public_id:
         membership = session.query(DBCourseMembership).filter_by(
@@ -2036,12 +2343,13 @@ def _profile_conditioned_discovery_context(
         ).order_by(DBProfileSnapshot.created_at.desc(), DBProfileSnapshot.id.desc()).all()
         for candidate in snapshots:
             body = candidate.snapshot if isinstance(candidate.snapshot, dict) else {}
-            candidate_course_id = str(body.get("course_id") or "").strip()
+            candidate_course_id = str(body.get("course_id") or (body.get("course_context") or {}).get("courseId") or "").strip()
             if course is None or not candidate_course_id or candidate_course_id == course.id:
                 snapshot = candidate
                 break
-    body = snapshot.snapshot if snapshot is not None and isinstance(snapshot.snapshot, dict) else {}
-    snapshot_course_id = str(body.get("course_id") or "").strip()
+    from app.profile_adaptation import build_profile_adaptation, complete_learning_snapshot, profile_prompt_context
+    body = complete_learning_snapshot(session, snapshot) if snapshot is not None else {}
+    snapshot_course_id = str(body.get("course_id") or (body.get("course_context") or {}).get("courseId") or "").strip()
     if course is not None and snapshot_course_id and snapshot_course_id != course.id:
         raise HTTPException(status_code=409, detail="画像快照与当前课程不一致，请选择同一课程的画像版本")
     if course is None and snapshot_course_id:
@@ -2077,6 +2385,9 @@ def _profile_conditioned_discovery_context(
         limit=8,
     )
     time_budget = " ".join(str(body.get("time_budget") or body.get("weekly_time_budget") or "").split())[:120]
+    adaptation = profile_prompt_context(build_profile_adaptation(body)) if snapshot is not None else {}
+    requirements = adaptation.get("learning_requirements") or {}
+    time_budget = requirements.get("study_schedule") or time_budget
     course_context = {
         "course_id": course.id if course is not None else snapshot_course_id,
         "title": course.title if course is not None else "",
@@ -2094,6 +2405,8 @@ def _profile_conditioned_discovery_context(
         "weak_directions": weak_directions,
         "preferences": preferences,
         "time_budget": time_budget,
+        "learning_requirements": requirements,
+        "foundation": (adaptation.get("registration_profile") or {}).get("knowledge_base") or "",
     }
     return {"course": course_context, "profile": profile_context}
 
@@ -2278,7 +2591,7 @@ async def add_course_to_shelf(
             course_id=course.id,
             user_public_id=current_user.public_id,
         ).first()
-        if course.visibility != "public" and membership is None:
+        if course.visibility != "public" and membership is None and course.owner_public_id != current_user.public_id:
             raise HTTPException(status_code=403, detail="该课程不能直接加入书架")
         created = membership is None
         if membership is None:
@@ -2315,6 +2628,39 @@ async def get_course_knowledge_graph(
     return await run_db_op(lambda session: build_course_graph(session, current_user, course_id))
 
 
+@router.get('/courses/{course_id}/structure')
+async def get_course_structure(course_id: str, current_user: DBUser = Depends(get_current_user)):
+    return await run_db_op(lambda db: read_course_structure(db, current_user, course_id))
+
+
+@router.put('/courses/{course_id}/structure')
+async def put_course_structure(course_id: str, payload: StructureSave, current_user: DBUser = Depends(get_current_user)):
+    return await run_db_op(lambda db: save_course_structure(db, current_user, course_id, payload))
+
+
+@router.post('/courses/{course_id}/structure/confirm')
+async def apply_course_structure(course_id: str, payload: StructureConfirm, current_user: DBUser = Depends(get_current_user)):
+    return await run_db_op(lambda db: confirm_course_structure(db, current_user, course_id, payload))
+
+
+@router.post('/courses/{course_id}/structure/reset')
+async def restart_course_structure(course_id: str, payload: StructureConfirm, current_user: DBUser = Depends(get_current_user)):
+    return await run_db_op(lambda db: reset_course_structure(db, current_user, course_id, payload))
+
+
+@router.post('/courses/{course_id}/structure/analyze')
+async def analyze_course_structure(course_id: str, payload: StructureConfirm, request: Request,
+                                   current_user: DBUser = Depends(get_current_user)):
+    state, bodies = await run_db_op(lambda db: prepare_structure_analysis(db, current_user, course_id))
+    if state['revision'] != payload.revision:
+        raise HTTPException(409, '课程结构已有修改，请重新打开后查找合并建议。')
+    llm = build_swarm_from_headers(request.headers).llm
+    async def persist_progress(analysis):
+        await run_db_op(lambda db: save_structure_analysis(db, current_user, course_id, state, analysis))
+    analysis = await analyze_structure(state, bodies, llm, current_user.public_id, on_progress=persist_progress)
+    return await run_db_op(lambda db: save_structure_analysis(db, current_user, course_id, state, analysis))
+
+
 @router.get("/discovery/search")
 async def discover_web_materials(
     request: Request,
@@ -2322,6 +2668,7 @@ async def discover_web_materials(
     max_results: Annotated[int, Field(ge=1, le=12)] = 8,
     course_id: str = "",
     profile_snapshot_id: str = "",
+    use_profile: bool = True,
     current_user: DBUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     context = await run_db_op(
@@ -2331,7 +2678,7 @@ async def discover_web_materials(
             course_id=course_id,
             profile_snapshot_id=profile_snapshot_id,
         )
-    )
+    ) if use_profile else {"course": {}, "profile": {"profile_snapshot_id": None}}
     llm = None
     if context["profile"]["profile_snapshot_id"]:
         # The factory returns the orchestration container; profile query planning
@@ -2427,6 +2774,10 @@ async def admit_web_source_candidate(
     except Exception as exc:
         await record_failure("download", exc)
         raise
+    await run_db_op(lambda session: mark_candidate_stage(
+        session, current_user, candidate_id, stage="download", status="completed",
+        message="原站文件已下载",
+    ))
     upload = UploadFile(filename=filename, file=BytesIO(raw))
     try:
         document = await upload_document(
@@ -2436,6 +2787,7 @@ async def admit_web_source_candidate(
             student_id=current_user.username,
             course_id=payload.course_id,
             current_user=current_user,
+            source_base_url=final_url,
         )
     except Exception as exc:
         await record_failure("parse", exc)
@@ -2853,6 +3205,8 @@ async def add_web_source(
         owner_id=student_id,
     )
 
+    await _prepare_course_search(source_document_id, source_status, indexing_warnings)
+
     try:
         from learning_strategy import invalidate_graph_cache
         invalidate_graph_cache()
@@ -3009,179 +3363,26 @@ async def download_web_file(
             "original_file_path": str(doc_path),
         }
 
-    doc_id = hashlib.sha256(f"{student_id}:{filename}:{os.urandom(4).hex()}".encode()).hexdigest()[:16]
-
-    file_category = SUPPORTED_EXTENSIONS[ext]
-    is_multimodal = file_category in ("video", "presentation")
-
-    # 3. 提取文本内容并分块
-    ocr_dir = _ocr_asset_dir(student_id=student_id, document_id=doc_id)
-    try:
-        parsed = parse_document(
-            raw,
-            filename,
-            offline_ocr=ext == ".pdf",
-            ocr_asset_dir=ocr_dir if ext == ".pdf" else None,
-        )
-    except DocumentParseError as exc:
-        if ocr_dir.parent.exists():
-            shutil.rmtree(ocr_dir.parent)
-        raise HTTPException(
-            status_code=422,
-            detail={"code": exc.code, "message": str(exc), "file_format": exc.file_format},
-        ) from exc
-    text_content = parsed.text
-    evidence_chunks = chunk_document(text_content, source=filename)
-
-    try:
-        structure_llm = build_swarm_from_headers(request.headers)
-        resource_structure = await _extract_resource_structure(
-            parsed,
-            llm=structure_llm.llm,
-            owner_public_id=owner_public_id,
-            course_id=target_course_id,
-        )
-    except Exception as exc:
-        resource_structure = _pending_structure(
-            parsed,
-            model_meta=None,
-            error_code="course_resource_structure_model_unavailable",
-            message=exc,
-        )
-
-    # 4. PDF 视觉解析
-    visual_evidence: list = []
-    if ext == ".pdf" and _visual_page_externalization_allowed(parsed):
-        try:
-            visual_evidence = parse_pdf_visually(
-                raw,
-                filename,
-                owner_public_id=current_user.public_id,
-                model_call_context={"trace_id": f"m5-pdf-download-{uuid.uuid4().hex}"},
-            )
-            if visual_evidence:
-                hybrid_rag.visual_index.index.upsert(tuple(visual_evidence))
-        except Exception as e:
-            print(f"  [download_web_file] PDF 视觉解析失败（非致命）: {e}")
-
-    # 5. 增量图谱自生长
-    graph_report = build_graph_after_upload(evidence_chunks, source=filename, previous_text="")
-
-    extra_metadata = {"url": url}
-    if ext in (".pptx", ".ppt"):
-        try:
-            from document_parser import parse_pptx_slides
-            slides = parse_pptx_slides(raw)
-            extra_metadata["slide_count"] = len(slides)
-            extra_metadata["has_images"] = any(s["images"] for s in slides)
-        except Exception:
-            pass
-
-    # 6. 保存至数据库记录
-    db_doc = DBKnowledgeDocument(
-        id=doc_id,
-        student_id=student_id,
-        filename=filename,
-        file_type=ext.lstrip("."),
-        file_size=file_size,
-        title=safe_title,
-        content=text_content,
-        tags=list({tag for chunk in evidence_chunks for tag in chunk.tags}),
-        chunk_count=len(evidence_chunks),
-        is_multimodal=is_multimodal,
-        multimodal_metadata=extra_metadata,
+    # Local files and downloaded course files share parsing, image retries,
+    # course preparation and canonical persistence.
+    result = await upload_document(
+        request=request, background_tasks=background_tasks,
+        file=UploadFile(filename=filename, file=BytesIO(raw)),
+        student_id=student_id, course_id=target_course_id, current_user=current_user,
+        source_base_url=_final_url,
     )
-    
-    def save_doc(session):
-        session.add(db_doc)
-        session.flush()
-        source, refs = _persist_personal_canonical_source(
-            session,
-            document=db_doc,
-            parsed=parsed,
-            owner_public_id=owner_public_id,
-            uploader_public_id=current_user.public_id,
-            course_id=target_course_id,
-            structure=resource_structure,
-            source_path=doc_file_path,
-        )
-        source.source_url = url
+
+    def attach_origin(session):
+        source = session.get(DBSourceDocument, result["source_document_id"])
+        source.source_url = _final_url
+        document = session.get(DBKnowledgeDocument, result["id"])
+        document.title = safe_title
+        source.title = safe_title
+        document.multimodal_metadata = {**dict(document.multimodal_metadata or {}), "url": _final_url}
         session.commit()
-        return (
-            source.id,
-            [ref.id for ref in refs],
-            source.processing_status,
-            source.processing_error_code,
-        )
-        
-    # 7. 原文件先原子落盘；数据库失败时清理，避免 ready 行缺失原文件。
-    doc_file_path = _write_upload_file(
-        student_id=student_id, document_id=doc_id, ext=ext, raw=raw
-    )
-    try:
-        source_document_id, source_ref_ids, source_status, source_error = await run_db_op(save_doc)
-    except Exception:
-        if doc_file_path.exists():
-            doc_file_path.unlink()
-        if ocr_dir.parent.exists():
-            shutil.rmtree(ocr_dir.parent)
-        raise
 
-    # 8. 索引可重建；失败不回滚已验证的来源正文，但必须显式返回延期警告。
-    indexing_warnings = _index_canonical_chunks(
-        evidence_chunks,
-        source_document_id=source_document_id,
-        source_ref_ids=source_ref_ids,
-        source_status=source_status,
-        owner_id=student_id,
-    )
-
-    try:
-        from learning_strategy import invalidate_graph_cache
-        invalidate_graph_cache()
-    except Exception:
-        pass
-
-    # 调度异步文档导读生成（NotebookLM 风格）
-    if text_content.strip():
-        background_tasks.add_task(
-            _generate_doc_guide_for_document,
-            doc_id=doc_id,
-            student_id=student_id,
-            owner_public_id=current_user.public_id,
-            text_content=text_content[:12000],
-        )
-
-    return {
-        "status": "success" if source_status == "ready" else "partial",
-        "id": doc_id,
-        "filename": filename,
-        "file_type": ext.lstrip("."),
-        "file_category": file_category,
-        "file_size": file_size,
-        "chunk_count": len(evidence_chunks),
-        "tags": list({tag for chunk in evidence_chunks for tag in chunk.tags}),
-        "is_multimodal": is_multimodal,
-        "multimodal_metadata": extra_metadata,
-        "content_preview": text_content[:300],
-        "course_id": target_course_id,
-        "source_document_id": source_document_id,
-        "source_ref_count": len(source_ref_ids),
-        "source_parser_version": parsed.parser_version,
-        "source_sha256": parsed.source_sha256,
-        "processed_sha256": parsed.processed_sha256,
-        "source_processing_status": source_status,
-        "source_processing_error_code": source_error,
-        "source_parser_metadata": {**dict(parsed.metadata or {}), "resource_structure": resource_structure},
-        "source_parse_warnings": list(parsed.warnings),
-        "indexing_warnings": indexing_warnings,
-        "knowledge_extraction": resource_structure,
-        "visual_pages_parsed": len(visual_evidence),
-        "ocr": (parsed.metadata or {}).get("ocr", {}),
-        "graph_triplets_extracted": graph_report.raw_triplets if graph_report else 0,
-        "graph_candidate_relations": graph_report.candidate_edges if graph_report else 0,
-        "graph_edges_written": graph_report.written_edges if graph_report else 0,
-    }
+    await run_db_op(attach_origin)
+    return {**result, "status": "success" if result["source_processing_status"] == "ready" else "partial"}
 
 
 @router.get("/sources/{source_document_id}")

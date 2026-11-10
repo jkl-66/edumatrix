@@ -54,7 +54,7 @@ def test_agent_timeline_uses_only_server_facts_and_four_public_stages() -> None:
         "validation",
         "revision",
         "decisionSummary",
-        "冻结演示结果（非本次实时运行）",
+        "这是之前保存的演示内容，并非本次生成。",
         "历史已完成回答（非本次结果）",
         'data-testid="agent-audit-timeline"',
     ):
@@ -104,7 +104,11 @@ def test_chat_reader_and_handout_share_source_and_audit_components() -> None:
     assert "readerDoc.value.source_document_id || sourceDocumentId.value" in reader
     assert ':source="selection.answer_source || selection.source"' in reader
     assert ':audit="selection.agent_audit"' in reader
-    assert "const returnTo = String(route.query.return_to || '')" in reader
+    assert "const returnPath = computed(" in reader
+    assert "String(route.query.return_to || '')" in reader
+    assert "router.push(returnPath.value)" in reader
+    assert ':aria-label="returnLabel"' in reader
+    assert "返回原学习位置" in reader
 
     assert "import SourceCitation" in handout
     assert "sourceForFootnote(item)" in handout
@@ -137,7 +141,7 @@ def test_f7_t02_and_f7_t04_layout_and_state_ownership_remain_intact() -> None:
     assert "retryDocumentSelectionOcr" in reader
     assert "已恢复上次位置" in reader
 
-    assert "grid-template-columns: 228px minmax(520px, 1fr) 292px" in chat
+    assert "grid-template-columns: clamp(236px, 15vw, 300px) minmax(0, 1fr) clamp(304px, 20vw, 392px)" in chat
     assert 'data-testid="focused-chat-workspace"' in chat
     assert "等待解析" in chat
     assert "部分解析失败" in chat
@@ -150,14 +154,17 @@ def test_f7_t02_and_f7_t04_layout_and_state_ownership_remain_intact() -> None:
 def test_f1_minimal_visual_contract_is_preserved_without_small_text_or_theme_drift() -> None:
     ui = "\n".join(source(path) for path in (SOURCE_CITATION, AGENT_TIMELINE, CHAT, READER, HANDOUT)).lower()
 
+    tokens = source(FRONTEND / "styles/tokens.css").lower()
+    # The 10/31 approved sample supersedes F1's old pure grey palette. Keep
+    # warm paper, restrained rose/blue-grey shell and readable supporting text.
     for required in (
-        "#f5f7f7",
-        "#ffffff",
-        "#06141b",
-        "#11212d",
-        "var(--font-sans)",
+        "--color-reading-paper: #fcfaf5",
+        "--color-accent: #7d6465",
+        "--color-shell-gradient: linear-gradient",
+        "--font-size-supporting: 14px",
+        "--font-heading: var(--font-sans)",
     ):
-        assert required in ui
+        assert required in tokens
     for forbidden in (
         "linear-gradient",
         "radial-gradient",

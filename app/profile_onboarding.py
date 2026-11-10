@@ -24,6 +24,7 @@ from app.database import (
     DBUser,
 )
 from document_parser import DocumentParseError, parse_document
+from app.profile_adaptation import LEARNING_CONTEXT_LABELS, current_learning_state
 
 
 DIMENSIONS = ("background", "goal", "foundation", "difficulty", "preference")
@@ -35,11 +36,11 @@ DIMENSION_LABELS = {
     "preference": "学习偏好",
 }
 QUESTIONS = {
-    "background": "先认识一下你。你目前的学校、年级或专业是什么？",
-    "goal": "这门课你最想达成什么目标？可以说说近期任务或更长远的计划。",
+    "background": "先认识一下你。你平时在做什么，或者有过哪些学习和工作经历？",
+    "goal": "你想学些什么，学完最想做成什么？可以说说近期任务或更长远的计划。",
     "foundation": "你已经学过哪些相关内容？哪些基础比较有把握？",
     "difficulty": "目前最容易卡住你的是什么？可以是知识点、题型或学习过程。",
-    "preference": "你更喜欢怎样学习？例如先看例子、分步推导、画图理解或动手写代码。",
+    "preference": "怎样学对你最顺手？也可以说说方便使用的语言、设备和时间。",
 }
 KNOWN_MAJORS = (
     "人工智能", "计算机科学与技术", "软件工程", "数据科学与大数据技术",
@@ -84,8 +85,15 @@ CONTINUOUS_DIMENSION_LABELS = {
 CONTINUOUS_ALLOWED_FIELDS = {
     "major", "target_course", "knowledge_base", "cognitive_style", "motivation_type",
     "focus_level", "cognitive_load", "frustration_index", "learning_goals",
-    "weak_points", "interaction_preferences", "misconception_patterns",
+    "weak_points", "interaction_preferences", "misconception_patterns", "learning_context",
+} | (set(LEARNING_CONTEXT_LABELS) - {"timetable"})
+
+QUALITATIVE_STATE_FIELDS = {
+    "affect_context": ("affect_resilience", "学习感受"),
+    "cognitive_context": ("cognitive_processing", "理解和专注情况"),
+    "difficulty_context": ("misconception_profile", "需要厘清的内容"),
 }
+CONTINUOUS_ALLOWED_FIELDS.update(QUALITATIVE_STATE_FIELDS)
 
 CONTINUOUS_PROFILE_EXTRACTION_PROMPT = """
 你是 EduMatrix 的持续学情画像理解 Agent。学生正在用自然语言补充或纠正自己的学习情况。
@@ -110,6 +118,11 @@ CONTINUOUS_PROFILE_EXTRACTION_PROMPT = """
 }
 
 fields 只能使用已有字段键；dimensions 只能使用十维键。没有原话依据的内容放入 uncertainties，不能写入 fields 或 dimensions。
+focus_level、cognitive_load、frustration_index 仅在原话明确给出对应的0到1评分时使用。情绪感受写 affect_context，理解/专注的具体情况写 cognitive_context；保留发生情境、否定与变化，不把“不会/分不清”换成情绪或认知负荷分数。没有明确评分的 dimensions.score 为 null，仍用文字理解和调整教学。
+具体经历写入 background_context；讲解语言和术语要求写入 language_preference；当前有效的可用学习时段、时长写入 study_schedule，替代掉的旧时间留在 evidence 中，不再混入当前值；设备、软件与操作条件写入 available_tools；其他环境条件写入 learning_context。各项分别更新，只写本轮明确改变的部分，保留当前条件、否定和时间范围。不要用宽泛的“碎片化学习”代替具体条件，也不要把一项变化写成整个学习环境的替代。
+knowledge_mastery 的自述只能作为待验证的学习感受，score 必须为 null，不能把表达清楚或自称学会当作测评成绩。
+把学习方法的请求和已发生的困难分开：想先画表、喜欢分步骤、希望先看例子，只说明希望怎样学，不等于跟不上或能力不足。weak_point_attribution只记录本轮明确说出的卡点或实际错误；没有表现依据的原因放入uncertainties，不能为了填全十维而推断困难。
+本轮确认会替换对应字段的当前值。学生说“设备仍旧、时间不变、保留原安排”时，不为该字段输出缩略替代值。确实补充或改变某一字段时，结合当前已确认值形成完整的新值，保留没有被否定的具体条件；例如增加支架不代表手机新增专业模式，不能丢掉原来的设备限制。新时间替代旧时间，不把二者并排作为当前安排。互动偏好同样保留本轮未撤回的已有方法。
 """.strip()
 
 CONTINUOUS_UPDATE_REMINDER_DAYS = 3
@@ -170,6 +183,10 @@ def _continuous_coverage(turns: list[DBOnboardingTurn]) -> dict[str, int]:
 
 
 def _continuous_next_question_from_turns(turns: list[DBOnboardingTurn]) -> str:
+    if turns and turns[-1].status == "confirmed":
+        follow_up = _learner_safe_text((turns[-1].extracted_candidates or {}).get("followUpQuestion"))
+        if follow_up:
+            return follow_up
     coverage = _continuous_coverage(turns)
     for guide in CONTINUOUS_CONVERSATION_GUIDES:
         if any(coverage.get(topic, 0) == 0 for topic in guide["topics"]):
@@ -321,15 +338,22 @@ PROFILE_EXTRACTION_PROMPT = """
 
 只输出一个 JSON 对象，结构必须是：
 {
-  "understanding": "用人话概括本轮回答体现的学习画像",
+  "understanding": "用学习者本轮使用的语言，直接对他说清记住了什么；不使用‘学生表示’等第三人称分析口吻",
   "fields": [
     {"key":"字段键", "label":"字段名称", "value":"字段值或字符串数组", "kind":"text 或 list", "evidence":"来自原话的依据", "confidence":0.0}
   ],
   "uncertainties": ["仍需学生确认或补充的内容"]
 }
 
-字段只表达本轮问题维度内的信息。value 必须能在学生原话中找到依据；confidence 是 0 到 1 之间的数。没有依据的内容放入 uncertainties，不要写入 fields。
-misconception_patterns 的 value 使用对象，键为易混淆主题，值为 0 到 1 之间的混淆程度；不要将该对象转换成字符串。
+围绕本轮问题整理信息，但任何一轮明确补充的经历、讲解语言、时间和设备都须保留为可确认字段。
+understanding 只概括本轮有用的学习信息，不重复“我记住了”等开场，不讲字段如何记录、系统没有做哪些推断或评分。缺少信息只放入 uncertainties，不在理解正文重复待办；不要加入本轮未涉及的追问。完整保留 fields 中的条件和依据。
+background_context 保存具体经历；language_preference 保存讲解语言和术语要求；study_schedule 保存可用时段和时长；available_tools 保存设备、软件和操作条件；其他条件写入 learning_context。分开提取，保留否定、条件和时间范围，不用“工作驱动”“碎片化”等概括替代。
+不假定学习者是大学生或计算机专业，不根据职业、忙碌和时间少推定能力、专注或认知负荷分数。
+保留认识上的区别：“有A经验不代表掌握B”表示B尚待确认，不能改写成“不会B/尚未掌握B”；“未系统学习”也不等于“完全不会”。只有明确自述不会或已有作答证据才能记作确定缺口。
+学习感受写 affect_context，理解/专注的具体情况写 cognitive_context，保留原话的情境、否定和变化；不会某个知识不等于焦虑或负荷高。focus_level、cognitive_load、frustration_index 仅在原话明确给出对应0到1评分时使用，不自行量化。知识混淆优先写 weak_points/difficulty_context，不为自然语言编造混淆概率。
+value 必须能在原话或此前已确认信息中找到依据；confidence 是 0 到 1 之间的数。没有依据的内容放入 uncertainties，不要写入 fields。
+如果本轮补充已有字段，value 应是合并后的完整当前值：保留此前仍有效的经历和条件，只替换明确纠正的部分；不要用本轮一句补充覆盖整个背景。未改变的字段不必重复输出。knowledge_base 必须包含相关的已会与未学内容，不能只列会的技能而丢掉先修缺口；foundation_context 是这一字段的补充说明，不能将必需的基础信息只放在说明中。
+学习者描述的具体误解保存在 difficulty_context，用自然语言保留主题、误解与原话；不要从自述推算 misconception_patterns 数值。测评已有的数值依据由学习记录提供。
 """.strip()
 
 _ALLOWED_MODEL_FIELDS = {
@@ -339,6 +363,9 @@ _ALLOWED_MODEL_FIELDS = {
     "difficulty": {"weak_points", "difficulty_context", "frustration_index", "cognitive_load", "misconception_patterns"},
     "preference": {"interaction_preferences", "cognitive_style", "preference_context", "focus_level", "cognitive_load"},
 }
+for _dimension_fields in _ALLOWED_MODEL_FIELDS.values():
+    _dimension_fields.update(set(LEARNING_CONTEXT_LABELS) - {"timetable"})
+    _dimension_fields.update(QUALITATIVE_STATE_FIELDS)
 _LIST_MODEL_FIELDS = {"learning_goals", "weak_points", "interaction_preferences"}
 _NUMERIC_MODEL_FIELDS = {"focus_level", "cognitive_load", "frustration_index"}
 
@@ -425,10 +452,8 @@ def _signal_field(
 ) -> dict[str, Any]:
     """Create a human-readable candidate derived from explicit learner wording.
 
-    Registration is intentionally conservative: these are *candidates* shown for
-    confirmation, never silent profile writes.  Numeric controls are included
-    only when the wording contains a clear signal (time pressure, confidence,
-    anxiety, etc.).
+    These are candidates shown for confirmation, never silent profile writes.
+    A verbal difficulty or feeling is not a measured numeric state.
     """
     return {
         "key": key,
@@ -453,12 +478,6 @@ def _derived_signal_fields(dimension: str, text: str) -> tuple[list[dict[str, An
             highlights.append(highlight)
 
     if dimension == "background":
-        if any(token in text for token in ("工作", "公司", "项目", "上线", "实习", "岗位")):
-            add("learning_context", "学习情境", "工作/项目驱动", highlight="你更像是在真实项目里边做边学")
-        elif any(token in text for token in ("大一", "大二", "大三", "大四", "在校", "学生")):
-            add("learning_context", "学习情境", "在校学习", highlight="你当前处在有课程节奏的学习阶段")
-        elif any(token in text for token in ("自学", "业余", "下班", "通勤")):
-            add("learning_context", "学习情境", "自主/碎片化学习", highlight="你更需要能嵌入日常的学习安排")
         if any(token in lowered for token in ("转行", "就业", "求职", "找工作", "岗位")):
             add("motivation_type", "学习动力", "职业发展", highlight="后续会优先连接到岗位任务")
     elif dimension == "goal":
@@ -470,31 +489,33 @@ def _derived_signal_fields(dimension: str, text: str) -> tuple[list[dict[str, An
             add("motivation_type", "学习动力", "职业发展", highlight="后续会把练习往岗位能力上对齐")
         elif any(token in text for token in ("兴趣", "好奇", "探索", "想了解")):
             add("motivation_type", "学习动力", "兴趣探索", highlight="你会更适合用问题驱动的方式逐步深入")
-    elif dimension == "foundation":
-        if any(token in text for token in ("时间少", "没时间", "碎片", "通勤", "忙")):
-            add("cognitive_load", "单次学习负荷", 0.72, confidence=0.78, highlight="你的可用时间比较碎，我会把任务切成更短的段落")
-            add("focus_level", "专注节奏", 0.48, confidence=0.74)
-        elif any(token in text for token in ("熟练", "做过", "有经验", "比较有把握", "很熟")):
-            add("focus_level", "专注节奏", 0.82, confidence=0.76, highlight="你已有可复用的基础，可以更快进入迁移练习")
-            add("cognitive_load", "单次学习负荷", 0.34, confidence=0.7)
-    elif dimension == "difficulty":
-        if any(token in text for token in ("焦虑", "害怕", "挫败", "总是不会", "一看到就", "不敢")):
-            add("frustration_index", "受挫感", 0.72, confidence=0.84, highlight="你提到的卡点带有明显压力感，我会先给更稳的反馈")
-            add("cognitive_load", "认知负荷", 0.68, confidence=0.8)
-        elif any(token in text for token in ("卡住", "容易错", "分不清", "不会", "难")):
-            add("frustration_index", "受挫感", 0.52, confidence=0.76, highlight="你有明确卡点，练习会先围绕这些地方建立信心")
-            add("cognitive_load", "认知负荷", 0.58, confidence=0.72)
-        if any(token in text for token in ("概念", "定义", "公式", "推导", "区别", "辨析")):
-            add("misconception_patterns", "易混淆主题", {"概念辨析": 0.62}, confidence=0.7)
     elif dimension == "preference":
-        if any(token in text for token in ("碎片", "短一点", "一次", "每天")):
-            add("cognitive_load", "单次学习负荷", 0.5, confidence=0.7, highlight="我会尽量让每次学习都有一个小闭环")
         if any(token in text for token in ("自己想", "先想", "提问", "讨论", "对话")):
             add("interaction_preferences", "互动方式", "先提问再讨论", kind="list", confidence=0.78, highlight="我会多留一点思考和追问空间")
 
     # Keep the candidate list stable and avoid duplicate keys when a model has
     # already supplied the same field; the model result wins in that case.
     return fields, list(dict.fromkeys(highlights))
+
+
+def _updated_learning_context(prior: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
+    """Replace only confirmed parts, retaining other practical conditions."""
+    details = dict(prior.get("confirmed_fields") or {})
+    if not details and prior.get("summary") and "learning_context" not in fields:
+        details["learning_context"] = str(prior["summary"])
+    for key in LEARNING_CONTEXT_LABELS:
+        if key in fields:
+            value = fields[key]
+            details[key] = "；".join(str(item) for item in value) if isinstance(value, list) else str(value or "").strip()
+    return {
+        **prior, "key": "learning_context", "label": "学习情境",
+        "confirmed_fields": details,
+        "summary": "；".join(
+            details[key] if key == "learning_context" else f"{label}：{details[key]}"
+            for key, label in LEARNING_CONTEXT_LABELS.items() if details.get(key)
+        ),
+        "last_updated": _now().isoformat(),
+    }
 
 
 def _enrich_candidates(dimension: str, answer: str, candidates: dict[str, Any]) -> dict[str, Any]:
@@ -520,17 +541,17 @@ def conversational_question(session: DBOnboardingSession) -> str:
     current = session.current_dimension or DIMENSIONS[0]
     confirmed = session.confirmed_fields or {}
     if not confirmed:
-        return "先不用按栏目回答。最近是什么事情让你想学这门课？从正在做的事、感兴趣的方向或遇到的卡点说起都可以。"
+        return "先不用按栏目回答。最近想学些什么，是什么事情让你想学？从正在做的事、感兴趣的方向或遇到的卡点说起都可以。"
     previous = list(confirmed.values())[-1] if confirmed else {}
     previous_text = _clip(previous.get("summary") or "")
     if current == "goal":
-        return f"你刚才提到“{previous_text}”。如果这门课学好，你最想先解决什么问题，或完成什么具体事情？"
+        return f"你刚才提到“{previous_text}”。围绕这个方向，你最想先解决什么问题，或完成什么具体事情？"
     if current == "foundation":
         return f"为了把内容接到你的目标上，你已经接触过哪些相关知识或工具？哪些部分你比较有把握？"
     if current == "difficulty":
         return "在刚才说的基础上，哪一类地方最容易让你停下来？可以说一个最近真实遇到的例子。"
     if current == "preference":
-        return "如果把这门课变成你的学习搭档，你希望我怎么陪你学：先看例子、画图、推导、写代码，还是边问边练？"
+        return "怎样陪你学最顺手：先看例子、画图、动手尝试，还是边问边练？也可以告诉我方便使用的语言、设备和时间。"
     return "还有什么会影响你学习节奏的事情想告诉我吗？不确定也没关系，我们可以边学边调整。"
 
 
@@ -543,15 +564,12 @@ def _decorate_turn_candidates(
 ) -> dict[str, Any]:
     result = _enrich_candidates(dimension, answer, candidates)
     summary = str(result.get("understanding") or result.get("summary") or answer).strip()
-    highlights = list(result.get("signalHighlights") or [])
-    if not highlights:
-        highlights = [f"我先记住了：{_clip(summary, 82)}"]
     result["summary"] = summary
     result["understanding"] = summary
     result["question"] = asked_question
-    echo = _clip(summary, 96).rstrip("，。；、!?！？ ")
-    highlight = highlights[0].rstrip("，。；、!?！？ ") if highlights else ""
-    result["assistantReply"] = f"我听到的是：{echo}。" + (f" {highlight}。" if highlight else "")
+    # The confirmation card and conversation history share one complete
+    # understanding. The UI shows it once, rather than echoing a clipped copy.
+    result["assistantReply"] = summary
     result["followUpQuestion"] = conversational_question(session)
     return result
 
@@ -632,6 +650,39 @@ def _normalize_misconception_patterns(raw: Any) -> dict[str, float]:
     return patterns
 
 
+def _explicit_state_score(answer: str, key: str, raw: Any) -> bool:
+    """A supplied rating may be kept; ordinary prose cannot measure a state."""
+    labels = {
+        "frustration_index": r"受挫|挫败|焦虑|frustration|anxiety",
+        "cognitive_load": r"认知负荷|理解负担|cognitive load",
+        "focus_level": r"专注|注意力|focus|attention",
+    }
+    try:
+        score = float(raw)
+    except (TypeError, ValueError):
+        return False
+    for statement in re.split(r"[；;。\n]", answer):
+        if not re.search(labels.get(key, r"评分|分数|量表|score|rating"), statement, re.I):
+            continue
+        if any(float(number) == score for number in re.findall(r"(?<![\d.])(?:0(?:\.\d+)?|1(?:\.0+)?)(?![\d.])", statement)):
+            return True
+    return False
+
+
+def _qualitative_model_field(value: Any, answer: str) -> Any:
+    if not isinstance(value, dict):
+        return value
+    key = str(value.get("key") or "")
+    destination = {"frustration_index": "affect_context", "cognitive_load": "cognitive_context",
+                   "focus_level": "cognitive_context", "misconception_patterns": "difficulty_context"}.get(key)
+    if not destination or (key != "misconception_patterns" and _explicit_state_score(answer, key, value.get("value"))):
+        return value
+    # Retain the actual account, including negation, rather than the model's
+    # unsupported score. Confirmation and downstream teaching still use it.
+    return {**value, "key": destination, "label": QUALITATIVE_STATE_FIELDS[destination][1],
+            "value": str(value.get("evidence") or answer), "kind": "text"}
+
+
 def _model_field(dimension: str, value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -683,7 +734,7 @@ def _parse_model_candidates(raw: str, dimension: str, answer: str) -> dict[str, 
         raise ValueError("画像模型输出缺少 understanding")
     fields = [
         field
-        for field in (_model_field(dimension, item) for item in payload.get("fields", []))
+        for field in (_model_field(dimension, _qualitative_model_field(item, answer)) for item in payload.get("fields", []))
         if field is not None
     ]
     if not fields:
@@ -708,6 +759,7 @@ async def _extract_candidates_with_model(
     answer: str,
     *,
     owner_public_id: str,
+    confirmed_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from app.m5_legacy_calls import audited_legacy_text_call
     from llm_client import AsyncDeterministicEducationLLM, build_async_llm
@@ -740,6 +792,7 @@ async def _extract_candidates_with_model(
     user_prompt = (
         f"本轮维度：{DIMENSION_LABELS.get(dimension, dimension)}\n"
         f"本轮 fields.key 只能从以下规范键中选择：{allowed_keys}\n"
+        f"此前已确认的信息（本轮有补充时合并保留，有明确纠正时更新）：{json.dumps(confirmed_context or {}, ensure_ascii=False)}\n"
         f"学生原话：{answer}\n\n"
         "请按要求只返回 JSON。"
     )
@@ -772,6 +825,7 @@ def llm_extract_candidates(
     answer: str,
     *,
     owner_public_id: str,
+    confirmed_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synchronously bridge the async real-model call into the DB worker thread."""
 
@@ -779,6 +833,7 @@ def llm_extract_candidates(
         dimension,
         answer,
         owner_public_id=owner_public_id,
+        confirmed_context=confirmed_context,
     ))
 
 
@@ -791,9 +846,18 @@ def _continuous_field(value: Any) -> dict[str, Any] | None:
     raw = value.get("value")
     if isinstance(raw, list):
         normalized: Any = [str(item).strip() for item in raw if str(item).strip()]
+    elif key == "misconception_patterns":
+        normalized = _normalize_misconception_patterns(raw)
+    elif key in _NUMERIC_MODEL_FIELDS:
+        try:
+            normalized = str(max(0.0, min(1.0, float(raw))))
+        except (TypeError, ValueError):
+            # A verbal account of attention is useful, but is not a numeric score.
+            key = "learning_context"
+            normalized = str(raw or "").strip()
     else:
-        normalized = str(raw or "").strip()
-    if not normalized:
+        normalized = str(raw if raw is not None else "").strip()
+    if normalized in ("", [], {}):
         return None
     evidence = str(value.get("evidence") or "").strip()
     if not evidence:
@@ -874,8 +938,11 @@ def _parse_continuous_model_candidates(raw: str, answer: str) -> dict[str, Any]:
     understanding = str(payload.get("understanding") or payload.get("summary") or "").strip()
     if not understanding:
         raise ValueError("持续画像模型输出缺少 understanding")
-    fields = [item for item in (_continuous_field(value) for value in payload.get("fields", [])) if item]
+    fields = [item for item in (_continuous_field(_qualitative_model_field(value, answer)) for value in payload.get("fields", [])) if item]
     dimensions = [item for item in (_continuous_dimension(value) for value in payload.get("dimensions", [])) if item]
+    for item in dimensions:
+        if not _explicit_state_score(answer, item["key"], item.get("score")):
+            item["score"] = None
     attributions = [item for item in (_continuous_attribution(value) for value in payload.get("weak_point_attribution", [])) if item]
     uncertainties = payload.get("uncertainties") or []
     if isinstance(uncertainties, str):
@@ -898,15 +965,16 @@ def _parse_continuous_model_candidates(raw: str, answer: str) -> dict[str, Any]:
 def _profile_prompt_projection(profile: DBStudentProfile | None) -> dict[str, Any]:
     if profile is None:
         return {}
+    current_state = current_learning_state(profile)
     return {
         "major": profile.major or "",
         "target_course": profile.target_course or "",
         "knowledge_base": profile.knowledge_base or "",
         "cognitive_style": profile.cognitive_style or "",
         "motivation_type": profile.motivation_type or "",
-        "focus_level": profile.focus_level,
-        "cognitive_load": profile.cognitive_load,
-        "frustration_index": profile.frustration_index,
+        "focus_level": current_state["focus_level"]["value"],
+        "cognitive_load": current_state["cognitive_load"]["value"],
+        "frustration_index": current_state["frustration_index"]["value"],
         "learning_goals": list(profile.learning_goals or []),
         "weak_points": list(profile.weak_points or []),
         "interaction_preferences": list(profile.interaction_preferences or []),
@@ -940,6 +1008,7 @@ async def _extract_continuous_candidates_with_model(
     user_prompt = (
         f"当前课程：{course_context.get('title') or '当前课程'}（{course_context.get('courseId') or '未指定'}）\n"
         f"已有画像摘要：{json.dumps(_profile_prompt_projection(profile), ensure_ascii=False)}\n"
+        f"当前已确认的具体条件（未改变的保留原值）：{json.dumps(((profile.dimension_states or {}).get('learning_context') or {}).get('confirmed_fields') or {}, ensure_ascii=False) if profile else '{}'}\n"
         f"这轮老师刚刚问：{question or '最近的学习经历'}\n"
         f"此前对话（只用于承接，不要原样复述系统字段）：{json.dumps((conversation_history or [])[-6:], ensure_ascii=False)}\n"
         f"已经聊到的方面计数：{json.dumps(covered_dimensions or {}, ensure_ascii=False)}\n"
@@ -1059,7 +1128,8 @@ def profile_influence_summary(snapshot: DBProfileSnapshot | None) -> list[str]:
     if snapshot is None:
         return ["当前还没有可用的已确认画像快照，先按课程默认难度安排。"]
     body = snapshot.snapshot or {}
-    projection = body.get("profile_projection") or {}
+    from app.profile_adaptation import _profile_projection
+    projection = _profile_projection(body)
     messages: list[str] = []
     weak_points = list(
         body.get("weak_points")
@@ -1401,6 +1471,8 @@ def _normalize_continuous_fields(fields: dict[str, Any]) -> dict[str, Any]:
             try:
                 value = max(0.0, min(1.0, float(raw)))
             except (TypeError, ValueError):
+                if str(raw or "").strip():
+                    normalized.setdefault("learning_context", str(raw).strip())
                 continue
         else:
             value = str(raw or "").strip()
@@ -1449,6 +1521,30 @@ def _profile_update_projection(profile: DBStudentProfile) -> dict[str, Any]:
         "history_logs": profile.history_logs or "",
         "mental_state_history": list(profile.mental_state_history or []),
     }
+
+
+def _apply_qualitative_states(states: dict[str, Any], fields: dict[str, Any], *, source: str) -> None:
+    numeric_fields = {
+        "affect_context": {"frustration_index": "受挫感"},
+        "cognitive_context": {"cognitive_load": "理解负荷", "focus_level": "专注程度"},
+    }
+    for field, (key, label) in QUALITATIVE_STATE_FIELDS.items():
+        numeric = numeric_fields.get(field, {})
+        explicit = {name: fields[name] for name in numeric if name in fields}
+        if field not in fields and not explicit:
+            continue
+        prior = dict(states.get(key) or {})
+        scores = ({name: None for name in numeric} if field in fields
+                  else dict(prior.get("confirmed_state_scores") or {}))
+        scores.update(explicit)
+        report = str(fields[field]) if field in fields else "；".join(
+            f"本次自评{numeric[name]}为{value}（0到1）" for name, value in explicit.items())
+        states[key] = {
+            **prior, "key": key, "label": label,
+            "summary": report, "self_report": report, "qualitative": True,
+            "confirmed_state_scores": scores,
+            "status": "已确认的学习自述", "source": source, "last_updated": _now().isoformat(),
+        }
 
 
 def _apply_continuous_projection(
@@ -1506,14 +1602,45 @@ def _apply_continuous_projection(
             "source_course_id": course_context.get("courseId"),
             "source_turn_id": turn_id,
         }
-        if item.get("score") is not None:
+        if key == "knowledge_mastery":
+            # Confirming a conversation verifies the learner's words, not mastery.
+            state["status"] = prior.get("status") or "学习自述，等待练习检验"
+            state["summary"] = prior.get("summary") or "掌握情况需要结合实际作答判断。"
+            state["self_report"] = item.get("value") or ""
+        elif item.get("score") is not None:
             state["score"] = item["score"]
+        if item.get("score") is None and (key != "knowledge_mastery" or not profile.concept_mastery):
+            state["qualitative"] = True
+            state["self_report"] = item.get("value") or ""
+        if key == "learning_context":
+            # Ten-dimension summaries are supplementary. The accepted concrete
+            # fields below remain independently editable across conversations.
+            state = _updated_learning_context(state, {
+                "learning_context": item.get("value") or prior.get("summary") or "",
+            })
         states[key] = state
         evidence_records.append({
             "dimension": key,
             "text": evidence,
             "confidence": item["confidence"],
         })
+    # The confirmation form accepts both concrete fields and ten-dimension
+    # descriptions. A confirmed verbal state has the same teaching meaning in
+    # either shape; it must not leave old inferred scalar values in control.
+    qualitative_fields = {
+        field: item["value"]
+        for field, (key, _) in QUALITATIVE_STATE_FIELDS.items()
+        for item in dimensions
+        if item["key"] == key and item.get("score") is None
+    }
+    _apply_qualitative_states(states, {**qualitative_fields, **fields}, source="continuous_profile_update")
+    if set(fields).intersection(LEARNING_CONTEXT_LABELS):
+        states["learning_context"] = {
+            **_updated_learning_context(dict(states.get("learning_context") or {}), fields),
+            "status": "已确认的学习安排", "source_turn_id": turn_id,
+            "source_course_id": course_context.get("courseId"),
+            "last_updated": _now().isoformat(),
+        }
     profile.dimension_states = states
     for item in attributions:
         weak_point = item["weakPoint"]
@@ -1527,7 +1654,7 @@ def _apply_continuous_projection(
     for key, value in fields.items():
         evidence_records.append({
             "field": key,
-            "text": answer,
+            "text": "确认的学习信息：" + ("；".join(str(item) for item in value) if isinstance(value, list) else str(value)),
             "value": value,
             "confidence": 1.0,
         })
@@ -1621,6 +1748,17 @@ def confirm_continuous_turn(
     normalized_fields = _normalize_continuous_fields(fields or {})
     normalized_dimensions = _normalize_continuous_dimensions(dimensions or [])
     normalized_attributions = _normalize_continuous_attributions(attributions or [])
+    candidate_dimensions = {item.get("key"): item for item in candidate.get("dimensions", [])}
+    for item in normalized_dimensions:
+        original = candidate_dimensions.get(item["key"])
+        if original and item.get("value") != original.get("value"):
+            # Original words stay on the turn; accepted evidence describes the correction.
+            item["evidence"] = f"确认时更正：{item.get('value') or item.get('status') or ''}"
+    candidate_attributions = candidate.get("weakPointAttribution") or []
+    for index, item in enumerate(normalized_attributions):
+        original = candidate_attributions[index] if index < len(candidate_attributions) else None
+        if original and any(item.get(key) != original.get(key) for key in ("weakPoint", "reason")):
+            item["evidence"] = f"确认时更正：{item['weakPoint']}；{item['reason']}"
     if not normalized_fields and not normalized_dimensions and not normalized_attributions and not continue_conversation:
         raise OnboardingError("empty_confirmation", "请至少确认一项画像变化、十维状态或薄弱点归因。")
     if turn.status == "confirmed" and (turn.confirmed_fields or {}) == {
@@ -1817,6 +1955,30 @@ def get_or_create_session(db: Session, user: DBUser, *, feature_enabled: bool = 
     return session
 
 
+def _confirmed_turn_summary(turn: DBOnboardingTurn) -> str:
+    """Use edited values as the current understanding, retaining the raw model draft."""
+    extracted = turn.extracted_candidates or {}
+    candidates = list(extracted.get("fields") or [])
+    confirmed = turn.confirmed_fields or {}
+
+    def readable(value: Any) -> str:
+        if isinstance(value, list):
+            return "\n".join(str(item).strip() for item in value if str(item).strip())
+        if isinstance(value, dict):
+            return "；".join(f"{key}：{item}" for key, item in value.items())
+        return str(value or "").strip()
+
+    proposed = {item["key"]: readable(item.get("value")) for item in candidates if item.get("key")}
+    actual = {key: readable(value) for key, value in confirmed.items()}
+    if actual == proposed:
+        return str(extracted.get("understanding") or extracted.get("summary") or turn.user_answer)
+    labels = {item["key"]: item.get("label") for item in candidates if item.get("key")}
+    return "\n".join(
+        f"{labels[key]}：{value}" if labels.get(key) else value
+        for key, value in actual.items() if value
+    )
+
+
 def _turn_payload(turn: DBOnboardingTurn) -> dict[str, Any]:
     extracted = turn.extracted_candidates or {}
     return {
@@ -1825,6 +1987,7 @@ def _turn_payload(turn: DBOnboardingTurn) -> dict[str, Any]:
         "userAnswer": turn.user_answer,
         "extractedCandidates": extracted,
         "confirmedFields": turn.confirmed_fields or {},
+        "confirmedSummary": _confirmed_turn_summary(turn) if turn.status == "confirmed" else "",
         "status": turn.status,
         "error": turn.error or "",
         "question": extracted.get("question") or QUESTIONS.get(turn.question_dimension, ""),
@@ -1879,11 +2042,13 @@ def _onboarding_profile_signals(profile: DBStudentProfile | None) -> list[dict[s
     context_value = context.get("summary") or context.get("value") if isinstance(context, dict) else context
     if context_value:
         signals.append({"key": "context", "label": "学习情境", "value": str(context_value)[:100]})
-    if profile.cognitive_load is not None and float(profile.cognitive_load) >= 0.5:
+    from app.profile_adaptation import _profile_projection
+    current = _profile_projection({}, profile)
+    if current.get("cognitive_load") is not None and float(current["cognitive_load"]) >= 0.5:
         signals.append({"key": "load", "label": "学习节奏", "value": "拆成更短的小段，减少一次性负荷"})
-    elif profile.focus_level is not None and float(profile.focus_level) >= 0.8:
+    elif current.get("focus_level") is not None and float(current["focus_level"]) >= 0.8:
         signals.append({"key": "focus", "label": "学习节奏", "value": "可以安排更连续的深度练习"})
-    if profile.frustration_index is not None and float(profile.frustration_index) >= 0.5:
+    if current.get("frustration_index") is not None and float(current["frustration_index"]) >= 0.5:
         signals.append({"key": "support", "label": "陪学方式", "value": "先给明确反馈，再逐步增加挑战"})
     return signals[:8]
 
@@ -1943,7 +2108,8 @@ def record_turn(
     question_dimension: str,
     user_answer: str,
     feature_enabled: bool = True,
-    extractor: Callable[[str, str], dict[str, Any]] = extract_candidates,
+    extractor: Callable[..., dict[str, Any]] = extract_candidates,
+    contextual_extractor: bool = False,
 ) -> dict[str, Any]:
     session = get_or_create_session(db, user, feature_enabled=feature_enabled)
     existing = db.query(DBOnboardingTurn).filter_by(session_id=session.id, turn_id=turn_id).first()
@@ -1975,7 +2141,19 @@ def record_turn(
     db.refresh(turn)
 
     try:
-        candidates = extractor(question_dimension, answer)
+        if contextual_extractor:
+            profile = db.get(DBStudentProfile, session.student_id)
+            projection = _profile_update_projection(profile) if profile is not None else {}
+            context = {
+                key: projection.get(key) for key in (
+                    "major", "target_course", "knowledge_base", "learning_goals", "weak_points",
+                    "interaction_preferences", "cognitive_style",
+                ) if projection.get(key)
+            }
+            context.update(((projection.get("dimension_states") or {}).get("learning_context") or {}).get("confirmed_fields") or {})
+            candidates = extractor(question_dimension, answer, confirmed_context=context)
+        else:
+            candidates = extractor(question_dimension, answer)
         turn.extracted_candidates = _decorate_turn_candidates(
             session, question_dimension, answer, candidates, asked_question,
         )
@@ -2050,12 +2228,20 @@ def project_confirmed_fields(db: Session, student_id: str, dimension: str, field
             profile.motivation_type = str(fields["motivation_type"]).strip()
         if fields.get("target_course"):
             profile.target_course = str(fields["target_course"]).strip()
-    elif dimension == "foundation" and fields.get("knowledge_base"):
-        profile.knowledge_base = str(fields["knowledge_base"])
+    elif dimension == "foundation":
+        def text(value: Any) -> str:
+            return "；".join(str(item) for item in value) if isinstance(value, list) else str(value or "").strip()
+        basis, detail = text(fields.get("knowledge_base")), text(fields.get("foundation_context"))
+        if basis or detail:
+            profile.knowledge_base = detail if basis in detail else basis if detail in basis else f"{basis}；{detail}"
     elif dimension == "difficulty":
         profile.weak_points = items("weak_points")
     elif dimension == "preference":
-        profile.interaction_preferences = items("interaction_preferences")
+        preferences = items("interaction_preferences")
+        detail = fields.get("preference_context")
+        if detail:
+            preferences.extend(detail if isinstance(detail, list) else [str(detail).strip()])
+        profile.interaction_preferences = list(dict.fromkeys(preferences))
         if fields.get("cognitive_style"):
             profile.cognitive_style = str(fields["cognitive_style"])
 
@@ -2076,12 +2262,20 @@ def project_confirmed_fields(db: Session, student_id: str, dimension: str, field
         profile.misconception_patterns = prior
 
     states = dict(profile.dimension_states or {})
+    context_fields = {key: value for key, value in fields.items() if key in LEARNING_CONTEXT_LABELS}
+    if dimension == "background" and not context_fields and fields.get("major"):
+        context_fields["background_context"] = fields["major"]
+    if context_fields:
+        states["learning_context"] = {
+            **_updated_learning_context(dict(states.get("learning_context") or {}), context_fields),
+            "status": "已从注册对话确认", "confidence": 1.0, "source": "initial_onboarding",
+        }
     state_map = {
-        "background": ("learning_context", "学习情境", fields.get("learning_context") or fields.get("background_context") or fields.get("major")),
+        "background": ("", "", ""),
         "goal": ("motivation_and_purpose", "学习目标和动力", fields.get("motivation_type") or fields.get("learning_goals")),
         "foundation": ("knowledge_mastery", "知识基础与掌握度", fields.get("knowledge_base") or fields.get("foundation_context")),
-        "difficulty": ("affect_resilience", "信心和抗挫能力", fields.get("difficulty_context") or fields.get("weak_points")),
-        "preference": ("interaction_preference", "喜欢怎样互动学习", fields.get("cognitive_style") or fields.get("interaction_preferences")),
+        "difficulty": ("misconception_profile", "需要厘清的内容", fields.get("difficulty_context") or fields.get("weak_points")),
+        "preference": ("interaction_preference", "喜欢怎样互动学习", profile.interaction_preferences or fields.get("cognitive_style")),
     }
     state_key, state_label, state_value = state_map.get(dimension, ("", "", ""))
     if state_key and state_value:
@@ -2091,16 +2285,20 @@ def project_confirmed_fields(db: Session, student_id: str, dimension: str, field
             **dict(states.get(state_key) or {}),
             "key": state_key,
             "label": state_label,
-            "summary": str(state_value)[:240],
+            "summary": str(state_value),
             "status": "已从注册对话确认",
             "confidence": 1.0,
             "evidence_count": int((states.get(state_key) or {}).get("evidence_count") or 0) + 1,
             "last_updated": _now().isoformat(),
             "source": "initial_onboarding",
         }
+    _apply_qualitative_states(states, fields, source="initial_onboarding")
     profile.dimension_states = states
 
     customized = list(profile.customized_fields or [])
+    if dimension == "preference" and ("interaction_preferences" in fields or "preference_context" in fields):
+        if "interaction_preferences" not in customized:
+            customized.append("interaction_preferences")
     for key in fields:
         if key in {"major", "target_course", "learning_goals", "motivation_type", "knowledge_base", "weak_points", "interaction_preferences", "cognitive_style", "focus_level", "cognitive_load", "frustration_index", "misconception_patterns"} and key not in customized:
             customized.append(key)
@@ -2151,7 +2349,7 @@ def confirm_turn(
     session = db.get(DBOnboardingSession, session.id)
     turn = db.query(DBOnboardingTurn).filter_by(session_id=session.id, turn_id=turn_id).one()
     confirmed = dict(session.confirmed_fields or {})
-    summary = str((turn.extracted_candidates or {}).get("summary") or turn.user_answer)
+    summary = _confirmed_turn_summary(turn)
     confirmed[turn.question_dimension] = {
         "label": DIMENSION_LABELS[turn.question_dimension],
         "summary": summary,
@@ -2238,7 +2436,9 @@ def extract_personal_evidence_candidates(parsed: Any, evidence_type: str) -> lis
         course_scores: list[str] = []
         for line in text.splitlines():
             clean = re.sub(r"\s+", " ", line).strip()
-            match = re.search(r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9+（）()· -]{1,36})\s*[：:]?\s*([0-9]{2,3}(?:\.[0-9]+)?)\s*$", clean)
+            if re.match(r"(?:GPA|平均绩点|绩点)\s*[：:]", clean, re.I):
+                continue
+            match = re.fullmatch(r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9+（）()· -]{1,36}?)\s*(?:[：:]\s*|\s+)([0-9]{1,3}(?:\.[0-9]+)?)\s*(?:分)?", clean)
             if match and 0 <= float(match.group(2)) <= 100:
                 course_scores.append(f"{match.group(1).strip()} {match.group(2)}")
         course_scores = list(dict.fromkeys(course_scores))[:12]
@@ -2259,11 +2459,15 @@ def extract_personal_evidence_candidates(parsed: Any, evidence_type: str) -> lis
             clean = re.sub(r"\s+", " ", line).strip()
             if not clean:
                 continue
-            if re.search(r"(?:周一|周二|周三|周四|周五|周六|周日|星期[一二三四五六日天])", clean):
+            if re.search(r"(?:周[一二三四五六日末]|星期[一二三四五六日天]|学习时间|学习习惯)", clean):
                 schedule.append(clean[:100])
-                course = re.sub(r"^(?:周[一二三四五六日]|星期[一二三四五六日天])\s*", "", clean)
+                # Only a day followed by an explicit class entry is a course.
+                # Free-time notes remain scheduling evidence, never course titles.
+                entry = re.match(r"^(?:周[一二三四五六日]|星期[一二三四五六日天])\s+(.+)$", clean)
+                course = entry.group(1) if entry else ""
+                course = re.sub(r"^(?:\d{1,2}[:：]\d{2}(?:\s*[-—至]\s*\d{1,2}[:：]\d{2})?|第?\d+(?:[-—]\d+)?节)\s+", "", course)
                 course = re.split(r"\s+(?:第?\d+[节周]|\d{1,2}[:：]\d{2})", course, maxsplit=1)[0].strip()
-                if len(course) >= 2:
+                if len(course) >= 2 and not re.search(r"学习时间|学习习惯|可学习|休息|分钟|有课|可用|空闲", course):
                     courses.append(course)
         courses = list(dict.fromkeys(courses))[:12]
         schedule = list(dict.fromkeys(schedule))[:12]
@@ -2281,6 +2485,7 @@ def extract_personal_evidence_candidates(parsed: Any, evidence_type: str) -> lis
 
 
 def _mark_candidate_conflicts(
+    db: Session,
     session: DBOnboardingSession,
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -2291,7 +2496,23 @@ def _mark_candidate_conflicts(
                 "value": value,
                 "source": dimension.get("source") or "已确认自述",
                 "sourceRef": dimension.get("turnId") or "",
+                "confirmedAt": dimension.get("confirmedAt") or "",
             }
+    # A corrected upload is also confirmed information. Compare against the
+    # latest confirmation, while keeping the original self-report unchanged.
+    evidence = db.query(DBOnboardingPersonalEvidence).filter_by(
+        session_id=session.id, status="confirmed",
+    ).order_by(DBOnboardingPersonalEvidence.confirmed_at.asc()).all()
+    for row in evidence:
+        for field in row.confirmed_fields or []:
+            confirmed_at = field.get("confirmedAt") or (row.confirmed_at.isoformat() if row.confirmed_at else "")
+            if confirmed_at >= current.get(field["key"], {}).get("confirmedAt", ""):
+                current[field["key"]] = {
+                    "value": field.get("value"),
+                    "source": f"已确认资料：{row.filename}",
+                    "sourceRef": field.get("sourceRef") or row.id,
+                    "confirmedAt": confirmed_at,
+                }
     output: list[dict[str, Any]] = []
     for candidate in candidates:
         existing = current.get(candidate["key"])
@@ -2356,7 +2577,7 @@ def upload_personal_evidence(
                 "这里不能上传课件、教材或课程大纲。课程库已由团队预先构建。",
             )
         candidates = _mark_candidate_conflicts(
-            session, extract_personal_evidence_candidates(parsed, evidence_type),
+            db, session, extract_personal_evidence_candidates(parsed, evidence_type),
         )
         row.parser_version = parsed.parser_version
         row.extracted_candidates = candidates
@@ -2488,6 +2709,28 @@ def finalize_initial_profile(
     evidence = db.query(DBOnboardingPersonalEvidence).filter_by(
         session_id=session.id, owner_public_id=user.public_id, status="confirmed",
     ).order_by(DBOnboardingPersonalEvidence.created_at.asc()).all()
+    # Project the confirmed material into the same teaching profile used by
+    # diagnosis, Chat and resource generation. Merely archiving the upload in
+    # the initial snapshot left its grades and available time unused later.
+    material_fields = {
+        field["key"]: field.get("value")
+        for row in evidence for field in (row.confirmed_fields or [])
+    }
+    if profile is not None:
+        completed_courses = material_fields.get("completed_courses") or []
+        if completed_courses:
+            grades = "；".join(completed_courses)
+            profile.knowledge_base = f"{profile.knowledge_base or ''}\n已确认成绩单：{grades}。课程成绩仅说明已有学习经历，当前掌握程度以诊断和练习为准。".strip()
+        schedule = material_fields.get("weekly_schedule") or []
+        if schedule:
+            states = dict(profile.dimension_states or {})
+            prior = dict(states.get("learning_context") or {})
+            states["learning_context"] = {
+                **_updated_learning_context(prior, {"timetable": schedule}),
+                "status": "已确认课程表安排",
+                "source": "confirmed_personal_evidence", "last_updated": _now().isoformat(),
+            }
+            profile.dimension_states = states
     snapshot_data = {
         "kind": "initial_learner_profile",
         "owner_public_id": user.public_id,

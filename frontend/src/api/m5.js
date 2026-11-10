@@ -1,4 +1,5 @@
 import { api, authConfig, request, normalizeApiError } from './common.js'
+import { invalidateResourceContextVersion } from '../services/context.js'
 
 export {
   createGenerationJob as createM5ResourceGenerationJob,
@@ -17,20 +18,24 @@ export function getM5Resource(artifactId) {
   return request(api.get(`/v1/m5/resources/${encodeURIComponent(artifactId)}`, authConfig()))
 }
 
-export function createM5ResourceVersion(artifactId, payload) {
-  return request(api.post(
+export async function createM5ResourceVersion(artifactId, payload) {
+  const result = await request(api.post(
     `/v1/m5/resources/${encodeURIComponent(artifactId)}/versions`,
     payload,
     authConfig(),
   ))
+  invalidateResourceContextVersion(artifactId)
+  return result
 }
 
-export function restoreM5ResourceVersion(artifactId, payload) {
-  return request(api.post(
+export async function restoreM5ResourceVersion(artifactId, payload) {
+  const result = await request(api.post(
     `/v1/m5/resources/${encodeURIComponent(artifactId)}/restore`,
     payload,
     authConfig(),
   ))
+  invalidateResourceContextVersion(artifactId)
+  return result
 }
 
 export function completeM5Resource(artifactId, payload) {
@@ -152,15 +157,25 @@ export function confirmM5Plan(planId, expectedLockVersion) {
   }, authConfig()))
 }
 
-export function getM5TextbookPathDraft(courseId) {
-  return request(api.get('/v1/m5/textbook-path-draft', authConfig({ course_id: courseId })))
+export function getM5TextbookPathDraft(courseId, planId) {
+  return request(api.get('/v1/m5/textbook-path-draft', authConfig({ course_id: courseId, plan_id: planId || undefined })))
 }
 
-export function generateM5TextbookPathDraft(courseId, timeBudgetMinutes = 90) {
+export function generateM5TextbookPathDraft(courseId, timeBudgetMinutes, fullCoverage = false, background = false) {
   return request(api.post('/v1/m5/textbook-path-draft/generate', {
     course_id: courseId,
     time_budget_minutes: timeBudgetMinutes,
+    full_coverage: fullCoverage,
+    background,
   }, authConfig()))
+}
+
+export function findPathGenerationTask(params) {
+  return request(api.get('/v1/m5/path-generation-tasks', authConfig(params)))
+}
+
+export function getPathGenerationTask(taskId) {
+  return request(api.get(`/v1/m5/path-generation-tasks/${encodeURIComponent(taskId)}`, authConfig()))
 }
 
 export function listM5Paths(params = {}) {
@@ -186,7 +201,9 @@ export function getM5Schedule(day = 1, courseId = '') {
 }
 
 export function getM5WorkspaceOverview(courseId = '') {
-  return request(api.get('/v1/m5/workspace', authConfig(courseId ? { course_id: courseId } : {})))
+  return request(api.get('/v1/m5/workspace', authConfig({
+    ...(courseId ? { course_id: courseId } : {}),
+  })))
 }
 
 export function getM5DashboardSummary(courseId = '') {
@@ -315,12 +332,17 @@ export function getM5IntelligentExamGate(courseId) {
   return request(api.get('/v1/m5/assessment/exam-gate', authConfig({ course_id: courseId })))
 }
 
-export function getM5IntelligentExamContext(courseId) {
-  return request(api.get('/v1/m5/assessment/intelligent-exams/context', authConfig({ course_id: courseId })))
+export function getM5IntelligentExamContext(courseId, reviewTaskId = '') {
+  return request(api.get('/v1/m5/assessment/intelligent-exams/context', authConfig({ course_id: courseId, ...(reviewTaskId ? { review_task_id: reviewTaskId } : {}) })))
 }
 
 export function createM5IntelligentExam(payload) {
   return request(api.post('/v1/m5/assessment/intelligent-exams', payload, authConfig()))
+}
+
+export function getM5IntelligentExamGeneration(courseId, taskId = '', reviewTaskId = '') {
+  return request(api.get('/v1/m5/assessment/intelligent-exams/generation', authConfig({ course_id: courseId,
+    ...(taskId ? { task_id: taskId } : {}), ...(reviewTaskId ? { review_task_id: reviewTaskId } : {}) })))
 }
 
 export function createM5FormalExam(payload) {

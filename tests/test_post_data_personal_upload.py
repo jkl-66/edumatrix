@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -38,6 +40,38 @@ MIME_TYPES = {
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "mp4": "video/mp4",
 }
+
+
+def test_first_upload_bootstraps_implicit_course_but_not_missing_explicit_course(monkeypatch, tmp_path):
+    username = "validation_implicit_upload_owner"
+    monkeypatch.setattr(knowledge_api, "UPLOAD_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(knowledge_api, "build_graph_after_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(knowledge_api.hybrid_rag, "ingest_user_documents", lambda *args, **kwargs: None)
+
+    async def no_guide(**kwargs):
+        return None
+
+    monkeypatch.setattr(knowledge_api, "_generate_doc_guide_for_document", no_guide)
+    with TestClient(app) as client:
+        headers = auth_headers(client, username)
+        raw = "# 梯度下降\n沿负梯度方向逐步更新参数。\n".encode("utf-8")
+        response = client.post("/api/knowledge/upload", headers=headers,
+                               files={"file": ("gradient.md", raw, "text/markdown")})
+        assert response.status_code == 200, response.text
+        course_id = response.json()["course_id"]
+        with SessionLocal() as db:
+            owner = db.query(DBUser).filter_by(username=username).one()
+            assert course_id == knowledge_api._personal_course_id(owner.public_id)
+            assert db.get(DBCourse, course_id).owner_public_id == owner.public_id
+        second = client.post("/api/knowledge/upload", headers=headers,
+                             files={"file": ("second.md", raw + b"\nSecond source", "text/markdown")})
+        assert second.status_code == 200, second.text
+        assert second.json()["course_id"] == course_id
+        missing = client.post("/api/knowledge/upload?course_id=validation-does-not-exist", headers=headers,
+                              files={"file": ("gradient.md", raw, "text/markdown")})
+        assert missing.status_code == 404
+        with SessionLocal() as db:
+            assert db.get(DBCourse, "validation-does-not-exist") is None
 
 
 def _protected_learning_state(username: str) -> dict[str, object]:
@@ -93,14 +127,34 @@ def _canonical_counts(course_id: str) -> tuple[int, int, int, int]:
 def test_personal_course_real_multiformat_upload_and_failure_recovery(monkeypatch, tmp_path) -> None:
     username = "post_data_personal_upload_owner"
     monkeypatch.setattr(knowledge_api, "UPLOAD_DIR", tmp_path / "uploads")
+    monkeypatch.setenv("EDUMATRIX_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setattr(knowledge_api, "build_graph_after_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(knowledge_api, "parse_pdf_visually", lambda *args, **kwargs: [])
+    # This is the deterministic upload/retry contract; live vision is exercised
+    # separately with explicit sample inputs and recorded model responses.
+    monkeypatch.setattr(knowledge_api, "parse_pptx_visually", lambda *args, **kwargs: [])
     monkeypatch.setattr(knowledge_api.hybrid_rag, "ingest_user_documents", lambda *args, **kwargs: None)
 
     async def no_guide(**_kwargs):
         return None
 
     monkeypatch.setattr(knowledge_api, "_generate_doc_guide_for_document", no_guide)
+
+    class StructureModel:
+        provider = "openai"
+        model = "deepseek-v4-flash"
+        thinking_mode = "enabled"
+        reasoning_effort = "max"
+
+        async def generate(self, system_prompt, user_prompt, *, role):
+            content = json.loads(user_prompt)
+            return json.dumps({"chapters": [{
+                "title": Path(content["filename"]).stem,
+                "start_block": content["blocks"][0]["id"], "end_block": content["blocks"][-1]["id"],
+                "knowledge_points": [],
+            }]})
+
+    monkeypatch.setattr(knowledge_api, "build_swarm_from_headers", lambda headers: SimpleNamespace(llm=StructureModel()))
 
     with TestClient(app) as client:
         headers = auth_headers(client, username)
@@ -120,6 +174,13 @@ def test_personal_course_real_multiformat_upload_and_failure_recovery(monkeypatc
         course_id = created.json()["course"]["id"]
         assert created.json()["created"] is True
         assert created.json()["course"]["document_count"] == 0
+        # Creating a course bootstraps its profile context, not mastery.
+        after_creation = _protected_learning_state(username)
+        assert after_creation["profile_snapshots"] == protected_before["profile_snapshots"] + 1
+        assert {k: v for k, v in after_creation.items() if k != "profile_snapshots"} == {
+            k: v for k, v in protected_before.items() if k != "profile_snapshots"
+        }
+        protected_before = after_creation
         empty_shelf = client.get("/api/knowledge/courses", headers=headers)
         assert empty_shelf.status_code == 200, empty_shelf.text
         empty_course = next(item for item in empty_shelf.json()["shelf"] if item["id"] == course_id)

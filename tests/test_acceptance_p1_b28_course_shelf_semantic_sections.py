@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ import document_parser
 import knowledge_api
 from app.main import app
 from tests.api_test_helpers import auth_headers
+from app.database import DBUser, DBKnowledgeDocument, DBSourceDocument, DBStudentProfile, SessionLocal
 
 
 class _FakeResourceLLM:
@@ -43,6 +45,54 @@ def _upload(client: TestClient, headers: dict[str, str], course_id: str, filenam
         headers=headers,
         files={"file": (filename, content, "application/octet-stream")},
     )
+
+
+@pytest.mark.parametrize('role', ['teacher', 'admin'])
+def test_course_owner_upload_defaults_to_own_account_for_staff(monkeypatch, tmp_path, role):
+    monkeypatch.setattr(knowledge_api, 'UPLOAD_DIR', tmp_path / 'uploads')
+    fake = _FakeResourceLLM('{"chapters":[{"title":"数组课堂","char_start":0,"char_end":30,"knowledge_points":[{"code":"KP-A","title":"数组下标"}]}]}')
+    monkeypatch.setattr(knowledge_api,'build_swarm_from_headers',lambda _headers:SimpleNamespace(llm=fake))
+    monkeypatch.setattr(knowledge_api,'_generate_doc_guide_for_document',lambda **_kwargs:None)
+    with TestClient(app) as client:
+        username = 'b28_staff_upload_'+role
+        headers, course_id = _course(client, username)
+        with SessionLocal() as db:
+            db.query(DBUser).filter_by(username=username).update({'role':role})
+            db.query(DBStudentProfile).filter_by(student_id=username).delete()
+            db.commit()
+        response = client.post('/api/knowledge/upload-batch?student_id=default&course_id='+course_id,
+            headers=headers,files={'files':('array.md','数组[10,20,30]下标从0开始。'.encode(),'text/markdown')})
+        assert response.status_code == 200,response.text
+        assert response.json()['succeeded'] == 1,response.text
+        source_id = response.json()['results'][0]['document']['source_document_id']
+        with SessionLocal() as db:
+            source = db.get(DBSourceDocument, source_id)
+            document = db.get(DBKnowledgeDocument, source.legacy_document_id)
+            assert source.course_id == course_id and document.student_id == username
+            assert not db.get(DBStudentProfile, username).concept_mastery
+        _, other_course_id = _course(client, username+'_other')
+        denied = _upload(client, headers, other_course_id, 'array.md', b'not my course')
+        assert denied.status_code == 403
+
+
+def test_batch_accepts_more_than_twenty_files_and_keeps_each_result(monkeypatch):
+    received = []
+
+    async def accept_one(**kwargs):
+        file = kwargs['file']
+        received.append((file.filename, await file.read()))
+        return {'source_processing_status': 'ready', 'filename': file.filename}
+
+    monkeypatch.setattr(knowledge_api, 'upload_document', accept_one)
+    with TestClient(app) as client:
+        headers = auth_headers(client, 'b28_unbounded_batch')
+        files = [('files', (f'lesson-{n}.txt', f'lesson {n}'.encode(), 'text/plain')) for n in range(21)]
+        response = client.post('/api/knowledge/upload-batch', headers=headers, files=files)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert (payload['total'], payload['succeeded'], payload['failed']) == (21, 21, 0)
+        assert [name for name, _ in received] == [f'lesson-{n}.txt' for n in range(21)]
+        assert received[-1][1] == b'lesson 20'
 
 
 def test_non_document_resource_is_exactly_one_chapter_and_binds_model_points(
@@ -174,3 +224,56 @@ def test_resource_shelf_static_contract_keeps_course_controls_out_of_reader() ->
     assert "课程正文" in source
     assert "查看课程结构" not in reader
     assert "检索课程正文" not in reader
+
+
+@pytest.mark.parametrize('file_format', ['md', 'html', 'htm'])
+def test_textbook_chapters_have_independent_exact_references_and_reuse_concepts(monkeypatch, tmp_path, file_format):
+    from app.database import DBSourceRef, DBKnowledgePoint, DBChapterKnowledgePoint, DBChapter
+    from app.source_refs import source_ref_teaching_text
+    text = '\n\n'.join(f'第{n}章\n' + f'第{n}章课程内容与解释。' * 40 for n in range(1, 4))
+    raw = text.encode() if file_format == 'md' else ('<main>' + ''.join(f'<p>{part}</p>' for part in text.split('\n\n')) + '</main>').encode()
+    parsed = document_parser.parse_document(raw, f'chapters.{file_format}')
+    starts = [parsed.text.index(f'第{n}章') for n in range(1, 4)]
+    ends = [*starts[1:], len(parsed.text)]
+    chapters = [{'title': f'第{n+1}章', 'char_start': start, 'char_end': end,
+                 'knowledge_points': [{'code': 'KP-A', 'title': '共同概念' if n != 1 else '独立概念'}]}
+                for n, (start, end) in enumerate(zip(starts, ends))]
+    fake = _FakeResourceLLM(json.dumps({'chapters': chapters}, ensure_ascii=False))
+    monkeypatch.setattr(knowledge_api, 'UPLOAD_DIR', tmp_path / 'uploads')
+    monkeypatch.setattr(knowledge_api, 'build_swarm_from_headers', lambda _headers: SimpleNamespace(llm=fake))
+    monkeypatch.setattr(knowledge_api, '_generate_doc_guide_for_document', lambda **_kwargs: None)
+    with TestClient(app) as client:
+        headers, course = _course(client, 'b1_chapter_ranges_'+file_format)
+        response = _upload(client, headers, course, f'chapters.{file_format}', raw)
+        assert response.status_code == 200, response.text
+        uploaded = response.json()
+        assert uploaded['source_processing_status'] == 'ready', uploaded
+        outline = client.get(f'/api/v1/courses/{course}/outline', headers=headers).json()
+        assert len(outline) == 3
+        with SessionLocal() as db:
+            for index, chapter in enumerate(outline):
+                ref = db.get(DBSourceRef, chapter['source_ref_id'])
+                assert ref.location_kind == 'chapter'
+                assert (ref.char_start, ref.char_end) == (starts[index], ends[index])
+                assert source_ref_teaching_text(db, ref) == parsed.text[starts[index]:ends[index]]
+            nodes = db.query(DBKnowledgePoint).join(DBChapterKnowledgePoint).join(DBChapter).filter(DBChapter.source_document_id == uploaded['source_document_id']).all()
+            assert {node.title for node in nodes} == {'共同概念', '独立概念'}
+            assert len({node.id for node in nodes}) == 2
+        reader = client.get(f'/api/v1/document-reader/documents/{uploaded["source_document_id"]}', headers=headers).json()
+        assert [chapter['source_ref_id'] for chapter in reader['chapters']] == [chapter['source_ref_id'] for chapter in outline]
+        # Re-uploading a source made before chapter anchors existed must update
+        # its projection even when no image needs another reading.
+        with SessionLocal() as db:
+            old = db.get(DBSourceDocument, uploaded['source_document_id'])
+            old.parser_metadata = {key: value for key, value in old.parser_metadata.items() if key != 'chapter_reference_version'}
+            db.commit()
+        async def unexpected_model_call(*args, **kwargs):
+            raise AssertionError('successful analysis segments should be reused')
+        monkeypatch.setattr(fake, 'generate', unexpected_model_call)
+        refreshed = _upload(client, headers, course, f'chapters.{file_format}', raw).json()
+        assert refreshed['source_document_id'] != uploaded['source_document_id']
+        assert refreshed['source_processing_status'] == 'ready', refreshed
+        assert all(part['reused'] for part in refreshed['source_parser_metadata']['resource_structure']['analysis_segments'])
+        new_outline = client.get(f'/api/v1/courses/{course}/outline', headers=headers).json()
+        assert len(new_outline) == 3
+        assert [chapter['knowledge_points'] for chapter in new_outline] == [chapter['knowledge_points'] for chapter in outline]

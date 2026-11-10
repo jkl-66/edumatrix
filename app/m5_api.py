@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.source_refs import current_chapter_clause
+
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -9,11 +11,12 @@ from urllib.parse import quote
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import Field
 
 from app.auth import get_current_user
+from app.learner_output import teacher_text
 from app.authorization import ObjectAccess, active_course_role, require_object_access
 from app.database import (
     DBAssessmentAbilityState,
@@ -79,6 +82,7 @@ from app.m5_learning import (
     confirm_plan,
     create_plan_draft,
     plan_version_diff,
+    path_task_route,
     process_path_event,
     propose_plan_revision,
     record_learning_event,
@@ -143,11 +147,12 @@ from app.m5_assessment_core import (
 )
 from app.m5_exam_core import (
     ExamCreateInput, ExamItemInput, FormalExamError, FormalResponseInput, HumanReviewInput,
-    IntelligentExamConfigInput,
+    IntelligentExamConfigInput, _equal_exam_points,
     assign_sitting, complete_human_review, create_exam, exam_payload,
     build_intelligent_exam_input, finalize_formal_response_drafts, formal_draft_payload,
-    generate_report, intelligent_exam_context, latest_formal_response_drafts,
+    generate_report, intelligent_exam_context, latest_formal_response_drafts, learner_report_data,
     report_csv, request_review, save_formal_response_draft, sitting_payload,
+    formal_exam_event_payload as _formal_exam_event_payload, current_exam_feedback_payload, review_case_payload,
     start_sitting, submit_formal_response, submit_sitting, transition_exam,
 )
 from app.exam_gate import ExamGateError, exam_gate_status, require_exam_gate
@@ -300,7 +305,9 @@ class PlanConfirmRequest(StrictModel):
 
 class TextbookPathDraftRequest(StrictModel):
     course_id: str
-    time_budget_minutes: int = 90
+    time_budget_minutes: int | None = None
+    full_coverage: bool = False
+    background: bool = False
 
 
 @router.post("/context/resolve", response_model=ContextResolution)
@@ -391,7 +398,7 @@ class HumanReviewRequest(StrictModel):
 class ResourceCompletionRequest(StrictModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
     resource_version_id: str = Field(min_length=1, max_length=64)
-    completion_rule: str = Field(min_length=1, max_length=512)
+    completion_rule: str = Field(min_length=1)
     context: dict[str, Any] | None = None
     actual_minutes: int | None = Field(default=None, ge=0, le=10080)
 
@@ -532,70 +539,16 @@ def _learner_exam_payload(
         formal_draft_payload(row)
         for row in latest_formal_response_drafts(session, sitting_id=sitting.id)
     ] if sitting else []
+    if sitting:
+        saved_ids = {row["exam_item_id"] for row in data["drafts"]}
+        for response in session.query(DBAssessmentExamResponse).filter_by(sitting_id=sitting.id):
+            if response.exam_item_id not in saved_ids:
+                attempt = session.get(DBAssessmentAttempt, response.attempt_id)
+                data["drafts"].append({"id": response.id, "exam_item_id": response.exam_item_id,
+                                       "answer": attempt.answer or {}, "confidence": attempt.confidence})
     data["can_manage"] = _can_manage_exam(session, exam, user)
     data["learner_generated"] = _is_learner_generated_exam(exam, user)
     return data
-
-
-def _formal_exam_event_payload(
-    *,
-    exam: DBAssessmentExam,
-    sitting: DBAssessmentExamSitting,
-    report: DBAssessmentExamReport,
-) -> dict[str, Any]:
-    report_data = dict(report.report_data or {})
-    coverage = list(report_data.get("coverage") or [])
-    item_results = [
-        {
-            "position": item.get("position"),
-            "question_version_id": item.get("question_version_id"),
-            "knowledge_point_id": (item.get("knowledge_point") or {}).get("id"),
-            "score": item.get("score"),
-            "correct": item.get("correct"),
-            "error_reason": item.get("error_reason") or "",
-        }
-        for item in report_data.get("items") or []
-    ]
-    recommended_ids = [
-        item["id"] for item in coverage
-        if item.get("id") not in {None, "unbound"} and float(item.get("ratio") or 0.0) < 0.8
-    ]
-    if not recommended_ids and coverage:
-        lowest = min(coverage, key=lambda item: float(item.get("ratio") or 0.0))
-        if lowest.get("id") not in {None, "unbound"}:
-            recommended_ids = [lowest["id"]]
-    base_time = sitting.submitted_at or datetime.now(timezone.utc).replace(tzinfo=None)
-    next_day = (base_time.date() + timedelta(days=1)).isoformat()
-    coverage_by_id = {item.get("id"): item for item in coverage}
-    next_day_schedule = [
-        {
-            "knowledge_point_id": point_id,
-            "title": str((coverage_by_id.get(point_id) or {}).get("title") or "Knowledge point review"),
-            "scheduled_for": next_day,
-            "reason": "Formal exam evidence indicates this topic should be reinforced next.",
-            "route": "/workspace/review",
-        }
-        for point_id in recommended_ids
-    ]
-    return {
-        "graded": report_data.get("final_ratio") is not None,
-        "attempt_id": sitting.id,
-        "exam_id": exam.id,
-        "sitting_id": sitting.id,
-        "report_id": report.id,
-        "score": report_data.get("final_ratio"),
-        "knowledge_point_scores": [
-            {
-                "knowledge_point_id": item.get("id"),
-                "score": item.get("ratio"),
-            }
-            for item in coverage
-            if item.get("id") not in {None, "unbound"}
-        ],
-        "item_results": item_results,
-        "recommended_knowledge_point_ids": recommended_ids,
-        "next_day_schedule": next_day_schedule,
-    }
 
 
 def _formal_exam_submission_bundle(
@@ -616,7 +569,7 @@ def _formal_exam_submission_bundle(
     steps = dict((aggregation.get("result") or {}).get("steps") or {})
     completed_steps = set((aggregation.get("result") or {}).get("completed_steps") or [])
     wrong_review = dict(steps.get("wrong_review") or {})
-    event_payload = dict(event.payload or {}) if event else _formal_exam_event_payload(
+    event_payload = current_exam_feedback_payload(session, event) if event else _formal_exam_event_payload(
         exam=exam, sitting=sitting, report=report,
     )
     return {
@@ -625,12 +578,13 @@ def _formal_exam_submission_bundle(
             "id": report.id,
             "report_version": report.report_version,
             "content_hash": report.content_hash,
-            "report": report.report_data,
+            "report": learner_report_data(report),
         },
         "event_id": event.id if event else None,
         "aggregation": aggregation,
         "learning_feedback": learning_feedback_payload(event, consumption) if event else None,
         "recoverable": aggregation.get("status") != "processed",
+        "reviews": [review_case_payload(session, row) for row in session.query(DBAssessmentReviewCase).filter_by(sitting_id=sitting.id).all()],
         "feedback_updates": {
             "profile": "completed" if "profile_snapshot" in completed_steps else "pending",
             "path": "completed" if "path_task" in completed_steps else "pending",
@@ -654,7 +608,7 @@ def _formal_exam_report_response(
         "report_version": report.report_version,
         "input_hash": report.input_hash,
         "content_hash": report.content_hash,
-        "report": report.report_data,
+        "report": learner_report_data(report),
     }
     if created is not None:
         result["created"] = created
@@ -670,6 +624,7 @@ def _formal_exam_report_response(
             report=report,
             event=event,
         )
+        result["reviews"] = bundle["reviews"]
         result["event_id"] = bundle["event_id"]
         result["aggregation"] = bundle["aggregation"]
         result["recoverable"] = bundle["recoverable"]
@@ -870,6 +825,7 @@ def _plan_payload(session, plan: DBPlanDraft) -> dict[str, Any]:
         "versions": [{
             "id": item.id,
             "number": item.version_number,
+            "profile_snapshot_id": item.profile_snapshot_id,
             "content_hash": item.content_hash,
             "content": item.content,
             "created_at": item.created_at.isoformat() if item.created_at else None,
@@ -880,8 +836,18 @@ def _plan_payload(session, plan: DBPlanDraft) -> dict[str, Any]:
 def _path_payload(session, path: DBLearningPath) -> dict[str, Any]:
     nodes = session.query(DBPathNode).filter_by(learning_path_id=path.id).order_by(DBPathNode.sequence).all()
     course = session.get(DBCourse, path.course_id) if path.course_id else None
+    intervention = None
+    if nodes and nodes[0].node_key.startswith("teacher-intervention-"):
+        from app.m6_teacher import intervention_progress
+        chapter = session.get(DBChapter, nodes[0].target_object_id)
+        intervention = {
+            **intervention_progress(session, path),
+            "title": nodes[0].title.replace("教师干预：", ""),
+            "reading_route": f"/knowledge/documents/{chapter.source_document_id}?course_id={path.course_id}&chapter_id={chapter.id}" if chapter and chapter.source_document_id else None,
+        }
     return {
         "id": path.id,
+        "intervention": intervention,
         "course_id": path.course_id,
         "course": {
             "id": course.id,
@@ -898,6 +864,7 @@ def _path_payload(session, path: DBLearningPath) -> dict[str, Any]:
             "sequence": item.sequence,
             "node_type": item.node_type,
             "target_object_id": item.target_object_id,
+            "continue_route": path_task_route(session, node=item, course_id=path.course_id),
             "title": item.title,
             "status": item.status,
             "prerequisites": item.prerequisites or [],
@@ -993,7 +960,7 @@ def _planning_targets(session, current_user: DBUser) -> dict[str, Any]:
             continue
         if not course_is_selectable(session, course):
             continue
-        chapters = session.query(DBChapter).filter_by(course_id=course.id).order_by(
+        chapters = session.query(DBChapter).filter_by(course_id=course.id).filter(current_chapter_clause()).order_by(
             DBChapter.position, DBChapter.id,
         ).all()
         courses.append({
@@ -1026,13 +993,20 @@ def _planning_targets(session, current_user: DBUser) -> dict[str, Any]:
 
 
 def runtime_availability() -> RuntimeAvailability:
+    from app.database import SessionLocal
+    from app.canonical_retrieval import canonical_sources_available
+    from sqlalchemy.exc import SQLAlchemyError
     provider = CONFIG.llm_provider.strip().lower()
     text_model = bool(CONFIG.llm_endpoint and CONFIG.llm_api_key and CONFIG.llm_model) and provider not in {"mock", "deterministic"}
     deterministic_text_model = provider == "deterministic" and CONFIG.llm_model.strip().lower() == "deterministic"
     vision_model = bool(
         CONFIG.multimodal_llm_endpoint and CONFIG.multimodal_llm_api_key and CONFIG.multimodal_llm_model
     )
-    retrieval = any((ROOT / "data" / "faiss_indexes").glob("*.faiss"))
+    try:
+        with SessionLocal() as session:
+            retrieval = canonical_sources_available(session)
+    except SQLAlchemyError:
+        retrieval = False
     sandbox = CONFIG.sandbox_mode if CONFIG.sandbox_mode in {"disabled", "trusted_local", "docker", "external_lab"} else "disabled"
     return RuntimeAvailability(
         text_model=text_model,
@@ -1307,6 +1281,7 @@ def _owned_resource(session, artifact_id: str, current_user: DBUser, action: str
 @router.get("/resources")
 async def list_resources(
     q: str = "", artifact_type: str | None = None, course_id: str | None = None,
+    knowledge_point_id: str | None = None,
     status: str | None = None, source_status: str | None = None,
     include_archived: bool = False,
     cursor: str | None = None, limit: int = 25,
@@ -1315,6 +1290,7 @@ async def list_resources(
     return await run_db_op(lambda session: search_resources(
         session, owner_public_id=current_user.public_id, query=q,
         artifact_type=artifact_type, course_id=course_id, status=status,
+        knowledge_point_id=knowledge_point_id,
         source_status=source_status, include_archived=include_archived,
         cursor=cursor, limit=limit,
     ))
@@ -1491,11 +1467,12 @@ async def confirm_learning_plan(
 @router.get("/textbook-path-draft")
 async def get_textbook_path_draft(
     course_id: str,
+    plan_id: str | None = None,
     current_user: DBUser = Depends(get_current_user),
 ):
     try:
         return await run_db_op(lambda session: textbook_path_draft_payload(
-            session, current_user=current_user, course_id=course_id,
+            session, current_user=current_user, course_id=course_id, plan_id=plan_id,
         ))
     except PathDraftError as exc:
         status_code = 404 if exc.code == "course_not_found" else 403 if exc.code == "course_forbidden" else 409
@@ -1508,20 +1485,26 @@ async def get_textbook_path_draft(
 async def generate_textbook_path_draft_api(
     payload: TextbookPathDraftRequest,
     current_user: DBUser = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
 ):
-    if not 30 <= payload.time_budget_minutes <= 480:
+    if payload.time_budget_minutes is not None and not 15 <= payload.time_budget_minutes <= 480:
         raise HTTPException(
             status_code=422,
-            detail={"code": "path_draft_time_budget_invalid", "message": "时间预算需在 30 到 480 分钟之间"},
+            detail={"code": "path_draft_time_budget_invalid", "message": "时间预算需在 15 到 480 分钟之间"},
         )
 
     def operation(session):
+        if payload.background:
+            from app.path_tasks import queue_path_task
+            return {"task": queue_path_task(session, user=current_user, course_id=payload.course_id,
+                time_budget_minutes=payload.time_budget_minutes, full_coverage=payload.full_coverage)}
         plan, changed = generate_textbook_path_draft(
             session,
             current_user=current_user,
             course_id=payload.course_id,
             time_budget_minutes=payload.time_budget_minutes,
             llm=_build_path_model(),
+            full_coverage=payload.full_coverage,
         )
         session.commit()
         return {
@@ -1533,13 +1516,36 @@ async def generate_textbook_path_draft_api(
         }
 
     try:
-        return await run_db_op(operation)
+        result = await run_db_op(operation)
+        return result
     except (PathDraftError, M5LearningError) as exc:
         code = getattr(exc, "code", "path_draft_failed")
         status_code = 404 if code == "course_not_found" else 403 if code in {"course_forbidden", "plan_forbidden"} else 409
         raise HTTPException(
             status_code=status_code, detail={"code": code, "message": str(exc)},
         ) from exc
+
+
+@router.get("/path-generation-tasks")
+async def latest_path_generation_task(course_id: str, report_id: str | None = None,
+                                      current_user: DBUser = Depends(get_current_user)):
+    from app.path_tasks import find_path_task
+    try:
+        return {"task": await run_db_op(lambda session: find_path_task(session, user=current_user,
+            course_id=course_id, report_id=report_id))}
+    except PathDraftError as exc:
+        raise HTTPException(status_code=404 if exc.code == "course_not_found" else 403,
+                            detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+@router.get("/path-generation-tasks/{task_id}")
+async def path_generation_task_status(task_id: str, current_user: DBUser = Depends(get_current_user)):
+    from app.path_tasks import get_path_task
+    try:
+        return {"task": await run_db_op(lambda session: get_path_task(session, task_id=task_id, user=current_user))}
+    except PathDraftError as exc:
+        raise HTTPException(status_code=403 if exc.code == "course_forbidden" else 404,
+                            detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 @router.get("/paths/{path_id}")
@@ -1563,7 +1569,8 @@ async def create_resource_revision(
             request=payload,
         ))
     except M5CapabilityError as exc:
-        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
+        status = 422 if "content" in exc.code and exc.code.endswith(("invalid", "incomplete")) else 409
+        raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 @router.get("/resources/{artifact_id}/deck-export/{format_name}")
@@ -2426,9 +2433,25 @@ async def get_intelligent_exam_gate(
     return await run_db_op(operation)
 
 
+def _review_exam_scope(session, actor: DBUser, task_id: str, course_id: str):
+    from app.review_schedule import (
+        ReviewScheduleError, _owned_plan, _knowledge_contexts, _plan_context, _readable_courses,
+    )
+    try:
+        plan = _owned_plan(session, actor, task_id)
+    except ReviewScheduleError as exc:
+        raise FormalExamError(exc.code, str(exc)) from exc
+    aliases, _ = _knowledge_contexts(session, _readable_courses(session, actor))
+    scope = _plan_context(plan, aliases)
+    if scope.get("course_id") != course_id or not scope.get("knowledge_point_id"):
+        raise FormalExamError("review_task_context_mismatch", "请从该复习任务所属课程进入测验。")
+    return plan, scope
+
+
 @router.get("/assessment/intelligent-exams/context")
 async def get_intelligent_exam_context(
     course_id: str,
+    review_task_id: str | None = None,
     current_user: DBUser = Depends(get_current_user),
 ):
     if normalize_role(current_user.role) != "student":
@@ -2448,6 +2471,11 @@ async def get_intelligent_exam_context(
             owner_public_id=current_user.public_id,
             course_id=course_id,
         )
+        if review_task_id:
+            _, scope = _review_exam_scope(session, current_user, review_task_id, course_id)
+            context["knowledge_points"] = [item for item in context["knowledge_points"] if item["id"] == scope["knowledge_point_id"]]
+            context["chapters"] = [item for item in context["chapters"] if item["id"] == scope["chapter_id"]]
+            context["review_scope"] = scope
         if _local_assessment_demo_mode():
             context["question_type_counts"] = {
                 **context["question_type_counts"],
@@ -2457,7 +2485,7 @@ async def get_intelligent_exam_context(
             context["llm_generation_required"] = False
         return {
             **context,
-            "gate": exam_gate_status(
+            "gate": {"unlocked": True, "reason": "review_task", "message": "围绕本次复习内容检验理解。"} if review_task_id else exam_gate_status(
                 session,
                 owner_public_id=current_user.public_id,
                 course_id=course_id,
@@ -2477,6 +2505,9 @@ async def _create_configured_intelligent_exam(
 ) -> dict[str, Any]:
     def operation(session):
         llm = _build_governed_assessment_llm()
+        from app.learning_generation_jobs import CURRENT_JOB, assert_generation_owner, event_payload
+        job = CURRENT_JOB.get()
+        submission = event_payload(session, job['task_id'], 'assessment.submission') if job else {}
         if llm is None and int(config.question_type_counts.get("short_answer", 0)):
             raise FormalExamError(
                 "intelligent_exam_demo_subjective_unsupported",
@@ -2484,16 +2515,14 @@ async def _create_configured_intelligent_exam(
             )
         review_plan = None
         if config.review_task_id:
-            if not config.review_task_id.startswith("review-plan:"):
-                raise FormalExamError("review_task_invalid", "复习任务标识无效。")
-            try:
-                plan_id = int(config.review_task_id.split(":", 1)[1])
-            except ValueError as exc:
-                raise FormalExamError("review_task_invalid", "复习任务标识无效。") from exc
-            review_plan = session.get(DBReviewPlan, plan_id)
-            if review_plan is None or review_plan.student_id != current_user.username:
-                raise FormalExamError("review_task_forbidden", "复习任务不属于当前学习者。")
+            review_plan, scope = _review_exam_scope(session, current_user, config.review_task_id, config.course_id)
+            if set(config.knowledge_point_ids) != {scope["knowledge_point_id"]} or any(
+                chapter_id != scope["chapter_id"] for chapter_id in config.chapter_ids
+            ):
+                raise FormalExamError("review_task_scope_mismatch", "请围绕本次复习知识点组卷。")
             gate = {"unlocked": True, "reason": "review_task", "message": "复习任务已进入智能组卷。"}
+        elif submission.get('gate'):
+            gate = submission['gate']
         else:
             gate = require_exam_gate(
                 session,
@@ -2525,12 +2554,20 @@ async def _create_configured_intelligent_exam(
                 "created": False,
             }
 
+        from app.learning_generation_jobs import course_generation_basis, assert_course_generation_basis
+        # This exam keeps its initial learning evidence while the learner can
+        # continue studying. Course/source changes must still block publication.
+        basis_scope = {'course_id':config.course_id, 'owner_public_id':current_user.public_id,
+                       'include_profile': False}
+        basis = course_generation_basis(session, **basis_scope)
         create_payload = build_intelligent_exam_input(
             session,
             owner_public_id=current_user.public_id,
             config=config,
             llm=llm,
         )
+        assert_generation_owner(session)
+        assert_course_generation_basis(session, basis, **basis_scope)
         exam, _, _ = create_exam(
             session,
             owner_public_id=current_user.public_id,
@@ -2566,7 +2603,56 @@ async def _create_configured_intelligent_exam(
     return await run_db_op(operation)
 
 
-async def _submit_learner_generated_exam(
+def _queue_intelligent_exam(session, user, config):
+    from app.learning_generation_jobs import queue_task, LearningGenerationError
+    from app.m1_repository import append_task_event
+    if _build_governed_assessment_llm() is None and config.question_type_counts.get('short_answer'):
+        raise FormalExamError('intelligent_exam_demo_subjective_unsupported', '本地演示模式暂不提供主观题模型评分，请选择客观题完成组卷。')
+    if config.review_task_id:
+        _, scope = _review_exam_scope(session, user, config.review_task_id, config.course_id)
+        if set(config.knowledge_point_ids) != {scope['knowledge_point_id']} or any(
+                chapter != scope['chapter_id'] for chapter in config.chapter_ids):
+            raise FormalExamError('review_task_scope_mismatch', '请围绕本次复习知识点组卷。')
+        gate = {'unlocked': True, 'reason': 'review_task'}
+    else:
+        gate = require_exam_gate(session, owner_public_id=user.public_id, course_id=config.course_id)
+    try:
+        task = queue_task(session, user, course_id=config.course_id, capability='assessment_exam.prepare',
+            request=config.model_dump(mode='json'), key='exam:' + config.idempotency_key)
+    except LearningGenerationError as exc:
+        raise HTTPException(status_code=409, detail={'code': exc.code, 'message': str(exc)}) from exc
+    from app.learning_generation_jobs import event_payload
+    if not event_payload(session, task['id'], 'assessment.submission'):
+        append_task_event(session, task_id=task['id'], event_type='assessment.submission', payload={'gate': gate})
+        session.commit()
+    return {'generation': task}
+
+
+@router.get('/assessment/intelligent-exams/generation')
+async def get_intelligent_exam_generation(course_id: str, task_id: str | None = None,
+                                         review_task_id: str | None = None,
+                                         current_user: DBUser = Depends(get_current_user)):
+    def operation(session):
+        course = session.get(DBCourse, course_id)
+        if course is None:
+            raise HTTPException(status_code=404, detail={'code':'course_unknown', 'message':'课程不存在。'})
+        if not _course_is_readable(session, course, current_user):
+            raise HTTPException(status_code=403, detail={'code':'course_forbidden', 'message':'当前课程不可用。'})
+        from app.database import DBGenerationTask
+        from app.learning_generation_jobs import task_payload, event_payload
+        query = session.query(DBGenerationTask).filter_by(owner_public_id=current_user.public_id,
+            course_id=course_id, capability='assessment_exam.prepare')
+        if task_id:
+            query = query.filter_by(id=task_id)
+        for task in query.order_by(DBGenerationTask.created_at.desc()):
+            request = event_payload(session, task.id, 'learning_generation.request').get('request', {})
+            if (request.get('review_task_id') or None) == (review_task_id or None):
+                return {'generation': task_payload(session, task)}
+        return {'generation': None}
+    return await run_db_op(operation)
+
+
+async def _submit_formal_exam(
     *,
     sitting_id: str,
     expected_lock_version: int,
@@ -2580,11 +2666,16 @@ async def _submit_learner_generated_exam(
                 detail={"code": "sitting_unknown", "message": "exam sitting does not exist"},
             )
         exam = session.query(DBAssessmentExam).filter_by(id=sitting.exam_id).one()
-        if not _is_learner_generated_exam(exam, current_user):
+        if sitting.owner_public_id != current_user.public_id:
             raise FormalExamError("sitting_forbidden", "exam sitting belongs to another owner")
 
+        learner_generated = _is_learner_generated_exam(exam, current_user)
         review_task_id = _review_task_id_for_exam(session, exam)
         gate = (
+            {"unlocked": True, "reason": "already_submitted", "message": "本次测评已提交，可以回顾结果。"}
+            if sitting.status in {"submitted", "released"} else
+            {"unlocked": True, "reason": "assigned_exam", "message": "本次测评由老师安排。"}
+            if not learner_generated else
             {"unlocked": True, "reason": "review_task", "message": "复习任务已进入智能组卷。"}
             if review_task_id
             else require_exam_gate(
@@ -2611,6 +2702,7 @@ async def _submit_learner_generated_exam(
                 sitting=sitting,
                 owner_public_id=current_user.public_id,
                 llm=_build_governed_assessment_llm(),
+                sandbox_runner=SANDBOX_RUNNER,
             )
             submit_sitting(
                 session,
@@ -2618,7 +2710,7 @@ async def _submit_learner_generated_exam(
                 owner_public_id=current_user.public_id,
                 expected_lock_version=expected_lock_version,
             )
-            if exam.status == "open":
+            if learner_generated and exam.status == "open":
                 transition_exam(
                     session,
                     exam=exam,
@@ -2626,18 +2718,18 @@ async def _submit_learner_generated_exam(
                     expected_lock_version=exam.lock_version,
                     actor_public_id=current_user.public_id,
                 )
-            report, _ = generate_report(
-                session,
-                sitting=sitting,
-                actor_public_id=current_user.public_id,
-            )
 
-        if report is None:
-            report, _ = generate_report(
-                session,
-                sitting=sitting,
-                actor_public_id=current_user.public_id,
-            )
+        version = session.get(DBAssessmentExamVersion, sitting.exam_version_id)
+        if version.feedback_policy == "teacher_only" or (
+            version.feedback_policy == "after_close" and exam.status not in {"closed", "archived"}
+        ):
+            session.commit()
+            return {"sitting": sitting_payload(session, sitting), "report": None,
+                    "feedback_pending": True, "recoverable": False}
+
+        report, _ = generate_report(
+            session, sitting=sitting, actor_public_id=current_user.public_id,
+        )
         event_payload = _formal_exam_event_payload(
             exam=exam,
             sitting=sitting,
@@ -2674,7 +2766,8 @@ async def _submit_learner_generated_exam(
         session.commit()
 
         consumption = get_learning_aggregation(session, event_id=event.id)
-        if consumption is None or consumption.status != "processed":
+        if (consumption is None or consumption.status != "processed"
+                or (consumption.result or {}).get("report_id", (event.payload or {}).get("report_id")) != report.id):
             try:
                 process_path_event(session, event=event)
             except Exception:
@@ -2707,10 +2800,9 @@ async def create_intelligent_exam(
         )
     if payload.configuration is not None:
         try:
-            return await _create_configured_intelligent_exam(
-                config=payload.configuration,
-                current_user=current_user,
-            )
+            if CONFIG.demo_mode:
+                return await _create_configured_intelligent_exam(config=payload.configuration, current_user=current_user)
+            return await run_db_op(lambda session: _queue_intelligent_exam(session, current_user, payload.configuration))
         except ExamGateError as exc:
             raise _exam_gate_error(exc) from exc
         except FormalExamError as exc:
@@ -2728,8 +2820,8 @@ async def create_intelligent_exam(
     if not 1 <= payload.duration_minutes <= 1440:
         raise HTTPException(status_code=422, detail={"code": "intelligent_exam_duration_invalid", "message": "考试时长必须在 1 到 1440 分钟之间"})
     version_ids = list(dict.fromkeys(payload.question_version_ids))
-    if not 1 <= len(version_ids) <= 100:
-        raise HTTPException(status_code=422, detail={"code": "intelligent_exam_question_count", "message": "智能组卷需选择 1 到 100 道题"})
+    if not version_ids:
+        raise HTTPException(status_code=422, detail={"code": "intelligent_exam_question_count", "message": "请至少选择一道题。"})
 
     def operation(session):
         gate = require_exam_gate(
@@ -2737,9 +2829,7 @@ async def create_intelligent_exam(
             owner_public_id=current_user.public_id,
             course_id=payload.course_id,
         )
-        base_points = round(100 / len(version_ids), 2)
-        item_points = [base_points] * len(version_ids)
-        item_points[-1] = round(100 - sum(item_points[:-1]), 2)
+        item_points = _equal_exam_points(len(version_ids))
         exam, _, _ = create_exam(
             session,
             owner_public_id=current_user.public_id,
@@ -2894,11 +2984,11 @@ async def start_formal_exam_sitting(
             raise HTTPException(status_code=404, detail={"code": "sitting_unknown", "message": "exam sitting does not exist"})
         exam = session.query(DBAssessmentExam).filter_by(id=sitting.exam_id).one()
         if normalize_role(current_user.role) == "student" and exam.owner_public_id == current_user.public_id:
-            require_exam_gate(
-                session,
-                owner_public_id=current_user.public_id,
-                course_id=exam.course_id,
-            )
+            review_task_id = _review_task_id_for_exam(session, exam)
+            if review_task_id:
+                _review_exam_scope(session, current_user, review_task_id, exam.course_id)
+            else:
+                require_exam_gate(session, owner_public_id=current_user.public_id, course_id=exam.course_id)
         start_sitting(session, sitting=sitting, owner_public_id=current_user.public_id,
                       expected_lock_version=payload.expected_lock_version)
         session.commit()
@@ -2917,95 +3007,19 @@ async def submit_formal_exam_response(
     current_user: DBUser = Depends(get_current_user),
 ):
     def operation(session):
-        sitting = session.query(DBAssessmentExamSitting).filter_by(id=sitting_id).first()
+        sitting = session.get(DBAssessmentExamSitting, sitting_id)
         if sitting is None:
             raise HTTPException(status_code=404, detail={"code": "sitting_unknown", "message": "exam sitting does not exist"})
-        exam = session.query(DBAssessmentExam).filter_by(id=sitting.exam_id).one()
-        if _is_learner_generated_exam(exam, current_user):
-            draft, created = save_formal_response_draft(
-                session,
-                sitting=sitting,
-                owner_public_id=current_user.public_id,
-                payload=payload,
-            )
-            session.commit()
-            return {
-                "learner_draft": True,
-                "draft": formal_draft_payload(draft),
-                "created": created,
-                "sitting": sitting_payload(session, sitting),
-            }
-        response, attempt, created = submit_formal_response(
+        draft, created = save_formal_response_draft(
             session, sitting=sitting, owner_public_id=current_user.public_id, payload=payload,
         )
-        version = session.query(DBAssessmentQuestionVersion).filter_by(id=attempt.question_version_id).one()
-        question = session.query(DBAssessmentQuestion).filter_by(id=version.question_id).one()
-        if question.question_type == "code" and not SANDBOX_RUNNER.execution_enabled:
-            raise HTTPException(status_code=503, detail={"code": "code_runtime_unavailable", "message": SANDBOX_RUNNER.status_message()})
         session.commit()
-        return {
-            "response_id": response.id, "attempt": _assessment_attempt_bundle(session, attempt),
-            "created": created, "question_type": question.question_type,
-            "version": {"id": version.id, "prompt": learner_safe_prompt(version.prompt),
-                        "answer_key": version.answer_key, "scoring_rule": version.scoring_rule},
-        }
+        return {"draft": formal_draft_payload(draft), "created": created,
+                "sitting": sitting_payload(session, sitting)}
     try:
-        initial = await run_db_op(operation)
-        if initial.get("learner_draft"):
-            initial.pop("learner_draft", None)
-            return initial
-        response_id = initial["response_id"]
-        attempt = initial["attempt"]
-        question_type = initial["question_type"]
-        if not initial["created"] or question_type not in {"short_answer", "code", "open_task"}:
-            return {"response_id": response_id, "attempt": attempt, "created": initial["created"]}
-        trace_id = f"next-formal-exam-{uuid.uuid4().hex}"
-        if question_type == "code":
-            version_data = initial["version"]
-            version_stub = DBAssessmentQuestionVersion(
-                id=version_data["id"], prompt=version_data["prompt"],
-                answer_key=version_data["answer_key"], scoring_rule=version_data["scoring_rule"],
-            )
-            result = await grade_code_submission(version_stub, payload.answer, SANDBOX_RUNNER)
-
-            def save_code(session):
-                persist_code_grading(session, attempt_id=attempt["id"], result=result, trace_id=trace_id)
-                row = session.query(DBAssessmentAttempt).filter_by(id=attempt["id"]).one()
-                session.commit()
-                return _assessment_attempt_bundle(session, row)
-            return {"response_id": response_id, "attempt": await run_db_op(save_code), "created": True}
-
-        def prompt_data(session):
-            version = session.query(DBAssessmentQuestionVersion).filter_by(id=attempt["question_version_id"]).one()
-            return ai_grading_prompt(version, payload.answer)
-        system_prompt, user_prompt, rubric_version, rubric = await run_db_op(prompt_data)
-        try:
-            output = await _call_quiz_model(
-                build_swarm_from_headers(request.headers).llm,
-                system_prompt=system_prompt, user_prompt=user_prompt,
-                response_model=AIGradingOutput, owner_public_id=current_user.public_id,
-                operation="formal_exam_grade", trace_id=trace_id,
-            )
-            def save_ai(session):
-                persist_ai_grading(session, attempt_id=attempt["id"],
-                                   output=AIGradingOutput.model_validate(output), trace_id=trace_id)
-                row = session.query(DBAssessmentAttempt).filter_by(id=attempt["id"]).one()
-                session.commit()
-                return _assessment_attempt_bundle(session, row)
-            persisted = await run_db_op(save_ai)
-        except Exception:
-            def save_failure(session):
-                persist_failed_ai_grading(
-                    session, attempt_id=attempt["id"], rubric_version=rubric_version,
-                    rubric_snapshot=rubric, trace_id=trace_id, error_code="ai_grading_unavailable",
-                )
-                row = session.query(DBAssessmentAttempt).filter_by(id=attempt["id"]).one()
-                session.commit()
-                return _assessment_attempt_bundle(session, row)
-            persisted = await run_db_op(save_failure)
-        return {"response_id": response_id, "attempt": persisted, "created": True}
-    except (FormalExamError, AssessmentCoreError) as exc:
-        raise (_formal_exam_error(exc) if isinstance(exc, FormalExamError) else _assessment_error(exc)) from exc
+        return await run_db_op(operation)
+    except FormalExamError as exc:
+        raise _formal_exam_error(exc) from exc
 
 
 @router.post("/assessment/exam-sittings/{sitting_id}/submit")
@@ -3013,60 +3027,19 @@ async def submit_formal_exam_sitting(
     sitting_id: str, payload: SittingTransitionRequest,
     current_user: DBUser = Depends(get_current_user),
 ):
-    if normalize_role(current_user.role) == "student":
-        def is_learner_generated(session):
-            sitting = session.query(DBAssessmentExamSitting).filter_by(id=sitting_id).first()
-            if sitting is None:
-                return False
-            exam = session.query(DBAssessmentExam).filter_by(id=sitting.exam_id).first()
-            return bool(exam and exam.owner_public_id == current_user.public_id)
-
-        learner_generated = await run_db_op(is_learner_generated)
-        if learner_generated:
-            try:
-                return await _submit_learner_generated_exam(
-                    sitting_id=sitting_id,
-                    expected_lock_version=payload.expected_lock_version,
-                    current_user=current_user,
-                )
-            except ExamGateError as exc:
-                raise _exam_gate_error(exc) from exc
-            except FormalExamError as exc:
-                raise _formal_exam_error(exc) from exc
-            except AssessmentCoreError as exc:
-                raise _assessment_error(exc) from exc
-            except M5LearningError as exc:
-                raise _learning_error(exc) from exc
-
-    def operation(session):
-        sitting = session.query(DBAssessmentExamSitting).filter_by(id=sitting_id).first()
-        if sitting is None:
-            raise HTTPException(status_code=404, detail={"code": "sitting_unknown", "message": "exam sitting does not exist"})
-        exam = session.query(DBAssessmentExam).filter_by(id=sitting.exam_id).one()
-        if normalize_role(current_user.role) == "student" and exam.owner_public_id == current_user.public_id:
-            require_exam_gate(
-                session,
-                owner_public_id=current_user.public_id,
-                course_id=exam.course_id,
-            )
-        submit_sitting(session, sitting=sitting, owner_public_id=current_user.public_id,
-                       expected_lock_version=payload.expected_lock_version)
-        if exam.owner_public_id == current_user.public_id and exam.status == "open":
-            transition_exam(
-                session,
-                exam=exam,
-                target="closed",
-                expected_lock_version=exam.lock_version,
-                actor_public_id=current_user.public_id,
-            )
-        session.commit()
-        return sitting_payload(session, sitting)
     try:
-        return await run_db_op(operation)
+        return await _submit_formal_exam(
+            sitting_id=sitting_id, expected_lock_version=payload.expected_lock_version,
+            current_user=current_user,
+        )
     except ExamGateError as exc:
         raise _exam_gate_error(exc) from exc
     except FormalExamError as exc:
         raise _formal_exam_error(exc) from exc
+    except AssessmentCoreError as exc:
+        raise _assessment_error(exc) from exc
+    except M5LearningError as exc:
+        raise _learning_error(exc) from exc
 
 
 @router.post("/assessment/exam-sittings/{sitting_id}/reviews", status_code=201)
@@ -3080,6 +3053,14 @@ async def request_formal_exam_review(
             raise HTTPException(status_code=404, detail={"code": "sitting_unknown", "message": "exam sitting does not exist"})
         if sitting.owner_public_id != current_user.public_id:
             raise HTTPException(status_code=403, detail={"code": "sitting_forbidden", "message": "exam sitting belongs to another owner"})
+        if sitting.status not in {"submitted", "released"}:
+            raise FormalExamError("review_not_ready", "请提交试卷并查看报告后再申请复核。")
+        if not payload.reason.strip():
+            raise FormalExamError("review_reason_required", "请说明希望老师核对的地方。")
+        version = session.get(DBAssessmentExamVersion, sitting.exam_version_id)
+        exam = session.get(DBAssessmentExam, sitting.exam_id)
+        if version.feedback_policy == "teacher_only" or (version.feedback_policy == "after_close" and exam.status not in {"closed", "archived"}):
+            raise FormalExamError("review_not_ready", "请等待老师公布报告后再申请复核。")
         review, created = request_review(session, sitting=sitting, attempt_id=payload.attempt_id,
                                          requested_by_public_id=current_user.public_id, reason=payload.reason)
         session.commit()
@@ -3100,10 +3081,7 @@ async def list_formal_exam_reviews(current_user: DBUser = Depends(get_current_us
             sitting = session.query(DBAssessmentExamSitting).filter_by(id=review.sitting_id).one()
             exam = session.query(DBAssessmentExam).filter_by(id=sitting.exam_id).one()
             if _can_manage_exam(session, exam, current_user):
-                items.append({"id": review.id, "sitting_id": review.sitting_id, "attempt_id": review.attempt_id,
-                              "status": review.status, "reason": review.reason,
-                              "reviewer_public_id": review.reviewer_public_id,
-                              "lock_version": review.lock_version})
+                items.append(review_case_payload(session, review))
         return {"schema_version": "next.formal-exam-review-queue.v1", "items": items}
     return await run_db_op(operation)
 
@@ -3125,8 +3103,18 @@ async def complete_formal_exam_review(
             raise HTTPException(status_code=403, detail={"code": "review_forbidden", "message": "review case is unavailable"})
         result = complete_human_review(session, review=review, reviewer_public_id=current_user.public_id,
                                        expected_lock_version=payload.expected_lock_version, payload=payload.result)
+        report, _ = generate_report(session, sitting=sitting, actor_public_id=current_user.public_id)
         session.commit()
-        return {"review_id": review.id, "status": review.status, "grading": grading_result_payload(result)}
+        event = session.query(DBLearningEvent).filter_by(owner_public_id=sitting.owner_public_id,
+            idempotency_key=f"formal-exam-submission:{sitting.id}").first()
+        if event:
+            try:
+                process_path_event(session, event=event)
+            except Exception:
+                # Keep the saved decision and expose the existing retryable feedback state.
+                pass
+        return {"review_id": review.id, "status": review.status, "grading": grading_result_payload(result),
+                "report": _formal_exam_report_response(session, report=report, sitting=sitting, exam=exam)}
     try:
         return await run_db_op(operation)
     except FormalExamError as exc:
@@ -3137,6 +3125,25 @@ async def complete_formal_exam_review(
 async def generate_formal_exam_report(
     sitting_id: str, current_user: DBUser = Depends(get_current_user),
 ):
+    def feedback_state(session):
+        sitting = session.get(DBAssessmentExamSitting, sitting_id)
+        if sitting is None or sitting.owner_public_id != current_user.public_id:
+            return None
+        exam = session.get(DBAssessmentExam, sitting.exam_id)
+        version = session.get(DBAssessmentExamVersion, sitting.exam_version_id)
+        if version.feedback_policy == "teacher_only" and not _can_manage_exam(session, exam, current_user):
+            raise HTTPException(status_code=403, detail={"code": "report_forbidden", "message": "本次测评由老师统一反馈。"})
+        ready = version.feedback_policy == "after_submission" or exam.status in {"closed", "archived"}
+        return sitting.lock_version if ready and sitting.status in {"submitted", "released"} else None
+
+    lock_version = await run_db_op(feedback_state)
+    if lock_version is not None:
+        try:
+            await _submit_formal_exam(sitting_id=sitting_id, expected_lock_version=lock_version, current_user=current_user)
+        except (FormalExamError, AssessmentCoreError, M5LearningError) as exc:
+            raise (_formal_exam_error(exc) if isinstance(exc, FormalExamError) else
+                   _assessment_error(exc) if isinstance(exc, AssessmentCoreError) else _learning_error(exc)) from exc
+
     def operation(session):
         sitting = session.query(DBAssessmentExamSitting).filter_by(id=sitting_id).first()
         if sitting is None:
@@ -3165,6 +3172,9 @@ async def get_formal_exam_report(report_id: str, current_user: DBUser = Depends(
         exam = session.query(DBAssessmentExam).filter_by(id=sitting.exam_id).one()
         if sitting.owner_public_id != current_user.public_id and not _can_manage_exam(session, exam, current_user):
             raise HTTPException(status_code=403, detail={"code": "report_forbidden", "message": "exam report is unavailable"})
+        version = session.get(DBAssessmentExamVersion, sitting.exam_version_id)
+        if version.feedback_policy == "teacher_only" and not _can_manage_exam(session, exam, current_user):
+            raise HTTPException(status_code=403, detail={"code": "report_forbidden", "message": "本次测评由老师统一反馈。"})
         return _formal_exam_report_response(
             session, report=report, sitting=sitting, exam=exam,
         )
@@ -3270,23 +3280,41 @@ async def export_review_diagnosis_material(current_user: DBUser = Depends(get_cu
                 ("accepted", "modified", "teacher_confirmed"),
             )).all()
         }
+        def local_time(value):
+            if not value:
+                return "待安排"
+            moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=timezone.utc)
+            return moment.astimezone(timezone(timedelta(hours=8))).strftime("%Y年%m月%d日 %H:%M（北京时间）")
+
+        categories = {
+            "knowledge_gap": "知识遗漏", "concept_confusion": "概念混淆",
+            "strategy_error": "解题方法", "calculation_error": "计算错误",
+            "careless": "审题与检查", "programming_error": "编程问题",
+            "insufficient_evidence": "需要进一步练习确认", "spaced_repetition": "间隔复习",
+        }
+        next_actions = {
+            "complete_delayed_retest": "先回顾错题，到复测时间后再独立作答。",
+            "review_diagnosis_material": "回顾这次出错的原因，并整理容易混淆的地方。",
+            "rate_review_quality": "回忆这个知识点，再用困难、一般或简单记录这次感受。",
+        }
         lines = [
-            "# EduMatrix 复习诊疗材料", "",
-            "> 仅包含当前学习者自己的复习安排、错因分类和下一步建议；不包含题目答案、API Key、模型提示词或其他用户数据。",
-            "", f"生成时间：{datetime.now(timezone.utc).isoformat()}",
+            "# EduMatrix 复习报告", "",
+            "> 回顾你的复习安排、已确认的错因和接下来可以做的练习。",
+            "", f"生成时间：{local_time(datetime.now(timezone.utc))}",
             f"待处理项目：{len(items)}", "", "## 复习项目", "",
         ]
         if not items:
             lines.append("当前没有已确认的待复习项目。")
         for index, item in enumerate(items, 1):
             lines.extend([
-                f"### {index}. {item.get('concept') or item.get('category') or '未命名知识点'}",
-                f"- 来源：{item['source_type']}",
-                f"- 状态：{item.get('status', 'unknown')}",
-                f"- 计划时间：{item.get('due_at') or '待安排'}",
-                f"- 进入原因：{item.get('reason') or '未提供'}",
-                f"- 证据强度：{item.get('evidence_strength') or '未提供'}",
-                f"- 下一步：{item.get('next_action') or '复习并提交反馈'}",
+                f"### {index}. {categories.get(item.get('concept'), teacher_text(item.get('concept') or '') or '待复习知识点')}",
+                f"- 复习类型：{'间隔复习' if item['source_type'] == 'sm2_review_plan' else '错因复测'}",
+                f"- 当前安排：{ {'due': '已到复习时间', 'needs_review': '建议先复习', 'scheduled': '已安排'}.get(item.get('status'), '待处理')}",
+                f"- 计划时间：{local_time(item.get('due_at'))}",
+                f"- 安排原因：{teacher_text(item.get('reason') or '巩固这个知识点。')}",
+                f"- 下一步：{next_actions.get(item.get('next_action'), '复习并记录这次学习感受。')}",
             ])
             review = reviews.get(item.get("source_id"))
             if review is not None and review.decision_note:
@@ -3294,9 +3322,9 @@ async def export_review_diagnosis_material(current_user: DBUser = Depends(get_cu
             lines.append("")
         lines.extend([
             "## 使用建议", "",
-            "1. 先处理状态为 due 或 needs_review 的项目。",
-            "2. 延迟复测通过后，系统才会形成稳定掌握证据；一次查看或主观声明不会直接改变掌握度。",
-            "3. 完成 SM-2 复习后提交困难、一般或简单反馈，让现有调度器更新下一次复习时间。",
+            "1. 优先处理已经到期或建议先复习的项目。",
+            "2. 隔一段时间后还能独立答对，才能更好地判断是否掌握；只查看资料或填写自评不会提高掌握度。",
+            "3. 回顾后记录困难、一般或简单，下一次复习时间会参考你的感受调整。",
         ])
         return "\n".join(lines) + "\n"
 
@@ -3592,8 +3620,11 @@ async def preflight_current_tutor_request(
         blockers = []
         if not runtime.text_generation_available:
             blockers.append("text_model_unavailable")
-        if row.context_mode != "current_resource" and not runtime.retrieval:
-            blockers.append("retrieval_unavailable")
+        if row.context_mode != "current_resource":
+            from app.canonical_retrieval import canonical_sources_available
+            # Another course's source cannot make this course ready.
+            if not canonical_sources_available(session, course_id=row.course_id, actor=current_user):
+                blockers.append("retrieval_unavailable")
         return {
             **envelope,
             "ready": not blockers,

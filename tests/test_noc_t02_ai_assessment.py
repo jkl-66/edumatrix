@@ -342,9 +342,15 @@ def test_intelligent_exam_generation_uses_live_model_and_source_bound_schema(mon
                         questions.append({"question_type": question_type, "prompt": "判断课程来源中的结论。", "options": [], "answer_key": {"value": True}, "scoring_rule": {"type": "exact"}, "primary_knowledge_point_id": point, "source_ref_ids": [source]})
                     else:
                         questions.append({"question_type": question_type, "prompt": "请说明课程来源中的关键步骤。", "options": [], "answer_key": {"reference_answer": "依据来源说明关键步骤"}, "scoring_rule": {"version": "rubric-ml-v1", "criteria": [{"id": "scope", "label": "范围", "weight": 1}]}, "primary_knowledge_point_id": point, "source_ref_ids": [source]})
+            for question in questions:
+                question["explanation"] = "正确结论需要满足题目条件；逐项核对前提后即可判断。"
             return SimpleNamespace(model="deepseek-v4-flash", fallback_used=False, trace_id="trace-exam", call_id="call-exam", structured_output={"questions": questions})
 
         monkeypatch.setattr(exam_core, "execute_registered_structured_call", fake_gateway)
+        # This test isolates the generation schema; real review/rejection is
+        # covered separately through the shared reviewer in exam_mode_contract.
+        monkeypatch.setattr(exam_core, "_review_intelligent_exam_items", lambda *_args, **_kwargs: {"approved": True})
+        monkeypatch.setattr(exam_core, "_review_exam_composition", lambda *_args, **_kwargs: {"approved": True, "findings": []})
         payload = exam_core.build_intelligent_exam_input(session, owner_public_id=learner.public_id, config=config, llm=GovernedLLM())
         assert payload.generation_context["external_model_used"] is True
         assert payload.generation_context["generation_mode"] == "llm"

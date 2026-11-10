@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import lru_cache
 from typing import Any, Literal
 
 from pydantic import ConfigDict, Field
@@ -16,7 +17,7 @@ from app.learning_aggregation import (
 )
 from app.m1_repository import add_artifact_version
 from app.m2_contracts import StrictModel
-from app.m5_resources import canonical_resource_type, parse_interactive_model_content
+from app.m5_resources import canonical_resource_type, parse_interactive_model_content, resource_generation_blocker
 
 
 LAB_INSTANCE_TYPE = "interactive_lab_instance"
@@ -74,8 +75,8 @@ class LabMetric(StrictModel):
     key: str
     label: str
     unit: str = ""
-    higher_is_better: bool
-    acceptance_threshold: float
+    higher_is_better: bool | None
+    acceptance_threshold: float | None
 
 
 class LabTemplate(StrictModel):
@@ -213,6 +214,145 @@ def _coverage_template(
 
 
 _TEMPLATES = {
+    "sample-frequency-estimation": _template({
+        "template_id": "sample-frequency-estimation", "template_version": "1.0.1",
+        "title": "样本频率与总体比例",
+        "summary": "重复抽取同一总体的样本，比较单次频率和多次抽样的波动。",
+        "skill_target": "用样本频率估计总体比例，解释样本量、抽样波动与下一次事件的不确定性。",
+        "applicability": "频率与概率估计、互补事件、独立同分布抽样和样本量；总体比例在教学模型中已知。",
+        "sweep_parameter_key": "sample_size",
+        "parameters": (
+            LabParameter(key="event_probability", label="设定的总体比例", kind="float", minimum=0, maximum=1, step=.01, default=.11,
+                description="教学总体中事件发生的概率p；每次试验独立且保持同一概率。真实业务中的总体比例需要估计。"),
+            LabParameter(key="sample_size", label="每组样本量", kind="integer", minimum=20, maximum=2000, step=20, default=100, unit="次",
+                description="每组独立试验的次数n；每次运行计算200组，每组按二项分布抽取事件计数。"),
+            LabParameter(key="sample_seed", label="抽样批次", kind="integer", minimum=1, maximum=20, step=1, default=7,
+                description="更换随机种子查看另一批样本；相同参数可复现。改变样本量会重新抽样，不是在同一组末尾追加记录。"),
+        ),
+        "metrics": (
+            LabMetric(key="event_count", label="第一组事件次数", unit="次", higher_is_better=None, acceptance_threshold=None),
+            LabMetric(key="sample_frequency", label="第一组频率", unit="%", higher_is_better=None, acceptance_threshold=None),
+            LabMetric(key="complement_frequency", label="第一组互补频率", unit="%", higher_is_better=None, acceptance_threshold=None),
+            LabMetric(key="mean_frequency", label="200组平均频率", unit="%", higher_is_better=None, acceptance_threshold=None),
+            LabMetric(key="frequency_sd", label="200组频率标准差", unit="百分点", higher_is_better=None, acceptance_threshold=None),
+            LabMetric(key="theoretical_se", label="理论频率标准差", unit="百分点", higher_is_better=None, acceptance_threshold=None),
+        ),
+        "public_scenarios": ("同一比例不同批次", "小样本与大样本的波动", "事件与互补事件"),
+        "checker_version": "lab.sample-frequency-estimation.v1",
+        "hidden_categories": ("sample_consistency",),
+        "static_fallback": "先计算两组事件次数除以各自总次数，写出对应的互补频率，再比较样本量。",
+    }),
+    "prediction-score-to-class": _template({
+        "template_id": "prediction-score-to-class", "template_version": "1.0.1",
+        "title": "从给定分数到分类结果",
+        "summary": "改变一个阈值，逐行核对六个教学样本的类别；分清给定分数、预测类别与真实标签。",
+        "skill_target": "按明确阈值判断类别，说明预测不读取真实标签，而核对预测是否正确需要真实标签。",
+        "applicability": "监督学习的输入与标签、分类任务、模型分数到类别的决策；不讲模型复杂度或训练调参。",
+        "sweep_parameter_key": "decision_threshold",
+        "parameters": (
+            LabParameter(key="decision_threshold", label="判为类别1的阈值", kind="float",
+                minimum=0, maximum=1, step=0.05, default=0.5,
+                description="给定分数大于或等于阈值判为1，否则判为0；不改变原分数，不重新训练。"),
+        ),
+        "metrics": (
+            LabMetric(key="predicted_positive", label="预测为1的样本", unit="个", higher_is_better=None, acceptance_threshold=None),
+            LabMetric(key="predicted_negative", label="预测为0的样本", unit="个", higher_is_better=None, acceptance_threshold=None),
+            LabMetric(key="matched_labels", label="与真实标签一致", unit="个", higher_is_better=True, acceptance_threshold=5),
+        ),
+        "public_scenarios": ("等于阈值的样本", "阈值提高后哪些类别变化", "判类后再核对真实标签"),
+        "checker_version": "lab.prediction-score-to-class.v2",
+        "hidden_categories": ("matched_labels",),
+        "static_fallback": "六个给定分数依次为0.20、0.40、0.50、0.60、0.80、0.90，真实标签依次为0、0、1、0、1、1。先遮住标签按阈值判类，再核对。",
+    }),
+    "inventory-demand-boundary": _template({
+        "template_id": "inventory-demand-boundary", "template_version": "1.0.0",
+        "title": "需求波动与交货期库存实验",
+        "summary": "用十天教学需求比较交货期内的供货与缺货，分别观察缺货延期和销售丢失。",
+        "skill_target": "理解平均需求不能保证不缺货，区分现货满足、延期交货与销售丢失。",
+        "applicability": "单店单品的随机需求、固定提前期、库存模型假设、缺货延期与销售丢失；不计算最优订货策略。",
+        "sweep_parameter_key": "initial_stock",
+        "parameters": (
+            LabParameter(key="initial_stock", label="现有库存", kind="integer", minimum=0, maximum=60, step=1, default=12, unit="件", description="每个交货期案例起点的现货；本轮结束前没有新货到达，也没有期初积欠。"),
+            LabParameter(key="lead_days", label="固定交货期", kind="integer", minimum=1, maximum=5, step=1, default=2, unit="天", description="每个案例均采用同一交货期；调整后比较另一组固定交货期，不模拟随机交货期。"),
+            LabParameter(key="demand_variation", label="需求波动倍数", kind="float", minimum=0, maximum=2, step=0.25, default=1, description="教学需求为5.5+倍数×(原需求−5.5)。倍数0表示每日5.5件，倍数1保留原波动；小数表示连续需求近似。"),
+            LabParameter(key="backorder", label="缺货处理（0丢失 / 1延期）", kind="integer", minimum=0, maximum=1, step=1, default=0, description="0：未满足需求成为丢失销售；1：全部保留为等待下一次交货的积欠。本实验不模拟下一次到货后的清偿。"),
+        ),
+        "metrics": (
+            LabMetric(key="immediate_fill_rate", label="现货满足比例", unit="%", higher_is_better=True, acceptance_threshold=95),
+            LabMetric(key="average_unmet", label="每个交货期平均未满足需求", unit="件", higher_is_better=False, acceptance_threshold=.5),
+            LabMetric(key="average_backlog", label="交货前平均积欠", unit="件", higher_is_better=False, acceptance_threshold=.5),
+            LabMetric(key="average_lost", label="平均丢失销售", unit="件", higher_is_better=False, acceptance_threshold=.5),
+        ),
+        "public_scenarios": ("每日相同需求", "平均值相同但需求波动", "较长的固定交货期", "缺货延期与销售丢失"),
+        "checker_version": "lab.inventory-demand-boundary.v1",
+        "hidden_categories": ("immediate_fill_rate", "average_unmet", "average_backlog", "average_lost"),
+        "static_fallback": "教学需求为4、6、5、7、5、6、4、8、5、5；可先在纸上比较相邻两天需求与12件现货。",
+    }),
+    "parallel-training-throughput": _template({
+        "template_id": "parallel-training-throughput", "template_version": "1.0.0",
+        "title": "并行计算与通信重叠实验",
+        "summary": "按串行比例、设备数和通信耗时计算一步训练用时，比较并行加速与通信重叠的收益。",
+        "skill_target": "解释并行加速为什么受串行部分和通信约束，区分理想上限与实际测量。",
+        "applicability": "计算性能、异步计算、并行训练、Amdahl定律、通信与计算重叠。",
+        "sweep_parameter_key": "devices",
+        "parameters": (
+            LabParameter(key="devices", label="计算设备数", kind="integer", minimum=1, maximum=16, step=1, default=4, unit="个", description="固定总工作量，增加参与并行计算的设备。"),
+            LabParameter(key="parallel_fraction", label="可并行比例", kind="float", minimum=0, maximum=1, step=0.05, default=0.9, description="单设备计算时间中可以均分到多设备的比例，其余部分仍需串行执行。"),
+            LabParameter(key="communication_seconds", label="每增加一台的通信耗时", kind="float", minimum=0, maximum=20, step=0.5, default=2, unit="秒", description="教学模型假设总通信耗时随额外设备数线性增加，不代表某种真实集群拓扑。"),
+            LabParameter(key="overlap_fraction", label="通信重叠比例", kind="float", minimum=0, maximum=1, step=0.05, default=0.5, description="被计算掩盖的通信比例；设为1代表理想的完全重叠。"),
+            LabParameter(key="serial_seconds", label="单设备计算耗时", kind="integer", minimum=20, maximum=200, step=10, default=100, unit="秒", description="相同工作量在单设备上完成计算的用时，不含跨设备通信。"),
+        ),
+        "metrics": (
+            LabMetric(key="step_seconds", label="一步训练耗时", unit="秒", higher_is_better=False, acceptance_threshold=40),
+            LabMetric(key="speedup", label="加速比", unit="倍", higher_is_better=True, acceptance_threshold=2),
+            LabMetric(key="parallel_efficiency", label="并行效率", higher_is_better=True, acceptance_threshold=0.65),
+        ),
+        "public_scenarios": ("单设备基线", "串行瓶颈", "无通信理想上限", "通信开销", "通信与计算重叠"),
+        "checker_version": "lab.parallel-training.hidden.v1", "hidden_categories": ("step_seconds", "speedup", "parallel_efficiency"),
+        "static_fallback": "可阅读Amdahl定律与通信说明；运行后查看本组参数的计算结果。",
+    }),
+    "exploratory-data-distribution": _template({
+        "template_id": "exploratory-data-distribution", "template_version": "1.0.0",
+        "title": "异常值与缺失数据观察实验",
+        "summary": "用30到70的41个合成观测值，比较高值异常和低值缺失怎样改变均值、中位数与数据完整性。",
+        "skill_target": "能够用实际统计量区分异常值影响和非随机缺失偏差，不把缺失或极端值一律删除。",
+        "applicability": "探索性数据分析、描述统计、均值、中位数、异常值与缺失模式。",
+        "sweep_parameter_key": "outlier_count",
+        "parameters": (
+            LabParameter(key="outlier_count", label="高值异常数量", kind="integer", minimum=0, maximum=8, step=1, default=2, unit="个", description="把原数据末尾的若干高值替换为指定异常值。"),
+            LabParameter(key="outlier_value", label="异常值大小", kind="integer", minimum=70, maximum=200, step=10, default=100, description="仅影响被替换的高值，其他观测值保持不变。"),
+            LabParameter(key="missing_count", label="低值缺失数量", kind="integer", minimum=0, maximum=8, step=1, default=2, unit="个", description="从原数据最低值开始移除若干观测，模拟非随机缺失，不用零代替缺失值。"),
+        ),
+        "metrics": (
+            LabMetric(key="mean_shift", label="均值偏移幅度", higher_is_better=False, acceptance_threshold=5),
+            LabMetric(key="median_shift", label="中位数偏移幅度", higher_is_better=False, acceptance_threshold=5),
+            LabMetric(key="available_fraction", label="保留观测比例", higher_is_better=True, acceptance_threshold=0.8),
+        ),
+        "public_scenarios": ("完整数据基线", "高值异常", "低值缺失", "均值与中位数对照"),
+        "checker_version": "lab.eda.hidden.v1", "hidden_categories": ("mean_shift", "median_shift", "available_fraction"),
+        "static_fallback": "可阅读统计方法；只有实际运行才能形成观察结果。",
+    }),
+    "sklearn-fit-predict": _template({
+        "template_id": "sklearn-fit-predict", "template_version": "1.0.0",
+        "title": "训练与预测接口实验",
+        "summary": "在固定的300条双月形合成数据上实际调用scikit-learn训练决策树，再预测一个新样本；只用验证集比较参数。",
+        "skill_target": "区分训练时的fit、预测时的predict和验证评分，理解训练量、树深度与新样本预测的关系。",
+        "applicability": "scikit-learn、sklearn、训练与推理接口、fit与predict。",
+        "sweep_parameter_key": "max_depth",
+        "parameters": (
+            LabParameter(key="max_depth", label="树的最大深度", kind="integer", minimum=1, maximum=10, step=1, default=3, description="每轮用相同数据重新训练，观察容量变化，不用验证集拟合。"),
+            LabParameter(key="training_samples", label="训练样本数量", kind="integer", minimum=40, maximum=240, step=40, default=160, unit="条", description="从固定240条训练池依次取样，另外60条验证数据始终不参与训练。"),
+            LabParameter(key="prediction_x", label="新样本第一维", kind="float", minimum=-2, maximum=3, step=0.25, default=1.5, description="新样本第二维固定为0.25；此参数只影响预测，不改变训练或验证得分。"),
+        ),
+        "metrics": (
+            LabMetric(key="training_score", label="训练准确率", higher_is_better=True, acceptance_threshold=0.75),
+            LabMetric(key="validation_score", label="验证准确率", higher_is_better=True, acceptance_threshold=0.75),
+            LabMetric(key="generalization_gap", label="训练与验证差距", higher_is_better=False, acceptance_threshold=0.2),
+        ),
+        "public_scenarios": ("训练后预测", "不同训练量", "浅树与深树", "改变新样本不重新选参"),
+        "checker_version": "lab.sklearn.hidden.v1", "hidden_categories": ("training_score", "validation_score", "generalization_gap"),
+        "static_fallback": "可阅读训练和预测方法；未运行时不产生模型分数。",
+    }),
     "rag-hybrid-tuning": _template({
         "template_id": "rag-hybrid-tuning",
         "template_version": "1.0.0",
@@ -296,7 +436,7 @@ _TEMPLATES = {
         "sweep_parameter_key": "model_complexity",
         "parameters": (
             LabParameter(key="model_complexity", label="模型复杂度", kind="integer", minimum=1, maximum=10, step=1, default=5, unit="级", description="表示模型能够表达的规则复杂程度。"),
-            LabParameter(key="training_samples", label="训练样本量", kind="integer", minimum=100, maximum=1000, step=100, default=500, unit="条", description="控制用于拟合模型的冻结样本数量。"),
+            LabParameter(key="training_samples", label="训练样本量", kind="integer", minimum=100, maximum=1000, step=100, default=500, unit="条", description="设置教学模拟中的样本规模；本页不加载数据进行真实训练。"),
             LabParameter(key="regularization", label="正则强度", kind="float", minimum=0, maximum=1, step=0.05, default=0.2, description="控制对过度复杂模型的惩罚强度。"),
         ),
         "metrics": (
@@ -583,6 +723,11 @@ _TEMPLATES.update({
 })
 
 
+from app.concept_labs import BY_ID as CONCEPT_LABS, template_specs as concept_template_specs
+
+_TEMPLATES.update({spec["template_id"]: _template(spec) for spec in concept_template_specs()})
+
+
 def list_templates() -> tuple[LabTemplate, ...]:
     return tuple(_TEMPLATES[key] for key in sorted(_TEMPLATES))
 
@@ -628,7 +773,7 @@ def validate_resource_template_content(content: Any) -> LabTemplate:
     for key, definition in expected.items():
         item = declared[key]
         if (
-            item.label != definition.label
+            not item.label.strip()
             or item.kind != definition.kind
             or item.unit != definition.unit
             or float(item.minimum) != float(definition.minimum)
@@ -643,13 +788,182 @@ def validate_resource_template_content(content: Any) -> LabTemplate:
         _fail("interactive_model_template_mismatch", "这份资源的结果指标与所选实验模板不一致，请重新生成可交互模型。")
     for key, definition in expected_series.items():
         item = declared_series[key]
-        if item.label != definition.label or item.unit != definition.unit or item.higherIsBetter != definition.higher_is_better:
+        if not item.label.strip() or item.unit != definition.unit or item.higherIsBetter != definition.higher_is_better:
             _fail("interactive_model_template_mismatch", "这份资源的结果指标定义与所选实验模板不一致，请重新生成可交互模型。")
     return template
 
 
+def experiment_execution_info(template_id: str) -> dict[str, str]:
+    """Describe the actual evaluator, independently of generated resource prose."""
+    if template_id in CONCEPT_LABS:
+        from app.concept_labs import execution_info
+        return execution_info(template_id)
+    if template_id == "sample-frequency-estimation":
+        return {
+            "mode": "synthetic_data_statistics", "label": "合成样本统计",
+            "description": "在设定比例的教学总体中，实际抽取200组二项计数并统计频率。",
+            "capabilities": "固定随机种子sample_seed，使用numpy.default_rng.binomial(n=sample_size,p=event_probability,size=200)。第一组展示事件计数、计数/n的频率和1−频率；另计算200组频率均值、样本标准差(ddof=1)，以及理论标准差sqrt(p*(1-p)/n)。比例与均值用百分数，标准差用百分点。反馈提供前10组事件计数及各组频率。曲线在相同p和种子下重抽不同n，比较分布波动；不是对同一组追加数据。总体p在此模拟已知；它不自动等于真实业务比例，单次频率不保证下一次结果。大样本降低同分布独立抽样下的理论波动，但某一次频率不必随n单调靠近p。",
+        }
+    if template_id == "prediction-score-to-class":
+        return {
+            "mode": "synthetic_data_statistics", "label": "教学样本逐行计算",
+            "description": "实际对六个给定教学分数逐行应用阈值，不训练模型，也不把分数自动解释为概率。",
+            "capabilities": "S1到S6的给定分数为[0.20,0.40,0.50,0.60,0.80,0.90]，真实标签为[0,0,1,0,1,1]。分数>=decision_threshold判为1，否则为0；反馈逐行给出分数、预测类别和真实标签。统计预测为1、预测为0以及与标签一致的个数，曲线扫描同一组分数的阈值。预测类别只使用给定分数与阈值；核对是否正确才读取标签。本页没有输入特征或训练步骤，不能声称已学习特征到标签的映射。分数落在[0,1]不证明它是概率；六行一致数不证明真实泛化能力，也不表示预测1越多或越少越好。",
+        }
+    if template_id == "inventory-demand-boundary":
+        return {
+            "mode": "synthetic_data_statistics", "label": "库存教学案例计算",
+            "description": "实际计算十天合成需求的十个循环交货期案例；不是店铺真实销量、未来概率预测或最优订货方案。",
+            "capabilities": "原需求[4,6,5,7,5,6,4,8,5,5]，均值5.5；每天变为5.5+demand_variation*(原值-5.5)。从每一天起循环取lead_days天求和，共十个等权案例，每例均从initial_stock开始，期内无补货、无期初积欠、仅单店单品。未满足量=max(交货期需求-现货,0)；现货满足比例=100*各例min(现货,需求)总和/各例需求总和；其余为十例均值。backorder=0将未满足量计为丢失销售，=1计为到货前积欠，模式不改变本期现货满足率。曲线仅扫描现有库存。不能从这些教学案例推出真实缺货概率、EOQ、再订货点、随机提前期或商品相关性。",
+        }
+    if template_id == "parallel-training-throughput":
+        return {
+            "mode": "teaching_simulation", "label": "并行耗时计算",
+            "description": "按Amdahl定律与线性通信模型计算固定工作量的用时，不启动多卡训练，也不代表真实硬件测速。",
+            "capabilities": "T=T1*((1-p)+p/n)+c*(n-1)*(1-o)；加速比=T1/T，并行效率=加速比/n。T1为单设备计算秒数，p为可并行比例，n为设备数，c为每增加一台的通信秒数，o为通信重叠比例。曲线只扫描设备数；不模拟梯度陈旧、收敛精度或真实通信拓扑。",
+        }
+    if template_id == "sklearn-fit-predict":
+        return {
+            "mode": "synthetic_data_training", "label": "合成数据训练",
+            "description": "本页实际训练固定的双月形合成数据：300条中240条作为训练池，60条只作验证；不会加载教材数据，结果不能视为真实业务效果。",
+            "capabilities": "实际使用make_moons(300,noise=0.25,random_state=42)，train_test_split(test_size=60,stratify=y,random_state=42)，DecisionTreeClassifier(max_depth,random_state=42)。训练取训练池前training_samples条；新样本为(prediction_x,0.25)，反馈展示predict类别与概率。曲线扫描树深度，评分只有训练准确率、验证准确率及二者差距绝对值。不提供测试分数、路径或不纯度操作。",
+        }
+    if template_id == "exploratory-data-distribution":
+        return {
+            "mode": "synthetic_data_statistics", "label": "合成数据统计",
+            "description": "本页实际计算30到70共41个合成观测值：替换末尾高值并移除开头低值，比较统计量；不会加载教材数据。",
+            "capabilities": "高值异常数量指定替换原数据末尾多少个值，替换值由异常值大小决定；低值缺失数量指定移除开头多少个值。实际计算均值、中位数相对50的偏移绝对值及保留比例，反馈展示均值与中位数；曲线扫描异常数量。不能声称执行自动清洗、插补或任意文件分析。",
+        }
+    return {
+        "mode": "teaching_simulation", "label": "教学模拟",
+        "description": "本页根据参数计算教学模拟趋势，不会加载这份数据进行真实训练；实际训练请使用关联代码练习。",
+        "capabilities": "只计算此模板声明的参数和模拟指标；不执行代码沙盒的训练、数据划分、决策路径或不纯度计算。",
+    }
+
+
+@lru_cache(maxsize=128)
+def _sklearn_training_run(depth: int, count: int):
+    from sklearn.datasets import make_moons
+    from sklearn.model_selection import train_test_split
+    from sklearn.tree import DecisionTreeClassifier
+
+    x, y = make_moons(n_samples=300, noise=0.25, random_state=42)
+    train_x, valid_x, train_y, valid_y = train_test_split(x, y, test_size=60, stratify=y, random_state=42)
+    model = DecisionTreeClassifier(max_depth=depth, random_state=42)
+    model.fit(train_x[:count], train_y[:count])
+    return model, model.score(train_x[:count], train_y[:count]), model.score(valid_x, valid_y)
+
+
 def _evaluate(template: LabTemplate, p: dict[str, float | int]) -> tuple[dict[str, float | int], tuple[str, ...]]:
-    if template.template_id == "rag-hybrid-tuning":
+    if template.template_id in CONCEPT_LABS:
+        from app.concept_labs import evaluate
+        return evaluate(template.template_id, p)
+    if template.template_id == "sample-frequency-estimation":
+        import math
+        import numpy as np
+        probability, count, seed = float(p["event_probability"]), int(p["sample_size"]), int(p["sample_seed"])
+        counts = np.random.default_rng(seed).binomial(count, probability, size=200)
+        frequencies = counts / count
+        return {
+            "event_count": int(counts[0]),
+            "sample_frequency": round(float(frequencies[0]) * 100, 6),
+            "complement_frequency": round((1 - float(frequencies[0])) * 100, 6),
+            "mean_frequency": round(float(frequencies.mean()) * 100, 6),
+            "frequency_sd": round(float(frequencies.std(ddof=1)) * 100, 6),
+            "theoretical_se": round(math.sqrt(probability * (1 - probability) / count) * 100, 6),
+        }, (
+            f"总体比例设为{probability:.0%}；每组{count}次独立试验，共200组。",
+            *tuple(f"第{i+1}组：事件{value}/{count}次，频率{value/count:.2%}。" for i,value in enumerate(counts[:10])),
+            "比较200组频率的分散程度与理论标准差，解释样本量对波动的影响。",
+            (f"总体比例设为{probability:.0%}，每次事件{'都不发生' if probability == 0 else '都发生'}；各组频率相同，标准差恒为0。"
+             if probability in (0, 1) else
+             "第一组频率是这组样本的结果；下一次事件仍按设定的总体概率发生。"),
+        )
+    if template.template_id == "prediction-score-to-class":
+        scores, labels = (.2, .4, .5, .6, .8, .9), (0, 0, 1, 0, 1, 1)
+        threshold = float(p["decision_threshold"])
+        predicted = [int(score >= threshold) for score in scores]
+        return {
+            "predicted_positive": sum(predicted), "predicted_negative": len(scores) - sum(predicted),
+            "matched_labels": sum(prediction == label for prediction, label in zip(predicted, labels)),
+        }, (
+            f"本次规则：分数≥{threshold:g}判为1，否则为0。",
+            *tuple(f"S{i}：给定分数{score:.2f} → 预测类别{prediction}；真实标签{label}。"
+                   for i, (score, prediction, label) in enumerate(zip(scores, predicted, labels), 1)),
+            "先遮住真实标签也能按分数判类；核对预测是否正确才需要标签。改变阈值不会改变给定分数。",
+            "这六行只用于练习判断，不能证明模型在新数据上可靠；分数在0到1之间也不自动成为概率。",
+        )
+    if template.template_id == "inventory-demand-boundary":
+        original = (4, 6, 5, 7, 5, 6, 4, 8, 5, 5)
+        demand = [5.5 + float(p["demand_variation"]) * (value - 5.5) for value in original]
+        lead = int(p["lead_days"])
+        totals = [sum(demand[(start + day) % len(demand)] for day in range(lead))
+                  for start in range(len(demand))]
+        stock = int(p["initial_stock"])
+        unmet = [max(total - stock, 0) for total in totals]
+        average_unmet = sum(unmet) / len(unmet)
+        backorder = bool(p["backorder"])
+        metrics = {
+            "immediate_fill_rate": round(100 * sum(min(stock, total) for total in totals) / sum(totals), 4),
+            "average_unmet": round(average_unmet, 4),
+            "average_backlog": round(average_unmet if backorder else 0, 4),
+            "average_lost": round(0 if backorder else average_unmet, 4),
+        }
+        feedback = (
+            f"十个教学案例的交货期需求为：{'、'.join(f'{value:g}' for value in totals)}件；每例从{stock}件现货开始。",
+            "延期模式把未满足需求保留到下一次交货；丢失模式不保留。切换模式本身不会增加本期现货或改善现货满足比例。",
+            "只改变一个条件比较结果；这里是单店单品的教学案例，不是店铺未来需求概率或最优库存。",
+        )
+    elif template.template_id == "parallel-training-throughput":
+        devices = int(p["devices"])
+        baseline = float(p["serial_seconds"])
+        parallel = float(p["parallel_fraction"])
+        communication = float(p["communication_seconds"]) * (devices - 1) * (1 - float(p["overlap_fraction"]))
+        elapsed = baseline * (1 - parallel + parallel / devices) + communication
+        speedup = baseline / elapsed
+        metrics = {"step_seconds": round(elapsed, 4), "speedup": round(speedup, 4),
+                   "parallel_efficiency": round(speedup / devices, 4)}
+        feedback = (
+            f"计算部分用时{elapsed - communication:.2f}秒，未被掩盖的通信耗时{communication:.2f}秒。",
+            "保持工作量不变，比较增加设备和提高通信重叠比例；串行部分不能随设备数增加而缩短。",
+        )
+    elif template.template_id == "exploratory-data-distribution":
+        from statistics import mean, median
+
+        values = list(range(30, 71))
+        outliers, missing = int(p["outlier_count"]), int(p["missing_count"])
+        if outliers:
+            values[-outliers:] = [int(p["outlier_value"])] * outliers
+        observed = values[missing:]
+        average, middle = mean(observed), median(observed)
+        metrics = {
+            "mean_shift": round(abs(average - 50), 4),
+            "median_shift": round(abs(middle - 50), 4),
+            "available_fraction": round(len(observed) / 41, 4),
+        }
+        feedback = (
+            f"完整合成数据均值和中位数均为50；本轮保留{len(observed)}个观测，均值{average:.4f}，中位数{middle:g}。",
+            "高值异常通常更明显地拉动均值；仅缺失低值也会使中心位置上移，不能假定缺失完全随机。",
+            "偏移以这份已知完整数据为基准，不代表实际数据的中心越低越好；先解释异常原因，再决定处理方式。",
+        )
+    elif template.template_id == "sklearn-fit-predict":
+        count = int(p["training_samples"])
+        model, training, validation = _sklearn_training_run(int(p["max_depth"]), count)
+        sample = [[float(p["prediction_x"]), 0.25]]
+        predicted = int(model.predict(sample)[0])
+        probabilities = model.predict_proba(sample)[0]
+        probability = float(probabilities[list(model.classes_).index(predicted)])
+        metrics = {
+            "training_score": round(float(training), 4), "validation_score": round(float(validation), 4),
+            "generalization_gap": round(abs(float(training - validation)), 4),
+        }
+        feedback = (
+            f"已实际用{count}条合成训练样本调用fit；另60条固定验证样本只用于score，没有参与拟合。",
+            f"predict对新样本({sample[0][0]:g}, 0.25)给出类别{predicted}；该类预测概率为{probability:.1%}，不等于预测一定正确。",
+            "改变新样本第一维只影响预测结果；比较树深度使用验证分数，本实验没有提供可反复用于调参的最终测试分数。",
+            "这是固定合成数据的教学实验，分数不代表真实课程数据或生产模型效果。",
+        )
+    elif template.template_id == "rag-hybrid-tuning":
         recall = 0.56 + min(int(p["top_k"]), 6) * 0.04 - abs(float(p["keyword_weight"]) - 0.4) * 0.2
         ranking = 0.62 + float(p["rerank_threshold"]) * 0.2 - abs(float(p["vector_weight"]) - 0.6) * 0.3
         metrics = {
@@ -836,7 +1150,17 @@ def _computed_series(template: LabTemplate, p: dict[str, float | int]) -> tuple[
 
 def _hidden(template: LabTemplate, state: LabState) -> HiddenLabResult:
     m, p = state.metrics or {}, state.parameters
-    if template.template_id == "rag-hybrid-tuning":
+    if template.template_id in CONCEPT_LABS:
+        import math
+        checks = {"finite_computation": bool(m) and all(math.isfinite(float(value)) for value in m.values())}
+    elif template.template_id == "sample-frequency-estimation":
+        checks = {"sample_consistency": (
+            0 <= m["event_count"] <= p["sample_size"]
+            and abs(m["sample_frequency"] - 100 * m["event_count"] / p["sample_size"]) < 1e-5
+            and abs(m["sample_frequency"] + m["complement_frequency"] - 100) < 1e-5
+            and m["frequency_sd"] >= 0 and m["theoretical_se"] >= 0
+        )}
+    elif template.template_id == "rag-hybrid-tuning":
         checks = {
             "retrieval_quality": float(m["recall_at_k"]) >= 0.72 and 4 <= int(p["top_k"]) <= 6,
             "ranking_quality": float(m["ranking_score"]) >= 0.71,
@@ -858,6 +1182,7 @@ def _hidden(template: LabTemplate, state: LabState) -> HiddenLabResult:
                 else float(m[definition.key]) <= definition.acceptance_threshold
             )
             for definition in template.metrics
+            if definition.higher_is_better is not None and definition.acceptance_threshold is not None
         }
     failures = tuple(key for key, passed in checks.items() if not passed)
     return HiddenLabResult(
@@ -874,6 +1199,8 @@ def _resource_contract(
         _fail("lab_source_resource_unknown", "interactive model resource does not exist")
     if artifact.owner_public_id != owner:
         _fail("lab_source_resource_forbidden", "interactive model resource belongs to another owner")
+    if reason := resource_generation_blocker(db, artifact):
+        _fail("resource_generation_incomplete", reason)
     version = db.get(DBArtifactVersion, artifact.current_version_id)
     metadata = dict(version.metadata_json or {}) if version else {}
     if version is None or canonical_resource_type(artifact.artifact_type, metadata) != "interactive_model":
@@ -1035,6 +1362,10 @@ def apply_action(
         result = instance_payload(artifact, action_version, LabState.model_validate_json(action_version.content))
         result["learning_evidence"] = {"created": False, "event_id": None}
         return result, False
+    if state.source_resource_id:
+        source = db.get(DBArtifact, state.source_resource_id)
+        if source and (reason := resource_generation_blocker(db, source, state.source_resource_version_id)):
+            _fail("resource_generation_incomplete", reason)
     if version.version_number != expected_version:
         _fail("lab_version_conflict", "interactive lab instance has changed")
     template = get_template(state.template_id)
@@ -1054,8 +1385,8 @@ def apply_action(
         if state.status != "evaluated":
             _fail("lab_transition_invalid", "submit requires evaluated state")
         if state.source_resource_id:
-            clean_observation = " ".join(str(observation or "").split())
-            if len(clean_observation) < state.observation_minimum_characters:
+            clean_observation = str(observation or "").strip()
+            if len(" ".join(clean_observation.split())) < state.observation_minimum_characters:
                 _fail(
                     "lab_observation_required",
                     f"observation must contain at least {state.observation_minimum_characters} characters",
@@ -1069,7 +1400,15 @@ def apply_action(
         if state.status not in {"evaluated", "needs_retry"}:
             _fail("lab_transition_invalid", "hint requires an observable result")
         data["hint_count"] = state.hint_count + 1
-        data["feedback"] = tuple(state.feedback) + ("提示已记录：使用提示会降低本次学习证据强度。",)
+        if template.template_id == "sklearn-fit-predict":
+            hint = "先固定训练样本量，对比浅树和较深的树；记录训练与验证准确率。再固定这两个设置，只改变新样本，检查预测是否变化、验证分数是否保持不变。"
+        elif template.template_id == "exploratory-data-distribution":
+            hint = "先把异常和缺失数量都设为0，核对均值与中位数均为50；只加入一个高值异常，比较哪个统计量变化更大，再单独试低值缺失。"
+        else:
+            sweep = next(item for item in template.parameters if item.key == template.sweep_parameter_key)
+            hint = f"先保持其他参数不变，只调整“{sweep.label}”；对比两次“{template.metrics[0].label}”的结果，结合实验条件解释变化，不能只记录哪个数更大。"
+        if hint not in state.feedback:
+            data["feedback"] = tuple(state.feedback) + (hint,)
     elif action == "reset":
         defaults = {item.key: int(item.default) if item.kind == "integer" else item.default for item in template.parameters}
         data.update(status="configured", attempt=state.attempt + 1, parameters=defaults, metrics=None,
@@ -1088,7 +1427,8 @@ def apply_action(
                                                   "source_resource_version_id": next_state.source_resource_version_id})
     evidence = {"created": False, "event_id": None}
     if action == "submit" and next_state.source_resource_id:
-        strength = 0.65 if next_state.hint_count == 0 else 0.45
+        # Parameter runs and ungraded prose prove participation, not correctness.
+        strength = 0.0
         event = DBLearningEvent(
             id=event_id,
             owner_public_id=owner,
@@ -1110,13 +1450,14 @@ def apply_action(
                 "source_ref_ids": list(next_state.source_ref_ids),
             },
             evidence_strength=strength,
-            evidence_status="accepted",
-            evidence_reason="学习者完成确定性参数实验并提交了观察结论。",
-            mastery_eligible=True,
-            completion_effect="complete",
+            evidence_status="none",
+            evidence_reason="实验观察已保存；理解程度由后续作答或复述评价确认",
+            mastery_eligible=False,
+            completion_effect="progress",
             payload_version="f6.interactive-model-observation.v1",
             payload={
                 "request_sha256": request_hash,
+                "evidence_kind": "guided_practice",
                 "result_version_id": next_version.id,
                 "template_id": template.template_id,
                 "parameters": next_state.parameters,

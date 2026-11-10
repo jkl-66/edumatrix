@@ -1,4 +1,5 @@
 <script setup>
+import { displayLabel, learningText, referenceTitle } from '../utils/learningCopy.js'
 import { computed, onMounted, ref } from 'vue'
 import {
   BookOpenText,
@@ -21,9 +22,11 @@ import {
   getContentReviewCase,
   getContentReviewQueue,
 } from '../api/contentReview'
+import { getMarketplaceWorkspace, getMarketplaceListing, reviewMarketplaceListing } from '../api/marketplace'
+import { reviewContentText } from '../utils/reviewContentText.js'
 
 const statusOptions = [
-  { value: '', label: '全部案件' },
+  { value: '', label: '全部状态' },
   { value: 'pending', label: '待审核' },
   { value: 'changes_requested', label: '待返工' },
   { value: 'approved', label: '待发布' },
@@ -56,6 +59,7 @@ const loadError = ref('')
 const actionError = ref('')
 const recoveryMessage = ref('')
 const filter = ref('')
+const queueSource = ref('content')
 const items = ref([])
 const selectedId = ref('')
 const detail = ref(null)
@@ -81,7 +85,24 @@ const actions = computed(() => {
   return []
 })
 
-const reasonReady = computed(() => reason.value.trim().length >= 4)
+const reasonMinimum = computed(() => queueSource.value === 'marketplace' ? 8 : 4)
+const reasonReady = computed(() => reason.value.trim().length >= reasonMinimum.value)
+
+function marketplaceCase(item) {
+  return {
+    ...item,
+    artifact: { title: item.title, type: item.preview?.resource_type || item.item_type },
+    version: { number: null, format: item.preview?.content_format || item.item_type, preview: item.preview?.summary || item.summary },
+    submission_note: item.summary,
+    submitted_at: item.created_at,
+  }
+}
+
+async function fetchCase(caseId) {
+  return queueSource.value === 'marketplace'
+    ? marketplaceCase(await getMarketplaceListing(caseId))
+    : getContentReviewCase(caseId)
+}
 
 function errorMessage(error, fallback) {
   const value = error?.detail || error?.message
@@ -103,7 +124,7 @@ function formatDate(value) {
 
 function sourceLabel(sourceRefId) {
   const source = detail.value?.evidence?.sources?.find((item) => item.id === sourceRefId)
-  return source?.document_title || sourceRefId || '未关联来源'
+  return source?.document_title || '提交时保存的课程内容'
 }
 
 async function loadCase(caseId, { keepPrevious = true } = {}) {
@@ -115,7 +136,7 @@ async function loadCase(caseId, { keepPrevious = true } = {}) {
   detailLoading.value = true
   actionError.value = ''
   try {
-    detail.value = await getContentReviewCase(caseId)
+    detail.value = await fetchCase(caseId)
   } catch (error) {
     actionError.value = errorMessage(error, '案件详情加载失败，已保留当前内容')
   } finally {
@@ -130,8 +151,13 @@ async function loadQueue({ quiet = false, preserveReason = true } = {}) {
   const pendingReason = reason.value
   const previousId = selectedId.value
   try {
-    const response = await getContentReviewQueue(filter.value)
-    items.value = response.items || []
+    if (queueSource.value === 'marketplace') {
+      const response = await getMarketplaceWorkspace()
+      items.value = (response.managed || []).filter(item => !filter.value || item.status === filter.value).map(marketplaceCase)
+    } else {
+      const response = await getContentReviewQueue(filter.value)
+      items.value = response.items || []
+    }
     const nextId = items.value.some((item) => item.id === previousId)
       ? previousId
       : items.value[0]?.id || ''
@@ -168,12 +194,14 @@ async function changeFilter() {
 async function recoverConflict() {
   const pendingReason = reason.value
   try {
-    const latest = await getContentReviewCase(selectedId.value)
+    const latest = await fetchCase(selectedId.value)
     detail.value = latest
     items.value = items.value.map((item) => item.id === latest.id ? latest : item)
     reason.value = pendingReason
     actionError.value = ''
-    recoveryMessage.value = '案件已更新到最新版本，未提交的审核理由仍保留，请核对后再次操作。'
+    recoveryMessage.value = actions.value.length
+      ? '案件已更新到最新版本，未提交的审核理由仍保留，请核对后再次操作。'
+      : '此内容已由其他管理员处理。未提交的审核理由仍保留在下方，请核对最新决定。'
   } catch (error) {
     actionError.value = errorMessage(error, '刷新失败，未提交的审核理由仍保留')
   }
@@ -185,7 +213,8 @@ async function act(action) {
   actionError.value = ''
   recoveryMessage.value = ''
   try {
-    await decideContentReview(detail.value.id, {
+    const decide = queueSource.value === 'marketplace' ? reviewMarketplaceListing : decideContentReview
+    await decide(detail.value.id, {
       action,
       reason: reason.value.trim(),
       expected_version: detail.value.lock_version,
@@ -208,7 +237,7 @@ onMounted(() => loadQueue())
   <main class="review-page" data-testid="content-review-page">
     <PageHeader
       title="内容审核"
-      description="选择一个待办，核对冻结版本、来源和校验结果，再完成返工、批准、发布或下架。"
+      
     >
       <template #actions>
         <button
@@ -242,6 +271,13 @@ onMounted(() => loadQueue())
 
     <section v-else class="review-workspace" aria-label="内容审核工作区">
       <aside class="case-panel" aria-label="审核案件列表">
+        <div class="case-toolbar">
+          <label for="review-source">审核范围</label>
+          <select id="review-source" v-model="queueSource" :disabled="Boolean(busy)" @change="changeFilter">
+            <option value="content">课程内容</option>
+            <option value="marketplace">学习市场</option>
+          </select>
+        </div>
         <div class="case-toolbar">
           <div>
             <strong>审核队列</strong>
@@ -277,7 +313,7 @@ onMounted(() => loadQueue())
           >
             <span class="case-copy">
               <strong>{{ item.artifact.title }}</strong>
-              <small>{{ item.artifact.type }} · 版本 {{ item.version.number }}</small>
+              <small>{{ displayLabel(item.artifact.type) }} · {{ item.version.number ? `版本 ${item.version.number}` : '提交时保存的版本' }}</small>
             </span>
             <span class="case-status">{{ statusLabel(item.status) }}</span>
             <ChevronRight :size="17" aria-hidden="true" />
@@ -290,7 +326,7 @@ onMounted(() => loadQueue())
           v-if="detailLoading && !detail"
           state="loading"
           title="正在读取审核详情"
-          message="冻结版本和来源记录正在载入。"
+          message="正在加载提交内容与来源。"
         />
         <TaskState
           v-else-if="actionError && !detail"
@@ -303,7 +339,7 @@ onMounted(() => loadQueue())
         <div v-else-if="!selectedSummary" class="detail-empty">
           <ShieldCheck :size="34" aria-hidden="true" />
           <h2>从左侧选择一个审核案件</h2>
-          <p>案件详情会显示冻结版本、来源定位、校验结论和可执行动作。</p>
+          <p>选择待审核内容。</p>
         </div>
 
         <template v-else-if="detail">
@@ -327,7 +363,7 @@ onMounted(() => loadQueue())
               <span class="status-text">{{ statusLabel(detail.status) }}</span>
               <h2>{{ detail.artifact.title }}</h2>
               <p>
-                {{ detail.artifact.type }} · 冻结版本 {{ detail.version.number }} ·
+                {{ displayLabel(detail.artifact.type) }} · {{ detail.version.number ? `版本 ${detail.version.number}` : '提交时保存的版本' }} ·
                 提交于 {{ formatDate(detail.submitted_at) }}
               </p>
             </div>
@@ -337,11 +373,7 @@ onMounted(() => loadQueue())
           <dl class="version-meta">
             <div>
               <dt>内容格式</dt>
-              <dd>{{ detail.version.format }}</dd>
-            </div>
-            <div>
-              <dt>版本摘要</dt>
-              <dd :title="detail.version.content_hash">{{ detail.version.content_hash.slice(0, 16) }}…</dd>
+              <dd>{{ displayLabel(detail.version.format) }}</dd>
             </div>
             <div>
               <dt>提交说明</dt>
@@ -353,14 +385,28 @@ onMounted(() => loadQueue())
             <div class="section-heading">
               <div>
                 <h3>版本内容</h3>
-                <p>以下内容来自当前冻结版本，审核动作不会改写它。</p>
+                
               </div>
               <BookOpenText :size="19" aria-hidden="true" />
             </div>
-            <pre>{{ detail.version.preview }}</pre>
+            <template v-if="detail.review_contents?.length">
+              <article v-for="(part, index) in detail.review_contents" :key="index">
+                <h4>{{ part.title }}</h4>
+                <pre>{{ reviewContentText(part.content) }}</pre>
+              </article>
+            </template>
+            <pre v-else>{{ reviewContentText(detail.version.content || detail.version.preview) }}</pre>
           </section>
 
-          <section class="review-section evidence-section">
+          <section v-if="queueSource === 'marketplace'" class="review-section evidence-section">
+            <h3>分享来源</h3>
+            <p>{{ detail.provenance?.course_title }}</p>
+            <p>{{ detail.provenance?.source_label }}</p>
+            <p>{{ detail.provenance?.license_label }}</p>
+            <p>正在审核提交时的版本。</p>
+          </section>
+
+          <section v-else class="review-section evidence-section">
             <div class="section-heading">
               <div>
                 <h3>来源与检查</h3>
@@ -395,10 +441,7 @@ onMounted(() => loadQueue())
                 <h4>质量检查</h4>
                 <div v-if="detail.evidence.quality_checks?.length" class="check-list">
                   <article v-for="check in detail.evidence.quality_checks" :key="check.id" class="check-row">
-                    <div>
-                      <strong>{{ check.type }}</strong>
-                      <span>{{ statusLabel(check.status) }} · 检查器 {{ check.checker_version }}</span>
-                    </div>
+
                     <span>{{ check.score == null ? '未评分' : `${Math.round(check.score * 100)} 分` }}</span>
                   </article>
                 </div>
@@ -407,8 +450,8 @@ onMounted(() => loadQueue())
                 <h4 class="claim-heading">声明支持</h4>
                 <div v-if="detail.evidence.claim_checks?.length" class="check-list">
                   <article v-for="claim in detail.evidence.claim_checks" :key="claim.id" class="claim-row">
-                    <strong>{{ claim.claim }}</strong>
-                    <span>{{ claim.support_status }} · {{ sourceLabel(claim.source_ref_id) }}</span>
+                    <strong>{{ learningText(claim.claim) }}</strong>
+                    <span>{{ displayLabel(claim.support_status) }} · {{ sourceLabel(claim.source_ref_id) }}</span>
                   </article>
                 </div>
                 <p v-else class="inline-empty">尚无声明校验记录。</p>
@@ -416,7 +459,7 @@ onMounted(() => loadQueue())
             </div>
           </section>
 
-          <details class="agent-audit">
+          <details v-if="detail.agent_audit?.items?.length" class="agent-audit">
             <summary>
               <span>
                 <strong>公开校验摘要</strong>
@@ -431,22 +474,22 @@ onMounted(() => loadQueue())
                   <span>{{ statusLabel(item.status) }}</span>
                 </header>
                 <dl>
-                  <div v-if="item.inputRefs?.length"><dt>来源</dt><dd>{{ item.inputRefs.join('、') }}</dd></div>
-                  <div v-if="item.candidateSummary"><dt>候选</dt><dd>{{ item.candidateSummary }}</dd></div>
-                  <div v-if="item.disagreement"><dt>分歧</dt><dd>{{ item.disagreement }}</dd></div>
-                  <div v-if="item.validation"><dt>校验</dt><dd>{{ item.validation }}</dd></div>
-                  <div v-if="item.revision"><dt>修订</dt><dd>{{ item.revision }}</dd></div>
-                  <div v-if="item.decisionSummary"><dt>决定</dt><dd>{{ item.decisionSummary }}</dd></div>
+                  <div v-if="item.inputRefs?.length"><dt>来源</dt><dd>{{ item.inputRefs.map(sourceLabel).join('、') }}</dd></div>
+                  <div v-if="item.candidateSummary"><dt>候选</dt><dd>{{ learningText(item.candidateSummary) }}</dd></div>
+                  <div v-if="item.disagreement"><dt>分歧</dt><dd>{{ learningText(item.disagreement) }}</dd></div>
+                  <div v-if="item.validation"><dt>校验</dt><dd>{{ learningText(item.validation) }}</dd></div>
+                  <div v-if="item.revision"><dt>修订</dt><dd>{{ learningText(item.revision) }}</dd></div>
+                  <div v-if="item.decisionSummary"><dt>决定</dt><dd>{{ learningText(item.decisionSummary) }}</dd></div>
                 </dl>
               </article>
             </div>
           </details>
 
-          <section v-if="actions.length" class="decision-section" aria-label="审核决定">
+          <section v-if="actions.length || reason" class="decision-section" aria-label="审核决定">
             <div class="section-heading">
               <div>
-                <h3>作出审核决定</h3>
-                <p>说明实际依据。理由会写入不可变责任记录，至少填写 4 个字符。</p>
+                <h3>{{ actions.length ? '作出审核决定' : '保留的未提交理由' }}</h3>
+                <p>{{ actions.length ? `说明审核依据，至少填写 ${reasonMinimum} 个字符。` : '最新决定已保存。下面是你尚未提交的文字，可核对或复制；它没有覆盖已保存的审核意见。' }}</p>
               </div>
             </div>
             <label class="reason-field">
@@ -482,8 +525,8 @@ onMounted(() => loadQueue())
               <article v-for="entry in detail.decisions" :key="entry.id">
                 <span>{{ statusLabel(entry.to_status) }}</span>
                 <div>
-                  <strong>{{ entry.actor_role }} · {{ entry.actor_public_id }}</strong>
-                  <p>{{ entry.reason }}</p>
+                  <strong>{{ displayLabel(entry.actor_role) }} · {{ referenceTitle(entry) }}</strong>
+                  <p>{{ learningText(entry.reason) }}</p>
                   <small>{{ formatDate(entry.created_at) }}</small>
                 </div>
               </article>
@@ -685,7 +728,7 @@ onMounted(() => loadQueue())
 
 .version-meta {
   display: grid;
-  grid-template-columns: 140px 180px minmax(0, 1fr);
+  grid-template-columns: 140px minmax(0, 1fr);
   margin: 0;
   padding: 14px 0;
   border-bottom: 1px solid var(--color-border);
@@ -1048,7 +1091,7 @@ button:disabled {
   }
 
   .version-meta {
-    grid-template-columns: 120px 160px minmax(0, 1fr);
+    grid-template-columns: 120px minmax(0, 1fr);
   }
 }
 </style>

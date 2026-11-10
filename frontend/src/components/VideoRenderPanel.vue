@@ -1,4 +1,5 @@
 <script setup>
+import { userMessage } from '../services/errorTranslator.js'
 import { ref, watch, computed } from 'vue'
 import { Video, Loader2, Play, Pause, Maximize2, Minimize2, Volume2, VolumeX, Film, ChevronLeft, ChevronRight, FolderOpen } from '@lucide/vue'
 import { listAllAnimations } from '../api'
@@ -190,7 +191,7 @@ function formatSize(bytes) {
 
       <!-- Error -->
       <div v-else-if="error" class="flex flex-col items-center justify-center py-20 px-6 text-center">
-        <p class="text-red-500 text-sm">{{ error }}</p>
+        <p class="text-red-500 text-sm">{{ userMessage(error) }}</p>
         <p class="text-gray-400 text-xs mt-2">请确认后端已启动且 data/animations/ 下有视频文件</p>
       </div>
 

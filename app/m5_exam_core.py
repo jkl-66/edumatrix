@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from app.source_refs import current_chapter_clause
+
 import csv
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from copy import copy
 import hashlib
 import io
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import Field, model_validator
@@ -18,7 +22,7 @@ from app.database import (
     DBAssessmentAttempt, DBAssessmentExam, DBAssessmentExamItem,
     DBAssessmentExamReport, DBAssessmentExamResponse, DBAssessmentExamResponseDraft,
     DBAssessmentExamSitting,
-    DBAssessmentExamVersion, DBAssessmentGradingResult, DBAssessmentQuestion,
+    DBAssessmentExamVersion, DBAssessmentGenerationReview, DBAssessmentGradingResult, DBAssessmentQuestion,
     DBAssessmentQuestionVersion, DBAssessmentReviewCase, DBChapter,
     DBChapterKnowledgePoint, DBCourse, DBKnowledgePoint, DBLearningEvent,
     DBProfileSnapshot, DBSourceDocument, DBSourceRef,
@@ -29,9 +33,10 @@ from app.m5_assessment_core import (
     AIGradingOutput,
     AttemptInput, QuestionVersionInput, create_grading_result, create_question_version,
     ai_grading_prompt, grading_result_payload, learner_correct_answer, learner_option_texts, learner_safe_explanation,
-    learner_topic_title,
+    learner_topic_title, learner_question_content_issue, learner_explanation_has_content,
+    validate_question_version, AssessmentCoreError,
     learner_safe_prompt, persist_ai_grading,
-    persist_failed_ai_grading, record_attempt,
+    persist_failed_ai_grading, record_attempt, grade_code_submission, persist_code_grading,
 )
 from app.m5_capabilities import Capability, M5CapabilityError, OutputConstraints
 from app.m5_gateway import execute_registered_structured_call
@@ -41,6 +46,18 @@ class FormalExamError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+class ExamCompositionFinding(StrictModel):
+    question_positions: tuple[int, ...] = Field(min_length=1)
+    issue: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+    fix: str = Field(min_length=1)
+
+
+class ExamCompositionReview(StrictModel):
+    approved: bool
+    findings: tuple[ExamCompositionFinding, ...] = ()
 
 
 def _fail(code: str, message: str) -> None:
@@ -79,7 +96,8 @@ def _run_async(coro):
     except RuntimeError:
         return asyncio.run(coro)
     with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
+        from contextvars import copy_context
+        return pool.submit(copy_context().run, asyncio.run, coro).result()
 
 
 def _require_exam_model(llm: Any) -> None:
@@ -110,6 +128,10 @@ def _validate_llm_exam_output(
     expected_counts = {key: int(value) for key, value in config.question_type_counts.items() if int(value)}
     actual_counts: dict[str, int] = {}
     allowed_points = {str(item["id"]) for item in blueprint.get("knowledge_points", [])}
+    point_titles = {
+        str(item["id"]): str(item.get("title") or "")
+        for item in blueprint.get("knowledge_points", [])
+    }
     allowed_sources = set(str(item) for item in blueprint.get("source_ref_ids", []))
     for question in output.questions:
         actual_counts[question.question_type] = actual_counts.get(question.question_type, 0) + 1
@@ -119,6 +141,24 @@ def _validate_llm_exam_output(
             _fail("intelligent_exam_llm_source_invalid", "模型题目引用了当前课程范围之外的来源")
         if not question.source_ref_ids:
             _fail("intelligent_exam_llm_source_missing", "模型题目必须绑定课程来源")
+        try:
+            validate_question_version(question.question_type, QuestionVersionInput(
+                **question.model_dump(exclude={"question_type"}),
+            ))
+        except AssessmentCoreError:
+            _fail("intelligent_exam_llm_question_invalid", "这次题目缺少完整的作答内容，请重新生成。")
+        if not learner_explanation_has_content(
+            question.explanation,
+            prompt=question.prompt,
+            options=question.options,
+            answer_key=question.answer_key,
+            question_type=question.question_type,
+            knowledge_point=point_titles.get(question.primary_knowledge_point_id, ""),
+        ):
+            _fail(
+                "intelligent_exam_llm_explanation_missing",
+                "这次组卷没有生成完整的题目讲解，请重新生成。",
+            )
         if question.question_type in {"short_answer"}:
             criteria = question.scoring_rule.get("criteria") if isinstance(question.scoring_rule, dict) else None
             if not str(question.answer_key.get("reference_answer", "")).strip() or not isinstance(criteria, list) or not criteria:
@@ -146,7 +186,7 @@ class ExamCreateInput(StrictModel):
     configuration: dict[str, Any] = Field(default_factory=dict)
     generation_context: dict[str, Any] = Field(default_factory=dict)
     coverage: dict[str, Any] = Field(default_factory=dict)
-    items: tuple[ExamItemInput, ...] = Field(min_length=1, max_length=200)
+    items: tuple[ExamItemInput, ...] = Field(min_length=1)
 
 
 class FormalResponseInput(StrictModel):
@@ -169,22 +209,22 @@ class IntelligentExamConfigInput(StrictModel):
     title: str = Field(default="今日智能组卷", min_length=1, max_length=256)
     theme: str = Field(default="今日学习检验", min_length=1, max_length=256)
     duration_minutes: int = Field(default=45, ge=5, le=240)
-    chapter_ids: tuple[str, ...] = Field(default=(), max_length=50)
-    knowledge_point_ids: tuple[str, ...] = Field(default=(), max_length=100)
+    chapter_ids: tuple[str, ...] = ()
+    knowledge_point_ids: tuple[str, ...] = ()
     difficulty: Literal["easy", "balanced", "challenging", "adaptive"] = "adaptive"
     question_type_counts: dict[str, int] = Field(default_factory=dict)
-    source_limit: int = Field(default=8, ge=1, le=30)
+    source_limit: int | None = Field(default=None, ge=1, description="旧客户端兼容字段；已选范围的来源完整参与组卷")
 
     @model_validator(mode="after")
     def valid_counts(self) -> "IntelligentExamConfigInput":
         unknown = sorted(set(self.question_type_counts) - set(LEARNER_EXAM_TYPES))
         if unknown:
             raise ValueError(f"unsupported learner exam question types: {unknown}")
-        if any(not isinstance(value, int) or value < 0 or value > 50 for value in self.question_type_counts.values()):
-            raise ValueError("question type counts must be integers between 0 and 50")
+        if any(not isinstance(value, int) or value < 0 for value in self.question_type_counts.values()):
+            raise ValueError("question type counts must be nonnegative integers")
         total = sum(self.question_type_counts.values())
-        if total < 1 or total > 100:
-            raise ValueError("intelligent exam requires 1 to 100 questions")
+        if total < 1:
+            raise ValueError("intelligent exam requires at least one question")
         return self
 
 
@@ -194,19 +234,19 @@ class IntelligentExamQuestionOutput(StrictModel):
     question_type: Literal[
         "single_choice", "multiple_choice", "true_false", "fill_blank", "short_answer"
     ]
-    prompt: str = Field(min_length=1, max_length=20000)
+    prompt: str = Field(min_length=1)
     options: tuple[str, ...] = Field(default=(), max_length=20)
     answer_key: dict[str, Any]
     scoring_rule: dict[str, Any]
-    explanation: str = Field(default="", max_length=20000)
+    explanation: str = Field(min_length=1)
     primary_knowledge_point_id: str = Field(min_length=1, max_length=64)
-    source_ref_ids: tuple[str, ...] = Field(min_length=1, max_length=16)
+    source_ref_ids: tuple[str, ...] = Field(min_length=1)
     bloom_level: Literal["remember", "understand", "apply", "analyze", "evaluate", "create"] = "understand"
     expert_difficulty: float = Field(default=0.5, ge=0, le=1)
 
 
 class IntelligentExamGenerationOutput(StrictModel):
-    questions: tuple[IntelligentExamQuestionOutput, ...] = Field(min_length=1, max_length=100)
+    questions: tuple[IntelligentExamQuestionOutput, ...] = Field(min_length=1)
 
 
 class HumanReviewInput(StrictModel):
@@ -233,6 +273,9 @@ def create_exam(
         question = session.query(DBAssessmentQuestion).filter_by(id=version.question_id).one()
         if question.status != "approved" or question.course_id != payload.course_id:
             _fail("exam_question_forbidden", "exam questions must be approved in the same course")
+        issue = learner_question_content_issue(version, question)
+        if issue:
+            _fail("question_content_incomplete", issue)
         validated.append((position, item, version))
     exam = DBAssessmentExam(
         course_id=payload.course_id, owner_public_id=owner_public_id,
@@ -253,7 +296,7 @@ def create_exam(
     version = DBAssessmentExamVersion(
         exam_id=exam.id, version_number=1, instructions=payload.instructions,
         feedback_policy=payload.feedback_policy,
-        total_points=sum(item.points for item in payload.items),
+        total_points=float(sum(Decimal(str(item.points)) for item in payload.items)),
         manifest_hash=_hash(manifest), configuration=payload.configuration,
         generation_context=payload.generation_context, coverage=payload.coverage,
         created_by_public_id=owner_public_id,
@@ -303,7 +346,7 @@ def intelligent_exam_context(
     from course_catalog import course_is_selectable
     if not course_is_selectable(session, course):
         _fail("course_unavailable", "course has no usable learning material")
-    chapters = session.query(DBChapter).filter_by(course_id=course_id).order_by(
+    chapters = session.query(DBChapter).filter_by(course_id=course_id).filter(current_chapter_clause()).order_by(
         DBChapter.position, DBChapter.id,
     ).all()
     chapter_ids = [row.id for row in chapters]
@@ -386,6 +429,16 @@ def _exam_recent_event_cursor(events: list[DBLearningEvent]) -> str:
     ])
 
 
+def _equal_exam_points(count: int) -> list[float]:
+    """Distribute rounding across items; no zero or negative final question."""
+    from decimal import Decimal
+    precision = max(2, len(str(count)))
+    units = 100 * 10 ** precision
+    share, remainder = divmod(units, count)
+    scale = Decimal(10) ** precision
+    return [float(Decimal(share + (index < remainder)) / scale) for index in range(count)]
+
+
 def _build_exam_generation_blueprint(
     session: Any,
     *,
@@ -403,9 +456,7 @@ def _build_exam_generation_blueprint(
     selected_chapters = [chapter_by_id[item] for item in chapter_ids if item in chapter_by_id]
     source_rows = session.query(DBSourceRef).filter(
         DBSourceRef.chapter_id.in_(chapter_ids or ("-",)),
-    ).order_by(DBSourceRef.chapter_id, DBSourceRef.location_index, DBSourceRef.id).limit(
-        config.source_limit,
-    ).all()
+    ).order_by(DBSourceRef.chapter_id, DBSourceRef.location_index, DBSourceRef.id).all()
     mastery = dict(profile_data.get("concept_mastery") or {})
     mastery_by_point = {}
     for point in points:
@@ -413,13 +464,22 @@ def _build_exam_generation_blueprint(
         mastery_by_point[point.id] = round(float(value), 4) if isinstance(value, (int, float)) else None
     mastery_values = [value for value in mastery_by_point.values() if value is not None]
     mastery_average = sum(mastery_values) / len(mastery_values) if mastery_values else 0.5
+    from app.source_refs import source_ref_teaching_text
+    from app.canonical_retrieval import teaching_excerpt
+    topics = [part.strip() for part in re.split(r"[，,、；;\n]+", config.theme) if part.strip()]
+    topics.extend(point.title for point in points)
     source_snapshot = [
         {
             "id": row.id,
             "chapter_id": row.chapter_id,
             "location_label": row.location_label or "",
             "content_hash": row.content_hash,
-            "quote": (row.quote or "")[:240],
+            "quote": teaching_excerpt(
+                source_ref_teaching_text(
+                    session, row, max_chars=max(12000, (row.char_end or 0) - (row.char_start or 0)),
+                ),
+                topics=topics, max_chars=8000,
+            ),
         }
         for row in source_rows
     ]
@@ -571,7 +631,9 @@ def _dynamic_exam_question_version(
                 {"id": "verification", "label": "验证步骤与失效边界", "weight": 0.5},
             ],
         }
-    explanation_seed = ""
+    explanation_seed = reference
+    if question_type == "single_choice":
+        explanation_seed = f"正确答案是 A。{reference}"
     if question_type == "true_false":
         explanation_seed = (
             f"这道题考查{point.title}。题干判断为正确。{statement} 原因是：{reference} "
@@ -644,7 +706,216 @@ def _generate_dynamic_exam_items(
     return selected
 
 
+def _review_intelligent_exam_items(
+    session: Any, *, llm: Any, owner_public_id: str,
+    config: IntelligentExamConfigInput, blueprint: dict[str, Any],
+    questions: IntelligentExamGenerationOutput, generation_call_id: str,
+    selected: list[tuple[DBAssessmentQuestionVersion, DBAssessmentQuestion]],
+) -> dict[str, Any]:
+    """Use the shared teaching reviewer before draft questions can enter an exam."""
+    from app.m5_legacy_calls import audited_legacy_text_call
+    from app.resource_bundles import _resource_review_async
+    from app.resource_review_adjudication import adjudicate_review
+    from app.learning_generation_jobs import component_cache, assert_generation_owner
+    from llm_client import parse_json_object
+
+    trace_id = f"exam-review:{generation_call_id}"
+    review_identity = "exam-generation-" + _hash([owner_public_id, config.idempotency_key])[:32]
+    # Preserve the exact candidate even when the review fails. Draft questions
+    # cannot be selected by CAT, the approved bank, or a new formal exam.
+    assert_generation_owner(session)
+    session.commit()
+    completed, save = component_cache(session)
+
+    class ExamReviewer:
+        model = llm.model
+        reasoning_effort = llm.reasoning_effort
+        max_tokens = max(int(getattr(llm, "max_tokens", 0)), 65536)
+
+        async def generate(self, system_prompt, user_prompt, *, role):
+            effective = copy(llm)
+            effective.max_tokens = self.max_tokens
+
+            async def run(operation, *args):
+                return operation(session, *args)
+
+            return await audited_legacy_text_call(
+                effective, system_prompt=system_prompt, user_prompt=user_prompt,
+                role=role, operation="intelligent_exam_review", capability="decision",
+                owner_public_id=owner_public_id, course_id=config.course_id,
+                trace_id=trace_id, input_summary={"question_count": len(selected)},
+                response_validator=parse_json_object, database_runner=run,
+            )
+
+    manifest = {
+        "verification_mode": "cove",
+        "automated_calculation_check": True,
+        "assessment_mode": "formal_exam",
+        "context": {
+            "course_title": (blueprint.get("course") or {}).get("title", ""),
+            "knowledge_point_title": "、".join(point["title"] for point in blueprint.get("knowledge_points", [])),
+            "learning_goal": config.theme,
+            "profile_adaptation": blueprint.get("profile_influence", []),
+            "profile_adaptation_plan": {"difficulty_band": config.difficulty},
+        },
+        "user_instruction": config.theme,
+        "dependency_resources": blueprint.get("accepted_candidates", []),
+        "input_snapshot": {"source_snapshots": {"quiz": [
+            {**source, "source_ref_id": source["id"]}
+            for source in blueprint.get("source_snapshot", [])
+        ]}},
+    }
+    candidate = {
+        "type": "quiz", "version_id": generation_call_id, "title": config.title,
+        "content_format": "json", "source_ref_ids": blueprint.get("source_ref_ids", []),
+        "content": _canonical({"question_details": [
+            {**question.model_dump(mode="json"), "questionVersionId": version.id,
+             "prompt": version.prompt, "options": version.options,
+             "answer_key": version.answer_key, "scoring_rule": version.scoring_rule,
+             "explanation": version.explanation}
+            for question, (version, _) in zip(questions.questions, selected)
+        ]}),
+    }
+    metadata = {
+        "generation_call_id": generation_call_id,
+        "configuration_hash": _hash(config.model_dump(mode="json")),
+        "question_version_ids": [version.id for version, _ in selected],
+    }
+    try:
+        review = _run_async(_resource_review_async(
+            ExamReviewer(), manifest=manifest,
+            semantic_plan="按所选知识点、题型配额和难度检查正式测评，逐项核对题干、答案与全部解析。",
+            candidates=[candidate], completed_reviews=completed, save_review=save,
+        ))
+        review = _run_async(adjudicate_review(ExamReviewer(), manifest=manifest,
+            candidates=[candidate], review=review, completed=completed, save=save))
+    except Exception as exc:
+        record_audit(session, actor_public_id=owner_public_id,
+            action="assessment.exam.generation_review", object_type="assessment_exam_generation",
+            object_id=review_identity, trace_id=trace_id, outcome="failed",
+            metadata={**metadata, "error_code": getattr(exc, "code", "review_unavailable")})
+        session.commit()
+        raise
+    approved = review.get("approved") is True and not review.get("rejectedTypes")
+    # Backend audit stores summaries only. Keep the public teaching decision in
+    # its own result row so long findings survive rejection and later inspection.
+    review_record = DBAssessmentGenerationReview(
+        generation_call_id=generation_call_id, owner_public_id=owner_public_id,
+        trace_id=trace_id, question_version_ids=metadata["question_version_ids"],
+        review=review, content_hash=_hash({"question_version_ids": metadata["question_version_ids"], "review": review}),
+    )
+    assert_generation_owner(session)
+    session.add(review_record)
+    session.flush()
+    audit = record_audit(session, actor_public_id=owner_public_id,
+        action="assessment.exam.generation_review", object_type="assessment_exam_generation",
+        object_id=review_identity, trace_id=trace_id,
+        outcome="success" if approved else "rejected",
+        metadata={**metadata, "review_id": review_record.id, "review_hash": review_record.content_hash,
+                  "review": review})
+    session.commit()
+    if not approved:
+        error = FormalExamError("intelligent_exam_review_rejected", _canonical(review))
+        error.review = review
+        raise error
+    return {"approved": True, "trace_id": trace_id, "audit_id": audit.id, "review_id": review_record.id}
+
+
 def _generate_llm_exam_items(
+    session: Any, *, owner_public_id: str, config: IntelligentExamConfigInput,
+    blueprint: dict[str, Any], points: list[DBKnowledgePoint], llm: Any,
+) -> tuple[list[tuple[DBAssessmentQuestionVersion, DBAssessmentQuestion]], dict[str, Any]]:
+    """Prepare and verify each requested question; retain all successful slots."""
+    from app.learning_generation_jobs import component_cache
+    completed, save = component_cache(session)
+    selected, metadata, accepted = [], [], []
+    slots = [kind for kind in LEARNER_EXAM_TYPES for _ in range(config.question_type_counts.get(kind, 0))]
+    identity = _hash([config.model_dump(mode="json"), blueprint])
+    for index, kind in enumerate(slots):
+        key = f"exam-question:{identity}:{index}"
+        state = dict(completed.get(key) or {})
+        one_config = config.model_copy(update={"question_type_counts": {kind: 1}})
+        one_blueprint = {**blueprint, "question_position": index + 1, "question_total": len(slots),
+            "suggested_knowledge_point": points[index % len(points)].id,
+            "accepted_candidates": accepted,
+            "retained_questions": state.get("retained_questions", [])}
+        items, meta = _generate_llm_exam_batch(session, owner_public_id=owner_public_id,
+            config=one_config, blueprint=one_blueprint, points=points, llm=llm,
+            state=state, save_state=lambda value, k=key: save(k, value))
+        selected.extend(items)
+        metadata.append(meta)
+        accepted.extend({"type": "quiz", "version_id": version.id, "content_format": "json",
+            "content": _canonical({"question_details": [{"prompt": version.prompt, "options": version.options,
+                "answer_key": version.answer_key, "explanation": version.explanation}]})}
+            for version, _ in items)
+    composition = _review_exam_composition(session, llm=llm, owner_public_id=owner_public_id,
+        config=config, blueprint=blueprint, selected=selected)
+    if not composition['approved']:
+        for index in sorted({position - 1 for finding in composition['findings']
+                             for position in finding['question_positions']}):
+            key = f"exam-question:{identity}:{index}"
+            state = dict(completed[key])
+            local = [finding for finding in composition['findings'] if index + 1 in finding['question_positions']]
+            save(key, {**state, 'approved': False, 'findings': {'composition': local},
+                'retained_questions': [item for pos, item in enumerate(accepted) if pos != index]})
+        error = FormalExamError('intelligent_exam_review_rejected', _canonical(composition))
+        error.review = composition
+        raise error
+    return selected, {"model": llm.model, "call_id": metadata[-1]["call_id"],
+        "trace_id": metadata[-1]["trace_id"], "review": {"approved": True, "questions": metadata,
+                                                        "composition": composition}}
+
+
+def _review_exam_composition(session, *, llm, owner_public_id, config, blueprint, selected):
+    """Check only relationships between accepted questions; repair named slots."""
+    from app.learning_generation_jobs import component_cache
+    cache, save = component_cache(session)
+    questions = [{'position': i + 1, 'version_id': version.id, 'prompt': version.prompt,
+                  'options': version.options, 'knowledge_point_id': version.primary_knowledge_point_id,
+                  'question_type': question.question_type}
+                 for i, (version, question) in enumerate(selected)]
+    key = 'exam-composition:' + _hash([config.model_dump(mode='json'), questions])
+    if key in cache:
+        return cache[key]
+    seen, duplicates = {}, []
+    for row in questions:
+        fingerprint = _canonical([re.sub(r'\s+', '', row['prompt']), row['options']])
+        if fingerprint in seen:
+            duplicates.append({'question_positions': [row['position']],
+                'issue': f"与第{seen[fingerprint]}题题干及选项重复。", 'evidence': row['prompt'],
+                'fix': '保留前题，将本位置改为同题型、原范围内尚未考查的判断或计算。'})
+        else:
+            seen[fingerprint] = row['position']
+    if duplicates or len(questions) == 1:
+        review = {'approved': not duplicates, 'findings': duplicates}
+    else:
+        def validate(value):
+            result = ExamCompositionReview.model_validate(value)
+            if result.approved == bool(result.findings):
+                raise ValueError('整卷通过状态须与具体待改问题一致。')
+            if any(not 1 <= position <= len(questions) for finding in result.findings
+                   for position in finding.question_positions):
+                raise ValueError('待修题号必须属于本卷，按实际position定位。')
+            return result
+        result = _run_async(execute_registered_structured_call(session, backend=llm,
+            capability=Capability.DECISION, role='试卷组合核对', operation='intelligent_exam_composition',
+            system_prompt=('你核对已逐题审核并独立求解通过的试卷组合。仅检查实质重复、跨题泄露答案，'
+                '以及原主题中有来源支持且题量足够覆盖却被重复题挤掉的内容。不同题型考查同一概念不自动算重复；'
+                '用户选的知识点是范围，不强求题数不足时每点都有一题。不重审单题措辞或追加课外要求。'
+                '发现问题给最少待修题号question_positions（1起）、具体issue、原题或原主题evidence、fix。'
+                '其余题保留；缺覆盖时指定一题承担补充，题型及数量保持不变。没有实质问题approved=true。'
+                '只输出JSON：' + _canonical(ExamCompositionReview.model_json_schema())),
+            user_prompt=_canonical({'theme': config.theme, 'question_type_counts': config.question_type_counts,
+                'knowledge_points': blueprint.get('knowledge_points', []), 'questions': questions}),
+            response_model=ExamCompositionReview, response_validator=validate,
+            owner_public_id=owner_public_id, course_id=config.course_id,
+            trace_id=f'exam-composition:{config.idempotency_key}'))
+        review = validate(result.structured_output).model_dump(mode='json')
+    save(key, review)
+    return review
+
+
+def _generate_llm_exam_batch(
     session: Any,
     *,
     owner_public_id: str,
@@ -652,21 +923,34 @@ def _generate_llm_exam_items(
     blueprint: dict[str, Any],
     points: list[DBKnowledgePoint],
     llm: Any,
+    state: dict,
+    save_state: Any,
 ) -> tuple[list[tuple[DBAssessmentQuestionVersion, DBAssessmentQuestion]], dict[str, Any]]:
     """Generate and persist one source-bound intelligent exam with the live model."""
     _require_exam_model(llm)
+    from types import SimpleNamespace
+    from app.learning_generation_jobs import assert_generation_owner
+    if state.get("approved"):
+        return [(session.get(DBAssessmentQuestionVersion, item[0]), session.get(DBAssessmentQuestion, item[1]))
+                for item in state["persisted"]], state["metadata"]
     schema = _canonical(IntelligentExamGenerationOutput.model_json_schema())
     system_prompt = (
         "你是 EduMatrix 智能组卷出题专家。只输出符合 JSON Schema 的原始 JSON，不要 Markdown。"
         "严格按照题型配额生成题目；每题只能使用输入提供的课程知识点和 source_ref_id。"
-        "选择题必须提供互不重复的选项，并严格使用 answer_key={choice:'A'}（多选为 choices:['A','B']）；"
+        "选择题必须在options数组中提供实际且互不重复的选项，不能遗漏options或只在解析中提到A/B/C/D；"
+        "并严格使用 answer_key={choice:'A'}（多选为 choices:['A','B']）；"
         "判断题严格使用 answer_key={value:true}，填空题严格使用 answer_key={blanks:['答案']}。"
         "简答题严格使用 answer_key={reference_answer:'参考答案'}，并把评分量规放在"
         "scoring_rule={version:'rubric-ml-v1',correct_threshold:0.6,criteria:[{id:'criterion',label:'标准',weight:1.0}]}；"
         "不要把 criteria 或 correct_threshold 放入 answer_key。"
         "题干、答案、解析和量规必须针对给定课程来源编写，不能编造未提供的教材事实。"
+        "主题列出的学习要点在来源支持且题量允许时都要覆盖，可在同题组合；不要用重复题挤掉主题后半部分。"
+        "逐项核算所有选项及干扰项解析，数组的元素、顺序和维度都必须一致；二维单行不等同一维数组。"
+        "说明干扰项的错因时，按所说的错误操作重新计算，结果必须等于该选项；"
+        "多维索引分别检查各轴，不能把多个条件同时改变误写成只改变一项。"
+        "不能确定错误步骤时只说明它违反什么条件，不猜造干扰项的来由。"
         "解析是学习者提交后直接看到的教学内容，必须先给结论，再解释正确选项为何满足题干，"
-        "并逐项说明主要干扰项为何不成立，补充适用条件、常见误区或一个最小例子；"
+        "必要时指出易混选项违反的具体题设；不要求每个干扰项都有单独解释，不臆测学生的错误操作。适用条件或最小例子仅在有助理解时补充；"
         "禁止把来源核验、版本、哈希、蓝图或证据绑定话术写进 explanation。"
         "不要输出 prompt、思维链、reasoning_content、密钥或内部日志。"
         f" JSON Schema: {schema}"
@@ -681,9 +965,30 @@ def _generate_llm_exam_items(
         "knowledge_points": blueprint.get("knowledge_points", []),
         "profile_influence": blueprint.get("profile_influence", []),
         "sources": blueprint.get("source_snapshot", []),
+        "question_position": blueprint.get("question_position"),
+        "question_total": blueprint.get("question_total"),
+        "suggested_knowledge_point": blueprint.get("suggested_knowledge_point"),
+        "accepted_questions": blueprint.get("accepted_candidates", []),
+        "retained_questions": blueprint.get("retained_questions", []),
+        "instruction": "完成本位置所需题型和数量；结合已通过题目覆盖主题的其它部分，不重复出题。",
+        **({"previous_draft": state.get("output"), "required_corrections": state["findings"]}
+           if state.get("findings") else {}),
+        **({'previous_invalid_output': state['invalid']} if state.get('invalid') else {}),
     })
     try:
-        result = _run_async(execute_registered_structured_call(
+        if state.get("output") and not state.get("findings"):
+            result = SimpleNamespace(**state["call"], structured_output=state["output"], fallback_used=False)
+        else:
+            if state.get("findings") and state.get("revision", 0) > 0:
+                from app.quiz_verification import independently_solve_quizzes
+                from app.learning_generation_jobs import component_cache
+                cache, save = component_cache(session)
+                reference = _run_async(independently_solve_quizzes(llm, [{"type": "quiz", "content":
+                    _canonical({"question_details": state["output"]["questions"]})}],
+                    [{**source, "source_ref_id": source["id"]} for source in blueprint.get("source_snapshot", [])],
+                    completed=cache, save=save))
+                user_prompt = _canonical({**json.loads(user_prompt), "independent_reference": reference})
+            result = _run_async(execute_registered_structured_call(
             session,
             backend=llm,
             capability=Capability.QUIZ,
@@ -700,23 +1005,33 @@ def _generate_llm_exam_items(
             trace_id=f"intelligent-exam-generate:{config.idempotency_key}",
             output_constraints=OutputConstraints(
                 format="json",
-                max_length=200000,
                 source_scope=tuple(blueprint.get("source_ref_ids", [])),
                 safety_boundary="Only the selected course chapters, knowledge points and source excerpts may be used.",
             ),
-        ))
+            ))
+            assert_generation_owner(session)
+            state = {"output": result.structured_output, "revision": state.get("revision", 0) + bool(state.get("findings")),
+                "call": {"model": result.model, "call_id": result.call_id, "trace_id": result.trace_id}}
+            save_state(state)
     except FormalExamError:
         raise
     except M5CapabilityError as exc:
-        _fail("intelligent_exam_generation_failed", f"真实模型出题失败：{exc.code}")
+        if getattr(exc, 'raw_output', None):
+            save_state({**state, 'invalid': {'raw':exc.raw_output, 'error':exc.validation_error,
+                                           'call_id':exc.call_id}})
+        raise
     except Exception as exc:
-        _fail("intelligent_exam_generation_failed", "真实模型出题失败，请稍后重试")
+        raise FormalExamError('intelligent_exam_generation_failed', str(exc)) from exc
     if result.model != "deepseek-v4-flash" or result.fallback_used:
         _fail("intelligent_exam_model_policy_invalid", "智能组卷出题未使用受治理的 deepseek-v4-flash 模型")
     output = _validate_llm_exam_output(result.structured_output or {}, config=config, blueprint=blueprint)
     point_by_id = {row.id: row for row in points}
     selected: list[tuple[DBAssessmentQuestionVersion, DBAssessmentQuestion]] = []
     for item in output.questions:
+        if state.get("persisted"):
+            selected = [(session.get(DBAssessmentQuestionVersion, value[0]), session.get(DBAssessmentQuestion, value[1]))
+                        for value in state["persisted"]]
+            break
         point = point_by_id.get(item.primary_knowledge_point_id)
         if point is None:
             _fail("intelligent_exam_llm_knowledge_point_invalid", "模型题目绑定了当前范围之外的知识点")
@@ -739,6 +1054,7 @@ def _generate_llm_exam_items(
             source_ref_ids=item.source_ref_ids,
         )
         try:
+            assert_generation_owner(session)
             question, version = create_question_version(
                 session,
                 owner_public_id=owner_public_id,
@@ -748,14 +1064,31 @@ def _generate_llm_exam_items(
                 version=version_input,
             )
         except Exception as exc:
-            _fail("intelligent_exam_llm_question_invalid", "模型题目不符合统一题目协议")
-        question.status = "approved"
+            _fail("intelligent_exam_llm_question_invalid", "这次题目缺少完整的作答内容，请重新生成。")
         selected.append((version, question))
-    return selected, {
+    state["persisted"] = [[version.id, question.id] for version, question in selected]
+    save_state(state)
+    try:
+        review = _review_intelligent_exam_items(
+            session, llm=llm, owner_public_id=owner_public_id,
+            config=config, blueprint=blueprint, questions=output,
+            generation_call_id=result.call_id, selected=selected,
+        )
+    except FormalExamError as exc:
+        if getattr(exc, "review", None):
+            save_state({**state, "findings": exc.review})
+        raise
+    assert_generation_owner(session)
+    for _, question in selected:
+        question.status = "approved"
+    metadata = {
         "model": result.model,
         "call_id": result.call_id,
         "trace_id": result.trace_id,
+        "review": review,
     }
+    save_state({**state, "approved": True, "metadata": metadata})
+    return selected, metadata
 
 
 def build_intelligent_exam_input(
@@ -769,7 +1102,7 @@ def build_intelligent_exam_input(
     if not course_is_selectable(session, course):
         _fail("course_unavailable", "course has no usable learning material")
 
-    course_chapters = session.query(DBChapter).filter_by(course_id=config.course_id).all()
+    course_chapters = session.query(DBChapter).filter_by(course_id=config.course_id).filter(current_chapter_clause()).all()
     course_chapter_ids = {row.id for row in course_chapters}
     unknown_chapters = sorted(set(config.chapter_ids) - course_chapter_ids)
     if unknown_chapters:
@@ -803,23 +1136,36 @@ def build_intelligent_exam_input(
     ).order_by(DBLearningEvent.occurred_at.desc(), DBLearningEvent.id.desc()).limit(30).all()
     recent_object_ids = {row.object_id for row in recent_events if row.evidence_status == "accepted"}
 
-    selected_scope = set(config.chapter_ids) or course_chapter_ids
+    point_chapter_ids = {row.chapter_id for row in links if row.knowledge_point_id in selected_point_ids}
+    selected_scope = set(config.chapter_ids) or (point_chapter_ids if config.knowledge_point_ids else course_chapter_ids)
     selected_chapter_rows = [row for row in course_chapters if row.id in selected_scope]
     blueprint_point_ids = selected_point_ids or course_point_ids
     point_rows = session.query(DBKnowledgePoint).filter(
         DBKnowledgePoint.id.in_(list(blueprint_point_ids) or ["-"]),
         DBKnowledgePoint.status == "active",
     ).order_by(DBKnowledgePoint.title, DBKnowledgePoint.id).all()
-    blueprint = _build_exam_generation_blueprint(
-        session,
-        config=config,
-        course=course,
-        chapters=selected_chapter_rows,
-        points=point_rows,
-        profile=profile,
-        profile_data=profile_data,
-        recent_events=recent_events,
-    )
+    from app.learning_generation_jobs import component_cache, course_generation_basis
+    completed, save_component = component_cache(session)
+    blueprint_key = 'exam-blueprint:' + _hash({
+        'owner': owner_public_id, 'configuration': config.model_dump(mode='json'),
+        'course_basis': course_generation_basis(session, course_id=config.course_id,
+            owner_public_id=owner_public_id, include_profile=False),
+    })
+    blueprint = completed.get(blueprint_key)
+    if blueprint is None:
+        blueprint = _build_exam_generation_blueprint(
+            session,
+            config=config,
+            course=course,
+            chapters=selected_chapter_rows,
+            points=point_rows,
+            profile=profile,
+            profile_data=profile_data,
+            recent_events=recent_events,
+        )
+        # Save before model work, so a retry reuses both the learning basis and
+        # approved questions. A different task gets fresh profile evidence.
+        save_component(blueprint_key, blueprint)
     generation_meta: dict[str, Any] = {}
     if llm is not None:
         dynamic_items, generation_meta = _generate_llm_exam_items(
@@ -844,9 +1190,7 @@ def build_intelligent_exam_input(
         )
     if dynamic_items:
         total = len(dynamic_items)
-        base_points = round(100 / total, 2)
-        item_points = [base_points] * total
-        item_points[-1] = round(100 - sum(item_points[:-1]), 2)
+        item_points = _equal_exam_points(total)
         point_counts: dict[str, int] = {}
         type_counts: dict[str, int] = {}
         for version, question in dynamic_items:
@@ -876,8 +1220,8 @@ def build_intelligent_exam_input(
             "model_call": generation_meta,
             "blueprint": blueprint,
             "generated_question_version_ids": [version.id for version, _ in dynamic_items],
-            "profile_snapshot_id": profile.id if profile else None,
-            "profile_version": profile.profile_version if profile else None,
+            "profile_snapshot_id": blueprint["profile_snapshot_id"],
+            "profile_version": blueprint["profile_version"],
             "profile_influence": blueprint["profile_influence"],
             "mastery_average": blueprint["mastery_average"],
             "recent_evidence_count": blueprint["recent_evidence_count"],
@@ -950,9 +1294,6 @@ def build_intelligent_exam_input(
             continue
         chosen = 0
         for _, version, question in candidates[question_type]:
-            introduced = set(version.source_ref_ids or []) - selected_sources
-            if len(selected_sources | introduced) > config.source_limit:
-                continue
             selected.append((version, question))
             selected_sources.update(version.source_ref_ids or [])
             chosen += 1
@@ -964,9 +1305,7 @@ def build_intelligent_exam_input(
         _fail("intelligent_exam_sources_insufficient", "当前范围题源不足：" + "; ".join(shortages))
 
     total = len(selected)
-    base_points = round(100 / total, 2)
-    item_points = [base_points] * total
-    item_points[-1] = round(100 - sum(item_points[:-1]), 2)
+    item_points = _equal_exam_points(total)
     point_counts: dict[str, int] = {}
     type_counts: dict[str, int] = {}
     for version, question in selected:
@@ -1264,7 +1603,7 @@ def _grade_subjective_with_llm(
 
 def finalize_formal_response_drafts(
     session: Any, *, sitting: DBAssessmentExamSitting, owner_public_id: str,
-    llm: Any | None = None,
+    llm: Any | None = None, sandbox_runner: Any | None = None,
 ) -> list[DBAssessmentAttempt]:
     if sitting.owner_public_id != owner_public_id:
         _fail("sitting_forbidden", "exam sitting belongs to another owner")
@@ -1272,10 +1611,22 @@ def finalize_formal_response_drafts(
         exam_version_id=sitting.exam_version_id,
     ).order_by(DBAssessmentExamItem.position).all()
     drafts = {row.exam_item_id: row for row in latest_formal_response_drafts(session, sitting_id=sitting.id)}
-    missing = [item.id for item in items if item.required and item.id not in drafts]
-    if missing:
+    completed_ids = {row.exam_item_id for row in session.query(DBAssessmentExamResponse).filter_by(sitting_id=sitting.id)}
+    missing = [item.id for item in items if item.required and item.id not in drafts and item.id not in completed_ids]
+    expired = sitting.due_at is not None and _utcnow() >= sitting.due_at
+    if missing and not expired:
         _fail("sitting_incomplete", "all required exam items must be answered")
     attempts: list[DBAssessmentAttempt] = []
+    # Check the ungraded items before grading any draft, including unanswered
+    # items on an expired paper. Missing choices must not become zero scores.
+    for item in items:
+        if item.id in completed_ids:
+            continue
+        version = session.get(DBAssessmentQuestionVersion, item.question_version_id)
+        question = session.get(DBAssessmentQuestion, version.question_id)
+        issue = learner_question_content_issue(version, question)
+        if issue:
+            _fail("question_content_incomplete", issue)
     for item in items:
         response = session.query(DBAssessmentExamResponse).filter_by(
             sitting_id=sitting.id, exam_item_id=item.id,
@@ -1288,8 +1639,8 @@ def finalize_formal_response_drafts(
             continue
         version = session.query(DBAssessmentQuestionVersion).filter_by(id=item.question_version_id).one()
         question = session.query(DBAssessmentQuestion).filter_by(id=version.question_id).one()
-        if question.question_type == "code":
-            _fail("intelligent_exam_code_unsupported", "learner intelligent exams do not include code questions")
+        if question.question_type == "code" and (sandbox_runner is None or not sandbox_runner.execution_enabled):
+            _fail("code_runtime_unavailable", "代码练习暂时无法运行，请稍后重新提交。")
         attempt, _ = record_attempt(
             session,
             owner_public_id=owner_public_id,
@@ -1303,7 +1654,10 @@ def finalize_formal_response_drafts(
             ),
             trusted_final_grade=None,
         )
-        if question.question_type in {"short_answer", "open_task"}:
+        if question.question_type == "code":
+            result = _run_async(grade_code_submission(version, draft.answer or {}, sandbox_runner))
+            persist_code_grading(session, attempt_id=attempt.id, result=result, trace_id=f"formal-exam-grade:{attempt.id}")
+        elif question.question_type in {"short_answer", "open_task"}:
             if llm is None:
                 _fail(
                     "intelligent_exam_grading_model_required",
@@ -1371,7 +1725,8 @@ def submit_sitting(
         _fail("sitting_submit_invalid", "only an in-progress sitting can be submitted")
     required_ids = {row.id for row in session.query(DBAssessmentExamItem).filter_by(exam_version_id=sitting.exam_version_id, required=True).all()}
     response_ids = {row.exam_item_id for row in session.query(DBAssessmentExamResponse).filter_by(sitting_id=sitting.id).all()}
-    if not required_ids.issubset(response_ids):
+    expired = sitting.due_at is not None and now >= sitting.due_at
+    if not required_ids.issubset(response_ids) and not expired:
         _fail("sitting_incomplete", "all required exam items must be answered")
     sitting.status = "submitted"
     sitting.submitted_at = now
@@ -1415,7 +1770,7 @@ def complete_human_review(
         rubric_snapshot={"type": "human_review", "review_case_id": review.id},
         status="completed", score=payload.score, correct=payload.score >= 0.6,
         confidence=payload.confidence, criterion_results=list(payload.criterion_results),
-        evidence={"review_case_id": review.id, "label": "人工复核（演示角色）", "prior_evidence_preserved": True},
+        evidence={"review_case_id": review.id, "label": "教师复核", "prior_evidence_preserved": True},
         feedback=payload.note, improvement_advice=[],
         trace_id=f"human-review:{review.id}", created_by_public_id=reviewer_public_id,
     )
@@ -1459,7 +1814,7 @@ def generate_report(
         if selected and selected.score is not None:
             earned += item.points * selected.score
             selected_ids.append(selected.id)
-        else:
+        elif attempt is not None:
             pending += 1
         point_id = question_version.primary_knowledge_point_id or "unbound"
         point_coverage = coverage.setdefault(point_id, {
@@ -1473,7 +1828,7 @@ def generate_report(
         point_coverage["total_points"] += item.points
         if selected and selected.score is not None:
             point_coverage["earned_points"] += item.points * selected.score
-        score = selected.score if selected else None
+        score = selected.score if selected else (0.0 if attempt is None else None)
         correct_answer = learner_correct_answer(question.question_type, question_version.answer_key or {})
         grading = grading_result_payload(selected) if selected else None
         report_items.append({
@@ -1507,14 +1862,14 @@ def generate_report(
             "initial_grading_result_id": initial.id if initial else None,
             "selected_grading_result_id": selected.id if selected else None,
             "selected_label": (
-                "人工复核（演示角色）" if selected and selected.grader_type == "human" else
-                "AI 智能初评" if selected and selected.grader_type == "ai" else
-                "代码隐藏测试" if selected and selected.grader_type == "code" else
-                "服务端客观评分" if selected else "待评分"
+                "教师复核" if selected and selected.grader_type == "human" else
+                "智能点评" if selected and selected.grader_type == "ai" else
+                "代码练习评分" if selected and selected.grader_type == "code" else
+                "答题评分" if selected else "未作答" if attempt is None else "待评分"
             ),
             "score": score,
-            "correct": selected.correct if selected else None,
-            "status": selected.status if selected else "pending",
+            "correct": selected.correct if selected else (False if attempt is None else None),
+            "status": selected.status if selected else ("unanswered" if attempt is None else "pending"),
             "grading": grading,
             "retest_action": {
                 "label": "针对该知识点重新组卷",
@@ -1583,12 +1938,39 @@ def generate_report(
     return row, True
 
 
+def learner_report_data(report: DBAssessmentExamReport) -> dict[str, Any]:
+    """Apply current learning explanations without rewriting historical evidence."""
+    data = dict(report.report_data or {})
+    data["items"] = [
+        {
+            **item,
+            "explanation": learner_safe_explanation(
+                item.get("explanation", ""),
+                prompt=item.get("prompt", ""),
+                options=item.get("options", []),
+                answer_key=item.get("correct_answer") or {},
+                question_type=item.get("question_type", "single_choice"),
+                knowledge_point=(item.get("knowledge_point") or {}).get("title", ""),
+            ),
+        }
+        for item in data.get("items", [])
+    ]
+    return data
+
+
 def report_csv(report: DBAssessmentExamReport) -> str:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["position", "question_version_id", "points", "score", "status", "grading_label"])
+    writer.writerow(["题号", "题目", "满分", "得分", "学习反馈", "评分方式"])
+    labels = {"人工复核（演示角色）": "教师复核", "AI 智能初评": "智能点评",
+              "代码隐藏测试": "代码练习评分", "服务端客观评分": "答题评分"}
     for item in report.report_data.get("items", []):
-        values = [item.get("position"), item.get("question_version_id"), item.get("points"), item.get("score"), item.get("status"), item.get("selected_label")]
+        score = item.get("score")
+        status = "未作答" if item.get("attempt_id") is None else "待评分" if score is None else "已经答对" if item.get("correct") else "需要巩固"
+        label = item.get("selected_label")
+        values = [item.get("position"), item.get("prompt"), item.get("points"),
+                  round(float(score) * float(item.get("points") or 0), 4) if score is not None else "",
+                  status, labels.get(label, label)]
         writer.writerow([f"'{value}" if isinstance(value, str) and value[:1] in {"=", "+", "-", "@"} else value for value in values])
     return output.getvalue()
 
@@ -1605,6 +1987,7 @@ def exam_payload(session: Any, exam: DBAssessmentExam, *, include_answers: bool 
                    "question_version_id": item.question_version_id, "question_type": question.question_type,
                    "prompt": learner_safe_prompt(question_version.prompt, knowledge_point=point.title if point else ""),
                    "options": learner_option_texts(question_version, question),
+                   "content_issue": learner_question_content_issue(question_version, question),
                    "difficulty": (
                        question_version.measured_difficulty
                        if question_version.measured_difficulty is not None
@@ -1641,9 +2024,9 @@ def exam_payload(session: Any, exam: DBAssessmentExam, *, include_answers: bool 
 
 
 def sitting_payload(session: Any, sitting: DBAssessmentExamSitting) -> dict[str, Any]:
-    final_count = session.query(DBAssessmentExamResponse).filter_by(sitting_id=sitting.id).count()
-    draft_count = len(latest_formal_response_drafts(session, sitting_id=sitting.id))
-    answered = max(final_count, draft_count)
+    saved_ids = {row.exam_item_id for row in session.query(DBAssessmentExamResponse).filter_by(sitting_id=sitting.id)}
+    saved_ids.update(row.exam_item_id for row in latest_formal_response_drafts(session, sitting_id=sitting.id))
+    answered = len(saved_ids)
     return {"id": sitting.id, "exam_id": sitting.exam_id, "exam_version_id": sitting.exam_version_id,
             "owner_public_id": sitting.owner_public_id, "status": sitting.status,
             "started_at": sitting.started_at.isoformat() if sitting.started_at else None,
@@ -1651,3 +2034,105 @@ def sitting_payload(session: Any, sitting: DBAssessmentExamSitting) -> dict[str,
             "submitted_at": sitting.submitted_at.isoformat() if sitting.submitted_at else None,
             "released_at": sitting.released_at.isoformat() if sitting.released_at else None,
             "lock_version": sitting.lock_version, "answered_count": answered}
+
+
+def formal_exam_event_payload(
+    *,
+    exam: DBAssessmentExam,
+    sitting: DBAssessmentExamSitting,
+    report: DBAssessmentExamReport,
+) -> dict[str, Any]:
+    report_data = dict(report.report_data or {})
+    coverage = list(report_data.get("coverage") or [])
+    item_results = [
+        {
+            "position": item.get("position"),
+            "question_version_id": item.get("question_version_id"),
+            "knowledge_point_id": (item.get("knowledge_point") or {}).get("id"),
+            "score": item.get("score"),
+            "correct": item.get("correct"),
+            "error_reason": item.get("error_reason") or "",
+        }
+        for item in report_data.get("items") or []
+    ]
+    recommended_ids = [
+        item["id"] for item in coverage
+        if item.get("id") not in {None, "unbound"} and float(item.get("ratio") or 0.0) < 0.8
+    ]
+    if not recommended_ids and coverage:
+        lowest = min(coverage, key=lambda item: float(item.get("ratio") or 0.0))
+        if lowest.get("id") not in {None, "unbound"}:
+            recommended_ids = [lowest["id"]]
+    base_time = sitting.submitted_at or datetime.now(timezone.utc).replace(tzinfo=None)
+    next_day = (base_time.date() + timedelta(days=1)).isoformat()
+    coverage_by_id = {item.get("id"): item for item in coverage}
+    next_day_schedule = [
+        {
+            "knowledge_point_id": point_id,
+            "title": str((coverage_by_id.get(point_id) or {}).get("title") or "Knowledge point review"),
+            "scheduled_for": next_day,
+            "reason": "Formal exam evidence indicates this topic should be reinforced next.",
+            "route": "/workspace/review",
+        }
+        for point_id in recommended_ids
+    ]
+    return {
+        "graded": report_data.get("final_ratio") is not None,
+        "attempt_id": sitting.id,
+        "exam_id": exam.id,
+        "sitting_id": sitting.id,
+        "report_id": report.id,
+        "score": report_data.get("final_ratio"),
+        "knowledge_point_scores": [
+            {
+                "knowledge_point_id": item.get("id"),
+                "score": item.get("ratio"),
+            }
+            for item in coverage
+            if item.get("id") not in {None, "unbound"}
+        ],
+        "item_results": item_results,
+        "recommended_knowledge_point_ids": recommended_ids,
+        "next_day_schedule": next_day_schedule,
+    }
+
+
+
+def current_exam_feedback_payload(session: Any, event: DBLearningEvent) -> dict[str, Any]:
+    """Use a reviewed report for projections; the original submission stays unchanged."""
+    original = dict(event.payload or {})
+    if event.event_type != "formal_exam_submitted":
+        return original
+    sitting_id = original.get("sitting_id") or event.object_id
+    latest = session.query(DBAssessmentExamReport).filter_by(sitting_id=sitting_id).order_by(
+        DBAssessmentExamReport.report_version.desc()).first()
+    if latest is None or latest.id == original.get("report_id"):
+        return original
+    sitting = session.get(DBAssessmentExamSitting, sitting_id)
+    if sitting is None or sitting.owner_public_id != event.owner_public_id:
+        return original
+    exam = session.get(DBAssessmentExam, sitting.exam_id)
+    return {**original, **formal_exam_event_payload(exam=exam, sitting=sitting, report=latest)}
+
+
+def review_case_payload(session: Any, review: DBAssessmentReviewCase) -> dict[str, Any]:
+    sitting = session.get(DBAssessmentExamSitting, review.sitting_id)
+    exam = session.get(DBAssessmentExam, sitting.exam_id)
+    attempt = session.get(DBAssessmentAttempt, review.attempt_id)
+    version = session.get(DBAssessmentQuestionVersion, attempt.question_version_id)
+    question = session.get(DBAssessmentQuestion, version.question_id)
+    initial, selected = _selected_grading(session, attempt.id)
+    return {
+        "id": review.id, "sitting_id": sitting.id, "attempt_id": attempt.id,
+        "course_id": exam.course_id, "exam_title": exam.title,
+        "status": review.status, "reason": review.reason, "decision_note": review.decision_note,
+        "lock_version": review.lock_version, "reviewer_public_id": review.reviewer_public_id,
+        "question": {"prompt": learner_safe_prompt(version.prompt), "question_type": question.question_type,
+                     "options": learner_option_texts(version, question),
+                     "correct_answer": learner_correct_answer(question.question_type, version.answer_key or {}),
+                     "explanation": learner_safe_explanation(version.explanation, prompt=version.prompt,
+                         options=version.options, answer_key=version.answer_key, question_type=question.question_type)},
+        "learner_answer": attempt.answer,
+        "initial_grading": grading_result_payload(initial) if initial else None,
+        "selected_grading": grading_result_payload(selected) if selected else None,
+    }

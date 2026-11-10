@@ -18,6 +18,7 @@ from app.database import (
     DBDiagnosticReport,
     DBPlanDraft,
     DBPlanVersion,
+    DBProfileSnapshot,
     DBUser,
 )
 from app.diagnostic_generation import (
@@ -54,15 +55,13 @@ class MultiCourseBlueprintRequest:
 class MultiCoursePathRequest:
     report_ids: tuple[str, ...]
     idempotency_key: str
-    time_budget_minutes: int = 90
+    time_budget_minutes: int | None = None
 
 
 def _unique_ids(values: tuple[str, ...] | list[str], *, field: str) -> tuple[str, ...]:
     normalized = tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
     if not normalized:
         raise MultiCourseDiagnosticError("multicourse_selection_required", f"{field} 不能为空。", status_code=422)
-    if len(normalized) > 8:
-        raise MultiCourseDiagnosticError("multicourse_selection_too_large", "一次最多选择 8 门课程。", status_code=422)
     if len(normalized) != len(values):
         raise MultiCourseDiagnosticError("multicourse_selection_duplicate", f"{field} 不能包含重复项目。", status_code=422)
     return normalized
@@ -96,36 +95,46 @@ def generate_multicourse_blueprints(
     llm: Any,
 ) -> dict[str, Any]:
     """Generate one independently audited blueprint for every selected course."""
+    from app.learning_generation_jobs import CURRENT_JOB, assert_generation_owner
+    job = CURRENT_JOB.get()
     course_ids = _unique_ids(request.course_ids, field="course_ids")
     if not request.idempotency_key.strip():
         raise MultiCourseDiagnosticError("multicourse_idempotency_required", "请重新开始多课程诊断。", status_code=422)
     items: list[dict[str, Any]] = []
+    session.commit()
     for course_id in course_ids:
+        assert_generation_owner(session)
         # The per-course key keeps the existing unique constraint meaningful
         # while allowing one user action to be replayed safely.
         per_course_key = _scoped_idempotency_key(request.idempotency_key, course_id)
         try:
-            # Isolate one course so a provider/validation failure cannot leave
-            # partial question rows that affect the remaining courses.
-            with session.begin_nested():
-                row, created = generate_diagnostic_blueprint(
-                    session,
-                    user=user,
-                    request=DiagnosticBlueprintRequest(
-                        course_id=course_id,
-                        idempotency_key=per_course_key,
-                        question_count=request.question_count,
-                        self_rating=request.self_rating,
-                    ),
-                    llm=llm,
-                )
-                payload = diagnostic_blueprint_payload(session, row)
+            # The shared model gateway commits its audit before network I/O.
+            # A savepoint around it is invalidated by that commit. Persist each
+            # successful course independently so later failures cannot erase it.
+            row, created = generate_diagnostic_blueprint(
+                session,
+                user=user,
+                request=DiagnosticBlueprintRequest(
+                    course_id=course_id,
+                    idempotency_key=per_course_key,
+                    question_count=request.question_count,
+                    self_rating=request.self_rating,
+                ),
+                llm=llm,
+                **({'task_id': job['task_id']} if job else {}),
+            )
+            payload = diagnostic_blueprint_payload(session, row)
+            assert_generation_owner(session)
+            session.commit()
             items.append({
                 **_course_item(payload, course_id),
                 "created": created,
                 "blueprint_id": row.id,
             })
         except DiagnosticGenerationError as exc:
+            session.rollback()
+            if job:
+                raise
             # A weak or unavailable course must not erase other successful
             # courses.  The caller can retry this item with the same run key.
             items.append({
@@ -202,11 +211,10 @@ def validate_total_schedule(
     subject_paths: list[dict[str, Any]],
     *,
     time_budget_minutes: int,
-    max_days: int = 60,
+    max_days: int | None = None,
 ) -> dict[str, Any]:
     """Validate and project independent subject paths into a total schedule."""
     budget = max(1, int(time_budget_minutes or 1))
-    max_days = max(1, min(60, int(max_days or 60)))
     issues: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
     task_keys: set[str] = set()
@@ -249,8 +257,12 @@ def validate_total_schedule(
             elif parent["course_id"] == task["course_id"] and parent["sequence"] >= task["sequence"]:
                 issues.append({"code": "prerequisite_inversion", "course_id": task["course_id"], "node_key": task["node_key"], "message": "先修关系顺序倒置。"})
 
+    # Without a learner-specified deadline, even a long prerequisite chain
+    # must be scheduled in full. One day per task is a finite upper bound.
+    has_deadline = max_days is not None
+    max_days = max(1, int(max_days)) if has_deadline else max(1, len(tasks))
     total_minutes = sum(item["estimate_minutes"] for item in tasks if item["status"] not in {"completed", "skipped"})
-    if total_minutes > budget * max_days:
+    if has_deadline and total_minutes > budget * max_days:
         issues.append({"code": "timeout", "message": f"总学习时长 {total_minutes} 分钟超过 {max_days} 天时间预算。"})
 
     remaining = {item["aggregate_key"] for item in tasks if item["status"] not in {"completed", "skipped"}}
@@ -284,6 +296,9 @@ def validate_total_schedule(
             remaining.remove(task["aggregate_key"])
             resolved.add(task["aggregate_key"])
             scheduled_course_counts[task["course_id"]] += 1
+        if used > budget:
+            issues.append({"code": "daily_budget_exceeded", "message":
+                f"第{day}次安排预计{used}分钟，超过每次可用的{budget}分钟。可分次完成本次内容，或调整学习时间。"})
         days.append({
             "day": day,
             "tasks": [
@@ -382,11 +397,23 @@ def generate_multicourse_paths(
     request: MultiCoursePathRequest,
     llm: Any,
 ) -> dict[str, Any]:
+    from app.learning_generation_jobs import CURRENT_JOB, assert_generation_owner
+    job = CURRENT_JOB.get()
     report_ids = _unique_ids(request.report_ids, field="report_ids")
-    if not 30 <= int(request.time_budget_minutes) <= 480:
-        raise MultiCourseDiagnosticError("multicourse_time_budget_invalid", "时间预算需在 30 到 480 分钟之间。", status_code=422)
+    budget = request.time_budget_minutes
+    if budget is None:
+        from app.profile_adaptation import confirmed_study_minutes
+        profiles = session.query(DBProfileSnapshot).join(
+            DBDiagnosticReport, DBDiagnosticReport.profile_snapshot_id == DBProfileSnapshot.id,
+        ).filter(DBDiagnosticReport.id.in_(report_ids), DBDiagnosticReport.owner_public_id == user.public_id,
+                 DBProfileSnapshot.owner_public_id == user.public_id).order_by(DBProfileSnapshot.created_at.desc()).all()
+        budget = next((minutes for profile in profiles if (minutes := confirmed_study_minutes(profile)) is not None), 90)
+    if not 15 <= int(budget) <= 480:
+        raise MultiCourseDiagnosticError("multicourse_time_budget_invalid", "时间预算需在 15 到 480 分钟之间。", status_code=422)
     subjects: list[dict[str, Any]] = []
+    session.commit()
     for report_id in report_ids:
+        assert_generation_owner(session)
         report = session.get(DBDiagnosticReport, report_id)
         if report is None:
             subjects.append({"report_id": report_id, "status": "failed", "error": {"code": "diagnostic_report_unknown", "message": "诊断报告不存在。"}})
@@ -395,15 +422,18 @@ def generate_multicourse_paths(
             subjects.append({"report_id": report_id, "course_id": report.course_id, "status": "failed", "error": {"code": "diagnostic_report_forbidden", "message": "无权使用该诊断报告。"}})
             continue
         try:
-            with session.begin_nested():
-                path = generate_report_path(
-                    session,
-                    user=user,
-                    report=report,
-                    time_budget_minutes=int(request.time_budget_minutes),
-                    idempotency_key=_scoped_idempotency_key(request.idempotency_key, report.course_id),
-                    llm=llm,
-                )
+            path = generate_report_path(
+                session,
+                user=user,
+                report=report,
+                time_budget_minutes=int(budget),
+                idempotency_key=_scoped_idempotency_key(request.idempotency_key, report.course_id),
+                llm=llm,
+            )
+            if not path.get('nodes'):
+                raise PathDraftError('path_draft_empty', '科目路径尚未形成学习安排。')
+            assert_generation_owner(session)
+            session.commit()
             course = dict(path.get("course") or {})
             subjects.append({
                 "report_id": report.id,
@@ -419,13 +449,16 @@ def generate_multicourse_paths(
                 "evidence": dict((report.report_data or {}).get("mastery") and {"mastery": (report.report_data or {}).get("mastery")} or {}),
             })
         except (DiagnosticReportError, PathDraftError, MultiCourseDiagnosticError) as exc:
+            session.rollback()
+            if job:
+                raise
             subjects.append({"report_id": report.id, "course_id": report.course_id, "status": "failed", "error": {"code": getattr(exc, "code", "path_generation_failed"), "message": str(exc)}})
 
     ready_subjects = [item for item in subjects if item["status"] == "ready" and item.get("nodes")]
     failed_subjects = [item for item in subjects if item["status"] != "ready"]
-    validation = validate_total_schedule(ready_subjects, time_budget_minutes=int(request.time_budget_minutes))
+    validation = validate_total_schedule(ready_subjects, time_budget_minutes=int(budget))
     total_plan = None
-    if ready_subjects and validation["status"] != "invalid":
+    if ready_subjects and not failed_subjects and validation["status"] != "invalid":
         specs = tuple(
             _path_node_spec(subject["course_id"], node, index)
             for subject in ready_subjects
@@ -435,11 +468,12 @@ def generate_multicourse_paths(
             goal="统筹多个课程的诊断结果，按先修关系和时间预算安排可验证学习任务",
             assumptions=tuple([
                 "每门课程保持独立的知识点、来源和画像边界。",
-                f"本轮总路径时间预算为 {int(request.time_budget_minutes)} 分钟/日。",
+                f"本轮总路径时间预算为 {int(budget)} 分钟/日。",
                 f"参与统筹的课程：{', '.join(item['course_id'] for item in ready_subjects)}。",
             ]),
             nodes=specs,
         )
+        assert_generation_owner(session)
         plan, _, _ = create_plan_draft(
             session,
             owner_public_id=user.public_id,
@@ -465,3 +499,27 @@ def generate_multicourse_paths(
             "allow_fallback": False,
         },
     }
+
+
+def execute_multicourse_task(session, *, user, capability, request):
+    """Continue the same per-course requests under the shared worker lease."""
+    from app.diagnostic_api import build_diagnostic_llm
+    from app.learning_generation_jobs import LearningGenerationError, assert_generation_owner
+    if capability == 'multicourse_diagnostic.prepare':
+        result = generate_multicourse_blueprints(session, user=user,
+            request=MultiCourseBlueprintRequest(course_ids=tuple(request['courseIds']),
+                idempotency_key=request['idempotencyKey'], question_count=request['questionCount'],
+                self_rating=request['selfRating']), llm=build_diagnostic_llm())
+        complete = result['status'] == 'completed'
+    else:
+        result = generate_multicourse_paths(session, user=user,
+            request=MultiCoursePathRequest(report_ids=tuple(request['reportIds']),
+                idempotency_key=request['idempotencyKey'], time_budget_minutes=request.get('timeBudgetMinutes')),
+            llm=build_diagnostic_llm())
+        complete = bool(result['total_plan']) and not result['failed_subject_count']
+    if not complete:
+        raise LearningGenerationError('learning_generation.multicourse_incomplete',
+                                      '所选课程尚未全部准备完成。')
+    assert_generation_owner(session)
+    session.commit()
+    return result

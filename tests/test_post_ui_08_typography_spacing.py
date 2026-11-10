@@ -43,10 +43,10 @@ def test_shell_and_target_pages_keep_text_inside_bordered_regions():
     workspace = read(WORKSPACE)
 
     for marker in (
-        "padding: 6px 24px",
-        "padding: 18px 16px",
-        "padding: 12px 8px",
-        "padding: 10px",
+        "padding: 7px 24px",
+        "padding: 14px 6px",
+        "padding: 8px 4px",
+        "padding: 10px 6px",
     ):
         assert marker in shell
     for marker in (
@@ -70,12 +70,13 @@ def test_shell_and_target_pages_keep_text_inside_bordered_regions():
 
 
 def test_typography_fix_does_not_reintroduce_display_font_or_negative_spacing():
-    combined = "\n".join(read(path) for path in (HEADER, SHELL, PROFILE, WORKSPACE)).lower()
-
+    # The approved Composer shell permits a display-font brand mark and a
+    # shared background gradient; ordinary page headings remain sans serif.
+    shell = re.sub(r"\.app-brand__mark\s*\{[^}]*\}", "", read(SHELL))
+    combined = "\n".join([shell, *(read(path) for path in (HEADER, PROFILE, WORKSPACE))]).lower()
     assert "font-family: var(--font-display)" not in combined
     assert "letter-spacing: -" not in combined
-    assert "linear-gradient" not in combined
-    assert "radial-gradient" not in combined
+    assert "var(--color-shell-gradient)" in shell
 
 
 def test_all_desktop_views_use_sans_for_ordinary_page_titles():

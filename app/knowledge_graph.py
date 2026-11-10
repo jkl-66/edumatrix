@@ -7,6 +7,8 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.authorization import require_course_access
+from app.source_refs import current_source_clause, current_chapter_clause, current_structure_ref_clause
+from app.course_structure import confirmed_structure, prerequisite_ids
 from app.database import (
     DBChapter,
     DBChapterKnowledgePoint,
@@ -34,7 +36,8 @@ def build_course_graph(session: Any, current_user: DBUser, course_id: str) -> di
 
     chapters = (
         session.query(DBChapter)
-        .filter_by(course_id=course.id)
+        .join(DBSourceDocument, DBChapter.source_document_id == DBSourceDocument.id)
+        .filter(DBChapter.course_id == course.id, current_source_clause(), current_chapter_clause())
         .order_by(DBChapter.position, DBChapter.id)
         .all()
     )
@@ -67,7 +70,7 @@ def build_course_graph(session: Any, current_user: DBUser, course_id: str) -> di
     )
     refs = (
         session.query(DBSourceRef)
-        .filter(DBSourceRef.source_document_id.in_(source_ids))
+        .filter(DBSourceRef.source_document_id.in_(source_ids), current_structure_ref_clause())
         .order_by(DBSourceRef.created_at.desc(), DBSourceRef.id)
         .all()
         if source_ids
@@ -138,7 +141,7 @@ def build_course_graph(session: Any, current_user: DBUser, course_id: str) -> di
                 "nodeType": "source",
                 "category": 3,
                 "categoryName": "来源",
-                "summary": f"{source.file_format.upper()} · {source.processing_status}",
+                "summary": source.file_format.upper(),
                 "courseId": course.id,
                 "chapterId": chapter.id,
                 "sourceDocumentId": source.id,
@@ -161,7 +164,7 @@ def build_course_graph(session: Any, current_user: DBUser, course_id: str) -> di
             "nodeType": "knowledge_point",
             "category": 2,
             "categoryName": "知识点",
-            "summary": f"{point.code} · {point.level}",
+            "summary": "",
             "courseId": course.id,
             "knowledgePointId": point.id,
             "knowledgePointCode": point.code,
@@ -170,7 +173,7 @@ def build_course_graph(session: Any, current_user: DBUser, course_id: str) -> di
             "sourceRefId": source_ref.id if source_ref else "",
             "locationLabel": source_ref.location_label if source_ref else "",
             "sourceStatus": source.processing_status if source else "missing",
-            "prerequisites": list(point.prerequisites or []),
+            "prerequisites": prerequisite_ids(course, point),
             "masteryStatus": (mastery_by_point.get(point.id) or {}).get("status", "unknown"),
             "masteryScore": (mastery_by_point.get(point.id) or {}).get("score"),
             "masteryLabel": (mastery_by_point.get(point.id) or {}).get("label", "未知"),
@@ -183,9 +186,9 @@ def build_course_graph(session: Any, current_user: DBUser, course_id: str) -> di
         for point in relations_by_chapter.get(chapter.id, []):
             edges.append(_edge(f"chapter:{chapter.id}", f"knowledge:{point.id}", "teaches", "讲授"))
 
-    point_by_code = {point.code: point for point in points}
+    point_by_code = {key: point for point in points for key in (point.code, point.id, point.title)}
     for point in points:
-        for prerequisite_code in point.prerequisites or []:
+        for prerequisite_code in prerequisite_ids(course, point):
             prerequisite = point_by_code.get(str(prerequisite_code))
             if prerequisite:
                 edges.append(_edge(
@@ -214,6 +217,7 @@ def build_course_graph(session: Any, current_user: DBUser, course_id: str) -> di
     } for chapter in chapters]
     status = "ready" if nodes and chapters else "empty"
     return {
+        "teachingUnits": confirmed_structure(course).get('units', []),
         "schemaVersion": "edumatrix.course-knowledge-graph.v1",
         "status": status,
         "course": {

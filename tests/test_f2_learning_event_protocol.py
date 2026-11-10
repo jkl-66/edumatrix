@@ -146,7 +146,7 @@ def test_browser_activity_is_not_mastery_evidence_and_fake_strong_evidence_is_re
     assert profile.concept_mastery == {"gradient_descent": 0.4}
 
 
-def test_server_graded_correct_and_wrong_attempts_create_idempotent_evidence_without_mastery_write():
+def test_server_graded_attempt_and_correction_keep_idempotent_facts_without_mastery_write():
     session, owner, _, course, _, profile = _session()
     version = _question(session, owner, course)
     plan, _, _ = create_plan_draft(
@@ -186,8 +186,13 @@ def test_server_graded_correct_and_wrong_attempts_create_idempotent_evidence_wit
         assert attempt.correct is expected
         result = record_canonical_attempt_evidence(session, attempt=attempt, user=owner)
         event = session.query(DBLearningEvent).filter_by(id=result["event_id"]).one()
-        assert event.evidence_status == "accepted"
-        assert event.mastery_eligible is True
+        # The first feedback disclosed this same question's answer. Correcting
+        # it is useful practice, but cannot count as a new independent result.
+        assert event.evidence_status == ("accepted" if not events else "none")
+        assert event.mastery_eligible is (not events)
+        if events:
+            assert event.payload["evidence_kind"] == "correction"
+            assert event.payload["feedback_attempt_id"] == events[0][0].id
         assert event.context_ref["attemptId"] == attempt.id
         events.append((attempt, event))
 
@@ -195,7 +200,8 @@ def test_server_graded_correct_and_wrong_attempts_create_idempotent_evidence_wit
     assert replay["created"] is False
     assert replay["event_id"] == events[0][1].id
     assert session.query(DBLearningEvent).count() == 2
-    assert session.query(DBProfileEvidence).count() == 2
+    assert session.query(DBProfileEvidence).count() == 1
+    # This path requires submitting an assessment, not a correct result.
     assert path.status == "completed"
     assert profile.concept_mastery == {"gradient_descent": 0.4}
 

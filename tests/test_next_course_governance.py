@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app.database import DBCourse, DBCourseMembership, DBTeachingClassMember, DBTeachingTask, DBUser, SessionLocal
+from app.database import DBSourceDocument, DBCourse, DBCourseMembership, DBTeachingClassMember, DBTeachingTask, DBUser, SessionLocal
 from app.main import app
 from tests.api_test_helpers import TEST_PASSWORD, auth_headers
 
@@ -27,6 +27,7 @@ def _fixture(client: TestClient, suffix: str):
     with SessionLocal() as db:
         db.add(DBCourse(id=course_id, version="1", title="AI 工程治理", visibility="private", status="published",
                         owner_public_id=teacher.public_id, manifest_version="gov-1"))
+        db.add(DBSourceDocument(id=course_id + "-source", course_id=course_id, title="合成课程资料", filename="lesson.md", file_format="md", content_hash="1" * 64, processing_status="ready"))
         db.add(DBCourseMembership(course_id=course_id, user_public_id=teacher.public_id, role="teacher", status="active"))
         db.add(DBCourseMembership(course_id=course_id, user_public_id=learner.public_id, role="student", status="active"))
         db.commit()
@@ -118,6 +119,14 @@ def test_course_withdrawal_freezes_impact_and_preserves_history():
                                json={"reason":"课程来源版本需要停止教学并保留历史记录","expected_status":"published"})
         assert repeated.status_code == 200 and repeated.json()["id"] == withdrawal.json()["id"]
         assert client.get(f"/api/v1/course-governance/classes/{classroom['id']}",headers=learner_h).status_code == 403
+        history = client.get('/api/v1/course-governance/classes',headers=teacher_h,params={'course_id':course_id})
+        assert history.status_code == 200 and history.json()['items'][0]['status'] == 'withdrawn'
+        assert course_id in {x['id'] for x in client.get('/api/v1/course-governance/catalog',headers=teacher_h).json()['courses']}
+        assert client.get('/api/v1/course-governance/classes',headers=learner_h,params={'course_id':course_id}).json()['items'] == []
+        member = history.json()['items'][0]['members'][0]
+        reopen = client.put(f"/api/v1/course-governance/classes/{classroom['id']}/members",headers=teacher_h,
+            json={'user_public_id':learner.public_id,'role':'student','group_id':None,'expected_version':member['lock_version']})
+        assert reopen.status_code == 422, 'Changing groups must not silently re-enable a withdrawn course'
         with SessionLocal() as db:
             assert db.get(DBCourse,course_id).status == "withdrawn"
             assert db.get(DBTeachingTask,task["id"]).status == "withdrawn"

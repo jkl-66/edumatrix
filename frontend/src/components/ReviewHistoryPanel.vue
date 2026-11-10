@@ -1,4 +1,5 @@
 <script setup>
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   CheckCircle2,
@@ -199,7 +200,7 @@ onUnmounted(() => {
     </header>
 
     <p v-if="streakError" class="review-history__message review-history__message--error" role="alert">
-      {{ streakError }}
+      {{ userMessage(streakError) }}
       <button type="button" @click="loadStreak">重试</button>
     </p>
 
@@ -236,7 +237,7 @@ onUnmounted(() => {
                 @click="selectConcept(plan)"
               >
                 <span>{{ plan.display_title || plan.concept }}</span>
-                <small>掌握度 {{ Math.round((plan.mastery || 0) * 100) }}%</small>
+                <small>复习熟悉度 {{ Math.round((plan.mastery || 0) * 100) }}%</small>
               </button>
               <p v-if="!filteredPlans.length">没有匹配的知识点</p>
             </div>
@@ -279,7 +280,7 @@ onUnmounted(() => {
           <button type="button" title="关闭" aria-label="关闭复习历史" @click="closeModal"><X :size="20" /></button>
         </header>
         <div class="review-history__dialog-body">
-          <p v-if="modalError" class="review-history__message review-history__message--error" role="alert">{{ modalError }}</p>
+          <p v-if="modalError" class="review-history__message review-history__message--error" role="alert">{{ userMessage(modalError) }}</p>
           <section class="review-history__chart" aria-labelledby="review-history-chart-title">
             <h3 id="review-history-chart-title">复习时长趋势</h3>
             <div ref="chartRef" class="review-history__chart-canvas" />

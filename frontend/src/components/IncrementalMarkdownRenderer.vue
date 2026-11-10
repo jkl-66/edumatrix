@@ -9,15 +9,19 @@
  * 2. 稳定 key 渲染：已完成的块用固定 key，Vue VDOM 只 patch 增量部分
  * 3. 骨架屏占位：未闭合的块显示 loading 骨架，闭合后替换为真实渲染
  */
-import { computed, watch, ref, nextTick, onMounted } from 'vue'
+import { computed, watch, ref, nextTick, onMounted, useId } from 'vue'
 
 const props = defineProps({
   text: { type: String, default: '' },
   type: { type: String, default: '' },
   conceptName: { type: String, default: '' },
+  preserveContent: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['rendered'])
+const rootRef = ref(null)
+const diagramId = useId()
+let diagramSequence = 0
 
 // ============================================================
 // 1. 增量解析状态机
@@ -105,8 +109,8 @@ function parseSegments(text, previousSegments = []) {
       continue
     }
     
-    // --- 检测 $$ ... $$ (行间公式) ---
-    const mathMatch = remaining.match(/^\$\$[\s\S]*?\$\$/)
+    // Both common display-math delimiters occur in live model answers.
+    const mathMatch = remaining.match(/^(?:\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\])/)
     if (mathMatch) {
       const seg = new Segment(BlockType.MATH_BLOCK, mathMatch[0], segIndex)
       seg.closed = true
@@ -117,9 +121,9 @@ function parseSegments(text, previousSegments = []) {
     }
     
     // --- 检测未闭合的 $$ (流式进行中) ---
-    if (remaining.startsWith('$$')) {
+    if (remaining.startsWith('$$') || remaining.startsWith('\\[')) {
       // 找闭合标记
-      const closePos = remaining.indexOf('$$', 2)
+      const closePos = remaining.indexOf(remaining.startsWith('$$') ? '$$' : '\\]', 2)
       if (closePos === -1) {
         // 未闭合，显示公式骨架屏占位
         const seg = new Segment(BlockType.MATH_BLOCK, remaining, segIndex)
@@ -133,7 +137,14 @@ function parseSegments(text, previousSegments = []) {
     }
     
     // --- 普通文本块：取到下一个特殊标记之前 ---
-    const nextSpecial = remaining.search(/```|(?<!\$)\$\$(?!\$)/)
+    const marker = /```|`[^`\n]*`|(?<!\$)\$\$(?!\$)|\\\[/g
+    let match
+    let nextSpecial = -1
+    while ((match = marker.exec(remaining))) {
+      if (match[0].startsWith('`') && !match[0].startsWith('```')) continue
+      nextSpecial = match.index
+      break
+    }
     if (nextSpecial === -1) {
       const seg = new Segment(BlockType.TEXT, remaining, segIndex)
       seg.closed = true
@@ -175,21 +186,39 @@ watch(segments, () => {
   })
 }, { deep: true })
 
-function renderMermaidDiagrams() {
-  if (typeof window.mermaid === 'undefined') return
-  try {
-    const elements = document.querySelectorAll('.inc-mermaid:not([data-processed="true"])')
-    elements.forEach(el => {
-      try {
-        window.mermaid.init(undefined, el)
-        el.setAttribute('data-processed', 'true')
-      } catch (e) {
-        console.warn('[IncrementalRenderer] Mermaid render error:', e)
-      }
-    })
-  } catch (e) {
-    console.warn('[IncrementalRenderer] Mermaid bulk render error:', e)
+async function renderMermaidDiagrams() {
+  if (!rootRef.value || !window.mermaid) return
+  const elements = rootRef.value.querySelectorAll('.inc-mermaid:not([data-processed])')
+  for (const el of elements) {
+    el.dataset.processed = 'pending'
+    try {
+      const code = normalizeMindmapCode(decodeURIComponent(el.dataset.code || ''))
+      // Keep Mermaid's temporary SVG (including parse errors) inside this block.
+      const { svg, bindFunctions } = await window.mermaid.render(`inc-${diagramId}-${++diagramSequence}`, code, el)
+      if (!rootRef.value?.contains(el)) continue
+      el.innerHTML = svg
+      bindFunctions?.(el)
+      el.dataset.processed = 'true'
+    } catch (e) {
+      el.textContent = '这张图暂时未能绘制，请结合下方讲解继续学习。'
+      el.dataset.processed = 'failed'
+      console.warn('[IncrementalRenderer] Mermaid render error:', e)
+    }
   }
+}
+
+function normalizeMindmapCode(code) {
+  if (!/^\s*mindmap\b/i.test(code)) return code
+  return code.split('\n').map((line) => {
+    const label = line.trim()
+    if (!label || /^(?:mindmap\b|%%|::)/i.test(label) || !/[()[\]{}]/.test(label)) return line
+    // Preserve explicit Mermaid node shapes. Plain teaching labels such as
+    // "sensor[:,1] 振动列" need quoting so brackets remain visible text.
+    const shaped = /^(?:[^()[\]{}]+)?(?:\(\(.*\)\)|\(.*\)|\[.*\]|\{\{.*\}\}|\)\).*\(\(|\).*\(|-\).*\(-)$/
+    if (shaped.test(label)) return line
+    const quoted = label.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return `${line.match(/^\s*/)[0]}["${quoted}"]`
+  }).join('\n')
 }
 
 // ============================================================
@@ -246,31 +275,44 @@ function renderInlineMarkdown(content) {
   html = html.replace(/`([^`\n]+)`/g, (_, code) => (
     placeholder(`<code class="inc-inline-code">${code}</code>`)
   ))
+  html = html.replace(/\\\((.+?)\\\)/g, (_, math) => (
+    placeholder(renderMath(math.trim(), false))
+  ))
   html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => (
     placeholder(renderMath(math.trim(), false))
   ))
+  // Plain teaching formulas also use Python-style multiplication/powers.
+  // Keep these operators literal; two separate products are not emphasis.
+  html = html.replace(/(?<=[A-Za-z0-9_\u0370-\u03ff)\]])\*{1,2}(?=[A-Za-z0-9_\u0370-\u03ff(\[])/g,
+    operator => placeholder(operator))
+  // A suffix such as w* names an optimum. It must not open an italic span
+  // ending at the next w*, while explicit *w* emphasis remains supported.
+  html = html.replace(/(?<![A-Za-z0-9_*\u0370-\u03ff])([A-Za-z\u0370-\u03ff](?:_[A-Za-z0-9]+)?)\*(?=$|[\s=+−\-，。；：、,;:()\[\]）])/g,
+    (_, variable) => variable + placeholder('*'))
   html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, href) => (
     `<a class="inc-link" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`
   ))
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
   html = html.replace(/~~(.+?)~~/g, '<del>$1</del>')
-  html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
+  html = html.replace(/(?<!\*)\*(\S(?:[^*\n]*?\S)?)\*(?!\*)/g, '<em>$1</em>')
 
   return html.replace(/\u0000inc-inline-(\d+)\u0000/g, (_, index) => placeholders[Number(index)] || '')
 }
 
 // 渲染普通文本。这里只实现回答中实际使用的 Markdown 子集，避免引入
 // 第二套 Markdown 依赖，同时保持流式分段的稳定 key 和安全转义。
-function renderTextBlock(content) {
+function renderTextBlock(content, preserveContent = false) {
   if (!content) return ''
 
-  const learnerText = String(content)
+  const learnerText = preserveContent ? String(content) : String(content)
+    .replace(/^\s*<details\b[^>]*>\s*/gim, '')
+    .replace(/<\/details>\s*$/gim, '')
+    .replace(/^\s*<summary\b[^>]*>(.*?)<\/summary>\s*$/gim, '### $1\n')
     .replace(/(?:运行|模型|生成|回答)模式\s*[:：]?\s*[A-Za-z0-9_.-]+/gi, '')
     .replace(/(?:知识点\s*)?(?:内部编号|哈希|指纹)\s*[:：]?\s*[A-Za-z0-9_.-]*/gi, '')
     .replace(/依据课程来源|根据课程来源|基于课程来源/g, '')
     .replace(/本地确定性演示/g, '可复现演示')
     .replace(/本地确定性/g, '可复现')
-    .replace(/确定性/g, '可复现性')
     .replace(/上下文重点/g, '本轮重点')
     .replace(/冻结课程来源/g, '已选课程内容')
     .replace(/课程来源/g, '课程内容')
@@ -278,7 +320,7 @@ function renderTextBlock(content) {
     .replace(/来源片段/g, '相关片段')
     .replace(/证据不足/g, '现有信息还不够')
     .replace(/证据链/g, '核对过程')
-    .replace(/学习证据/g, '学习记录')
+    .replace(/学习记录/g, '学习记录')
     .replace(/评分证据/g, '评分记录')
     .replace(/证据/g, '可核对信息')
     .replace(/来源/g, '参考材料')
@@ -298,6 +340,7 @@ function renderTextBlock(content) {
   let listType = ''
   let listItems = []
   let quoteLines = []
+  let tableRows = []
 
   const flushParagraph = () => {
     if (!paragraph.length) return
@@ -322,10 +365,19 @@ function renderTextBlock(content) {
     blocks.push(`<blockquote class="inc-blockquote">${body}</blockquote>`)
     quoteLines = []
   }
+  const flushTable = () => {
+    if (!tableRows.length) return
+    const head = tableRows[0]
+    const body = tableRows.slice(1).filter(row => !row.every(cell => /^:?-{3,}:?$/.test(cell.trim())))
+    const rowHtml = (row, tag) => `<tr>${row.map(cell => `<${tag}>${renderInlineMarkdown(cell.trim())}</${tag}>`).join('')}</tr>`
+    blocks.push(`<div class="inc-table-wrap"><table class="inc-table"><thead>${rowHtml(head, 'th')}</thead>${body.length ? `<tbody>${body.map(row => rowHtml(row, 'td')).join('')}</tbody>` : ''}</table></div>`)
+    tableRows = []
+  }
   const flushAll = () => {
     flushParagraph()
     flushList()
     flushQuote()
+    flushTable()
   }
 
   for (const rawLine of lines) {
@@ -335,11 +387,25 @@ function renderTextBlock(content) {
     const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/)
     const quote = line.match(/^\s*>\s?(.*)$/)
     const divider = /^\s*(?:\*\s*){3,}$|^\s*(?:-\s*){3,}$|^\s*(?:_\s*){3,}$/.test(line)
+    const table = line.trim().startsWith('|') && line.trim().endsWith('|')
 
     if (!line.trim()) {
       flushAll()
       continue
     }
+    if (table) {
+      flushParagraph(); flushList(); flushQuote()
+      // Literal pipes in inline formulas/code are content, not column edges.
+      const protectedCells = []
+      const row = line.trim().slice(1, -1).replace(/`[^`]*`|\\\([^\n]*?\\\)|\$[^$\n]*\$|\\\|/g, value => {
+        const key = `\u0000cell-${protectedCells.length}\u0000`
+        protectedCells.push(value === '\\|' ? '|' : value)
+        return key
+      })
+      tableRows.push(row.split('|').map(cell => cell.replace(/\u0000cell-(\d+)\u0000/g, (_, index) => protectedCells[Number(index)])))
+      continue
+    }
+    if (tableRows.length) flushTable()
     if (heading) {
       flushAll()
       const level = Math.min(heading[1].length, 4)
@@ -389,7 +455,7 @@ function renderCodeBlock(content, lang) {
 
 // 渲染行间公式
 function renderMathBlock(content) {
-  const math = content.replace(/^\$\$/, '').replace(/\$\$$/, '').trim()
+  const math = content.replace(/^(?:\$\$|\\\[)/, '').replace(/(?:\$\$|\\\])$/, '').trim()
   return `<div class="math-block">
     ${renderMath(math, true)}
   </div>`
@@ -432,7 +498,7 @@ const renderedBlocks = computed(() => {
     
     switch (seg.type) {
       case BlockType.TEXT:
-        html = renderTextBlock(seg.content)
+        html = renderTextBlock(seg.content, props.preserveContent)
         cls = 'inc-text-block'
         break
       case BlockType.FENCED_CODE:
@@ -470,7 +536,7 @@ defineExpose({ getLastIncompleteIndex })
 </script>
 
 <template>
-  <div class="incremental-md-renderer">
+  <div ref="rootRef" class="incremental-md-renderer">
     <template v-for="block in renderedBlocks" :key="block.key">
       <div :class="['inc-block', block.cls]" v-html="block.html" />
     </template>
@@ -480,7 +546,7 @@ defineExpose({ getLastIncompleteIndex })
 <style scoped>
 .incremental-md-renderer {
   width: 100%;
-  color: #06141b;
+  color: var(--color-text);
   font-size: 15px;
   line-height: 1.75;
 }
@@ -491,6 +557,37 @@ defineExpose({ getLastIncompleteIndex })
 
 .incremental-md-renderer :deep(.inc-paragraph:last-child) {
   margin-bottom: 0;
+}
+
+.incremental-md-renderer :deep(.inc-table-wrap) {
+  margin: 14px 0;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.incremental-md-renderer :deep(.inc-table) {
+  width: 100%;
+  min-width: 460px;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.incremental-md-renderer :deep(.inc-table th),
+.incremental-md-renderer :deep(.inc-table td) {
+  padding: 9px 12px;
+  border-bottom: 1px solid #e5eaeb;
+  text-align: left;
+  vertical-align: top;
+}
+
+.incremental-md-renderer :deep(.inc-table th) {
+  color: #17384a;
+  background: #f1f5f5;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .incremental-md-renderer :deep(.inc-heading) {
@@ -537,7 +634,7 @@ defineExpose({ getLastIncompleteIndex })
 
 .incremental-md-renderer :deep(.inc-list-marker) {
   flex: 0 0 20px;
-  color: #60727c;
+  color: var(--color-text-muted);
   text-align: right;
   font-weight: 600;
 }
@@ -553,17 +650,17 @@ defineExpose({ getLastIncompleteIndex })
   border-radius: 0 8px 8px 0;
   padding: 10px 14px;
   color: #4a5b63;
-  background: #f5f7f7;
+  background: var(--color-surface-subtle);
 }
 
 .incremental-md-renderer :deep(.inc-divider) {
   margin: 18px 0;
   border: 0;
-  border-top: 1px solid #dce2e3;
+  border-top: 1px solid var(--color-border);
 }
 
 .incremental-md-renderer :deep(.inc-inline-code) {
-  border: 1px solid #dce2e3;
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   padding: 2px 5px;
   color: #17384a;
@@ -585,10 +682,10 @@ defineExpose({ getLastIncompleteIndex })
 
 .incremental-md-renderer :deep(.inc-math-inline) {
   display: inline-block;
-  border: 1px solid #dce2e3;
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   padding: 0 4px;
-  background: #f5f7f7;
+  background: var(--color-surface-subtle);
   font-family: var(--font-display);
   font-size: 14px;
 }
@@ -597,10 +694,10 @@ defineExpose({ getLastIncompleteIndex })
 .incremental-md-renderer :deep(.math-block) {
   margin: 14px 0;
   overflow-x: auto;
-  border: 1px solid #dce2e3;
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 14px 16px;
-  background: #f5f7f7;
+  background: var(--color-surface-subtle);
   text-align: center;
   font-family: var(--font-display);
   font-size: 14px;
@@ -613,9 +710,9 @@ defineExpose({ getLastIncompleteIndex })
 .incremental-md-renderer :deep(.code-block-wrapper) {
   margin: 14px 0;
   overflow: hidden;
-  border: 1px solid #253745;
+  border: 1px solid var(--color-text);
   border-radius: 8px;
-  background: #11212d;
+  background: var(--color-text);
 }
 
 .incremental-md-renderer :deep(.code-block-heading) {
@@ -623,9 +720,9 @@ defineExpose({ getLastIncompleteIndex })
   min-height: 38px;
   align-items: center;
   padding: 0 14px;
-  border-bottom: 1px solid #344957;
-  color: #ccd0cf;
-  background: #06141b;
+  border-bottom: 1px solid var(--color-text-secondary);
+  color: var(--color-border-strong);
+  background: var(--color-text);
   font-family: var(--font-mono);
   font-size: 14px;
 }
@@ -634,23 +731,23 @@ defineExpose({ getLastIncompleteIndex })
   margin: 0;
   overflow-x: auto;
   padding: 16px;
-  color: #eef2f2;
-  background: #11212d;
+  color: var(--color-surface-subtle);
+  background: var(--color-text);
   font-family: var(--font-mono);
   font-size: 14px;
   line-height: 1.7;
   scrollbar-width: thin;
-  scrollbar-color: #60727c transparent;
+  scrollbar-color: var(--color-text-muted) transparent;
 }
 
 .incremental-md-renderer :deep(.mermaid-block) {
   margin: 14px 0;
   max-width: 100%;
   overflow-x: auto;
-  border: 1px solid #dce2e3;
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 16px;
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .incremental-md-renderer :deep(.inc-mermaid) {
@@ -666,25 +763,25 @@ defineExpose({ getLastIncompleteIndex })
   align-items: center;
   justify-content: center;
   gap: 9px;
-  color: #60727c;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 
 .incremental-md-renderer :deep(.skeleton-block) {
   margin: 10px 0;
   justify-content: flex-start;
-  border: 1px dashed #ccd0cf;
+  border: 1px dashed var(--color-border-strong);
   border-radius: 8px;
   padding: 12px 14px;
-  background: #f5f7f7;
+  background: var(--color-surface-subtle);
 }
 
 .incremental-md-renderer :deep(.inc-spinner) {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
-  border: 2px solid #ccd0cf;
-  border-top-color: #11212d;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-text);
   border-radius: 50%;
   animation: incSpin .8s linear infinite;
 }

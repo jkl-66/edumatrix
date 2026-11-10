@@ -1,7 +1,7 @@
 {
   "schema_version": "edumatrix.course-version-manifest.v1",
-  "manifest_version": "course-ai-deep-learning-agents-1.1.0",
-  "generated_at": "2026-08-31T00:00:00+08:00",
+  "manifest_version": "course-ai-deep-learning-agents-1.4.4",
+  "generated_at": "2026-11-05T03:48:51.645478+00:00",
   "course_id": "course-ai-deep-learning-agents-v1",
   "title": "人工智能与深度学习：从机器学习基础到大模型智能体",
   "subject": "人工智能 / 深度学习 / 大模型与智能体",
@@ -9,7 +9,7 @@
   "domain_pack": "domain-ai-deep-learning-agents-v1",
   "knowledge_point_version": "ai-deep-learning-agents-kp-1.0.0",
   "language": "zh-CN",
-  "content_origin": "D2L 中文第二版 PyTorch、NNDL 理论与通识版、NNDL 案例与实践、LLM-Beginner 的固定版本整合；每章保留来源角色和可追溯元数据。",
+  "content_origin": "D2L 中文第二版 PyTorch、NNDL 理论与通识版、NNDL 案例与实践、LLM-Beginner 的固定版本整合；每章保留来源角色和可追溯元数据。；scikit-learn 官方实践指南固定版本补充数据预处理与泄漏依据。",
   "license": "用户已取得课程资料使用许可；上游许可与署名见 LICENSES.md 及各文件 provenance 字段。",
   "visibility": "public",
   "status": "published",
@@ -28,45 +28,150 @@
     "theory": "NNDL 第二版",
     "intuition": "NNDL 通识版",
     "code": "NNDL 案例与实践",
-    "llm_agent": "LLM-Beginner"
+    "llm_agent": "LLM-Beginner",
+    "preprocessing": "scikit-learn 官方数据预处理、数据泄漏与随机性指南"
   },
   "pathways": {
     "main": [
-      "AI-KP-01",
-      "AI-KP-02",
-      "AI-KP-03",
-      "AI-KP-04",
-      "AI-KP-05",
-      "AI-KP-06",
-      "AI-KP-07",
-      "AI-KP-08",
-      "AI-KP-09",
-      "AI-KP-10",
-      "AI-KP-15",
-      "AI-KP-17",
-      "AI-KP-18",
+      "AI-KP-01-01",
+      "AI-KP-01-02",
+      "AI-KP-02-01",
+      "AI-KP-02-02",
+      "AI-KP-02-03",
+      "AI-KP-02-04",
+      "AI-KP-02-05",
+      "AI-KP-02-06",
+      "AI-KP-02-07",
+      "AI-KP-02-08",
+      "AI-KP-02-09",
+      "AI-KP-03-01",
+      "AI-KP-03-02",
+      "AI-KP-03-03",
+      "AI-KP-03-04",
+      "AI-KP-03-05",
+      "AI-KP-04-01",
+      "AI-KP-04-02",
+      "AI-KP-04-03",
+      "AI-KP-04-04",
+      "AI-KP-04-05",
+      "AI-KP-04-06",
+      "AI-KP-05-01",
+      "AI-KP-05-02",
+      "AI-KP-05-03",
+      "AI-KP-05-04",
+      "AI-KP-05-05",
+      "AI-KP-06-01",
+      "AI-KP-06-02",
+      "AI-KP-06-03",
+      "AI-KP-06-04",
+      "AI-KP-07-01",
+      "AI-KP-07-02",
+      "AI-KP-07-03",
+      "AI-KP-07-04",
+      "AI-KP-07-05",
+      "AI-KP-08-01",
+      "AI-KP-08-02",
+      "AI-KP-08-03",
+      "AI-KP-08-04",
+      "AI-KP-09-01",
+      "AI-KP-09-02",
+      "AI-KP-09-03",
+      "AI-KP-09-04",
+      "AI-KP-10-01",
+      "AI-KP-10-02",
+      "AI-KP-10-03",
+      "AI-KP-15-01",
+      "AI-KP-15-02",
+      "AI-KP-15-03",
+      "AI-KP-15-04",
+      "AI-KP-17-01",
+      "AI-KP-17-02",
+      "AI-KP-17-03",
+      "AI-KP-17-04",
+      "AI-KP-18-01",
+      "AI-KP-18-02",
+      "AI-KP-18-03",
+      "AI-KP-18-04",
       "AI-KP-20"
     ],
     "theory": [
-      "AI-KP-02",
-      "AI-KP-04",
-      "AI-KP-06",
-      "AI-KP-07",
-      "AI-KP-10",
-      "AI-KP-11",
-      "AI-KP-12",
-      "AI-KP-15"
+      "AI-KP-02-01",
+      "AI-KP-02-02",
+      "AI-KP-02-03",
+      "AI-KP-02-04",
+      "AI-KP-02-05",
+      "AI-KP-02-06",
+      "AI-KP-02-07",
+      "AI-KP-02-08",
+      "AI-KP-02-09",
+      "AI-KP-04-01",
+      "AI-KP-04-02",
+      "AI-KP-04-03",
+      "AI-KP-04-04",
+      "AI-KP-04-05",
+      "AI-KP-04-06",
+      "AI-KP-06-01",
+      "AI-KP-06-02",
+      "AI-KP-06-03",
+      "AI-KP-06-04",
+      "AI-KP-07-01",
+      "AI-KP-07-02",
+      "AI-KP-07-03",
+      "AI-KP-07-04",
+      "AI-KP-07-05",
+      "AI-KP-10-01",
+      "AI-KP-10-02",
+      "AI-KP-10-03",
+      "AI-KP-11-01",
+      "AI-KP-11-02",
+      "AI-KP-11-03",
+      "AI-KP-12-01",
+      "AI-KP-12-02",
+      "AI-KP-12-03",
+      "AI-KP-12-04",
+      "AI-KP-15-01",
+      "AI-KP-15-02",
+      "AI-KP-15-03",
+      "AI-KP-15-04"
     ],
     "engineering": [
-      "AI-KP-03",
-      "AI-KP-04",
-      "AI-KP-06",
-      "AI-KP-08",
-      "AI-KP-10",
-      "AI-KP-15",
-      "AI-KP-17",
-      "AI-KP-18",
-      "AI-KP-19",
+      "AI-KP-03-01",
+      "AI-KP-03-02",
+      "AI-KP-03-03",
+      "AI-KP-03-04",
+      "AI-KP-03-05",
+      "AI-KP-04-01",
+      "AI-KP-04-02",
+      "AI-KP-04-03",
+      "AI-KP-04-04",
+      "AI-KP-04-05",
+      "AI-KP-04-06",
+      "AI-KP-06-01",
+      "AI-KP-06-02",
+      "AI-KP-06-03",
+      "AI-KP-06-04",
+      "AI-KP-08-01",
+      "AI-KP-08-02",
+      "AI-KP-08-03",
+      "AI-KP-08-04",
+      "AI-KP-10-01",
+      "AI-KP-10-02",
+      "AI-KP-10-03",
+      "AI-KP-15-01",
+      "AI-KP-15-02",
+      "AI-KP-15-03",
+      "AI-KP-15-04",
+      "AI-KP-17-01",
+      "AI-KP-17-02",
+      "AI-KP-17-03",
+      "AI-KP-17-04",
+      "AI-KP-18-01",
+      "AI-KP-18-02",
+      "AI-KP-18-03",
+      "AI-KP-18-04",
+      "AI-KP-19-01",
+      "AI-KP-19-02",
+      "AI-KP-19-03",
       "AI-KP-20"
     ]
   },
@@ -115,7 +220,8 @@
       "title": "多层感知机与反向传播",
       "level": "core",
       "prerequisites": [
-        "AI-KP-04"
+        "AI-KP-04-03",
+        "AI-KP-04-04"
       ]
     },
     {
@@ -123,7 +229,7 @@
       "title": "优化算法、正则化与训练稳定性",
       "level": "core",
       "prerequisites": [
-        "AI-KP-05",
+        "AI-KP-05-03",
         "AI-KP-06"
       ]
     },
@@ -165,7 +271,8 @@
       "title": "无监督学习、表示学习与降维",
       "level": "advanced",
       "prerequisites": [
-        "AI-KP-03",
+        "AI-KP-03-02",
+        "AI-KP-02-04",
         "AI-KP-07"
       ]
     },
@@ -234,10 +341,930 @@
       "title": "个性化学习智能体综合项目",
       "level": "capstone",
       "prerequisites": [
-        "AI-KP-17",
-        "AI-KP-18",
-        "AI-KP-19"
+        "AI-KP-17-04",
+        "AI-KP-18-04",
+        "AI-KP-19-03"
       ]
+    },
+    {
+      "code": "AI-KP-21",
+      "title": "计算性能、异步计算与并行训练",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-06",
+        "AI-KP-07"
+      ]
+    },
+    {
+      "code": "AI-KP-01-01",
+      "title": "监督学习的输入、标签与预测任务",
+      "level": "foundation",
+      "prerequisites": [],
+      "parent_code": "AI-KP-01",
+      "teaching_sources": [
+        {
+          "filename": "00_D2L引言_人工智能与机器学习全景.md",
+          "headings": [
+            "监督学习"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-01-02",
+      "title": "回归与分类任务",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-01-01"
+      ],
+      "parent_code": "AI-KP-01",
+      "teaching_sources": [
+        {
+          "filename": "00_D2L引言_人工智能与机器学习全景.md",
+          "headings": [
+            "回归",
+            "分类"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-02-01",
+      "title": "标量、向量与张量形状",
+      "level": "foundation",
+      "prerequisites": [],
+      "parent_code": "AI-KP-02"
+    },
+    {
+      "code": "AI-KP-02-02",
+      "title": "矩阵的行列与转置",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-02-01"
+      ],
+      "parent_code": "AI-KP-02"
+    },
+    {
+      "code": "AI-KP-02-03",
+      "title": "向量点积与加权和",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-02-01"
+      ],
+      "parent_code": "AI-KP-02"
+    },
+    {
+      "code": "AI-KP-02-04",
+      "title": "矩阵向量乘法",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-02-02",
+        "AI-KP-02-03"
+      ],
+      "parent_code": "AI-KP-02"
+    },
+    {
+      "code": "AI-KP-02-05",
+      "title": "导数与变化率",
+      "level": "foundation",
+      "prerequisites": [],
+      "parent_code": "AI-KP-02"
+    },
+    {
+      "code": "AI-KP-02-06",
+      "title": "偏导数、梯度与链式法则",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-02-05"
+      ],
+      "parent_code": "AI-KP-02"
+    },
+    {
+      "code": "AI-KP-02-07",
+      "title": "频率与概率估计",
+      "level": "foundation",
+      "prerequisites": [],
+      "parent_code": "AI-KP-02",
+      "teaching_sources": [
+        {
+          "filename": "01_D2L预备知识_数学、数据与自动微分.md",
+          "headings": [
+            "基本概率论"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-02-08",
+      "title": "条件概率与独立性",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-02-07"
+      ],
+      "parent_code": "AI-KP-02"
+    },
+    {
+      "code": "AI-KP-02-09",
+      "title": "均值、期望与方差",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-02-07"
+      ],
+      "parent_code": "AI-KP-02"
+    },
+    {
+      "code": "AI-KP-03-01",
+      "title": "样本、特征与标签",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-01-01"
+      ],
+      "parent_code": "AI-KP-03",
+      "teaching_sources": [
+        {
+          "filename": "00_D2L引言_人工智能与机器学习全景.md",
+          "headings": [
+            "数据",
+            "监督学习"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-03-02",
+      "title": "缺失值与数据预处理",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-03-01"
+      ],
+      "parent_code": "AI-KP-03"
+    },
+    {
+      "code": "AI-KP-03-03",
+      "title": "类别特征的数值编码",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-03-01"
+      ],
+      "parent_code": "AI-KP-03"
+    },
+    {
+      "code": "AI-KP-03-04",
+      "title": "数据批次与训练数据读取",
+      "level": "foundation",
+      "prerequisites": [
+        "AI-KP-03-01",
+        "AI-KP-02-01"
+      ],
+      "parent_code": "AI-KP-03"
+    },
+    {
+      "code": "AI-KP-03-05",
+      "title": "预处理参数的拟合与数据泄漏",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-03-01",
+        "AI-KP-05-02"
+      ],
+      "parent_code": "AI-KP-03",
+      "teaching_sources": [
+        {
+          "filename": "24_sklearn数据预处理与数据泄漏.md",
+          "headings": [
+            "Inconsistent preprocessing",
+            "Data leakage"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-04-01",
+      "title": "线性模型的权重、偏置与预测",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-03-01"
+      ],
+      "parent_code": "AI-KP-04",
+      "teaching_sources": [
+        {
+          "filename": "02_D2L线性神经网络.md",
+          "headings": [
+            "线性模型",
+            "用模型进行预测"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-04-02",
+      "title": "平方损失与预测误差",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-04-01"
+      ],
+      "parent_code": "AI-KP-04",
+      "teaching_sources": [
+        {
+          "filename": "02_D2L线性神经网络.md",
+          "headings": [
+            "损失函数"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-04-03",
+      "title": "小批量随机梯度下降",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-04-02",
+        "AI-KP-02-06"
+      ],
+      "parent_code": "AI-KP-04"
+    },
+    {
+      "code": "AI-KP-04-04",
+      "title": "softmax与多类分类概率",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-01-02",
+        "AI-KP-02-07"
+      ],
+      "parent_code": "AI-KP-04"
+    },
+    {
+      "code": "AI-KP-04-05",
+      "title": "交叉熵损失",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-04-04"
+      ],
+      "parent_code": "AI-KP-04"
+    },
+    {
+      "code": "AI-KP-04-06",
+      "title": "线性回归的实现与训练循环",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-04-03",
+        "AI-KP-03-04"
+      ],
+      "parent_code": "AI-KP-04"
+    },
+    {
+      "code": "AI-KP-05-01",
+      "title": "训练误差与泛化误差",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-04-02"
+      ],
+      "parent_code": "AI-KP-05",
+      "teaching_sources": [
+        {
+          "filename": "03_D2L多层感知机.md",
+          "headings": [
+            "训练误差和泛化误差"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-05-02",
+      "title": "训练集、验证集与测试集",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-05-01"
+      ],
+      "parent_code": "AI-KP-05",
+      "teaching_sources": [
+        {
+          "filename": "03_D2L多层感知机.md",
+          "headings": [
+            "模型选择"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-05-03",
+      "title": "欠拟合、过拟合与模型复杂度",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-05-01"
+      ],
+      "parent_code": "AI-KP-05",
+      "teaching_sources": [
+        {
+          "filename": "03_D2L多层感知机.md",
+          "headings": [
+            "欠拟合还是过拟合？"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "AI-KP-05-04",
+      "title": "超参数选择与验证误差",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-05-02",
+        "AI-KP-05-03"
+      ],
+      "parent_code": "AI-KP-05"
+    },
+    {
+      "code": "AI-KP-05-05",
+      "title": "K折交叉验证",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-05-02"
+      ],
+      "parent_code": "AI-KP-05"
+    },
+    {
+      "code": "AI-KP-06-01",
+      "title": "隐藏层、非线性激活与多层感知机",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-02-04",
+        "AI-KP-04-01"
+      ],
+      "parent_code": "AI-KP-06",
+      "learning_outcome": "计算一层输出，解释连续线性层为什么仍是线性模型"
+    },
+    {
+      "code": "AI-KP-06-02",
+      "title": "计算图、前向传播与反向传播",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-06-01",
+        "AI-KP-02-06"
+      ],
+      "parent_code": "AI-KP-06",
+      "learning_outcome": "沿小计算图核算局部梯度与链式传播"
+    },
+    {
+      "code": "AI-KP-06-03",
+      "title": "梯度消失、梯度爆炸与参数初始化",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-06-02"
+      ],
+      "parent_code": "AI-KP-06",
+      "learning_outcome": "从训练曲线和梯度量级判断初始化问题"
+    },
+    {
+      "code": "AI-KP-06-04",
+      "title": "网络模块、参数管理与模型保存",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-06-01",
+        "AI-KP-04-06"
+      ],
+      "parent_code": "AI-KP-06",
+      "learning_outcome": "构造网络模块，区分可训练参数并保存和恢复模型"
+    },
+    {
+      "code": "AI-KP-07-01",
+      "title": "权重衰减与Dropout",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-05-03",
+        "AI-KP-06-01"
+      ],
+      "parent_code": "AI-KP-07",
+      "learning_outcome": "比较两种正则化的作用以及训练和推理时的差别"
+    },
+    {
+      "code": "AI-KP-07-02",
+      "title": "优化目标、凸性与梯度下降",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-04-03",
+        "AI-KP-02-06"
+      ],
+      "parent_code": "AI-KP-07",
+      "learning_outcome": "区分优化误差与泛化误差，解释梯度下降的步长和收敛条件"
+    },
+    {
+      "code": "AI-KP-07-03",
+      "title": "随机梯度、小批量与动量",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-07-02",
+        "AI-KP-03-04"
+      ],
+      "parent_code": "AI-KP-07",
+      "learning_outcome": "比较批大小和动量对噪声、速度及训练曲线的影响"
+    },
+    {
+      "code": "AI-KP-07-04",
+      "title": "自适应优化器与Adam",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-07-03"
+      ],
+      "parent_code": "AI-KP-07",
+      "learning_outcome": "解释自适应步长及一二阶矩，比较实际训练结果"
+    },
+    {
+      "code": "AI-KP-07-05",
+      "title": "学习率调度与训练诊断",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-07-04",
+        "AI-KP-06-03"
+      ],
+      "parent_code": "AI-KP-07",
+      "learning_outcome": "据训练与验证曲线选择学习率调整并保留对照"
+    },
+    {
+      "code": "AI-KP-08-01",
+      "title": "卷积核、局部连接与参数共享",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-06-01"
+      ],
+      "parent_code": "AI-KP-08",
+      "learning_outcome": "手算小矩阵卷积并说明与全连接层的不同"
+    },
+    {
+      "code": "AI-KP-08-02",
+      "title": "填充、步幅、通道与池化",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-08-01"
+      ],
+      "parent_code": "AI-KP-08",
+      "learning_outcome": "核算输出形状，解释通道和下采样保留了什么"
+    },
+    {
+      "code": "AI-KP-08-03",
+      "title": "LeNet与深层卷积网络",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-08-02",
+        "AI-KP-06-04"
+      ],
+      "parent_code": "AI-KP-08",
+      "learning_outcome": "搭建并比较卷积网络的输入输出和参数规模"
+    },
+    {
+      "code": "AI-KP-08-04",
+      "title": "批量规范化与残差连接",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-08-03",
+        "AI-KP-06-02"
+      ],
+      "parent_code": "AI-KP-08",
+      "learning_outcome": "解释训练与推理统计量及残差路径的作用"
+    },
+    {
+      "code": "AI-KP-09-01",
+      "title": "序列、词元与语言建模",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-03-04",
+        "AI-KP-04-05"
+      ],
+      "parent_code": "AI-KP-09",
+      "learning_outcome": "构造序列样本，解释条件预测与困惑度"
+    },
+    {
+      "code": "AI-KP-09-02",
+      "title": "循环状态与通过时间反向传播",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-09-01",
+        "AI-KP-06-02"
+      ],
+      "parent_code": "AI-KP-09",
+      "learning_outcome": "展开循环网络并解释长序列梯度问题"
+    },
+    {
+      "code": "AI-KP-09-03",
+      "title": "GRU与LSTM的门控记忆",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-09-02"
+      ],
+      "parent_code": "AI-KP-09",
+      "learning_outcome": "说明更新、遗忘与输出门如何控制状态"
+    },
+    {
+      "code": "AI-KP-09-04",
+      "title": "编码器解码器、seq2seq与束搜索",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-09-03"
+      ],
+      "parent_code": "AI-KP-09",
+      "learning_outcome": "追踪翻译输入输出，比较贪心与束搜索的局限"
+    },
+    {
+      "code": "AI-KP-10-01",
+      "title": "查询、键、值与注意力评分",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-02-04",
+        "AI-KP-04-04"
+      ],
+      "parent_code": "AI-KP-10",
+      "learning_outcome": "计算注意力权重，解释加权汇聚和掩码"
+    },
+    {
+      "code": "AI-KP-10-02",
+      "title": "多头、自注意力与位置编码",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-10-01"
+      ],
+      "parent_code": "AI-KP-10",
+      "learning_outcome": "核算多头形状并说明位置信息如何进入模型"
+    },
+    {
+      "code": "AI-KP-10-03",
+      "title": "Transformer结构与因果掩码",
+      "level": "core",
+      "prerequisites": [
+        "AI-KP-10-02",
+        "AI-KP-09-04",
+        "AI-KP-08-04"
+      ],
+      "parent_code": "AI-KP-10",
+      "learning_outcome": "画出编码解码数据流，区分训练并行与生成依赖"
+    },
+    {
+      "code": "AI-KP-11-01",
+      "title": "图数据、节点边任务与图级读出",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-02-04",
+        "AI-KP-06-01"
+      ],
+      "parent_code": "AI-KP-11",
+      "learning_outcome": "按任务选择表示、划分单位和读出方式"
+    },
+    {
+      "code": "AI-KP-11-02",
+      "title": "消息传递、邻域聚合与图卷积",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-11-01"
+      ],
+      "parent_code": "AI-KP-11",
+      "learning_outcome": "手算一次邻居聚合并对比GCN与注意力聚合"
+    },
+    {
+      "code": "AI-KP-11-03",
+      "title": "图网络的过平滑与过压缩",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-11-02"
+      ],
+      "parent_code": "AI-KP-11",
+      "learning_outcome": "区分两种深层图网络问题及适用的缓解方法"
+    },
+    {
+      "code": "AI-KP-12-01",
+      "title": "主成分分析与降维重建",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-02-04",
+        "AI-KP-02-09"
+      ],
+      "parent_code": "AI-KP-12",
+      "learning_outcome": "解释投影、方差与重建误差的关系"
+    },
+    {
+      "code": "AI-KP-12-02",
+      "title": "自编码器与表示学习",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-06-02",
+        "AI-KP-12-01"
+      ],
+      "parent_code": "AI-KP-12",
+      "learning_outcome": "解释编码、重建目标及压缩表示的局限"
+    },
+    {
+      "code": "AI-KP-12-03",
+      "title": "聚类、密度估计与无标签评价",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-02-08",
+        "AI-KP-12-01"
+      ],
+      "parent_code": "AI-KP-12",
+      "learning_outcome": "区分聚类与分类，说明无标签任务的评价依据"
+    },
+    {
+      "code": "AI-KP-12-04",
+      "title": "自监督任务与对比表示",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-12-02",
+        "AI-KP-04-05"
+      ],
+      "parent_code": "AI-KP-12",
+      "learning_outcome": "构造监督信号，区分预训练目标与下游效果"
+    },
+    {
+      "code": "AI-KP-13-01",
+      "title": "数据增广与迁移微调",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-08-03",
+        "AI-KP-05-02"
+      ],
+      "parent_code": "AI-KP-13",
+      "learning_outcome": "设计不泄漏的数据增广与微调对照"
+    },
+    {
+      "code": "AI-KP-13-02",
+      "title": "检测框、锚框与目标检测",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-13-01"
+      ],
+      "parent_code": "AI-KP-13",
+      "learning_outcome": "计算框重叠，说明类别和位置预测的分工"
+    },
+    {
+      "code": "AI-KP-13-03",
+      "title": "语义分割、转置卷积与全卷积网络",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-08-02",
+        "AI-KP-13-02"
+      ],
+      "parent_code": "AI-KP-13",
+      "learning_outcome": "解释逐像素输出与上采样的形状变化"
+    },
+    {
+      "code": "AI-KP-13-04",
+      "title": "视觉任务的实验比较",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-13-01",
+        "AI-KP-13-03"
+      ],
+      "parent_code": "AI-KP-13",
+      "learning_outcome": "比较独立验证结果，解释误判样例及适用边界"
+    },
+    {
+      "code": "AI-KP-14-01",
+      "title": "词嵌入、负采样与子词表示",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-09-01",
+        "AI-KP-04-05"
+      ],
+      "parent_code": "AI-KP-14",
+      "learning_outcome": "解释词表示的训练信号、近似计算与未登录词处理"
+    },
+    {
+      "code": "AI-KP-14-02",
+      "title": "BERT预训练与上下文表示",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-10-03",
+        "AI-KP-14-01"
+      ],
+      "parent_code": "AI-KP-14",
+      "learning_outcome": "区分掩码预训练与自回归生成，说明预训练输入"
+    },
+    {
+      "code": "AI-KP-14-03",
+      "title": "情感分类、自然语言推断与微调",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-14-02",
+        "AI-KP-05-02"
+      ],
+      "parent_code": "AI-KP-14",
+      "learning_outcome": "为下游任务选择输出头并解释验证结果"
+    },
+    {
+      "code": "AI-KP-15-01",
+      "title": "自回归生成、困惑度与解码策略",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-10-03",
+        "AI-KP-09-01"
+      ],
+      "parent_code": "AI-KP-15",
+      "learning_outcome": "比较温度、贪心和采样，解释困惑度不能直接代表回答正确性"
+    },
+    {
+      "code": "AI-KP-15-02",
+      "title": "大模型预训练、分词与规模规律",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-15-01"
+      ],
+      "parent_code": "AI-KP-15",
+      "learning_outcome": "解释训练数据、词元和计算预算的相互约束"
+    },
+    {
+      "code": "AI-KP-15-03",
+      "title": "上下文学习与推理增强",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-15-02"
+      ],
+      "parent_code": "AI-KP-15",
+      "learning_outcome": "区分示例提示、推理计算和参数更新，核验推理结果"
+    },
+    {
+      "code": "AI-KP-15-04",
+      "title": "小型GPT的训练与生成实验",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-15-02",
+        "AI-KP-06-04",
+        "AI-KP-07-05"
+      ],
+      "parent_code": "AI-KP-15",
+      "learning_outcome": "运行小规模因果语言模型，记录损失和生成行为"
+    },
+    {
+      "code": "AI-KP-16-01",
+      "title": "指令微调与参数高效微调",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-15-02",
+        "AI-KP-07-05"
+      ],
+      "parent_code": "AI-KP-16",
+      "learning_outcome": "说明指令数据、训练目标及LoRA改变的参数"
+    },
+    {
+      "code": "AI-KP-16-02",
+      "title": "偏好数据、奖励与RLHF",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-16-01"
+      ],
+      "parent_code": "AI-KP-16",
+      "learning_outcome": "区分示范答案与偏好比较，解释奖励优化的边界"
+    },
+    {
+      "code": "AI-KP-16-03",
+      "title": "DPO与策略优化方法的比较",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-16-02"
+      ],
+      "parent_code": "AI-KP-16",
+      "learning_outcome": "比较偏好优化目标和所需组件，避免把一种工程顺序当普遍定律"
+    },
+    {
+      "code": "AI-KP-17-01",
+      "title": "检索增强生成的证据链",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-15-01"
+      ],
+      "parent_code": "AI-KP-17",
+      "learning_outcome": "拆开索引、检索和生成，指出每步可能丢失或歪曲的证据"
+    },
+    {
+      "code": "AI-KP-17-02",
+      "title": "文档切分、向量索引与召回",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-17-01",
+        "AI-KP-03-05"
+      ],
+      "parent_code": "AI-KP-17",
+      "learning_outcome": "设计保留来源的切分和索引，说明归一化与相似度条件"
+    },
+    {
+      "code": "AI-KP-17-03",
+      "title": "重排序与检索质量评价",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-17-02",
+        "AI-KP-05-02"
+      ],
+      "parent_code": "AI-KP-17",
+      "learning_outcome": "计算Recall@k和MRR并比较有无重排的结果"
+    },
+    {
+      "code": "AI-KP-17-04",
+      "title": "回答忠实性与RAG消融实验",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-17-03"
+      ],
+      "parent_code": "AI-KP-17",
+      "learning_outcome": "逐项核对回答依据，区分检索命中、引用存在和内容受支持"
+    },
+    {
+      "code": "AI-KP-18-01",
+      "title": "智能体状态、规划与ReAct",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-15-03"
+      ],
+      "parent_code": "AI-KP-18",
+      "learning_outcome": "追踪观察、决策、行动和状态更新，不把文字计划当执行结果"
+    },
+    {
+      "code": "AI-KP-18-02",
+      "title": "工具选择、参数校验与执行恢复",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-18-01"
+      ],
+      "parent_code": "AI-KP-18",
+      "learning_outcome": "验证工具输入输出，利用实际结果继续任务并处理失败"
+    },
+    {
+      "code": "AI-KP-18-03",
+      "title": "多智能体分工、共享信息与协作",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-18-02"
+      ],
+      "parent_code": "AI-KP-18",
+      "learning_outcome": "比较协作与单体任务流程，追踪交接与纠错依据"
+    },
+    {
+      "code": "AI-KP-18-04",
+      "title": "智能体任务评价与过程治理",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-18-03",
+        "AI-KP-17-04"
+      ],
+      "parent_code": "AI-KP-18",
+      "learning_outcome": "分开统计任务完成、工具执行和证据质量，解释失败原因"
+    },
+    {
+      "code": "AI-KP-19-01",
+      "title": "MCP工具接口与调用协议",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-18-02"
+      ],
+      "parent_code": "AI-KP-19",
+      "learning_outcome": "区分协议接口与工具实现，验证枚举、调用和错误返回"
+    },
+    {
+      "code": "AI-KP-19-02",
+      "title": "技能加载、子任务隔离与上下文管理",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-19-01",
+        "AI-KP-18-03"
+      ],
+      "parent_code": "AI-KP-19",
+      "learning_outcome": "组织按需加载的技能与子任务信息，检查交接遗漏"
+    },
+    {
+      "code": "AI-KP-19-03",
+      "title": "代码智能体的修改验证循环",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-19-02",
+        "AI-KP-18-04"
+      ],
+      "parent_code": "AI-KP-19",
+      "learning_outcome": "完成读代码、修改、测试与结果核对，保留失败和修订"
+    },
+    {
+      "code": "AI-KP-21-01",
+      "title": "异步计算、并行与性能测量",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-06-04"
+      ],
+      "parent_code": "AI-KP-21",
+      "learning_outcome": "测量同步前后的真实耗时，区分延迟和吞吐量"
+    },
+    {
+      "code": "AI-KP-21-02",
+      "title": "多GPU数据并行与梯度同步",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-21-01",
+        "AI-KP-07-03"
+      ],
+      "parent_code": "AI-KP-21",
+      "learning_outcome": "追踪批次分配与梯度汇总，解释加速收益和通信代价"
+    },
+    {
+      "code": "AI-KP-21-03",
+      "title": "参数服务器与分布式训练",
+      "level": "advanced",
+      "prerequisites": [
+        "AI-KP-21-02"
+      ],
+      "parent_code": "AI-KP-21",
+      "learning_outcome": "比较集中与分布式参数更新的瓶颈和一致性条件"
     }
   ],
   "files": [
@@ -259,7 +1286,9 @@
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-01"
+        "AI-KP-01-01",
+        "AI-KP-01-02",
+        "AI-KP-03-01"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -270,20 +1299,29 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_preliminaries/autograd.md;chapter_preliminaries/calculus.md;chapter_preliminaries/index.md;chapter_preliminaries/linear-algebra.md;chapter_preliminaries/lookup-api.md;chapter_preliminaries/ndarray.md;chapter_preliminaries/pandas.md;chapter_preliminaries/probability.md",
+      "source_path": "chapter_preliminaries/index.md;chapter_preliminaries/ndarray.md;chapter_preliminaries/pandas.md;chapter_preliminaries/linear-algebra.md;chapter_preliminaries/calculus.md;chapter_preliminaries/autograd.md;chapter_preliminaries/probability.md;chapter_preliminaries/lookup-api.md",
       "source_type": "md",
       "source_bytes": 109631,
-      "source_sha256": "c9c48d71dd1b161eedf251aca065af4fe2025bda5931126386619c2cb29aa83b",
+      "source_sha256": "d462f95d47e24fff17c222fd8fc2f3638163b896d612cf0580b40341c0f3a416",
       "path": "chapters/01_D2L预备知识_数学、数据与自动微分.md",
       "bytes": 110447,
-      "sha256": "b4b2b55da32e695c4a54032641cd0b897088cf1fbcb6bccca8979e37d11f77a6",
-      "parser_version": "edumatrix-course-source-v2",
+      "sha256": "a89b866e3cf93957c184e7a156cc6411615f75aa3c3e987cf1f7fda83d53765b",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-02",
-        "AI-KP-03"
+        "AI-KP-02-01",
+        "AI-KP-02-02",
+        "AI-KP-02-03",
+        "AI-KP-02-04",
+        "AI-KP-02-05",
+        "AI-KP-02-06",
+        "AI-KP-02-07",
+        "AI-KP-02-08",
+        "AI-KP-02-09",
+        "AI-KP-03-02",
+        "AI-KP-03-03"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -294,19 +1332,25 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_linear-networks/image-classification-dataset.md;chapter_linear-networks/index.md;chapter_linear-networks/linear-regression-concise.md;chapter_linear-networks/linear-regression-scratch.md;chapter_linear-networks/linear-regression.md;chapter_linear-networks/softmax-regression-concise.md;chapter_linear-networks/softmax-regression-scratch.md;chapter_linear-networks/softmax-regression.md",
+      "source_path": "chapter_linear-networks/index.md;chapter_linear-networks/linear-regression.md;chapter_linear-networks/linear-regression-scratch.md;chapter_linear-networks/linear-regression-concise.md;chapter_linear-networks/softmax-regression.md;chapter_linear-networks/image-classification-dataset.md;chapter_linear-networks/softmax-regression-scratch.md;chapter_linear-networks/softmax-regression-concise.md",
       "source_type": "md",
       "source_bytes": 122609,
-      "source_sha256": "da811cf7e153b39cb928acafe3f9b69aa2cbd21994cf0657560b1f3fdd28dd51",
+      "source_sha256": "c441d326fd1cdaa4c8577135086e4c93fe5d511e6d19461db6e679f86c127578",
       "path": "chapters/02_D2L线性神经网络.md",
       "bytes": 123505,
-      "sha256": "0894b0f7b12d5fd366d0ffdab0fafa41b6e0cdf58c961207e9befc9ea5277a03",
-      "parser_version": "edumatrix-course-source-v2",
+      "sha256": "9da40878afd32dd2d40ac8fa4708cdcf34bc9c30c3fe66578101b442532d203c",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-04"
+        "AI-KP-03-04",
+        "AI-KP-04-01",
+        "AI-KP-04-02",
+        "AI-KP-04-03",
+        "AI-KP-04-04",
+        "AI-KP-04-05",
+        "AI-KP-04-06"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -317,19 +1361,29 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_multilayer-perceptrons/backprop.md;chapter_multilayer-perceptrons/dropout.md;chapter_multilayer-perceptrons/environment.md;chapter_multilayer-perceptrons/index.md;chapter_multilayer-perceptrons/kaggle-house-price.md;chapter_multilayer-perceptrons/mlp-concise.md;chapter_multilayer-perceptrons/mlp-scratch.md;chapter_multilayer-perceptrons/mlp.md;chapter_multilayer-perceptrons/numerical-stability-and-init.md;chapter_multilayer-perceptrons/underfit-overfit.md;chapter_multilayer-perceptrons/weight-decay.md",
+      "source_path": "chapter_multilayer-perceptrons/index.md;chapter_multilayer-perceptrons/mlp.md;chapter_multilayer-perceptrons/mlp-scratch.md;chapter_multilayer-perceptrons/mlp-concise.md;chapter_multilayer-perceptrons/underfit-overfit.md;chapter_multilayer-perceptrons/weight-decay.md;chapter_multilayer-perceptrons/dropout.md;chapter_multilayer-perceptrons/backprop.md;chapter_multilayer-perceptrons/numerical-stability-and-init.md;chapter_multilayer-perceptrons/environment.md;chapter_multilayer-perceptrons/kaggle-house-price.md",
       "source_type": "md",
       "source_bytes": 180565,
-      "source_sha256": "5eaec7ecfb2ced9e16b9bb5d123fa6db0ca6d45c866b0b8e5cdc23765a3d4dee",
+      "source_sha256": "06d352ebb25b1d44f02bcdd4691a2dda3af7e80a2911d0f68cde5a335860b460",
       "path": "chapters/03_D2L多层感知机.md",
-      "bytes": 181579,
-      "sha256": "7414475a6cb7e1f24b856434488f5448a6bc6d8e524646c9742d0c89bbe1c12b",
-      "parser_version": "edumatrix-course-source-v2",
+      "bytes": 183187,
+      "sha256": "8c743ecdd4f871e3251e118eecdf1767afc0c2a47e9023e78045db92e0cee0fe",
+      "parser_version": "edumatrix-course-source-v3-errata-r172",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-06"
+        "AI-KP-03-02",
+        "AI-KP-03-03",
+        "AI-KP-05-01",
+        "AI-KP-05-02",
+        "AI-KP-05-03",
+        "AI-KP-05-04",
+        "AI-KP-05-05",
+        "AI-KP-06-01",
+        "AI-KP-06-02",
+        "AI-KP-06-03",
+        "AI-KP-07-01"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -340,20 +1394,19 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_deep-learning-computation/custom-layer.md;chapter_deep-learning-computation/deferred-init.md;chapter_deep-learning-computation/index.md;chapter_deep-learning-computation/model-construction.md;chapter_deep-learning-computation/parameters.md;chapter_deep-learning-computation/read-write.md;chapter_deep-learning-computation/use-gpu.md",
+      "source_path": "chapter_deep-learning-computation/index.md;chapter_deep-learning-computation/model-construction.md;chapter_deep-learning-computation/parameters.md;chapter_deep-learning-computation/deferred-init.md;chapter_deep-learning-computation/custom-layer.md;chapter_deep-learning-computation/read-write.md;chapter_deep-learning-computation/use-gpu.md",
       "source_type": "md",
       "source_bytes": 86856,
-      "source_sha256": "e90ddda5fd2e50618ef1d17752415ceb3f92a8827c144de6b78b39f42cad1193",
+      "source_sha256": "958eb67305905d1f9306950994d5f85c5df69084039c269f2db7c3b302d22bd6",
       "path": "chapters/04_D2L深度学习计算.md",
       "bytes": 87709,
-      "sha256": "f2dd5b9b33e9f763797f85938c921caba2ef453c27fade721c8f382eed090676",
-      "parser_version": "edumatrix-course-source-v2",
+      "sha256": "aa5dea88531da9e69d87b1ad8f9bc470cddd5e1fd5a752b462a693f14977a563",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-06",
-        "AI-KP-07"
+        "AI-KP-06-04"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -364,23 +1417,40 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_optimization/adadelta.md;chapter_optimization/adagrad.md;chapter_optimization/adam.md;chapter_optimization/convexity.md;chapter_optimization/gd.md;chapter_optimization/index.md;chapter_optimization/lr-scheduler.md;chapter_optimization/minibatch-sgd.md;chapter_optimization/momentum.md;chapter_optimization/optimization-intro.md;chapter_optimization/rmsprop.md;chapter_optimization/sgd.md",
+      "source_path": "chapter_optimization/index.md;chapter_optimization/optimization-intro.md;chapter_optimization/convexity.md;chapter_optimization/gd.md;chapter_optimization/sgd.md;chapter_optimization/minibatch-sgd.md;chapter_optimization/momentum.md;chapter_optimization/adagrad.md;chapter_optimization/rmsprop.md;chapter_optimization/adadelta.md;chapter_optimization/adam.md;chapter_optimization/lr-scheduler.md",
       "source_type": "md",
       "source_bytes": 185531,
-      "source_sha256": "1fb490ff783839f6bdf051fa483a47a7061e4246f2d40b89722a97a6fb8fa917",
+      "source_sha256": "bf7ccd04a9b70045aefd6e0e657e306194e70f5405cf53cd2df70a50818e054f",
       "path": "chapters/05_D2L优化算法.md",
-      "bytes": 186433,
-      "sha256": "5983e3387bc43994f2d6aef3fc3733baf09c671b68a7dc87a707c599b52ebfec",
-      "parser_version": "edumatrix-course-source-v2",
+      "bytes": 188711,
+      "sha256": "debb95bab086067094840d827810c0d4d58144e74aa9901a414995e9f33af93c",
+      "parser_version": "edumatrix-course-source-v6",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-05",
-        "AI-KP-07"
+        "AI-KP-07-02",
+        "AI-KP-07-03",
+        "AI-KP-07-04",
+        "AI-KP-07-05"
       ],
       "source_role": "D2L 中文第二版主教材",
-      "conversion": "markdown-concatenation-with-provenance-header"
+      "conversion": "markdown-concatenation-with-provenance-header-and-explicit-errata",
+      "errata": {
+        "date": "2026-11-03",
+        "scope": [
+          "RMSProp平方梯度展开与初值",
+          "指数权重半衰期",
+          "Adadelta有效记忆窗口",
+          "二次函数配方、梯度与坐标平移符号",
+          "逐坐标梯度下降学习率",
+          "标量二次函数的振荡收敛边界",
+          "Adam偏差校正的等比求和上限与系数范围",
+          "TensorFlow Adam/Yogi稳定项分母括号",
+          "TensorFlow Adam每轮时间步递增"
+        ],
+        "basis": "按原递推式独立展开，按权重减半定义计算；上游原始版本与哈希保留。 二次函数按原正线性项精确展开并求导；标量更新按递推系数独立核算。 等比级数用Fraction逐项核算；TensorFlow两段代码的数值表达按原AST进行NumPy代数执行，与独立递推及零梯度边界比较，不等同原生TensorFlow训练。"
+      }
     },
     {
       "chapter_order": 6,
@@ -388,19 +1458,21 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_convolutional-neural-networks/channels.md;chapter_convolutional-neural-networks/conv-layer.md;chapter_convolutional-neural-networks/index.md;chapter_convolutional-neural-networks/lenet.md;chapter_convolutional-neural-networks/padding-and-strides.md;chapter_convolutional-neural-networks/pooling.md;chapter_convolutional-neural-networks/why-conv.md",
+      "source_path": "chapter_convolutional-neural-networks/index.md;chapter_convolutional-neural-networks/why-conv.md;chapter_convolutional-neural-networks/conv-layer.md;chapter_convolutional-neural-networks/padding-and-strides.md;chapter_convolutional-neural-networks/channels.md;chapter_convolutional-neural-networks/pooling.md;chapter_convolutional-neural-networks/lenet.md",
       "source_type": "md",
       "source_bytes": 83871,
-      "source_sha256": "69b651b3418256e7c0077e02e370c24d61ca6749882078b65ecdda28851f019c",
+      "source_sha256": "fd47edc89e7f7c77c9bfc6d3f6de3d1dbeef98b08ddb65cb7caa9a09530eeedf",
       "path": "chapters/06_D2L卷积神经网络.md",
       "bytes": 84729,
-      "sha256": "48516fa836eb235ea8ff83194979c99115739f44df346f00700a86b910bfb57c",
-      "parser_version": "edumatrix-course-source-v2",
+      "sha256": "f1ab76e3d68ded02fbc668eb63a99c879969c21161fa1d303baed060b64e07cb",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-08"
+        "AI-KP-08-01",
+        "AI-KP-08-02",
+        "AI-KP-08-03"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -411,19 +1483,20 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_convolutional-modern/alexnet.md;chapter_convolutional-modern/batch-norm.md;chapter_convolutional-modern/densenet.md;chapter_convolutional-modern/googlenet.md;chapter_convolutional-modern/index.md;chapter_convolutional-modern/nin.md;chapter_convolutional-modern/resnet.md;chapter_convolutional-modern/vgg.md",
+      "source_path": "chapter_convolutional-modern/index.md;chapter_convolutional-modern/alexnet.md;chapter_convolutional-modern/vgg.md;chapter_convolutional-modern/nin.md;chapter_convolutional-modern/googlenet.md;chapter_convolutional-modern/batch-norm.md;chapter_convolutional-modern/resnet.md;chapter_convolutional-modern/densenet.md",
       "source_type": "md",
       "source_bytes": 129471,
-      "source_sha256": "6ef12cae4fb14176879456212f5c8e469321c9fd735108af26c8221cd688f725",
+      "source_sha256": "4595475f7698eea2193e45a02e98e72db14c4fec7fd361eea6de82b101f4871c",
       "path": "chapters/07_D2L现代卷积网络.md",
       "bytes": 130288,
-      "sha256": "55016524122f427fb152a70e0d13c24bb83f79e2caa9b06c8886c9723c63e9fb",
-      "parser_version": "edumatrix-course-source-v2",
+      "sha256": "98e4426c6f0e3b9bc9f191b95cfd27736463b681731770d3211c11aa0ac7183f",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-08"
+        "AI-KP-08-03",
+        "AI-KP-08-04"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -434,19 +1507,20 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_recurrent-neural-networks/bptt.md;chapter_recurrent-neural-networks/index.md;chapter_recurrent-neural-networks/language-models-and-dataset.md;chapter_recurrent-neural-networks/rnn-concise.md;chapter_recurrent-neural-networks/rnn-scratch.md;chapter_recurrent-neural-networks/rnn.md;chapter_recurrent-neural-networks/sequence.md;chapter_recurrent-neural-networks/text-preprocessing.md",
+      "source_path": "chapter_recurrent-neural-networks/index.md;chapter_recurrent-neural-networks/sequence.md;chapter_recurrent-neural-networks/text-preprocessing.md;chapter_recurrent-neural-networks/language-models-and-dataset.md;chapter_recurrent-neural-networks/rnn.md;chapter_recurrent-neural-networks/rnn-scratch.md;chapter_recurrent-neural-networks/rnn-concise.md;chapter_recurrent-neural-networks/bptt.md",
       "source_type": "md",
       "source_bytes": 136975,
-      "source_sha256": "59ffff740724f5c928dd490099a6f82e694a246b736933a479021ee7a6934506",
+      "source_sha256": "c38c02684a8a0c6ba1a360e6e7ee3f78da19c2dc88580a86cd2b97e79a6b579b",
       "path": "chapters/08_D2L循环神经网络.md",
-      "bytes": 137868,
-      "sha256": "bae99c85662b926ae14e39c3999232a446d1f19e6a4427e434077b096270161e",
-      "parser_version": "edumatrix-course-source-v2",
+      "bytes": 138119,
+      "sha256": "7000f0b3a8c5eb40e9a3af11e85991c85bcba7be8e6cd8e8efd2a8b80552be80",
+      "parser_version": "edumatrix-course-source-v3-errata-r139",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-09"
+        "AI-KP-09-01",
+        "AI-KP-09-02"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -457,19 +1531,20 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_recurrent-modern/beam-search.md;chapter_recurrent-modern/bi-rnn.md;chapter_recurrent-modern/deep-rnn.md;chapter_recurrent-modern/encoder-decoder.md;chapter_recurrent-modern/gru.md;chapter_recurrent-modern/index.md;chapter_recurrent-modern/lstm.md;chapter_recurrent-modern/machine-translation-and-dataset.md;chapter_recurrent-modern/seq2seq.md",
+      "source_path": "chapter_recurrent-modern/index.md;chapter_recurrent-modern/gru.md;chapter_recurrent-modern/lstm.md;chapter_recurrent-modern/deep-rnn.md;chapter_recurrent-modern/bi-rnn.md;chapter_recurrent-modern/machine-translation-and-dataset.md;chapter_recurrent-modern/encoder-decoder.md;chapter_recurrent-modern/seq2seq.md;chapter_recurrent-modern/beam-search.md",
       "source_type": "md",
       "source_bytes": 136339,
-      "source_sha256": "930159b86ca38fe0a2578b559744593e002c48168a21f3475899eadbe7ad1231",
+      "source_sha256": "bb56e01296ae5b8fc4cd37056a4fc487ffce755fd16bf04722253971074f32dc",
       "path": "chapters/09_D2L现代循环网络与序列任务.md",
       "bytes": 137207,
-      "sha256": "1900816783a81b421dbfb739db4da7000f1f21caab6accb455085a09ad0b6103",
-      "parser_version": "edumatrix-course-source-v2",
+      "sha256": "93a549081607d2659e106d31f0fd542b5cd726a96f1ce94f81e3273e273fe04a",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-09"
+        "AI-KP-09-03",
+        "AI-KP-09-04"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -480,42 +1555,46 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_attention-mechanisms/attention-cues.md;chapter_attention-mechanisms/attention-scoring-functions.md;chapter_attention-mechanisms/bahdanau-attention.md;chapter_attention-mechanisms/index.md;chapter_attention-mechanisms/multihead-attention.md;chapter_attention-mechanisms/nadaraya-waston.md;chapter_attention-mechanisms/self-attention-and-positional-encoding.md;chapter_attention-mechanisms/transformer.md",
+      "source_path": "chapter_attention-mechanisms/index.md;chapter_attention-mechanisms/attention-cues.md;chapter_attention-mechanisms/nadaraya-waston.md;chapter_attention-mechanisms/attention-scoring-functions.md;chapter_attention-mechanisms/bahdanau-attention.md;chapter_attention-mechanisms/multihead-attention.md;chapter_attention-mechanisms/self-attention-and-positional-encoding.md;chapter_attention-mechanisms/transformer.md",
       "source_type": "md",
       "source_bytes": 164642,
-      "source_sha256": "55b590fbda9e6f6bcb8294d5777651d29a2e503d6b65a3cd2e9dbad0b6206e3d",
+      "source_sha256": "6892746dec8fd16b91aa9be62fede07e6c50fad9d32960a17b8ed3d5bf11f034",
       "path": "chapters/10_D2L注意力机制与Transformer.md",
       "bytes": 165567,
-      "sha256": "f3de4a33c05c039e59c276ff8d9ab22f04baf19938b5420918c41fb6bede70ae",
-      "parser_version": "edumatrix-course-source-v2",
+      "sha256": "d51228bd512449ac7ce729296061d8e84cca4d21f18be5ade4a50d3a09b0c669",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-10"
+        "AI-KP-10-01",
+        "AI-KP-10-02",
+        "AI-KP-10-03"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
     },
     {
       "chapter_order": 11,
-      "title": "D2L 无监督学习与表示",
+      "title": "D2L 计算性能与并行训练",
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_computational-performance/async-computation.md;chapter_computational-performance/auto-parallelism.md;chapter_computational-performance/hardware.md;chapter_computational-performance/hybridize.md;chapter_computational-performance/index.md;chapter_computational-performance/multiple-gpus-concise.md;chapter_computational-performance/multiple-gpus.md;chapter_computational-performance/parameterserver.md",
+      "source_path": "chapter_computational-performance/index.md;chapter_computational-performance/hybridize.md;chapter_computational-performance/async-computation.md;chapter_computational-performance/auto-parallelism.md;chapter_computational-performance/hardware.md;chapter_computational-performance/multiple-gpus.md;chapter_computational-performance/multiple-gpus-concise.md;chapter_computational-performance/parameterserver.md",
       "source_type": "md",
       "source_bytes": 128953,
-      "source_sha256": "3aa62d4f07768c2fc8f4d73d02cf38504dd64f79dd00211019c137b1a1cf4d6f",
+      "source_sha256": "fc686447b859f4ac20c588d06c26372514b264256753ff14dc627f8718695cff",
       "path": "chapters/11_D2L无监督学习与表示.md",
-      "bytes": 129875,
-      "sha256": "0c63bb5f6403f107992620c206b9fb3089ec3842ff36ec656c20cc6beb6faefa",
-      "parser_version": "edumatrix-course-source-v2",
+      "bytes": 129871,
+      "sha256": "b0a8358c03ecc46ec80d9284063996f00518e0e20feb985549255997793aba33",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-12"
+        "AI-KP-21-01",
+        "AI-KP-21-02",
+        "AI-KP-21-03"
       ],
       "source_role": "D2L 中文第二版主教材补充",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -526,19 +1605,22 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_computer-vision/anchor.md;chapter_computer-vision/bounding-box.md;chapter_computer-vision/fcn.md;chapter_computer-vision/fine-tuning.md;chapter_computer-vision/image-augmentation.md;chapter_computer-vision/index.md;chapter_computer-vision/kaggle-cifar10.md;chapter_computer-vision/kaggle-dog.md;chapter_computer-vision/multiscale-object-detection.md;chapter_computer-vision/neural-style.md;chapter_computer-vision/object-detection-dataset.md;chapter_computer-vision/rcnn.md;chapter_computer-vision/semantic-segmentation-and-dataset.md;chapter_computer-vision/ssd.md;chapter_computer-vision/transposed-conv.md",
+      "source_path": "chapter_computer-vision/index.md;chapter_computer-vision/image-augmentation.md;chapter_computer-vision/fine-tuning.md;chapter_computer-vision/bounding-box.md;chapter_computer-vision/anchor.md;chapter_computer-vision/multiscale-object-detection.md;chapter_computer-vision/object-detection-dataset.md;chapter_computer-vision/ssd.md;chapter_computer-vision/rcnn.md;chapter_computer-vision/semantic-segmentation-and-dataset.md;chapter_computer-vision/transposed-conv.md;chapter_computer-vision/fcn.md;chapter_computer-vision/neural-style.md;chapter_computer-vision/kaggle-cifar10.md;chapter_computer-vision/kaggle-dog.md",
       "source_type": "md",
       "source_bytes": 288105,
-      "source_sha256": "c77d27bddd9ea7304aaf61b4730966a85ff36a4cd2563116c3c18de8033de8ce",
+      "source_sha256": "96164cde8b4fa39d53f174c63f0bfe84b4771367a00593864abec9699031fbf7",
       "path": "chapters/12_D2L计算机视觉应用.md",
       "bytes": 289227,
-      "sha256": "730ff00ae180ff0ebf0cb9eb0c768bd5288a8299470ab7bd9978b6c1fbbedb38",
-      "parser_version": "edumatrix-course-source-v2",
+      "sha256": "fcf3c952f38c8c2ca45d288646bd8b5f4dc72c64448b59c635e42862063d86e3",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-13"
+        "AI-KP-13-01",
+        "AI-KP-13-02",
+        "AI-KP-13-03",
+        "AI-KP-13-04"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -549,19 +1631,20 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_natural-language-processing-pretraining/approx-training.md;chapter_natural-language-processing-pretraining/bert-dataset.md;chapter_natural-language-processing-pretraining/bert-pretraining.md;chapter_natural-language-processing-pretraining/bert.md;chapter_natural-language-processing-pretraining/glove.md;chapter_natural-language-processing-pretraining/index.md;chapter_natural-language-processing-pretraining/similarity-analogy.md;chapter_natural-language-processing-pretraining/subword-embedding.md;chapter_natural-language-processing-pretraining/word-embedding-dataset.md;chapter_natural-language-processing-pretraining/word2vec-pretraining.md;chapter_natural-language-processing-pretraining/word2vec.md",
+      "source_path": "chapter_natural-language-processing-pretraining/index.md;chapter_natural-language-processing-pretraining/word2vec.md;chapter_natural-language-processing-pretraining/approx-training.md;chapter_natural-language-processing-pretraining/word-embedding-dataset.md;chapter_natural-language-processing-pretraining/word2vec-pretraining.md;chapter_natural-language-processing-pretraining/glove.md;chapter_natural-language-processing-pretraining/subword-embedding.md;chapter_natural-language-processing-pretraining/similarity-analogy.md;chapter_natural-language-processing-pretraining/bert.md;chapter_natural-language-processing-pretraining/bert-dataset.md;chapter_natural-language-processing-pretraining/bert-pretraining.md",
       "source_type": "md",
       "source_bytes": 146802,
-      "source_sha256": "40030b93a7d95b2036c24ebc3df668bd92e9f1ae4df84cfc0c20fe333800c388",
+      "source_sha256": "c62bdc0e52ca36dccb7098031b13c3aa3d1da0538c1e03434d6d2cf405414976",
       "path": "chapters/13_D2L自然语言处理预训练.md",
-      "bytes": 148027,
-      "sha256": "402bd1603a840b34216ec2ed6dfdaa4cbe224fc5a501d3ada537a69c5b58dc00",
-      "parser_version": "edumatrix-course-source-v2",
+      "bytes": 148892,
+      "sha256": "68be406e4a63cd9873d31c4ad4dcaf945fe078c16ba04ddcec358b378f7840bb",
+      "parser_version": "edumatrix-course-source-v3-errata-r145",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-14"
+        "AI-KP-14-01",
+        "AI-KP-14-02"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -572,19 +1655,19 @@
       "repository_key": "d2l-zh",
       "repository_url": "https://github.com/d2l-ai/d2l-zh",
       "git_revision": "e6b18ccea71451a55fcd861d7b96fddf2587b09a",
-      "source_path": "chapter_natural-language-processing-applications/finetuning-bert.md;chapter_natural-language-processing-applications/index.md;chapter_natural-language-processing-applications/natural-language-inference-and-dataset.md;chapter_natural-language-processing-applications/natural-language-inference-attention.md;chapter_natural-language-processing-applications/natural-language-inference-bert.md;chapter_natural-language-processing-applications/sentiment-analysis-and-dataset.md;chapter_natural-language-processing-applications/sentiment-analysis-cnn.md;chapter_natural-language-processing-applications/sentiment-analysis-rnn.md",
+      "source_path": "chapter_natural-language-processing-applications/index.md;chapter_natural-language-processing-applications/sentiment-analysis-and-dataset.md;chapter_natural-language-processing-applications/sentiment-analysis-rnn.md;chapter_natural-language-processing-applications/sentiment-analysis-cnn.md;chapter_natural-language-processing-applications/natural-language-inference-and-dataset.md;chapter_natural-language-processing-applications/natural-language-inference-attention.md;chapter_natural-language-processing-applications/finetuning-bert.md;chapter_natural-language-processing-applications/natural-language-inference-bert.md",
       "source_type": "md",
       "source_bytes": 108768,
-      "source_sha256": "74c23d4f7f13cd5a3d4c52adbb36148618b0539efa4e612db5d60a729b64122b",
+      "source_sha256": "5f06ad2fcf8a0a2a832247190c1e146f80199a04f7100e77268134059b96b144",
       "path": "chapters/14_D2L自然语言处理应用.md",
       "bytes": 109899,
-      "sha256": "a13320480f332e71f6072a49de3884fe9c575f3fefc35fa0a1a82f0a34ab4319",
-      "parser_version": "edumatrix-course-source-v2",
+      "sha256": "d6ce8ed1825d4cbcfab092117146a4767580e91fed632f1f72d5d98337680442",
+      "parser_version": "edumatrix-course-source-v3",
       "license_spdx": "Apache-2.0",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-14"
+        "AI-KP-14-03"
       ],
       "source_role": "D2L 中文第二版主教材",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -606,13 +1689,7 @@
       "license_spdx": "OTHER",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
-      "knowledge_point_codes": [
-        "AI-KP-01",
-        "AI-KP-06",
-        "AI-KP-10",
-        "AI-KP-11",
-        "AI-KP-15"
-      ],
+      "knowledge_point_codes": [],
       "source_role": "理论深化与通识版入口",
       "conversion": "markdown-concatenation-with-provenance-header"
     },
@@ -634,15 +1711,25 @@
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-01",
-        "AI-KP-02",
-        "AI-KP-04",
-        "AI-KP-06",
-        "AI-KP-07",
-        "AI-KP-10",
-        "AI-KP-11",
-        "AI-KP-12",
-        "AI-KP-15"
+        "AI-KP-11-01",
+        "AI-KP-11-02",
+        "AI-KP-11-03",
+        "AI-KP-12-01",
+        "AI-KP-12-02",
+        "AI-KP-12-03",
+        "AI-KP-12-04",
+        "AI-KP-15-01",
+        "AI-KP-15-02",
+        "AI-KP-15-03",
+        "AI-KP-16-01",
+        "AI-KP-16-02",
+        "AI-KP-16-03",
+        "AI-KP-17-01",
+        "AI-KP-18-01",
+        "AI-KP-18-02",
+        "AI-KP-18-03",
+        "AI-KP-18-04",
+        "AI-KP-20"
       ],
       "source_role": "理论深化完整电子书",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -664,12 +1751,7 @@
       "license_spdx": "OTHER",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
-      "knowledge_point_codes": [
-        "AI-KP-01",
-        "AI-KP-06",
-        "AI-KP-10",
-        "AI-KP-15"
-      ],
+      "knowledge_point_codes": [],
       "source_role": "零基础直觉完整电子书",
       "conversion": "markdown-concatenation-with-provenance-header"
     },
@@ -690,13 +1772,7 @@
       "license_spdx": "OTHER",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
-      "knowledge_point_codes": [
-        "AI-KP-04",
-        "AI-KP-06",
-        "AI-KP-08",
-        "AI-KP-09",
-        "AI-KP-10"
-      ],
+      "knowledge_point_codes": [],
       "source_role": "代码实践教材",
       "conversion": "markdown-concatenation-with-provenance-header"
     },
@@ -718,8 +1794,7 @@
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-10",
-        "AI-KP-15"
+        "AI-KP-15-04"
       ],
       "source_role": "大模型与智能体专题",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -735,14 +1810,16 @@
       "source_bytes": 9219,
       "source_sha256": "92edf102a1894e40dc46226054ce159623aa7e0c36fd5ee79b27708368b96cae",
       "path": "chapters/20_指令微调与偏好对齐.md",
-      "bytes": 9749,
-      "sha256": "018ee60c21b1208604638302735e5b1a9f91945cd457e5d4e6050710b6c55b06",
-      "parser_version": "edumatrix-course-source-v2",
+      "bytes": 10180,
+      "sha256": "7a409cf9c1bbb6f62098db153001807f9cb26d1b575fdb793e354f7ef292a7e0",
+      "parser_version": "edumatrix-course-source-v3-errata-r145-lora",
       "license_spdx": "MIT",
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-16"
+        "AI-KP-16-01",
+        "AI-KP-16-02",
+        "AI-KP-16-03"
       ],
       "source_role": "大模型与智能体专题",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -765,7 +1842,9 @@
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-17"
+        "AI-KP-17-02",
+        "AI-KP-17-03",
+        "AI-KP-17-04"
       ],
       "source_role": "大模型与智能体专题",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -788,7 +1867,7 @@
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-18"
+        "AI-KP-18-02"
       ],
       "source_role": "大模型与智能体专题",
       "conversion": "markdown-concatenation-with-provenance-header"
@@ -811,10 +1890,2795 @@
       "license_file": "LICENSES.md",
       "license_sha256": "b1a982acfd5b82e62e809706ca532accd54903ebed638f3bd4bcfad07ff0fcd2",
       "knowledge_point_codes": [
-        "AI-KP-19"
+        "AI-KP-19-01",
+        "AI-KP-19-02",
+        "AI-KP-19-03"
       ],
       "source_role": "大模型与智能体专题",
       "conversion": "markdown-concatenation-with-provenance-header"
+    },
+    {
+      "chapter_order": 24,
+      "title": "scikit-learn 数据预处理与数据泄漏",
+      "repository_key": "scikit-learn",
+      "repository_url": "https://github.com/scikit-learn/scikit-learn",
+      "git_revision": "e099dba29ecbc6612c9a5ba715ef0f60915f97f5",
+      "source_path": "doc/common_pitfalls.rst",
+      "source_type": "rst",
+      "source_bytes": 25066,
+      "source_sha256": "6e2b42374fbb521c35f29eeab05bcbfa9744eed344b5f92e41013338ff60a2f5",
+      "path": "chapters/24_sklearn数据预处理与数据泄漏.md",
+      "bytes": 26678,
+      "sha256": "c89897be6057507bb7c7ad8d2fb832c78818c62a509d813cb2f23ef9389f9bbb",
+      "parser_version": "edumatrix-course-source-v1",
+      "license_spdx": "BSD-3-Clause",
+      "license_file": "SCIKIT_LEARN_LICENSE.txt",
+      "license_sha256": "75684d16f4662ab842ed5af9482ac01939aee83c8243d89993616d959d3053f8",
+      "knowledge_point_codes": [
+        "AI-KP-03-05"
+      ],
+      "source_role": "scikit-learn 官方实践参考（英文原文，中文教学使用）",
+      "conversion": "frozen-rst-to-markdown; full prose and all 15 code blocks retained"
     }
-  ]
+  ],
+  "diagnostic_stages": [
+    {
+      "id": "learning-foundations",
+      "title": "数据、预测与模型评价",
+      "knowledge_point_codes": [
+        "AI-KP-01-01",
+        "AI-KP-01-02",
+        "AI-KP-03-01",
+        "AI-KP-02-07",
+        "AI-KP-04-01",
+        "AI-KP-04-02",
+        "AI-KP-05-01",
+        "AI-KP-05-02",
+        "AI-KP-05-03"
+      ],
+      "goal": "读懂数据与预测，区分训练表现和新数据表现，为模型选择与过拟合学习确定起点。",
+      "assessment_guidance": "逐一核对输入/标签与预测任务、回归/分类、样本/特征、频率概率、线性预测、误差、泛化、训练验证测试分工、欠拟合/过拟合。它们是独立知识点，不以答对频率题推断会联合高斯、矩阵或导数。每题检验清楚的一个核心，保留必要数据。已确认编程/数学强项可用可读代码或更独立解释；未学者用数据表、计数与加减乘除。不要考后续阶段的优化器、矩阵微分或具体架构。"
+    },
+    {
+      "id": "mathematical-foundations",
+      "title": "数学表示与微积分",
+      "knowledge_point_codes": [
+        "AI-KP-02-01",
+        "AI-KP-02-02",
+        "AI-KP-02-03",
+        "AI-KP-02-04",
+        "AI-KP-02-05",
+        "AI-KP-02-06",
+        "AI-KP-02-08",
+        "AI-KP-02-09"
+      ],
+      "goal": "分别确认向量矩阵、概率关系和变化率，为模型推导补齐所需先修。",
+      "assessment_guidance": "先测具体分项，不把数学总体强弱作为答案。未学者可暂时不会；不得用讲完答案后的照抄来认定掌握。"
+    },
+    {
+      "id": "implementation-foundations",
+      "title": "数据处理与模型实验",
+      "knowledge_point_codes": [
+        "AI-KP-03-02",
+        "AI-KP-03-03",
+        "AI-KP-03-04",
+        "AI-KP-03-05",
+        "AI-KP-04-03",
+        "AI-KP-04-04",
+        "AI-KP-04-05",
+        "AI-KP-04-06",
+        "AI-KP-05-04",
+        "AI-KP-05-05"
+      ],
+      "goal": "完成数据处理、模型训练与验证，解释实际实验结果。",
+      "assessment_guidance": "依据已确认工具及编程基础选择操作或可读运行结果；共同检查数据、损失、训练与模型选择。测试集不能用来反复选模型。 预处理应区分学习参数与应用已学变换：划分后仅在训练数据拟合，验证/测试复用变换；固定单位换算不等于需要拟合的数据变换。"
+    },
+    {
+      "id": "neural-training",
+      "title": "神经网络与训练",
+      "knowledge_point_codes": [
+        "AI-KP-06-01",
+        "AI-KP-06-02",
+        "AI-KP-06-03",
+        "AI-KP-06-04",
+        "AI-KP-07-01",
+        "AI-KP-07-02",
+        "AI-KP-07-03",
+        "AI-KP-07-04",
+        "AI-KP-07-05",
+        "AI-KP-08-01",
+        "AI-KP-08-02",
+        "AI-KP-08-03",
+        "AI-KP-08-04",
+        "AI-KP-09-01",
+        "AI-KP-09-02",
+        "AI-KP-09-03",
+        "AI-KP-09-04",
+        "AI-KP-21-01",
+        "AI-KP-21-02",
+        "AI-KP-21-03"
+      ],
+      "goal": "连接网络结构、梯度、优化与数据类型，解释训练结果。",
+      "assessment_guidance": "先核对线性模型、基本函数和训练/验证理解，再检查多层网络、反向传播、优化与正则化、卷积和序列。公式推导以已确认的微积分/矩阵基础为依据；无先修时核查输入输出、简单函数变化和可读训练现象，不以补充一个定义强推Adam矩估计。"
+    },
+    {
+      "id": "representation",
+      "title": "注意力与表示学习",
+      "knowledge_point_codes": [
+        "AI-KP-10-01",
+        "AI-KP-10-02",
+        "AI-KP-10-03",
+        "AI-KP-11-01",
+        "AI-KP-11-02",
+        "AI-KP-11-03",
+        "AI-KP-12-01",
+        "AI-KP-12-02",
+        "AI-KP-12-03",
+        "AI-KP-12-04",
+        "AI-KP-13-01",
+        "AI-KP-13-02",
+        "AI-KP-13-03",
+        "AI-KP-13-04",
+        "AI-KP-14-01",
+        "AI-KP-14-02",
+        "AI-KP-14-03"
+      ],
+      "goal": "理解不同数据的表示与模型选择，并通过实验解释模型边界。",
+      "assessment_guidance": "覆盖注意力、图读出、无监督表示、视觉与语言任务，保持各自任务差异。区分典型实现与必要条件：图级读出要求应说明任务和不变性，不能断言任何单节点表示都不可用。"
+    },
+    {
+      "id": "language-retrieval",
+      "title": "大模型与检索增强",
+      "knowledge_point_codes": [
+        "AI-KP-15-01",
+        "AI-KP-15-02",
+        "AI-KP-15-03",
+        "AI-KP-15-04",
+        "AI-KP-16-01",
+        "AI-KP-16-02",
+        "AI-KP-16-03",
+        "AI-KP-17-01",
+        "AI-KP-17-02",
+        "AI-KP-17-03",
+        "AI-KP-17-04"
+      ],
+      "goal": "理解生成、对齐和检索增强的分工及评价依据。",
+      "assessment_guidance": "结合前阶段证据检查自回归生成、指令微调/偏好对齐与RAG；强调数据与目标、检索命中和回答受支持的差别，不以工具参数背诵代替原理。"
+    },
+    {
+      "id": "agent-project",
+      "title": "智能体与综合实践",
+      "knowledge_point_codes": [
+        "AI-KP-18-01",
+        "AI-KP-18-02",
+        "AI-KP-18-03",
+        "AI-KP-18-04",
+        "AI-KP-19-01",
+        "AI-KP-19-02",
+        "AI-KP-19-03",
+        "AI-KP-20"
+      ],
+      "goal": "设计可验证的工具协作流程，完成课程综合项目。",
+      "assessment_guidance": "区分模型决策、工具执行、协议与状态管理；工具或MCP不是必须无状态。根据任务讨论授权、输入输出、失败与结果验证，综合项目评价须依赖可观察成果。"
+    }
+  ],
+  "knowledge_refinements": {
+    "AI-KP-01": [
+      "AI-KP-01-01",
+      "AI-KP-01-02"
+    ],
+    "AI-KP-02": [
+      "AI-KP-02-01",
+      "AI-KP-02-02",
+      "AI-KP-02-03",
+      "AI-KP-02-04",
+      "AI-KP-02-05",
+      "AI-KP-02-06",
+      "AI-KP-02-07",
+      "AI-KP-02-08",
+      "AI-KP-02-09"
+    ],
+    "AI-KP-03": [
+      "AI-KP-03-01",
+      "AI-KP-03-02",
+      "AI-KP-03-03",
+      "AI-KP-03-04",
+      "AI-KP-03-05"
+    ],
+    "AI-KP-04": [
+      "AI-KP-04-01",
+      "AI-KP-04-02",
+      "AI-KP-04-03",
+      "AI-KP-04-04",
+      "AI-KP-04-05",
+      "AI-KP-04-06"
+    ],
+    "AI-KP-05": [
+      "AI-KP-05-01",
+      "AI-KP-05-02",
+      "AI-KP-05-03",
+      "AI-KP-05-04",
+      "AI-KP-05-05"
+    ],
+    "AI-KP-06": [
+      "AI-KP-06-01",
+      "AI-KP-06-02",
+      "AI-KP-06-03",
+      "AI-KP-06-04"
+    ],
+    "AI-KP-07": [
+      "AI-KP-07-01",
+      "AI-KP-07-02",
+      "AI-KP-07-03",
+      "AI-KP-07-04",
+      "AI-KP-07-05"
+    ],
+    "AI-KP-08": [
+      "AI-KP-08-01",
+      "AI-KP-08-02",
+      "AI-KP-08-03",
+      "AI-KP-08-04"
+    ],
+    "AI-KP-09": [
+      "AI-KP-09-01",
+      "AI-KP-09-02",
+      "AI-KP-09-03",
+      "AI-KP-09-04"
+    ],
+    "AI-KP-10": [
+      "AI-KP-10-01",
+      "AI-KP-10-02",
+      "AI-KP-10-03"
+    ],
+    "AI-KP-11": [
+      "AI-KP-11-01",
+      "AI-KP-11-02",
+      "AI-KP-11-03"
+    ],
+    "AI-KP-12": [
+      "AI-KP-12-01",
+      "AI-KP-12-02",
+      "AI-KP-12-03",
+      "AI-KP-12-04"
+    ],
+    "AI-KP-13": [
+      "AI-KP-13-01",
+      "AI-KP-13-02",
+      "AI-KP-13-03",
+      "AI-KP-13-04"
+    ],
+    "AI-KP-14": [
+      "AI-KP-14-01",
+      "AI-KP-14-02",
+      "AI-KP-14-03"
+    ],
+    "AI-KP-15": [
+      "AI-KP-15-01",
+      "AI-KP-15-02",
+      "AI-KP-15-03",
+      "AI-KP-15-04"
+    ],
+    "AI-KP-16": [
+      "AI-KP-16-01",
+      "AI-KP-16-02",
+      "AI-KP-16-03"
+    ],
+    "AI-KP-17": [
+      "AI-KP-17-01",
+      "AI-KP-17-02",
+      "AI-KP-17-03",
+      "AI-KP-17-04"
+    ],
+    "AI-KP-18": [
+      "AI-KP-18-01",
+      "AI-KP-18-02",
+      "AI-KP-18-03",
+      "AI-KP-18-04"
+    ],
+    "AI-KP-19": [
+      "AI-KP-19-01",
+      "AI-KP-19-02",
+      "AI-KP-19-03"
+    ],
+    "AI-KP-21": [
+      "AI-KP-21-01",
+      "AI-KP-21-02",
+      "AI-KP-21-03"
+    ]
+  },
+  "teaching_structure": {
+    "schema_version": "edumatrix.curated-teaching-structure.v1",
+    "chapters": [
+      {
+        "key": "ai-section-00-0",
+        "filename": "00_D2L引言_人工智能与机器学习全景.md",
+        "title": "D2L 引言：人工智能与机器学习全景 · 参考阅读",
+        "char_start": 0,
+        "char_end": 342,
+        "content_sha256": "52dcc733ae836561d4c59a7eed83a9e2d51cf7d65fa0b6f796f3bdb56b9b5f63",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-00-342",
+        "filename": "00_D2L引言_人工智能与机器学习全景.md",
+        "title": "从数据理解预测任务",
+        "char_start": 342,
+        "char_end": 27458,
+        "content_sha256": "52dcc733ae836561d4c59a7eed83a9e2d51cf7d65fa0b6f796f3bdb56b9b5f63",
+        "knowledge_point_codes": [
+          "AI-KP-01-01",
+          "AI-KP-01-02",
+          "AI-KP-03-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-01-0",
+        "filename": "01_D2L预备知识_数学、数据与自动微分.md",
+        "title": "D2L 预备知识：数学、数据与自动微分 · 参考阅读",
+        "char_start": 0,
+        "char_end": 1363,
+        "content_sha256": "41cfc71d5d431877012dd192094b0df44e75174c1019e295cdad212abba9dac2",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-01-1363",
+        "filename": "01_D2L预备知识_数学、数据与自动微分.md",
+        "title": "张量与数据操作",
+        "char_start": 1363,
+        "char_end": 14518,
+        "content_sha256": "41cfc71d5d431877012dd192094b0df44e75174c1019e295cdad212abba9dac2",
+        "knowledge_point_codes": [
+          "AI-KP-02-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-01-14518",
+        "filename": "01_D2L预备知识_数学、数据与自动微分.md",
+        "title": "缺失值与类别编码",
+        "char_start": 14518,
+        "char_end": 17500,
+        "content_sha256": "41cfc71d5d431877012dd192094b0df44e75174c1019e295cdad212abba9dac2",
+        "knowledge_point_codes": [
+          "AI-KP-03-02",
+          "AI-KP-03-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-01-17500",
+        "filename": "01_D2L预备知识_数学、数据与自动微分.md",
+        "title": "向量矩阵与加权预测",
+        "char_start": 17500,
+        "char_end": 38956,
+        "content_sha256": "41cfc71d5d431877012dd192094b0df44e75174c1019e295cdad212abba9dac2",
+        "knowledge_point_codes": [
+          "AI-KP-02-01",
+          "AI-KP-02-02",
+          "AI-KP-02-03",
+          "AI-KP-02-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-01-38956",
+        "filename": "01_D2L预备知识_数学、数据与自动微分.md",
+        "title": "变化率、梯度与链式法则",
+        "char_start": 38956,
+        "char_end": 47761,
+        "content_sha256": "41cfc71d5d431877012dd192094b0df44e75174c1019e295cdad212abba9dac2",
+        "knowledge_point_codes": [
+          "AI-KP-02-05",
+          "AI-KP-02-06"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-01-47761",
+        "filename": "01_D2L预备知识_数学、数据与自动微分.md",
+        "title": "自动微分核验",
+        "char_start": 47761,
+        "char_end": 55238,
+        "content_sha256": "41cfc71d5d431877012dd192094b0df44e75174c1019e295cdad212abba9dac2",
+        "knowledge_point_codes": [
+          "AI-KP-02-06"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-01-55238",
+        "filename": "01_D2L预备知识_数学、数据与自动微分.md",
+        "title": "概率、条件与不确定性",
+        "char_start": 55238,
+        "char_end": 68860,
+        "content_sha256": "41cfc71d5d431877012dd192094b0df44e75174c1019e295cdad212abba9dac2",
+        "knowledge_point_codes": [
+          "AI-KP-02-07",
+          "AI-KP-02-08",
+          "AI-KP-02-09"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-01-68860",
+        "filename": "01_D2L预备知识_数学、数据与自动微分.md",
+        "title": "D2L 预备知识：数学、数据与自动微分 · 参考阅读",
+        "char_start": 68860,
+        "char_end": 71004,
+        "content_sha256": "41cfc71d5d431877012dd192094b0df44e75174c1019e295cdad212abba9dac2",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-02-0",
+        "filename": "02_D2L线性神经网络.md",
+        "title": "D2L 线性神经网络 · 参考阅读",
+        "char_start": 0,
+        "char_end": 1184,
+        "content_sha256": "f45dbd26d3b650ce24a73c3dc714385940bd1ce1e6079528daf99463b8739323",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-02-1184",
+        "filename": "02_D2L线性神经网络.md",
+        "title": "线性模型与训练目标",
+        "char_start": 1184,
+        "char_end": 15112,
+        "content_sha256": "f45dbd26d3b650ce24a73c3dc714385940bd1ce1e6079528daf99463b8739323",
+        "knowledge_point_codes": [
+          "AI-KP-04-01",
+          "AI-KP-04-02",
+          "AI-KP-04-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-02-15112",
+        "filename": "02_D2L线性神经网络.md",
+        "title": "完成线性回归训练循环",
+        "char_start": 15112,
+        "char_end": 25548,
+        "content_sha256": "f45dbd26d3b650ce24a73c3dc714385940bd1ce1e6079528daf99463b8739323",
+        "knowledge_point_codes": [
+          "AI-KP-03-04",
+          "AI-KP-04-06"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-02-25548",
+        "filename": "02_D2L线性神经网络.md",
+        "title": "D2L 线性神经网络 · 参考阅读",
+        "char_start": 25548,
+        "char_end": 37514,
+        "content_sha256": "f45dbd26d3b650ce24a73c3dc714385940bd1ce1e6079528daf99463b8739323",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-02-37514",
+        "filename": "02_D2L线性神经网络.md",
+        "title": "多类概率与交叉熵",
+        "char_start": 37514,
+        "char_end": 46681,
+        "content_sha256": "f45dbd26d3b650ce24a73c3dc714385940bd1ce1e6079528daf99463b8739323",
+        "knowledge_point_codes": [
+          "AI-KP-04-04",
+          "AI-KP-04-05"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-02-46681",
+        "filename": "02_D2L线性神经网络.md",
+        "title": "D2L 线性神经网络 · 参考阅读",
+        "char_start": 46681,
+        "char_end": 58208,
+        "content_sha256": "f45dbd26d3b650ce24a73c3dc714385940bd1ce1e6079528daf99463b8739323",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-02-58208",
+        "filename": "02_D2L线性神经网络.md",
+        "title": "运行分类与评价实验",
+        "char_start": 58208,
+        "char_end": 74499,
+        "content_sha256": "f45dbd26d3b650ce24a73c3dc714385940bd1ce1e6079528daf99463b8739323",
+        "knowledge_point_codes": [
+          "AI-KP-04-04",
+          "AI-KP-04-05"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-02-74499",
+        "filename": "02_D2L线性神经网络.md",
+        "title": "D2L 线性神经网络 · 参考阅读",
+        "char_start": 74499,
+        "char_end": 79564,
+        "content_sha256": "f45dbd26d3b650ce24a73c3dc714385940bd1ce1e6079528daf99463b8739323",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-03-0",
+        "filename": "03_D2L多层感知机.md",
+        "title": "D2L 多层感知机 · 参考阅读",
+        "char_start": 0,
+        "char_end": 1398,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-03-1398",
+        "filename": "03_D2L多层感知机.md",
+        "title": "多层感知机",
+        "char_start": 1398,
+        "char_end": 13161,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [
+          "AI-KP-06-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-03-13161",
+        "filename": "03_D2L多层感知机.md",
+        "title": "实现多层网络",
+        "char_start": 13161,
+        "char_end": 19175,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [
+          "AI-KP-06-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-03-19175",
+        "filename": "03_D2L多层感知机.md",
+        "title": "D2L 多层感知机 · 参考阅读",
+        "char_start": 19175,
+        "char_end": 22488,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-03-22488",
+        "filename": "03_D2L多层感知机.md",
+        "title": "选择能泛化的模型",
+        "char_start": 22488,
+        "char_end": 38577,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [
+          "AI-KP-05-01",
+          "AI-KP-05-02",
+          "AI-KP-05-03",
+          "AI-KP-05-04",
+          "AI-KP-05-05"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-03-37903",
+        "filename": "03_D2L多层感知机.md",
+        "title": "权重衰减实验",
+        "char_start": 38577,
+        "char_end": 54176,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [
+          "AI-KP-07-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-03-53502",
+        "filename": "03_D2L多层感知机.md",
+        "title": "Dropout训练与推理",
+        "char_start": 54176,
+        "char_end": 68860,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [
+          "AI-KP-07-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-03-68186",
+        "filename": "03_D2L多层感知机.md",
+        "title": "前向传播、反向传播和计算图",
+        "char_start": 68860,
+        "char_end": 74439,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [
+          "AI-KP-06-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-03-73765",
+        "filename": "03_D2L多层感知机.md",
+        "title": "数值稳定性和模型初始化",
+        "char_start": 74439,
+        "char_end": 82140,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [
+          "AI-KP-06-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-03-81466",
+        "filename": "03_D2L多层感知机.md",
+        "title": "分布变化与模型失效",
+        "char_start": 82140,
+        "char_end": 94959,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [
+          "AI-KP-05-01",
+          "AI-KP-05-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-03-94285",
+        "filename": "03_D2L多层感知机.md",
+        "title": "房价预测的验证实验",
+        "char_start": 94959,
+        "char_end": 112637,
+        "content_sha256": "07018bcb11246a74c19135046a3aacfc08e43ba51f36eaeb3e6f74738a9f1ebe",
+        "knowledge_point_codes": [
+          "AI-KP-03-02",
+          "AI-KP-03-03",
+          "AI-KP-05-04",
+          "AI-KP-05-05"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-04-0",
+        "filename": "04_D2L深度学习计算.md",
+        "title": "D2L 深度学习计算 · 参考阅读",
+        "char_start": 0,
+        "char_end": 1411,
+        "content_sha256": "954c963625d11a0ac243452f020c3838d0acde486e0c6d279f2b08fa12b9a07a",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-04-1411",
+        "filename": "04_D2L深度学习计算.md",
+        "title": "网络模块、参数管理与模型保存",
+        "char_start": 1411,
+        "char_end": 34134,
+        "content_sha256": "954c963625d11a0ac243452f020c3838d0acde486e0c6d279f2b08fa12b9a07a",
+        "knowledge_point_codes": [
+          "AI-KP-06-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-04-34134",
+        "filename": "04_D2L深度学习计算.md",
+        "title": "D2L 深度学习计算 · 参考阅读",
+        "char_start": 34134,
+        "char_end": 43212,
+        "content_sha256": "954c963625d11a0ac243452f020c3838d0acde486e0c6d279f2b08fa12b9a07a",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-04-43212",
+        "filename": "04_D2L深度学习计算.md",
+        "title": "保存与恢复模型",
+        "char_start": 43212,
+        "char_end": 49007,
+        "content_sha256": "954c963625d11a0ac243452f020c3838d0acde486e0c6d279f2b08fa12b9a07a",
+        "knowledge_point_codes": [
+          "AI-KP-06-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-04-49007",
+        "filename": "04_D2L深度学习计算.md",
+        "title": "D2L 深度学习计算 · 参考阅读",
+        "char_start": 49007,
+        "char_end": 59150,
+        "content_sha256": "954c963625d11a0ac243452f020c3838d0acde486e0c6d279f2b08fa12b9a07a",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-05-0",
+        "filename": "05_D2L优化算法.md",
+        "title": "D2L 优化算法 · 参考阅读",
+        "char_start": 0,
+        "char_end": 1346,
+        "content_sha256": "d611ede95cba4a6c022fde5ce033c68839941af2677702c24caad7d96a116c9f",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-05-1346",
+        "filename": "05_D2L优化算法.md",
+        "title": "优化和深度学习",
+        "char_start": 1346,
+        "char_end": 8407,
+        "content_sha256": "d611ede95cba4a6c022fde5ce033c68839941af2677702c24caad7d96a116c9f",
+        "knowledge_point_codes": [
+          "AI-KP-07-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-05-8407",
+        "filename": "05_D2L优化算法.md",
+        "title": "凸性与优化条件",
+        "char_start": 8407,
+        "char_end": 21039,
+        "content_sha256": "d611ede95cba4a6c022fde5ce033c68839941af2677702c24caad7d96a116c9f",
+        "knowledge_point_codes": [
+          "AI-KP-07-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-05-21039",
+        "filename": "05_D2L优化算法.md",
+        "title": "梯度下降实验",
+        "char_start": 21039,
+        "char_end": 34049,
+        "content_sha256": "d611ede95cba4a6c022fde5ce033c68839941af2677702c24caad7d96a116c9f",
+        "knowledge_point_codes": [
+          "AI-KP-07-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-05-34049",
+        "filename": "05_D2L优化算法.md",
+        "title": "随机梯度、小批量与动量",
+        "char_start": 34049,
+        "char_end": 79682,
+        "content_sha256": "d611ede95cba4a6c022fde5ce033c68839941af2677702c24caad7d96a116c9f",
+        "knowledge_point_codes": [
+          "AI-KP-07-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-05-79682",
+        "filename": "05_D2L优化算法.md",
+        "title": "自适应优化器与Adam",
+        "char_start": 79682,
+        "char_end": 96272,
+        "content_sha256": "d611ede95cba4a6c022fde5ce033c68839941af2677702c24caad7d96a116c9f",
+        "knowledge_point_codes": [
+          "AI-KP-07-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-05-96272",
+        "filename": "05_D2L优化算法.md",
+        "title": "D2L 优化算法 · 参考阅读",
+        "char_start": 96272,
+        "char_end": 102219,
+        "content_sha256": "d611ede95cba4a6c022fde5ce033c68839941af2677702c24caad7d96a116c9f",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-05-102219",
+        "filename": "05_D2L优化算法.md",
+        "title": "Adam算法",
+        "char_start": 102219,
+        "char_end": 113336,
+        "content_sha256": "d611ede95cba4a6c022fde5ce033c68839941af2677702c24caad7d96a116c9f",
+        "knowledge_point_codes": [
+          "AI-KP-07-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-05-113336",
+        "filename": "05_D2L优化算法.md",
+        "title": "学习率调度器",
+        "char_start": 113336,
+        "char_end": 134210,
+        "content_sha256": "d611ede95cba4a6c022fde5ce033c68839941af2677702c24caad7d96a116c9f",
+        "knowledge_point_codes": [
+          "AI-KP-07-05"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-06-0",
+        "filename": "06_D2L卷积神经网络.md",
+        "title": "D2L 卷积神经网络 · 参考阅读",
+        "char_start": 0,
+        "char_end": 1716,
+        "content_sha256": "d3def1599403c6b652dd7c1dd0f5af9e3db35e5dcb97ccbb3d3ec80d99ee87ba",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-06-1716",
+        "filename": "06_D2L卷积神经网络.md",
+        "title": "卷积核、局部连接与参数共享",
+        "char_start": 1716,
+        "char_end": 17954,
+        "content_sha256": "d3def1599403c6b652dd7c1dd0f5af9e3db35e5dcb97ccbb3d3ec80d99ee87ba",
+        "knowledge_point_codes": [
+          "AI-KP-08-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-06-17954",
+        "filename": "06_D2L卷积神经网络.md",
+        "title": "填充、步幅、通道与池化",
+        "char_start": 17954,
+        "char_end": 37855,
+        "content_sha256": "d3def1599403c6b652dd7c1dd0f5af9e3db35e5dcb97ccbb3d3ec80d99ee87ba",
+        "knowledge_point_codes": [
+          "AI-KP-08-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-06-37855",
+        "filename": "06_D2L卷积神经网络.md",
+        "title": "卷积神经网络（LeNet）",
+        "char_start": 37855,
+        "char_end": 53594,
+        "content_sha256": "d3def1599403c6b652dd7c1dd0f5af9e3db35e5dcb97ccbb3d3ec80d99ee87ba",
+        "knowledge_point_codes": [
+          "AI-KP-08-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-07-0",
+        "filename": "07_D2L现代卷积网络.md",
+        "title": "D2L 现代卷积网络 · 参考阅读",
+        "char_start": 0,
+        "char_end": 13956,
+        "content_sha256": "410229eb540dfb27582aa74a5eff5770320c915dcb661f6c54310273db752f1c",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-07-13956",
+        "filename": "07_D2L现代卷积网络.md",
+        "title": "比较卷积块与网络深度",
+        "char_start": 13956,
+        "char_end": 21583,
+        "content_sha256": "410229eb540dfb27582aa74a5eff5770320c915dcb661f6c54310273db752f1c",
+        "knowledge_point_codes": [
+          "AI-KP-08-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-07-21583",
+        "filename": "07_D2L现代卷积网络.md",
+        "title": "D2L 现代卷积网络 · 参考阅读",
+        "char_start": 21583,
+        "char_end": 44077,
+        "content_sha256": "410229eb540dfb27582aa74a5eff5770320c915dcb661f6c54310273db752f1c",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-07-44077",
+        "filename": "07_D2L现代卷积网络.md",
+        "title": "批量规范化与残差连接",
+        "char_start": 44077,
+        "char_end": 80781,
+        "content_sha256": "410229eb540dfb27582aa74a5eff5770320c915dcb661f6c54310273db752f1c",
+        "knowledge_point_codes": [
+          "AI-KP-08-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-07-80781",
+        "filename": "07_D2L现代卷积网络.md",
+        "title": "D2L 现代卷积网络 · 参考阅读",
+        "char_start": 80781,
+        "char_end": 93382,
+        "content_sha256": "410229eb540dfb27582aa74a5eff5770320c915dcb661f6c54310273db752f1c",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-08-0",
+        "filename": "08_D2L循环神经网络.md",
+        "title": "D2L 循环神经网络 · 参考阅读",
+        "char_start": 0,
+        "char_end": 1710,
+        "content_sha256": "06deeb0be490aa8b296131884bb47982eadf11839bb377c3d255feb1299f922c",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-08-1710",
+        "filename": "08_D2L循环神经网络.md",
+        "title": "序列、词元与语言建模",
+        "char_start": 1710,
+        "char_end": 34867,
+        "content_sha256": "06deeb0be490aa8b296131884bb47982eadf11839bb377c3d255feb1299f922c",
+        "knowledge_point_codes": [
+          "AI-KP-09-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-08-34867",
+        "filename": "08_D2L循环神经网络.md",
+        "title": "循环神经网络",
+        "char_start": 34867,
+        "char_end": 43484,
+        "content_sha256": "06deeb0be490aa8b296131884bb47982eadf11839bb377c3d255feb1299f922c",
+        "knowledge_point_codes": [
+          "AI-KP-09-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-08-43357",
+        "filename": "08_D2L循环神经网络.md",
+        "title": "运行循环网络",
+        "char_start": 43484,
+        "char_end": 73086,
+        "content_sha256": "06deeb0be490aa8b296131884bb47982eadf11839bb377c3d255feb1299f922c",
+        "knowledge_point_codes": [
+          "AI-KP-09-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-08-72959",
+        "filename": "08_D2L循环神经网络.md",
+        "title": "D2L 循环神经网络 · 参考阅读",
+        "char_start": 73086,
+        "char_end": 83434,
+        "content_sha256": "06deeb0be490aa8b296131884bb47982eadf11839bb377c3d255feb1299f922c",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-08-83307",
+        "filename": "08_D2L循环神经网络.md",
+        "title": "时间展开与梯度",
+        "char_start": 83434,
+        "char_end": 94162,
+        "content_sha256": "06deeb0be490aa8b296131884bb47982eadf11839bb377c3d255feb1299f922c",
+        "knowledge_point_codes": [
+          "AI-KP-09-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-09-0",
+        "filename": "09_D2L现代循环网络与序列任务.md",
+        "title": "D2L 现代循环网络与序列任务 · 参考阅读",
+        "char_start": 0,
+        "char_end": 1422,
+        "content_sha256": "5450a51bd6e2eea07352dc3ca099830a708dd510a7071960a85f0073b62ca598",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-09-1422",
+        "filename": "09_D2L现代循环网络与序列任务.md",
+        "title": "GRU与LSTM的门控记忆",
+        "char_start": 1422,
+        "char_end": 30138,
+        "content_sha256": "5450a51bd6e2eea07352dc3ca099830a708dd510a7071960a85f0073b62ca598",
+        "knowledge_point_codes": [
+          "AI-KP-09-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-09-30138",
+        "filename": "09_D2L现代循环网络与序列任务.md",
+        "title": "D2L 现代循环网络与序列任务 · 参考阅读",
+        "char_start": 30138,
+        "char_end": 50985,
+        "content_sha256": "5450a51bd6e2eea07352dc3ca099830a708dd510a7071960a85f0073b62ca598",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-09-50985",
+        "filename": "09_D2L现代循环网络与序列任务.md",
+        "title": "编码器解码器、seq2seq与束搜索",
+        "char_start": 50985,
+        "char_end": 98790,
+        "content_sha256": "5450a51bd6e2eea07352dc3ca099830a708dd510a7071960a85f0073b62ca598",
+        "knowledge_point_codes": [
+          "AI-KP-09-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-10-0",
+        "filename": "10_D2L注意力机制与Transformer.md",
+        "title": "D2L 注意力机制与 Transformer · 参考阅读",
+        "char_start": 0,
+        "char_end": 6072,
+        "content_sha256": "9811468aff4eeb5ae02863c8fd38a1b2a900e3ac02cccff558682b180d0d9adc",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-10-6072",
+        "filename": "10_D2L注意力机制与Transformer.md",
+        "title": "查询、键、值与注意力评分",
+        "char_start": 6072,
+        "char_end": 44692,
+        "content_sha256": "9811468aff4eeb5ae02863c8fd38a1b2a900e3ac02cccff558682b180d0d9adc",
+        "knowledge_point_codes": [
+          "AI-KP-10-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-10-44692",
+        "filename": "10_D2L注意力机制与Transformer.md",
+        "title": "D2L 注意力机制与 Transformer · 参考阅读",
+        "char_start": 44692,
+        "char_end": 61333,
+        "content_sha256": "9811468aff4eeb5ae02863c8fd38a1b2a900e3ac02cccff558682b180d0d9adc",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-10-61333",
+        "filename": "10_D2L注意力机制与Transformer.md",
+        "title": "多头、自注意力与位置编码",
+        "char_start": 61333,
+        "char_end": 87264,
+        "content_sha256": "9811468aff4eeb5ae02863c8fd38a1b2a900e3ac02cccff558682b180d0d9adc",
+        "knowledge_point_codes": [
+          "AI-KP-10-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-10-87264",
+        "filename": "10_D2L注意力机制与Transformer.md",
+        "title": "Transformer",
+        "char_start": 87264,
+        "char_end": 130851,
+        "content_sha256": "9811468aff4eeb5ae02863c8fd38a1b2a900e3ac02cccff558682b180d0d9adc",
+        "knowledge_point_codes": [
+          "AI-KP-10-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-11-0",
+        "filename": "11_D2L无监督学习与表示.md",
+        "title": "D2L 计算性能与并行训练 · 参考阅读",
+        "char_start": 0,
+        "char_end": 13570,
+        "content_sha256": "238333b77df9350ff4e35b4c94149a626a5265eebfc8ad6d45c9379c094ce9e7",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-11-13570",
+        "filename": "11_D2L无监督学习与表示.md",
+        "title": "异步计算、并行与性能测量",
+        "char_start": 13570,
+        "char_end": 44323,
+        "content_sha256": "238333b77df9350ff4e35b4c94149a626a5265eebfc8ad6d45c9379c094ce9e7",
+        "knowledge_point_codes": [
+          "AI-KP-21-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-11-44323",
+        "filename": "11_D2L无监督学习与表示.md",
+        "title": "多GPU训练",
+        "char_start": 44323,
+        "char_end": 61357,
+        "content_sha256": "238333b77df9350ff4e35b4c94149a626a5265eebfc8ad6d45c9379c094ce9e7",
+        "knowledge_point_codes": [
+          "AI-KP-21-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-11-61357",
+        "filename": "11_D2L无监督学习与表示.md",
+        "title": "D2L 计算性能与并行训练 · 参考阅读",
+        "char_start": 61357,
+        "char_end": 72795,
+        "content_sha256": "238333b77df9350ff4e35b4c94149a626a5265eebfc8ad6d45c9379c094ce9e7",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-11-72795",
+        "filename": "11_D2L无监督学习与表示.md",
+        "title": "参数服务器",
+        "char_start": 72795,
+        "char_end": 78586,
+        "content_sha256": "238333b77df9350ff4e35b4c94149a626a5265eebfc8ad6d45c9379c094ce9e7",
+        "knowledge_point_codes": [
+          "AI-KP-21-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-12-0",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "D2L 计算机视觉应用 · 参考阅读",
+        "char_start": 0,
+        "char_end": 1816,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-12-1816",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "数据增广与迁移微调",
+        "char_start": 1816,
+        "char_end": 31677,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [
+          "AI-KP-13-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-12-31677",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "检测框、锚框与目标检测",
+        "char_start": 31677,
+        "char_end": 71637,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [
+          "AI-KP-13-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-12-71637",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "D2L 计算机视觉应用 · 参考阅读",
+        "char_start": 71637,
+        "char_end": 84898,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-12-84898",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "单发多框检测（SSD）",
+        "char_start": 84898,
+        "char_end": 114696,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [
+          "AI-KP-13-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-12-114696",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "D2L 计算机视觉应用 · 参考阅读",
+        "char_start": 114696,
+        "char_end": 120669,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-12-120669",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "语义分割、转置卷积与全卷积网络",
+        "char_start": 120669,
+        "char_end": 160149,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [
+          "AI-KP-13-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-12-160149",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "D2L 计算机视觉应用 · 参考阅读",
+        "char_start": 160149,
+        "char_end": 177282,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-12-177282",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "char_start": 177282,
+        "char_end": 199505,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [
+          "AI-KP-13-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-12-199505",
+        "filename": "12_D2L计算机视觉应用.md",
+        "title": "D2L 计算机视觉应用 · 参考阅读",
+        "char_start": 199505,
+        "char_end": 220924,
+        "content_sha256": "8ef86f20317ff8b1e370905c2b58b14d9591e265cd46eecf1182ac092cf7549d",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-13-0",
+        "filename": "13_D2L自然语言处理预训练.md",
+        "title": "D2L 自然语言处理预训练 · 参考阅读",
+        "char_start": 0,
+        "char_end": 2354,
+        "content_sha256": "cd4d07bc278aab80b5186c9ac799e865e96b06f829009c4b700bee1037e63611",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-13-2354",
+        "filename": "13_D2L自然语言处理预训练.md",
+        "title": "词嵌入、负采样与子词表示",
+        "char_start": 2354,
+        "char_end": 13076,
+        "content_sha256": "cd4d07bc278aab80b5186c9ac799e865e96b06f829009c4b700bee1037e63611",
+        "knowledge_point_codes": [
+          "AI-KP-14-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-13-12939",
+        "filename": "13_D2L自然语言处理预训练.md",
+        "title": "D2L 自然语言处理预训练 · 参考阅读",
+        "char_start": 13076,
+        "char_end": 42887,
+        "content_sha256": "cd4d07bc278aab80b5186c9ac799e865e96b06f829009c4b700bee1037e63611",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-13-42750",
+        "filename": "13_D2L自然语言处理预训练.md",
+        "title": "子词嵌入",
+        "char_start": 42887,
+        "char_end": 48615,
+        "content_sha256": "cd4d07bc278aab80b5186c9ac799e865e96b06f829009c4b700bee1037e63611",
+        "knowledge_point_codes": [
+          "AI-KP-14-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-13-48478",
+        "filename": "13_D2L自然语言处理预训练.md",
+        "title": "D2L 自然语言处理预训练 · 参考阅读",
+        "char_start": 48615,
+        "char_end": 55166,
+        "content_sha256": "cd4d07bc278aab80b5186c9ac799e865e96b06f829009c4b700bee1037e63611",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-13-55029",
+        "filename": "13_D2L自然语言处理预训练.md",
+        "title": "来自Transformers的双向编码器表示（BERT）",
+        "char_start": 55166,
+        "char_end": 77642,
+        "content_sha256": "cd4d07bc278aab80b5186c9ac799e865e96b06f829009c4b700bee1037e63611",
+        "knowledge_point_codes": [
+          "AI-KP-14-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-13-77505",
+        "filename": "13_D2L自然语言处理预训练.md",
+        "title": "D2L 自然语言处理预训练 · 参考阅读",
+        "char_start": 77642,
+        "char_end": 95309,
+        "content_sha256": "cd4d07bc278aab80b5186c9ac799e865e96b06f829009c4b700bee1037e63611",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-13-95172",
+        "filename": "13_D2L自然语言处理预训练.md",
+        "title": "预训练BERT",
+        "char_start": 95309,
+        "char_end": 109509,
+        "content_sha256": "cd4d07bc278aab80b5186c9ac799e865e96b06f829009c4b700bee1037e63611",
+        "knowledge_point_codes": [
+          "AI-KP-14-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-14-0",
+        "filename": "14_D2L自然语言处理应用.md",
+        "title": "D2L 自然语言处理应用 · 参考阅读",
+        "char_start": 0,
+        "char_end": 9367,
+        "content_sha256": "84eec18662b5553ef124d6ef174a02a0b5bad2864a0055c05e7f5801b563c055",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-14-9367",
+        "filename": "14_D2L自然语言处理应用.md",
+        "title": "情感分析：使用循环神经网络",
+        "char_start": 9367,
+        "char_end": 18296,
+        "content_sha256": "84eec18662b5553ef124d6ef174a02a0b5bad2864a0055c05e7f5801b563c055",
+        "knowledge_point_codes": [
+          "AI-KP-14-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-14-18296",
+        "filename": "14_D2L自然语言处理应用.md",
+        "title": "D2L 自然语言处理应用 · 参考阅读",
+        "char_start": 18296,
+        "char_end": 30171,
+        "content_sha256": "84eec18662b5553ef124d6ef174a02a0b5bad2864a0055c05e7f5801b563c055",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-14-30171",
+        "filename": "14_D2L自然语言处理应用.md",
+        "title": "自然语言推断与数据集",
+        "char_start": 30171,
+        "char_end": 40890,
+        "content_sha256": "84eec18662b5553ef124d6ef174a02a0b5bad2864a0055c05e7f5801b563c055",
+        "knowledge_point_codes": [
+          "AI-KP-14-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-14-40890",
+        "filename": "14_D2L自然语言处理应用.md",
+        "title": "D2L 自然语言处理应用 · 参考阅读",
+        "char_start": 40890,
+        "char_end": 59466,
+        "content_sha256": "84eec18662b5553ef124d6ef174a02a0b5bad2864a0055c05e7f5801b563c055",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-14-59466",
+        "filename": "14_D2L自然语言处理应用.md",
+        "title": "针对序列级和词元级应用微调BERT",
+        "char_start": 59466,
+        "char_end": 63529,
+        "content_sha256": "84eec18662b5553ef124d6ef174a02a0b5bad2864a0055c05e7f5801b563c055",
+        "knowledge_point_codes": [
+          "AI-KP-14-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-14-63529",
+        "filename": "14_D2L自然语言处理应用.md",
+        "title": "D2L 自然语言处理应用 · 参考阅读",
+        "char_start": 63529,
+        "char_end": 82276,
+        "content_sha256": "84eec18662b5553ef124d6ef174a02a0b5bad2864a0055c05e7f5801b563c055",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-15-0",
+        "filename": "15_NNDL第二版_神经网络与深度学习理论地图.md",
+        "title": "NNDL 第二版：神经网络与深度学习理论地图 · 参考阅读",
+        "char_start": 0,
+        "char_end": 5820,
+        "content_sha256": "36cb29a1ef4b49e562c937c5f4cf1a31712d51239305a981be62fb662269c8b1",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-16-0",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "NNDL理论参考",
+        "char_start": 0,
+        "char_end": 285454,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-16-285454",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "图数据与学习任务",
+        "char_start": 285454,
+        "char_end": 293717,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-11-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-293717",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "消息传递与图网络",
+        "char_start": 293717,
+        "char_end": 308242,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-11-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-308242",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "深层图网络的边界",
+        "char_start": 308242,
+        "char_end": 310392,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-11-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-310392",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "NNDL理论参考",
+        "char_start": 310392,
+        "char_end": 319264,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-16-319264",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "主成分分析",
+        "char_start": 319264,
+        "char_end": 320575,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-12-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-320575",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "NNDL理论参考",
+        "char_start": 320575,
+        "char_end": 323045,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-16-323045",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "自编码器",
+        "char_start": 323045,
+        "char_end": 326753,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-12-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-326753",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "密度与聚类",
+        "char_start": 326753,
+        "char_end": 332482,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-12-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-332482",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "自监督学习",
+        "char_start": 332482,
+        "char_end": 336851,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-12-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-336851",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "NNDL理论参考",
+        "char_start": 336851,
+        "char_end": 415212,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-16-415212",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "自回归语言模型与生成",
+        "char_start": 415212,
+        "char_end": 418839,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-15-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-418839",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "预训练与规模规律",
+        "char_start": 418839,
+        "char_end": 423966,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-15-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-423966",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "上下文学习",
+        "char_start": 423966,
+        "char_end": 426686,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-15-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-426686",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "指令与参数高效微调",
+        "char_start": 426686,
+        "char_end": 429283,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-16-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-429283",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "偏好与奖励学习",
+        "char_start": 429283,
+        "char_end": 431364,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-16-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-431364",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "DPO与策略优化",
+        "char_start": 431364,
+        "char_end": 436275,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-16-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-436275",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "推理增强与结果验证",
+        "char_start": 436275,
+        "char_end": 439745,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-15-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-439745",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "智能体与ReAct",
+        "char_start": 439745,
+        "char_end": 442481,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-18-01"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-442481",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "工具调用与检索增强",
+        "char_start": 442481,
+        "char_end": 443963,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-17-01",
+          "AI-KP-18-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-443963",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "多模态与多智能体协作",
+        "char_start": 443963,
+        "char_end": 445235,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-18-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-445235",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "智能体评价与学习项目设计",
+        "char_start": 445235,
+        "char_end": 446141,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [
+          "AI-KP-18-04",
+          "AI-KP-20"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-16-446141",
+        "filename": "16_NNDL第二版完整电子书.md",
+        "title": "NNDL后续理论与参考文献",
+        "char_start": 446141,
+        "char_end": 623051,
+        "content_sha256": "9425f70e3b25c5851d1ff878c3f4b8ea2dafd0af590bdd61356344c5229d89c5",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-17-0",
+        "filename": "17_NNDL通识版完整电子书.md",
+        "title": "NNDL 通识版完整电子书 · 参考阅读",
+        "char_start": 0,
+        "char_end": 458664,
+        "content_sha256": "83601b50635bda645dc670edf78841144e39429a686ea374c3c9908b46988db2",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-18-0",
+        "filename": "18_NNDL案例与实践_PyTorch工程实践.md",
+        "title": "NNDL 案例与实践：PyTorch 工程实践 · 参考阅读",
+        "char_start": 0,
+        "char_end": 4973,
+        "content_sha256": "7082de8550797a082ad6cf859b7fa5ac432daac37f84f00ec318dc5554f5e34f",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-19-0",
+        "filename": "19_大模型基础_Transformer到Mini-GPT.md",
+        "title": "大模型基础：Transformer 到 Mini-GPT · 参考阅读",
+        "char_start": 0,
+        "char_end": 4729,
+        "content_sha256": "d55746c751969e5aec10fcbe5501dc29ef994757cd289bee2dd0f3f121225081",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-19-4729",
+        "filename": "19_大模型基础_Transformer到Mini-GPT.md",
+        "title": "小型GPT训练与生成",
+        "char_start": 4729,
+        "char_end": 10045,
+        "content_sha256": "d55746c751969e5aec10fcbe5501dc29ef994757cd289bee2dd0f3f121225081",
+        "knowledge_point_codes": [
+          "AI-KP-15-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-20-0",
+        "filename": "20_指令微调与偏好对齐.md",
+        "title": "指令微调与偏好对齐 · 参考阅读",
+        "char_start": 0,
+        "char_end": 319,
+        "content_sha256": "5e45fae5b57bb817e87d44a4d1ed7c7d2d6c53151e09638194bdad930c7cb259",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-20-319",
+        "filename": "20_指令微调与偏好对齐.md",
+        "title": "微调与偏好对齐实验",
+        "char_start": 319,
+        "char_end": 6590,
+        "content_sha256": "5e45fae5b57bb817e87d44a4d1ed7c7d2d6c53151e09638194bdad930c7cb259",
+        "knowledge_point_codes": [
+          "AI-KP-16-01",
+          "AI-KP-16-02",
+          "AI-KP-16-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-21-0",
+        "filename": "21_RAG知识库问答工程.md",
+        "title": "RAG 知识库问答工程 · 参考阅读",
+        "char_start": 0,
+        "char_end": 313,
+        "content_sha256": "14a3501b53e778be083b337e6a3066008dae37f3086e10e16ad174598732bb6a",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-21-313",
+        "filename": "21_RAG知识库问答工程.md",
+        "title": "完成可核验的文档问答",
+        "char_start": 313,
+        "char_end": 6523,
+        "content_sha256": "14a3501b53e778be083b337e6a3066008dae37f3086e10e16ad174598732bb6a",
+        "knowledge_point_codes": [
+          "AI-KP-17-02",
+          "AI-KP-17-03",
+          "AI-KP-17-04"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-22-0",
+        "filename": "22_工具调用与ReActAgent.md",
+        "title": "工具调用与 ReAct Agent · 参考阅读",
+        "char_start": 0,
+        "char_end": 333,
+        "content_sha256": "e55b9a46ea13faa18f5bcfc4a1082d967ab6ca810b0667af1efb56e6c3f83114",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-22-333",
+        "filename": "22_工具调用与ReActAgent.md",
+        "title": "工具执行与恢复实验",
+        "char_start": 333,
+        "char_end": 6512,
+        "content_sha256": "e55b9a46ea13faa18f5bcfc4a1082d967ab6ca810b0667af1efb56e6c3f83114",
+        "knowledge_point_codes": [
+          "AI-KP-18-02"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-23-0",
+        "filename": "23_CodingAgent、MCP与Skill.md",
+        "title": "Coding Agent、MCP 与 Skill · 参考阅读",
+        "char_start": 0,
+        "char_end": 344,
+        "content_sha256": "01007440b8b6117b4afcd86b034adcbf08328318c666d30d8766b55dc0fea658",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-23-344",
+        "filename": "23_CodingAgent、MCP与Skill.md",
+        "title": "代码智能体综合实验",
+        "char_start": 344,
+        "char_end": 7610,
+        "content_sha256": "01007440b8b6117b4afcd86b034adcbf08328318c666d30d8766b55dc0fea658",
+        "knowledge_point_codes": [
+          "AI-KP-19-01",
+          "AI-KP-19-02",
+          "AI-KP-19-03"
+        ],
+        "learning_role": "teaching"
+      },
+      {
+        "key": "ai-section-24-0",
+        "filename": "24_sklearn数据预处理与数据泄漏.md",
+        "title": "scikit-learn 数据预处理与数据泄漏 · 参考阅读",
+        "char_start": 0,
+        "char_end": 260,
+        "content_sha256": "27e5a38abc3a1f1a7d37d22a6875ecc2835e412006bb960d34210eb66955fe27",
+        "knowledge_point_codes": [],
+        "learning_role": "reference"
+      },
+      {
+        "key": "ai-section-24-260",
+        "filename": "24_sklearn数据预处理与数据泄漏.md",
+        "title": "预处理参数与数据泄漏",
+        "char_start": 260,
+        "char_end": 26590,
+        "content_sha256": "27e5a38abc3a1f1a7d37d22a6875ecc2835e412006bb960d34210eb66955fe27",
+        "knowledge_point_codes": [
+          "AI-KP-03-05"
+        ],
+        "learning_role": "teaching"
+      }
+    ],
+    "units": [
+      {
+        "key": "unit-ai-section-00-342",
+        "title": "从数据理解预测任务",
+        "goal": "用一张数据表区分样本、特征、标签及回归与分类",
+        "knowledge_point_codes": [
+          "AI-KP-01-01",
+          "AI-KP-01-02",
+          "AI-KP-03-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-00-342"
+        ]
+      },
+      {
+        "key": "unit-ai-section-01-1363",
+        "title": "张量与数据操作",
+        "goal": "表示一批数据并检查形状和索引",
+        "knowledge_point_codes": [
+          "AI-KP-02-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-01-1363"
+        ]
+      },
+      {
+        "key": "unit-ai-section-01-14518",
+        "title": "缺失值与类别编码",
+        "goal": "处理缺失和类别数据，解释每一步改变了什么",
+        "knowledge_point_codes": [
+          "AI-KP-03-02",
+          "AI-KP-03-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-01-14518"
+        ]
+      },
+      {
+        "key": "unit-ai-section-01-17500",
+        "title": "向量矩阵与加权预测",
+        "goal": "核算点积和矩阵乘法并连接模型输入输出",
+        "knowledge_point_codes": [
+          "AI-KP-02-01",
+          "AI-KP-02-02",
+          "AI-KP-02-03",
+          "AI-KP-02-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-01-17500"
+        ]
+      },
+      {
+        "key": "unit-ai-section-01-38956",
+        "title": "变化率、梯度与链式法则",
+        "goal": "从函数变化逐步计算偏导数和复合函数梯度",
+        "knowledge_point_codes": [
+          "AI-KP-02-05",
+          "AI-KP-02-06"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-01-38956"
+        ]
+      },
+      {
+        "key": "unit-ai-section-01-47761",
+        "title": "自动微分核验",
+        "goal": "用手算小例子核对自动微分结果",
+        "knowledge_point_codes": [
+          "AI-KP-02-06"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-01-47761"
+        ]
+      },
+      {
+        "key": "unit-ai-section-01-55238",
+        "title": "概率、条件与不确定性",
+        "goal": "用计数解释条件概率、独立性、期望和方差",
+        "knowledge_point_codes": [
+          "AI-KP-02-07",
+          "AI-KP-02-08",
+          "AI-KP-02-09"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-01-55238"
+        ]
+      },
+      {
+        "key": "unit-ai-section-02-1184",
+        "title": "线性模型与训练目标",
+        "goal": "从预测误差推到损失和参数更新",
+        "knowledge_point_codes": [
+          "AI-KP-04-01",
+          "AI-KP-04-02",
+          "AI-KP-04-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-02-1184"
+        ]
+      },
+      {
+        "key": "unit-ai-section-02-15112",
+        "title": "完成线性回归训练循环",
+        "goal": "读取批次、计算损失并检查一次更新",
+        "knowledge_point_codes": [
+          "AI-KP-03-04",
+          "AI-KP-04-06"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-02-15112"
+        ]
+      },
+      {
+        "key": "unit-ai-section-02-37514",
+        "title": "多类概率与交叉熵",
+        "goal": "核算类别概率和损失，解释错误预测受到的惩罚",
+        "knowledge_point_codes": [
+          "AI-KP-04-04",
+          "AI-KP-04-05"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-02-37514"
+        ]
+      },
+      {
+        "key": "unit-ai-section-02-58208",
+        "title": "运行分类与评价实验",
+        "goal": "完成训练、验证并解释分类错误",
+        "knowledge_point_codes": [
+          "AI-KP-04-04",
+          "AI-KP-04-05"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-02-58208"
+        ]
+      },
+      {
+        "key": "unit-ai-section-03-1398",
+        "title": "多层感知机",
+        "goal": "计算一层输出，解释连续线性层为什么仍是线性模型",
+        "knowledge_point_codes": [
+          "AI-KP-06-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-03-1398"
+        ]
+      },
+      {
+        "key": "unit-ai-section-03-13161",
+        "title": "实现多层网络",
+        "goal": "核对层间形状、激活和分类结果",
+        "knowledge_point_codes": [
+          "AI-KP-06-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-03-13161"
+        ]
+      },
+      {
+        "key": "unit-ai-section-03-22488",
+        "title": "选择能泛化的模型",
+        "goal": "固定训练验证测试分工，用曲线解释过拟合和选参",
+        "knowledge_point_codes": [
+          "AI-KP-05-01",
+          "AI-KP-05-02",
+          "AI-KP-05-03",
+          "AI-KP-05-04",
+          "AI-KP-05-05"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-03-22488"
+        ]
+      },
+      {
+        "key": "unit-ai-section-03-37903",
+        "title": "权重衰减实验",
+        "goal": "比较不同正则化强度下的训练和验证误差",
+        "knowledge_point_codes": [
+          "AI-KP-07-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-03-37903"
+        ]
+      },
+      {
+        "key": "unit-ai-section-03-53502",
+        "title": "Dropout训练与推理",
+        "goal": "解释随机失活、缩放和推理时的差别",
+        "knowledge_point_codes": [
+          "AI-KP-07-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-03-53502"
+        ]
+      },
+      {
+        "key": "unit-ai-section-03-68186",
+        "title": "前向传播、反向传播和计算图",
+        "goal": "沿小计算图核算局部梯度与链式传播",
+        "knowledge_point_codes": [
+          "AI-KP-06-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-03-68186"
+        ]
+      },
+      {
+        "key": "unit-ai-section-03-73765",
+        "title": "数值稳定性和模型初始化",
+        "goal": "从训练曲线和梯度量级判断初始化问题",
+        "knowledge_point_codes": [
+          "AI-KP-06-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-03-73765"
+        ]
+      },
+      {
+        "key": "unit-ai-section-03-81466",
+        "title": "分布变化与模型失效",
+        "goal": "分析训练环境改变后预测失效的原因",
+        "knowledge_point_codes": [
+          "AI-KP-05-01",
+          "AI-KP-05-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-03-81466"
+        ]
+      },
+      {
+        "key": "unit-ai-section-03-94285",
+        "title": "房价预测的验证实验",
+        "goal": "完成预处理与交叉验证，记录选择依据和限制",
+        "knowledge_point_codes": [
+          "AI-KP-03-02",
+          "AI-KP-03-03",
+          "AI-KP-05-04",
+          "AI-KP-05-05"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-03-94285"
+        ]
+      },
+      {
+        "key": "unit-ai-section-04-1411",
+        "title": "网络模块、参数管理与模型保存",
+        "goal": "构造网络模块，区分参数、梯度和共享参数",
+        "knowledge_point_codes": [
+          "AI-KP-06-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-04-1411"
+        ]
+      },
+      {
+        "key": "unit-ai-section-04-43212",
+        "title": "保存与恢复模型",
+        "goal": "保存参数并重新加载，核对恢复前后的预测",
+        "knowledge_point_codes": [
+          "AI-KP-06-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-04-43212"
+        ]
+      },
+      {
+        "key": "unit-ai-section-05-1346",
+        "title": "优化和深度学习",
+        "goal": "区分优化误差与泛化误差，解释梯度下降的步长和收敛条件",
+        "knowledge_point_codes": [
+          "AI-KP-07-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-05-1346"
+        ]
+      },
+      {
+        "key": "unit-ai-section-05-8407",
+        "title": "凸性与优化条件",
+        "goal": "区分局部与全局最优以及适用前提",
+        "knowledge_point_codes": [
+          "AI-KP-07-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-05-8407"
+        ]
+      },
+      {
+        "key": "unit-ai-section-05-21039",
+        "title": "梯度下降实验",
+        "goal": "比较学习率对参数轨迹的影响",
+        "knowledge_point_codes": [
+          "AI-KP-07-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-05-21039"
+        ]
+      },
+      {
+        "key": "unit-ai-section-05-34049",
+        "title": "随机梯度、小批量与动量",
+        "goal": "比较批大小和动量对噪声、速度及训练曲线的影响",
+        "knowledge_point_codes": [
+          "AI-KP-07-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-05-34049"
+        ]
+      },
+      {
+        "key": "unit-ai-section-05-79682",
+        "title": "自适应优化器与Adam",
+        "goal": "解释自适应步长及一二阶矩，比较实际训练结果",
+        "knowledge_point_codes": [
+          "AI-KP-07-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-05-79682"
+        ]
+      },
+      {
+        "key": "unit-ai-section-05-102219",
+        "title": "Adam算法",
+        "goal": "解释自适应步长及一二阶矩，比较实际训练结果",
+        "knowledge_point_codes": [
+          "AI-KP-07-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-05-102219"
+        ]
+      },
+      {
+        "key": "unit-ai-section-05-113336",
+        "title": "学习率调度器",
+        "goal": "据训练与验证曲线选择学习率调整并保留对照",
+        "knowledge_point_codes": [
+          "AI-KP-07-05"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-05-113336"
+        ]
+      },
+      {
+        "key": "unit-ai-section-06-1716",
+        "title": "卷积核、局部连接与参数共享",
+        "goal": "手算小矩阵卷积并说明与全连接层的不同",
+        "knowledge_point_codes": [
+          "AI-KP-08-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-06-1716"
+        ]
+      },
+      {
+        "key": "unit-ai-section-06-17954",
+        "title": "填充、步幅、通道与池化",
+        "goal": "核算输出形状，解释通道和下采样保留了什么",
+        "knowledge_point_codes": [
+          "AI-KP-08-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-06-17954"
+        ]
+      },
+      {
+        "key": "unit-ai-section-06-37855",
+        "title": "卷积神经网络（LeNet）",
+        "goal": "搭建并比较卷积网络的输入输出和参数规模",
+        "knowledge_point_codes": [
+          "AI-KP-08-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-06-37855"
+        ]
+      },
+      {
+        "key": "unit-ai-section-07-13956",
+        "title": "比较卷积块与网络深度",
+        "goal": "核算不同块配置的形状、参数和训练结果",
+        "knowledge_point_codes": [
+          "AI-KP-08-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-07-13956"
+        ]
+      },
+      {
+        "key": "unit-ai-section-07-44077",
+        "title": "批量规范化与残差连接",
+        "goal": "解释训练与推理统计量及残差路径的作用",
+        "knowledge_point_codes": [
+          "AI-KP-08-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-07-44077"
+        ]
+      },
+      {
+        "key": "unit-ai-section-08-1710",
+        "title": "序列、词元与语言建模",
+        "goal": "构造序列样本，解释条件预测与困惑度",
+        "knowledge_point_codes": [
+          "AI-KP-09-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-08-1710"
+        ]
+      },
+      {
+        "key": "unit-ai-section-08-34867",
+        "title": "循环神经网络",
+        "goal": "展开循环网络并解释长序列梯度问题",
+        "knowledge_point_codes": [
+          "AI-KP-09-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-08-34867"
+        ]
+      },
+      {
+        "key": "unit-ai-section-08-43357",
+        "title": "运行循环网络",
+        "goal": "追踪隐藏状态并观察梯度与生成结果",
+        "knowledge_point_codes": [
+          "AI-KP-09-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-08-43357"
+        ]
+      },
+      {
+        "key": "unit-ai-section-08-83307",
+        "title": "时间展开与梯度",
+        "goal": "沿时间步解释梯度传播和截断",
+        "knowledge_point_codes": [
+          "AI-KP-09-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-08-83307"
+        ]
+      },
+      {
+        "key": "unit-ai-section-09-1422",
+        "title": "GRU与LSTM的门控记忆",
+        "goal": "说明更新、遗忘与输出门如何控制状态",
+        "knowledge_point_codes": [
+          "AI-KP-09-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-09-1422"
+        ]
+      },
+      {
+        "key": "unit-ai-section-09-50985",
+        "title": "编码器解码器、seq2seq与束搜索",
+        "goal": "追踪翻译输入输出，比较贪心与束搜索的局限",
+        "knowledge_point_codes": [
+          "AI-KP-09-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-09-50985"
+        ]
+      },
+      {
+        "key": "unit-ai-section-10-6072",
+        "title": "查询、键、值与注意力评分",
+        "goal": "计算注意力权重，解释加权汇聚和掩码",
+        "knowledge_point_codes": [
+          "AI-KP-10-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-10-6072"
+        ]
+      },
+      {
+        "key": "unit-ai-section-10-61333",
+        "title": "多头、自注意力与位置编码",
+        "goal": "核算多头形状并说明位置信息如何进入模型",
+        "knowledge_point_codes": [
+          "AI-KP-10-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-10-61333"
+        ]
+      },
+      {
+        "key": "unit-ai-section-10-87264",
+        "title": "Transformer",
+        "goal": "画出编码解码数据流，区分训练并行与生成依赖",
+        "knowledge_point_codes": [
+          "AI-KP-10-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-10-87264"
+        ]
+      },
+      {
+        "key": "unit-ai-section-11-13570",
+        "title": "异步计算、并行与性能测量",
+        "goal": "测量同步前后的真实耗时，区分延迟和吞吐量",
+        "knowledge_point_codes": [
+          "AI-KP-21-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-11-13570"
+        ]
+      },
+      {
+        "key": "unit-ai-section-11-44323",
+        "title": "多GPU训练",
+        "goal": "追踪批次分配与梯度汇总，解释加速收益和通信代价",
+        "knowledge_point_codes": [
+          "AI-KP-21-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-11-44323"
+        ]
+      },
+      {
+        "key": "unit-ai-section-11-72795",
+        "title": "参数服务器",
+        "goal": "比较集中与分布式参数更新的瓶颈和一致性条件",
+        "knowledge_point_codes": [
+          "AI-KP-21-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-11-72795"
+        ]
+      },
+      {
+        "key": "unit-ai-section-12-1816",
+        "title": "数据增广与迁移微调",
+        "goal": "设计不泄漏的数据增广与微调对照",
+        "knowledge_point_codes": [
+          "AI-KP-13-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-12-1816"
+        ]
+      },
+      {
+        "key": "unit-ai-section-12-31677",
+        "title": "检测框、锚框与目标检测",
+        "goal": "计算框重叠，说明类别和位置预测的分工",
+        "knowledge_point_codes": [
+          "AI-KP-13-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-12-31677"
+        ]
+      },
+      {
+        "key": "unit-ai-section-12-84898",
+        "title": "单发多框检测（SSD）",
+        "goal": "计算框重叠，说明类别和位置预测的分工",
+        "knowledge_point_codes": [
+          "AI-KP-13-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-12-84898"
+        ]
+      },
+      {
+        "key": "unit-ai-section-12-120669",
+        "title": "语义分割、转置卷积与全卷积网络",
+        "goal": "解释逐像素输出与上采样的形状变化",
+        "knowledge_point_codes": [
+          "AI-KP-13-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-12-120669"
+        ]
+      },
+      {
+        "key": "unit-ai-section-12-177282",
+        "title": "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "goal": "比较独立验证结果，解释误判样例及适用边界",
+        "knowledge_point_codes": [
+          "AI-KP-13-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-12-177282"
+        ]
+      },
+      {
+        "key": "unit-ai-section-13-2354",
+        "title": "词嵌入、负采样与子词表示",
+        "goal": "解释词表示的训练信号、近似计算与未登录词处理",
+        "knowledge_point_codes": [
+          "AI-KP-14-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-13-2354"
+        ]
+      },
+      {
+        "key": "unit-ai-section-13-42750",
+        "title": "子词嵌入",
+        "goal": "解释词表示的训练信号、近似计算与未登录词处理",
+        "knowledge_point_codes": [
+          "AI-KP-14-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-13-42750"
+        ]
+      },
+      {
+        "key": "unit-ai-section-13-55029",
+        "title": "来自Transformers的双向编码器表示（BERT）",
+        "goal": "区分掩码预训练与自回归生成，说明预训练输入",
+        "knowledge_point_codes": [
+          "AI-KP-14-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-13-55029"
+        ]
+      },
+      {
+        "key": "unit-ai-section-13-95172",
+        "title": "预训练BERT",
+        "goal": "区分掩码预训练与自回归生成，说明预训练输入",
+        "knowledge_point_codes": [
+          "AI-KP-14-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-13-95172"
+        ]
+      },
+      {
+        "key": "unit-ai-section-14-9367",
+        "title": "情感分析：使用循环神经网络",
+        "goal": "为下游任务选择输出头并解释验证结果",
+        "knowledge_point_codes": [
+          "AI-KP-14-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-14-9367"
+        ]
+      },
+      {
+        "key": "unit-ai-section-14-30171",
+        "title": "自然语言推断与数据集",
+        "goal": "为下游任务选择输出头并解释验证结果",
+        "knowledge_point_codes": [
+          "AI-KP-14-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-14-30171"
+        ]
+      },
+      {
+        "key": "unit-ai-section-14-59466",
+        "title": "针对序列级和词元级应用微调BERT",
+        "goal": "为下游任务选择输出头并解释验证结果",
+        "knowledge_point_codes": [
+          "AI-KP-14-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-14-59466"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-285454",
+        "title": "图数据与学习任务",
+        "goal": "按任务选择表示、划分单位和读出方式",
+        "knowledge_point_codes": [
+          "AI-KP-11-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-285454"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-293717",
+        "title": "消息传递与图网络",
+        "goal": "手算一次邻居聚合并对比GCN与注意力聚合",
+        "knowledge_point_codes": [
+          "AI-KP-11-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-293717"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-308242",
+        "title": "深层图网络的边界",
+        "goal": "区分两种深层图网络问题及适用的缓解方法",
+        "knowledge_point_codes": [
+          "AI-KP-11-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-308242"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-319264",
+        "title": "主成分分析",
+        "goal": "解释投影、方差与重建误差的关系",
+        "knowledge_point_codes": [
+          "AI-KP-12-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-319264"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-323045",
+        "title": "自编码器",
+        "goal": "解释编码、重建目标及压缩表示的局限",
+        "knowledge_point_codes": [
+          "AI-KP-12-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-323045"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-326753",
+        "title": "密度与聚类",
+        "goal": "区分聚类与分类，说明无标签任务的评价依据",
+        "knowledge_point_codes": [
+          "AI-KP-12-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-326753"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-332482",
+        "title": "自监督学习",
+        "goal": "构造监督信号，区分预训练目标与下游效果",
+        "knowledge_point_codes": [
+          "AI-KP-12-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-332482"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-415212",
+        "title": "自回归语言模型与生成",
+        "goal": "比较温度、贪心和采样，解释困惑度不能直接代表回答正确性",
+        "knowledge_point_codes": [
+          "AI-KP-15-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-415212"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-418839",
+        "title": "预训练与规模规律",
+        "goal": "解释训练数据、词元和计算预算的相互约束",
+        "knowledge_point_codes": [
+          "AI-KP-15-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-418839"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-423966",
+        "title": "上下文学习",
+        "goal": "区分示例提示、推理计算和参数更新，核验推理结果",
+        "knowledge_point_codes": [
+          "AI-KP-15-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-423966"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-426686",
+        "title": "指令与参数高效微调",
+        "goal": "说明指令数据、训练目标及LoRA改变的参数",
+        "knowledge_point_codes": [
+          "AI-KP-16-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-426686"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-429283",
+        "title": "偏好与奖励学习",
+        "goal": "区分示范答案与偏好比较，解释奖励优化的边界",
+        "knowledge_point_codes": [
+          "AI-KP-16-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-429283"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-431364",
+        "title": "DPO与策略优化",
+        "goal": "比较偏好优化目标和所需组件，避免把一种工程顺序当普遍定律",
+        "knowledge_point_codes": [
+          "AI-KP-16-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-431364"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-436275",
+        "title": "推理增强与结果验证",
+        "goal": "区分示例提示、推理计算和参数更新，核验推理结果",
+        "knowledge_point_codes": [
+          "AI-KP-15-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-436275"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-439745",
+        "title": "智能体与ReAct",
+        "goal": "追踪观察、决策、行动和状态更新，不把文字计划当执行结果",
+        "knowledge_point_codes": [
+          "AI-KP-18-01"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-439745"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-442481",
+        "title": "工具调用与检索增强",
+        "goal": "拆开索引、检索和生成，指出每步可能丢失或歪曲的证据；验证工具输入输出，利用实际结果继续任务并处理失败",
+        "knowledge_point_codes": [
+          "AI-KP-17-01",
+          "AI-KP-18-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-442481"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-443963",
+        "title": "多模态与多智能体协作",
+        "goal": "比较协作与单体任务流程，追踪交接与纠错依据",
+        "knowledge_point_codes": [
+          "AI-KP-18-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-443963"
+        ]
+      },
+      {
+        "key": "unit-ai-section-16-445235",
+        "title": "评价智能体任务与过程",
+        "goal": "分开统计任务完成、工具执行和证据质量，解释失败原因",
+        "knowledge_point_codes": [
+          "AI-KP-18-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-445235"
+        ]
+      },
+      {
+        "key": "project-ai-section-16-445235",
+        "title": "个性化学习智能体综合项目",
+        "goal": "设计个性化学习智能体综合项目：明确共同任务、资料证据、用户条件和结果标准，独立完成检索、工具协作与评估；项目要求由本课程综合设计，教材提供评估原理",
+        "knowledge_point_codes": [
+          "AI-KP-20"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-16-445235"
+        ]
+      },
+      {
+        "key": "unit-ai-section-19-4729",
+        "title": "小型GPT训练与生成",
+        "goal": "在可用设备上运行小模型并检查损失、因果掩码和生成；硬件不足时从可运行的小规模实验逐步扩大",
+        "knowledge_point_codes": [
+          "AI-KP-15-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-19-4729"
+        ]
+      },
+      {
+        "key": "unit-ai-section-20-319",
+        "title": "微调与偏好对齐实验",
+        "goal": "按本任务约定比较微调前后输出；说明数据、损失和比较标准，区分任务规则与通用原理",
+        "knowledge_point_codes": [
+          "AI-KP-16-01",
+          "AI-KP-16-02",
+          "AI-KP-16-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-20-319"
+        ]
+      },
+      {
+        "key": "unit-ai-section-21-313",
+        "title": "完成可核验的文档问答",
+        "goal": "保留原文位置，比较切分、召回和重排，分别评价检索命中与回答忠实性",
+        "knowledge_point_codes": [
+          "AI-KP-17-02",
+          "AI-KP-17-03",
+          "AI-KP-17-04"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-21-313"
+        ]
+      },
+      {
+        "key": "unit-ai-section-22-333",
+        "title": "工具执行与恢复实验",
+        "goal": "实现受限工具和执行循环，用任务结果检查成功与失败恢复",
+        "knowledge_point_codes": [
+          "AI-KP-18-02"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-22-333"
+        ]
+      },
+      {
+        "key": "unit-ai-section-23-344",
+        "title": "代码智能体综合实验",
+        "goal": "分阶段实现工具接口、技能加载和改码测试循环；以实际测试结果评价，材料中的本地7B和工具数量仅属该工程方案",
+        "knowledge_point_codes": [
+          "AI-KP-19-01",
+          "AI-KP-19-02",
+          "AI-KP-19-03"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-23-344"
+        ]
+      },
+      {
+        "key": "unit-ai-section-24-260",
+        "title": "预处理参数与数据泄漏",
+        "goal": "先划分数据，只在训练数据拟合；比较错误预处理与正确流水线",
+        "knowledge_point_codes": [
+          "AI-KP-03-05"
+        ],
+        "primary_chapter_keys": [
+          "ai-section-24-260"
+        ]
+      }
+    ],
+    "prerequisite_basis": "teaching_suggestion",
+    "scope_note": "原文完整保留；主教学片段与补充阅读分开；工程任务约定不作为普遍理论；先修为课程教学安排。"
+  }
 }

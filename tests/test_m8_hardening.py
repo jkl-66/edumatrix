@@ -100,7 +100,8 @@ def test_deployment_preflight_is_truthful_and_contains_no_secret_values():
     assert report["status"] in {"ready", "not_ready"}
     assert report["generation_allowed"] == (not report["blockers"])
     assert report["checks"]["data_initialization"]["published_courses"] >= 0
-    assert report["checks"]["retrieval"]["backend"] in {"canonical_hash", "faiss"}
+    assert report["checks"]["retrieval"]["backend"] == "canonical"
+    assert "configured_embedding_provider" in report["checks"]["retrieval"]
     assert report["checks"]["generation_runtime"]["mode"] in {
         "real_model", "deterministic_demo", "unavailable",
     }

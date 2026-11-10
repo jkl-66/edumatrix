@@ -68,6 +68,9 @@ class ChapterSummary(BaseModel):
     position: int
     parent_id: str | None
     source_document_id: str
+    source_title: str = ""
+    source_file_format: str = ""
+    source_processing_status: str = ""
     source_ref_id: str
     knowledge_points: list[dict[str, str]]
 

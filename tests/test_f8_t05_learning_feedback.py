@@ -16,6 +16,7 @@ from app.database import (
     DBKnowledgePoint,
     DBLearningEvent,
     DBLearningEventConsumption,
+    DBReviewPlan,
     DBStudentProfile,
     DBUser,
 )
@@ -161,6 +162,33 @@ def test_all_trusted_completion_types_publish_one_six_view_feedback_version(even
     assert feedback["nextDaySchedule"][0]["date"] == "2026-08-13"
     assert feedback["nextDaySchedule"][0]["knowledge_point_id"] == POINT
     assert feedback["nextDaySchedule"][0]["source_event_id"] == event.id
+
+
+@pytest.mark.parametrize("assessment_type", ["formal_exam_submitted", "quiz_answered"])
+def test_review_completion_keeps_history_without_counting_the_same_exam_score_twice(assessment_type):
+    _, session, owner, _ = _database()
+    exam = _event(assessment_type, event_id="review-exam")
+    reference = {"assessment_event_id": exam.id}
+    if assessment_type == "quiz_answered":
+        exam.payload = {"score": 0.75, "correct": True, "attempt_id": "review-assessment-attempt"}
+        reference = {"assessment_attempt_id": "review-assessment-attempt"}
+    session.add(exam)
+    session.flush()
+    aggregate_learning_event(session, event=exam)
+    profile = session.query(DBStudentProfile).filter_by(student_id=owner.username).one()
+    before = dict(profile.concept_mastery)
+    review = _event("review_completed", event_id="review-finish")
+    review.occurred_at = BASE_TIME + timedelta(minutes=1)
+    review.payload = {"recall_score": 0.75, **reference, "duration_minutes": 12}
+    session.add(review)
+    session.flush()
+    result = aggregate_learning_event(session, event=review)
+    assert result.status == "processed"
+    assert profile.concept_mastery == before
+    assert session.query(DBLearningEvent).count() == 2
+    plan = session.query(DBReviewPlan).filter_by(student_id=owner.username).one()
+    assert plan.review_count == 1
+    assert plan.next_review_at == review.occurred_at + timedelta(days=plan.interval_days)
 
 
 def test_partial_failure_survives_session_restart_and_replays_only_the_failed_tail(monkeypatch):

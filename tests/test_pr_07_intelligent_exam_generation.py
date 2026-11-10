@@ -1,16 +1,73 @@
 from datetime import timedelta
 
-from app.database import DBProfileSnapshot
+from app.database import DBProfileSnapshot, DBChapter, DBChapterKnowledgePoint, DBKnowledgePoint, DBSourceRef
 from app.m5_exam_core import IntelligentExamConfigInput, build_intelligent_exam_input
 import app.m5_exam_core as exam_core
 
 from tests.test_f6_t06_formal_exam import _configuration, _fixture
 
 
+def test_selected_knowledge_point_limits_exam_chapter_sources():
+    session, engine, learner, _ = _fixture()
+    try:
+        chapter = DBChapter(id="unrelated-chapter", course_id="course-f6", source_document_id="source-f6", stable_key="unrelated", title="Unrelated topic", position=2)
+        point = DBKnowledgePoint(id="unrelated-point", domain_pack="f6", code="unrelated", version="1", title="Unrelated")
+        session.add_all([chapter, point])
+        session.flush()
+        session.add_all([
+            DBChapterKnowledgePoint(chapter_id=chapter.id, knowledge_point_id=point.id),
+            DBSourceRef(id="unrelated-source-ref", source_document_id="source-f6", chapter_id=chapter.id, parser_version="1", location_kind="section", location_index=0, quote="Do not use this unrelated material", content_hash="a" * 64),
+        ])
+        session.flush()
+        payload = build_intelligent_exam_input(session, owner_public_id=learner.public_id,
+            config=_config(chapter_ids=[], knowledge_point_ids=["kp-f6-a"]))
+        blueprint = payload.generation_context["blueprint"]
+        assert blueprint["chapter_ids"] == ["chapter-f6"]
+        assert blueprint["source_ref_ids"] == ["source-ref-f6"]
+        from app.m5_assessment_core import learner_option_texts
+        from types import SimpleNamespace
+        assert learner_option_texts(SimpleNamespace(options=[], prompt="Explain the result"), SimpleNamespace(question_type="short_answer")) == []
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def _config(**overrides):
     payload = _configuration(overrides.pop("idempotency_key", "pr7-generation-key"))
     payload.update(overrides)
     return IntelligentExamConfigInput(**payload)
+
+
+def test_exam_source_excerpt_reads_relevant_end_of_verified_chapter(monkeypatch):
+    session, engine, learner, _ = _fixture()
+    text = ("## Indexing\n\n" + "Indexing selects a single item. " * 300
+            + "\n\n## 轴向统计 axis mean\n\nnp.mean(arr, axis=0) computes column means.\n")
+    seen = []
+    def source_text(db, ref, *, max_chars):
+        seen.append(max_chars)
+        return text[:max_chars]
+    monkeypatch.setattr("app.source_refs.source_ref_teaching_text", source_text)
+    try:
+        payload = build_intelligent_exam_input(session, owner_public_id=learner.public_id,
+            config=_config(theme="轴向统计 axis mean", knowledge_point_ids=["kp-f6-a"]))
+        quote = payload.generation_context["blueprint"]["source_snapshot"][0]["quote"]
+        assert seen and min(seen) >= len(text)
+        assert "np.mean(arr, axis=0)" in quote
+        assert len(quote) <= 8000
+    finally:
+        session.close(); engine.dispose()
+
+
+def test_seven_question_exam_total_does_not_expose_binary_float_tail():
+    session, engine, learner, _ = _fixture()
+    try:
+        payload = build_intelligent_exam_input(session, owner_public_id=learner.public_id,
+            config=_config(question_type_counts={"single_choice": 7}))
+        _, version, items = exam_core.create_exam(session, owner_public_id=learner.public_id, payload=payload)
+        assert len(items) == 7
+        assert version.total_points == 100
+    finally:
+        session.close(); engine.dispose()
 
 
 def test_pr07_builds_auditable_blueprint_and_source_bound_questions():

@@ -8,6 +8,7 @@ import hashlib
 import json
 from typing import Any, Literal
 import uuid
+from urllib.parse import urlencode
 
 from pydantic import Field, model_validator
 
@@ -28,6 +29,7 @@ from app.database import (
     DBProfileSnapshot,
     DBReviewPlan,
     DBSourceRef,
+    DBStudentProfile,
     DBUser,
 )
 from app.m1_lifecycle import record_audit
@@ -50,6 +52,10 @@ def _fail(code: str, message: str) -> None:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _learning_today():
+    return (_now() + timedelta(hours=8)).date()
 
 
 def _canonical(value: Any) -> str:
@@ -86,6 +92,9 @@ class PlanNodeSpec(StrictModel):
     rationale: str = Field(default="", max_length=2000)
     required: bool = True
     risk_level: Literal["normal", "high"] = "normal"
+    knowledge_point_ids: tuple[str, ...] = ()
+    teaching_unit_key: str | None = None
+    teaching_goal: str = Field(default="", description="本次学习要完成的具体动作或作品及检查标准，用简短任务句表达。练习解答、参考数值、逐步推导留给后续教学资源。")
 
     @model_validator(mode="after")
     def valid_estimate_and_target(self) -> "PlanNodeSpec":
@@ -101,10 +110,10 @@ class PlanNodeSpec(StrictModel):
 
 class PlanSpec(StrictModel):
     schema_version: Literal["m5.plan.v1"] = "m5.plan.v1"
-    goal: str = Field(min_length=1, max_length=2000)
+    goal: str = Field(min_length=1)
     deadline: datetime | None = None
     assumptions: tuple[str, ...] = ()
-    nodes: tuple[PlanNodeSpec, ...] = Field(min_length=1, max_length=500)
+    nodes: tuple[PlanNodeSpec, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def ordered_acyclic_nodes(self) -> "PlanSpec":
@@ -130,7 +139,7 @@ LearningEventType = Literal[
     "wrong_question_reviewed", "delayed_retest_passed",
     "user_marked_complete", "teacher_confirmed", "misconception_decided",
     "interactive_experiment_completed", "interactive_model_observation_submitted", "feynman_submitted",
-    "formal_exam_submitted", "review_completed",
+    "formal_exam_submitted", "review_completed", "learning_inquiry_answered",
 ]
 
 EvidenceStatus = Literal["none", "accepted", "rejected"]
@@ -148,6 +157,7 @@ class LearningEventClassification:
 
 
 _ACTIONS: dict[str, str] = {
+    "learning_inquiry_answered": "learning.inquiry_answered",
     "resource_opened": "resource.opened",
     "reading_started": "reading.started",
     "reading_threshold": "reading.threshold_reached",
@@ -312,6 +322,21 @@ def classify_learning_event(
             mastery_eligible=False,
             completion_effect="none",
         )
+    if event.event_type == "quiz_answered" and (
+        event.payload.get("used_hints") or event.payload.get("evidence_kind") == "correction"
+    ):
+        return LearningEventClassification(
+            action=action, evidence_strength=0.0, evidence_status="none",
+            evidence_reason=("订正已保存，后续用新题检查理解" if event.payload.get("evidence_kind") == "correction"
+                             else "借助提示完成练习，保留成绩；独立掌握需后续作答确认"),
+            mastery_eligible=False, completion_effect="progress",
+        )
+    if event.event_type in {"code_tests_passed", "interactive_model_observation_submitted"} and event.payload.get("evidence_kind") == "guided_practice":
+        return LearningEventClassification(
+            action=action, evidence_strength=0.0, evidence_status="none",
+            evidence_reason="实践记录已保存；理解程度由后续作答或复述评价确认",
+            mastery_eligible=False, completion_effect="progress",
+        )
     return LearningEventClassification(
         action=action,
         evidence_strength=strength,
@@ -330,6 +355,10 @@ def _validate_plan_targets(session: Any, *, owner_public_id: str, course_id: str
             chapter = session.query(DBChapter).filter_by(id=node.target_object_id).first()
             if chapter is None or (course_id and chapter.course_id != course_id):
                 _fail("plan_chapter_invalid", f"chapter is not in the confirmed course: {node.node_key}")
+            if node.knowledge_point_ids:
+                allowed = {row[0] for row in session.query(DBChapterKnowledgePoint.knowledge_point_id).filter_by(chapter_id=chapter.id)}
+                if not set(node.knowledge_point_ids).issubset(allowed):
+                    _fail("plan_knowledge_scope_invalid", "学习任务包含不属于本章的知识点。")
             continue
         if node.node_type == "assessment":
             version = session.query(DBAssessmentQuestionVersion).filter_by(id=node.target_object_id).first()
@@ -472,7 +501,8 @@ def propose_plan_revision(
     previous = session.query(DBPlanVersion).filter_by(id=plan.current_version_id).one()
     version = _add_version(
         session, plan=plan, spec=spec, actor_public_id=owner_public_id,
-        profile_snapshot_id=profile_snapshot_id,
+        profile_snapshot_id=(profile_snapshot_id if profile_snapshot_id is not None
+                             else previous.profile_snapshot_id),
     )
     diff = plan_version_diff(previous, version)
     plan.status = "draft" if plan.confirmed_version_id is None else "replan_pending"
@@ -490,6 +520,12 @@ def _publish_path(
     session: Any, *, plan: DBPlanDraft, version: DBPlanVersion, previous_path: DBLearningPath | None,
 ) -> DBLearningPath:
     spec = PlanSpec.model_validate(version.content)
+    previous_nodes = session.query(DBPathNode).filter_by(learning_path_id=previous_path.id).all() if previous_path else []
+    from app.path_scope import path_node_content, scope_identity
+    completed_by_target = {
+        scope_identity(node, path_node_content(session, node)): node
+        for node in previous_nodes if node.status == "completed" and node.target_object_id
+    }
     path = DBLearningPath(
         owner_public_id=plan.owner_public_id,
         course_id=plan.course_id,
@@ -500,6 +536,7 @@ def _publish_path(
     session.add(path)
     session.flush()
     for sequence, node in enumerate(spec.nodes, start=1):
+        completed = completed_by_target.get(scope_identity(node, node.model_dump()))
         session.add(DBPathNode(
             learning_path_id=path.id,
             node_key=node.node_key,
@@ -507,6 +544,8 @@ def _publish_path(
             node_type=node.node_type,
             target_object_id=node.target_object_id,
             title=node.title,
+            status="completed" if completed is not None else "pending",
+            actual_minutes=completed.actual_minutes if completed is not None else None,
             prerequisites=list(node.prerequisites),
             is_extension=node.node_type == "extension",
             resource_status=node.resource_status,
@@ -543,7 +582,7 @@ def confirm_plan(
         DBLearningPath.owner_public_id == owner_public_id,
         DBLearningPath.course_id == plan.course_id,
         DBPlanVersion.plan_draft_id == plan.id,
-        DBLearningPath.status.in_(("active", "paused")),
+        DBLearningPath.status.in_(("active", "paused", "completed")),
     ).order_by(DBLearningPath.created_at.desc()).first()
     if previous is not None:
         previous.status = "archived"
@@ -712,14 +751,29 @@ def process_path_event(
     )
 
 
-def _completion_criteria(node_type: str) -> str:
+def _completion_criteria(node_type: str, knowledge_point_ids: list[str] | None = None) -> str:
+    if node_type == "chapter" and knowledge_point_ids:
+        return "完成本单元各知识点的学习检查。"
     return {
         "chapter": "阅读章节并完成一项学习检查。",
         "interactive": "完成交互实验并提交一次有效结果。",
         "assessment": "提交作答并查看解析。",
         "artifact": "打开资源并完成对应学习动作。",
-        "review": "先回顾该知识点的授权资源，再完成一次智能组卷并提交服务端判分结果。",
+        "review": "先回顾这个知识点的资料，再完成一次测评并查看评分。",
     }.get(node_type, "完成任务并提交结果。")
+
+
+def path_task_route(session: Any, *, node: DBPathNode, course_id: str | None) -> str:
+    """Open a path chapter in the current reader, preserving its return position."""
+    chapter = session.get(DBChapter, node.target_object_id) if node.node_type == "chapter" else None
+    if chapter is not None and chapter.course_id == course_id and chapter.source_document_id:
+        query = urlencode({
+            "course_id": course_id,
+            "chapter_id": chapter.id,
+            "return_to": f"/workspace/path?course_id={course_id}&node_id={node.id}",
+        })
+        return f"/knowledge/documents/{chapter.source_document_id}?{query}"
+    return f"/workspace/path?{urlencode({'course_id': course_id or '', 'node_id': node.id})}"
 
 
 def _generation_context(
@@ -750,13 +804,21 @@ def _generation_context(
     if chapter is None:
         context["block_reason"] = "当前路径节点对应的课程章节不存在。"
         return context
-    knowledge_point = (
+    from app.path_scope import path_node_content
+    teaching = path_node_content(session, node)
+    path = session.get(DBLearningPath, node.learning_path_id)
+    scoped_ids = list(teaching.get("knowledge_point_ids") or [])
+    point_query = (
         session.query(DBKnowledgePoint)
         .join(DBChapterKnowledgePoint, DBChapterKnowledgePoint.knowledge_point_id == DBKnowledgePoint.id)
         .filter(DBChapterKnowledgePoint.chapter_id == chapter.id)
-        .order_by(DBKnowledgePoint.title, DBKnowledgePoint.id)
-        .first()
+        .order_by((DBKnowledgePoint.title == chapter.title).desc(), DBKnowledgePoint.title, DBKnowledgePoint.id)
     )
+    if scoped_ids:
+        point_query = point_query.filter(DBKnowledgePoint.id.in_(scoped_ids))
+    points = point_query.all()
+    points.sort(key=lambda point: scoped_ids.index(point.id) if point.id in scoped_ids else len(scoped_ids))
+    knowledge_point = points[0] if points else None
     source_refs = session.query(DBSourceRef).filter_by(chapter_id=chapter.id).order_by(
         DBSourceRef.location_index, DBSourceRef.id,
     ).all()
@@ -774,6 +836,12 @@ def _generation_context(
     context.update({
         "knowledge_point_id": knowledge_point.id if knowledge_point else None,
         "knowledge_point_title": knowledge_point.title if knowledge_point else "",
+        "knowledge_point_ids": [point.id for point in points],
+        "knowledge_point_titles": [point.title for point in points],
+        "teaching_unit_key": teaching.get("teaching_unit_key"),
+        "teaching_goal": teaching.get("teaching_goal") or "",
+        "teaching_title": node.title if scoped_ids else "",
+        "chapter_title": chapter.title,
         "source_ref_ids": [row.id for row in source_refs],
         "source_refs": [{
             "id": row.id,
@@ -784,7 +852,8 @@ def _generation_context(
         "profile_snapshot_id": profile.id if profile else None,
         "profile_version": profile.profile_version if profile else None,
         "profile_influence": profile_influence_summary(profile),
-        "path_version_id": node.learning_path_id,
+        "path_id": node.learning_path_id,
+        "path_version_id": path.source_plan_version_id if path else None,
     })
     missing = []
     if knowledge_point is None:
@@ -837,9 +906,11 @@ def _schedule_profile_projection(snapshot: DBProfileSnapshot | None) -> dict[str
         preferences = [preferences]
     if not isinstance(preferences, list):
         preferences = list(projection.get("interaction_preferences") or [])
-    time_budget = body.get("time_budget_minutes") or projection.get("time_budget_minutes") or 60
+    from app.profile_adaptation import confirmed_study_minutes, confirmed_study_days, confirmed_study_minutes_by_weekday
+    confirmed_budget = confirmed_study_minutes(snapshot)
+    time_budget = confirmed_budget or 60
     try:
-        time_budget = max(15, min(240, int(time_budget)))
+        time_budget = max(15, min(480, int(time_budget)))
     except (TypeError, ValueError):
         time_budget = 60
     return {
@@ -851,6 +922,9 @@ def _schedule_profile_projection(snapshot: DBProfileSnapshot | None) -> dict[str
         "unknown_ids": unknown_ids,
         "preferences": [str(item) for item in preferences if str(item).strip()],
         "time_budget_minutes": time_budget,
+        "time_budget_confirmed": confirmed_budget is not None,
+        "study_weekdays": confirmed_study_days(snapshot),
+        "study_minutes_by_weekday": confirmed_study_minutes_by_weekday(snapshot),
     }
 
 
@@ -876,6 +950,12 @@ def _mastery_state(
         score = max(0.0, min(1.0, float(raw_score))) if raw_score is not None else None
     except (TypeError, ValueError):
         score = None
+    learning_needs = entry.get("learning_needs") or []
+    if learning_needs:
+        need = next((item for item in learning_needs if isinstance(item, dict)), {})
+        return "weak", score, "已有答对的部分，仍需补齐：" + str(
+            need.get("basis") or need.get("next_step") or "本次作答中尚未完成的环节。"
+        )
     # A weak flag always wins over a stale/contradictory `known` label. A
     # zero or low score is actionable evidence, not permission to skip.
     if weak:
@@ -919,17 +999,24 @@ def _schedule_resource_plan(
         "extension": ("拓展迁移", "把知识点迁移到跨章节或真实场景", "完成一个拓展任务或写下迁移结论"),
     }
     weights = {"learning": 0.45, "practice": 0.35, "extension": 0.20}
+    minutes = max(0, int(expected_minutes))
+    allocation = {item: int(minutes * weights[item]) for item in order}
+    remainder = minutes - sum(allocation.values())
+    by_fraction = sorted(order, key=lambda item: minutes * weights[item] - allocation[item], reverse=True)
+    for item in by_fraction[:remainder]:
+        allocation[item] += 1
     return [
         {
             "type": item,
             "label": labels[item][0],
             "explanation": labels[item][1],
             "completion_criteria": labels[item][2],
-            "estimate_minutes": max(5, round(expected_minutes * weights[item])),
+            "estimate_minutes": allocation[item],
             "priority": len(order) - index,
             "priority_reason": rationale,
         }
         for index, item in enumerate(order)
+        if allocation[item] > 0
     ]
 
 
@@ -942,7 +1029,7 @@ def _completed_node_ids_today(
 ) -> set[str]:
     """Return path nodes backed by an accepted completion event from today."""
 
-    start = _now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start = datetime.combine(_learning_today(), datetime.min.time()) - timedelta(hours=8)
     end = start + timedelta(days=1)
     query = session.query(DBLearningEvent).filter(
         DBLearningEvent.owner_public_id == owner_public_id,
@@ -960,15 +1047,9 @@ def _completed_node_ids_today(
     for node in nodes:
         if node.status != "completed":
             continue
+        from app.learning_aggregation import _event_matches_node
         for event in events:
-            context = event.context_ref or {}
-            payload = event.payload or {}
-            if (
-                context.get("taskId") == node.id
-                or event.object_id == node.target_object_id
-                or payload.get("path_node_id") == node.id
-                or payload.get("node_id") == node.id
-            ):
+            if _event_matches_node(session, event, node):
                 completed.add(node.id)
                 break
     return completed
@@ -978,9 +1059,12 @@ def _schedule_course_projection(
     session: Any, *, owner_public_id: str, path: DBLearningPath,
 ) -> dict[str, Any]:
     from app.profile_onboarding import profile_influence_summary
+    from app.path_scope import plan_step_names
+    from app.learner_output import teacher_text
 
     course = session.get(DBCourse, path.course_id) if path.course_id else None
     version = session.get(DBPlanVersion, path.source_plan_version_id)
+    display_names = plan_step_names(version.content if version else {})
     profile_snapshot_id = getattr(version, "profile_snapshot_id", None)
     snapshot = _profile_for_schedule(
         session,
@@ -989,6 +1073,53 @@ def _schedule_course_projection(
         preferred_snapshot_id=profile_snapshot_id,
     )
     profile = _schedule_profile_projection(snapshot)
+    owner = session.query(DBUser).filter_by(public_id=owner_public_id).first()
+    from course_catalog import course_is_selectable
+    if owner is not None and course is not None and course_is_selectable(session, course):
+        # The path keeps its original profile/version, while scheduling uses
+        # the same current, course-scoped learning facts as the knowledge graph.
+        # A passing total must not erase a rubric gap, and an old gap must not
+        # override a later independent answer that resolves it.
+        from app.profile_summary import build_profile_summary
+        graph = build_profile_summary(session, current_user=owner, course_id=course.id)["knowledge_graph"]
+        profile["mastery"] = dict(profile["mastery"])
+        for point in graph["nodes"]:
+            actual_evidence = bool(point.get("sourceEventIds")) or any(
+                item.get("sourceType") == "assessment_attempt" for item in point.get("evidence", [])
+            )
+            if not actual_evidence:
+                continue
+            key = point["id"]
+            profile["mastery"][key] = {
+                "score": point["mastery"], "status": point["masteryBand"],
+                "evidence_item_count": point["evidenceCount"],
+                "learning_needs": point.get("learningNeeds", []),
+            }
+            for field in ("weak_ids", "mastered_ids", "unknown_ids"):
+                profile[field].discard(key)
+            if point.get("learningNeeds") or point["masteryBand"] in {"weak", "conflict"}:
+                profile["weak_ids"].add(key)
+            elif point["masteryBand"] == "mastered":
+                profile["mastered_ids"].add(key)
+            elif point["mastery"] is None:
+                profile["unknown_ids"].add(key)
+    current_profile = session.get(DBStudentProfile, owner.username) if owner else None
+    if current_profile is not None:
+        from app.profile_adaptation import build_profile_adaptation, confirmed_study_minutes, confirmed_study_days, confirmed_study_minutes_by_weekday
+        registration = build_profile_adaptation(snapshot, profile=current_profile)["registration_profile"]
+        current_preferences = list(registration.get("interaction_preferences") or [])
+        if registration.get("cognitive_style"):
+            current_preferences.append(registration["cognitive_style"])
+        if current_preferences:
+            profile["preferences"] = current_preferences
+        current_minutes = confirmed_study_minutes({"dimension_states": current_profile.dimension_states or {}})
+        if current_minutes is not None:
+            profile["time_budget_minutes"] = current_minutes
+            profile["time_budget_confirmed"] = True
+        current_context = (current_profile.dimension_states or {}).get("learning_context")
+        if current_context:
+            profile["study_weekdays"] = confirmed_study_days({"dimension_states": current_profile.dimension_states})
+            profile['study_minutes_by_weekday'] = confirmed_study_minutes_by_weekday({'dimension_states': current_profile.dimension_states})
     nodes = session.query(DBPathNode).filter_by(
         learning_path_id=path.id,
     ).order_by(DBPathNode.sequence, DBPathNode.id).all()
@@ -1023,7 +1154,9 @@ def _schedule_course_projection(
     topology_edges: list[dict[str, Any]] = []
     modules: dict[str, dict[str, Any]] = {}
     for node in nodes:
-        kp_ids = kp_ids_by_chapter.get(str(node.target_object_id), [])
+        from app.path_scope import is_staged_node, path_node_content
+        teaching = path_node_content(session, node)
+        kp_ids = list(teaching.get("knowledge_point_ids") or kp_ids_by_chapter.get(str(node.target_object_id), []))
         kp_states = [
             _mastery_state(kp_id, profile=profile) for kp_id in kp_ids
         ]
@@ -1032,7 +1165,7 @@ def _schedule_course_projection(
         if node.status == "completed":
             state = "completed"
             reason = "已有真实学习事件完成该路径节点。"
-        elif mastered and not weak:
+        elif mastered and not weak and not is_staged_node(node):
             state = "skipped"
             reason = "所有绑定知识点都有明确掌握证据；未测或冲突点不会走这条分支。"
         else:
@@ -1066,19 +1199,23 @@ def _schedule_course_projection(
             "node_type": node.node_type,
             "target_object_id": node.target_object_id,
             "status": state,
+            "is_extension": bool(node.is_extension),
             "completed_today": node.id in completed_today,
             "path_status": path.status,
             "prerequisites": list(node.prerequisites or []),
             "module_id": module_id,
             "module_title": module_title,
             "knowledge_points": knowledge_projection,
+            "teaching_unit_key": teaching.get("teaching_unit_key"),
+            "teaching_goal": teacher_text(teaching.get("teaching_goal"), names=display_names),
             "estimate_minutes": expected_minutes,
             "estimate_range": [node.estimate_min_minutes, node.estimate_max_minutes],
-            "completion_criteria": _completion_criteria(node.node_type),
+            "completion_criteria": _completion_criteria(node.node_type, teaching.get("knowledge_point_ids")),
             "reason": reason,
             "priority": 0,
             "resources": resources,
             "generation_context": None,
+            "continue_route": path_task_route(session, node=node, course_id=path.course_id),
         }
         if node.node_type == "chapter":
             context = _generation_context(
@@ -1121,8 +1258,20 @@ def _schedule_course_projection(
             "to": node.node_key,
             "type": "path_prerequisite",
         } for prerequisite in (node.prerequisites or []))
+    # Repairing a weak topic requires its unfinished foundations first.
+    # Propagate urgency along the confirmed DAG so independent later gaps do
+    # not repeatedly displace the prerequisite that unlocks the earlier one.
+    by_key = {node["node_key"]: node for node in node_projections}
+    for node in reversed(node_projections):
+        if node["status"] != "pending":
+            continue
+        for key in node["prerequisites"]:
+            prerequisite = by_key.get(key)
+            if prerequisite is not None and prerequisite["status"] == "pending":
+                prerequisite["priority"] = max(prerequisite["priority"], node["priority"])
     for kp_id, point in knowledge_points.items():
-        for prerequisite in point.prerequisites or []:
+        from app.course_structure import prerequisite_ids
+        for prerequisite in prerequisite_ids(course, point):
             if str(prerequisite) in knowledge_points:
                 topology_edges.append({
                     "from": str(prerequisite),
@@ -1139,6 +1288,9 @@ def _schedule_course_projection(
         "profile_snapshot_id": profile["snapshot_id"],
         "profile_influence": profile_influence_summary(snapshot),
         "time_budget_minutes": profile["time_budget_minutes"],
+        "time_budget_confirmed": profile["time_budget_confirmed"],
+        "study_weekdays": profile["study_weekdays"],
+        "study_minutes_by_weekday": profile['study_minutes_by_weekday'],
         "nodes": node_projections,
         "topology": {
             "nodes": topology_nodes,
@@ -1150,20 +1302,18 @@ def _schedule_course_projection(
 
 def multi_course_schedule(
     session: Any, *, owner_public_id: str, course_id: str | None = None,
-    selected_day: int = 1, max_days: int = 60,
+    selected_day: int = 1, max_days: int | None = None,
 ) -> dict[str, Any]:
     """Project active course paths into D-day work without writing learning state."""
     try:
         selected_day = max(1, int(selected_day))
     except (TypeError, ValueError):
         selected_day = 1
-    max_days = max(1, min(60, int(max_days or 60)))
+    max_days = max(1, int(max_days)) if max_days else None
     query = session.query(DBLearningPath).filter(
         DBLearningPath.owner_public_id == owner_public_id,
         DBLearningPath.status.in_(("active", "paused", "completed")),
     )
-    if course_id:
-        query = query.filter(DBLearningPath.course_id == course_id)
     paths = query.order_by(DBLearningPath.course_id, DBLearningPath.updated_at.desc(), DBLearningPath.id.desc()).all()
     from course_catalog import course_is_selectable
     paths = [
@@ -1172,6 +1322,18 @@ def multi_course_schedule(
     ]
     courses = [_schedule_course_projection(session, owner_public_id=owner_public_id, path=path) for path in paths]
     active_courses = [item for item in courses if item["status"] in {"active", "completed"}]
+    confirmed_budgets = [item["time_budget_minutes"] for item in active_courses if item["time_budget_confirmed"]]
+    budget = min(confirmed_budgets) if confirmed_budgets else None
+    weekday_options = {tuple(item["study_weekdays"]) for item in active_courses if item["study_weekdays"]}
+    study_weekdays = next(iter(weekday_options)) if len(weekday_options) == 1 else ()
+    daily_budgets = {}
+    for day in study_weekdays:
+        values = [item.get('study_minutes_by_weekday', {}).get(day, item['time_budget_minutes'])
+                  for item in active_courses if item['time_budget_confirmed']]
+        if values:
+            daily_budgets[day] = min(values)
+    current_date = _learning_today()
+    allocated_minutes: dict[str, int] = {}
     remaining: dict[str, set[str]] = {
         item["path_id"]: {
             node["node_key"] for node in item["nodes"]
@@ -1195,7 +1357,12 @@ def multi_course_schedule(
     }
     days: list[dict[str, Any]] = []
     day_number = 1
-    while remaining and any(remaining.values()) and day_number <= max_days:
+    while remaining and any(remaining.values()) and (max_days is None or day_number <= max_days):
+        if days:
+            current_date += timedelta(days=1)
+            while study_weekdays and current_date.weekday() not in study_weekdays:
+                current_date += timedelta(days=1)
+        day_budget = daily_budgets.get(current_date.weekday(), budget)
         candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for path_id, keys in remaining.items():
             projection = by_path[path_id]
@@ -1230,15 +1397,61 @@ def multi_course_schedule(
                     or not completed_today_keys.intersection(set(pair[1].get("prerequisites") or []))
                 ]
                 candidates.sort(key=lambda pair: (-int(pair[1]["priority"]), pair[0]["course_id"] or "", int(pair[1]["sequence"])))
-        # A time estimate describes the day's workload; it must not hide a
-        # course task or turn a valid path node into a locked item.  Select
-        # every currently-unblocked candidate and let prerequisites determine
-        # the next day.
-        selected: list[tuple[dict[str, Any], dict[str, Any]]] = list(candidates)
+        if study_weekdays and day_number == 1 and current_date.weekday() not in study_weekdays:
+            candidates = [pair for pair in candidates if pair[1].get("completed_today")]
+            if not candidates:
+                days.append({"day": 1, "date": current_date.isoformat(), "tasks": [], "total_minutes": 0,
+                             "budget_minutes": day_budget, "budget_note": "今天不在已确认的学习时段内，可查看下一次安排或自行复习。",
+                             "progress": {"completed": 0, "total": 0}})
+                day_number += 1
+                continue
+        # Keep completed work on its actual day, and distribute the remaining
+        # available work across the learner's shared time. This is a schedule
+        # projection, not a change to the underlying node's accessibility.
+        selected: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        used = 0
+        ready_before_day = {key: set(value) for key, value in resolved.items()}
+        if day_number == 1:
+            for key, value in completed_today_by_path.items():
+                ready_before_day[key].update(value)
+        planned = {key: set(value) for key, value in resolved.items()}
+        selected_keys = set()
+        while candidates:
+            if day_budget is not None:
+                candidates.sort(key=lambda pair: (
+                    0 if pair[1].get("completed_today") else 1,
+                    allocated_minutes.get(pair[0]["course_id"], 0),
+                    -int(pair[1]["priority"]), pair[0]["course_id"] or "", int(pair[1]["sequence"]),
+                ))
+            added = False
+            for projection, node in candidates:
+                minutes = int(node["estimate_minutes"])
+                if day_budget is not None and selected and used + minutes > day_budget and not node.get("completed_today"):
+                    continue
+                selected.append((projection, node))
+                selected_keys.add((projection['path_id'], node['node_key']))
+                planned[projection['path_id']].add(node['node_key'])
+                used += minutes
+                added = True
+            # With a confirmed time allowance, short consecutive tasks can
+            # share a session. Planning them does not complete prerequisites.
+            # Without an allowance, retain the existing one-frontier schedule.
+            if not added or day_budget is None or used >= day_budget:
+                break
+            if study_weekdays and current_date.weekday() not in study_weekdays:
+                break
+            candidates = [
+                (projection, node)
+                for projection in active_courses for node in projection['nodes']
+                if node['node_key'] in remaining[projection['path_id']]
+                and (projection['path_id'], node['node_key']) not in selected_keys
+                and set(node['prerequisites'] or []) <= planned[projection['path_id']]
+            ]
         if not selected:
             break
         task_payload: list[dict[str, Any]] = []
         for projection, node in selected:
+            allocated_minutes[projection["course_id"]] = allocated_minutes.get(projection["course_id"], 0) + int(node["estimate_minutes"])
             remaining[projection["path_id"]].discard(node["node_key"])
             resolved[projection["path_id"]].add(node["node_key"])
             node["scheduled_day"] = day_number
@@ -1247,11 +1460,13 @@ def multi_course_schedule(
             node["generation_context"]["schedule_path_id"] = projection["path_id"]
             task_payload.append({
                 **node,
-                # A node reaches this branch only after its path prerequisites
-                # have been resolved.  Keep the course projection and
-                # persistent path node unchanged, but expose this selected
-                # day's task as currently learnable to the client.
-                "status": "in_progress" if node["status"] == "pending" else node["status"],
+                # Same-session successors remain visibly pending until their
+                # predecessor is actually complete. Earlier planned days only
+                # describe the future schedule; no learning state is written.
+                "status": ("in_progress" if node["status"] == "pending"
+                    and set(node['prerequisites'] or []) <= ready_before_day[projection['path_id']]
+                    else node["status"]),
+                "required": not node.get('is_extension', False),
                 # Keep the persistent path-node identity separate from the
                 # display/node key.  Chat path_bundle context validation uses
                 # this ID to resolve the authorized path task.
@@ -1260,25 +1475,34 @@ def multi_course_schedule(
                 "course_title": (projection.get("course") or {}).get("title", ""),
                 "path_id": projection["path_id"],
                 "task_kind": "path",
-                "continue_route": f"/workspace?course_id={projection['course_id']}&node_id={node['id']}",
+                "continue_route": node["continue_route"],
             })
         days.append({
             "day": day_number,
-            "date": (_now().date()).isoformat(),
+            "date": current_date.isoformat(),
             "tasks": task_payload,
             "total_minutes": sum(int(item["estimate_minutes"]) for item in task_payload),
+            "budget_minutes": day_budget,
+            "budget_note": (f"这次内容预计{used}分钟，超过本次可用的{day_budget}分钟，可分次学习。" if day_budget is not None and used > day_budget else ""),
             "progress": {
                 "completed": sum(1 for item in task_payload if item["status"] == "completed"),
                 "total": len(task_payload),
             },
         })
         day_number += 1
-    for item in days:
-        item["date"] = (_now().date() + timedelta(days=int(item["day"]) - 1)).isoformat()
+    if course_id:
+        courses = [item for item in courses if item["course_id"] == course_id]
+        for day in days:
+            had_tasks = bool(day["tasks"])
+            day["tasks"] = [item for item in day["tasks"] if item["course_id"] == course_id]
+            day["total_minutes"] = sum(int(item["estimate_minutes"]) for item in day["tasks"])
+            day["progress"] = {"completed": sum(item["status"] == "completed" for item in day["tasks"]), "total": len(day["tasks"])}
+            if not day["tasks"] and had_tasks:
+                day["budget_note"] = ""
     total_days = max(1, len(days))
     selected = next((item for item in days if item["day"] == min(selected_day, total_days)), None)
     if selected is None:
-        selected = {"day": selected_day, "date": (_now().date()).isoformat(), "tasks": [], "total_minutes": 0, "progress": {"completed": 0, "total": 0}}
+        selected = {"day": selected_day, "date": _learning_today().isoformat(), "tasks": [], "total_minutes": 0, "progress": {"completed": 0, "total": 0}}
     return {
         "schema_version": "m5.multi-course-schedule.v1",
         "selected_day": int(selected["day"]),
@@ -1286,6 +1510,9 @@ def multi_course_schedule(
         "days": days,
         "selected": selected,
         "courses": courses,
+        "budget_minutes": budget,
+        "study_weekdays": list(study_weekdays),
+        "study_minutes_by_weekday": daily_budgets,
         "read_only": True,
         "learning_state_written": False,
     }
@@ -1295,6 +1522,9 @@ def today_work_items(
     session: Any, *, owner_public_id: str, course_id: str | None = None, limit: int = 3,
 ) -> tuple[dict[str, Any], ...]:
     limit = max(1, int(limit or 3))
+    schedule = multi_course_schedule(session, owner_public_id=owner_public_id, course_id=course_id)
+    scheduled_ids = ({item["node_id"] for item in schedule["selected"]["tasks"]}
+                     if schedule.get("budget_minutes") is not None or schedule.get("study_weekdays") else None)
     query = session.query(DBLearningPath).filter_by(owner_public_id=owner_public_id, status="active")
     if course_id:
         query = query.filter(DBLearningPath.course_id == course_id)
@@ -1317,7 +1547,12 @@ def today_work_items(
     }
     for path in paths:
         nodes = session.query(DBPathNode).filter_by(learning_path_id=path.id).order_by(DBPathNode.sequence).all()
-        completed_keys = {item.node_key for item in nodes if item.status == "completed"}
+        # Use the same measured exemptions as the path calendar. Otherwise a
+        # diagnosis can unlock a task in the UI while Today/exam generation
+        # still rejects it because the exempt prerequisite was never studied.
+        projected = _schedule_course_projection(session, owner_public_id=owner_public_id, path=path)
+        exempt_keys = {item["node_key"] for item in projected["nodes"] if item["status"] == "skipped"}
+        completed_keys = {item.node_key for item in nodes if item.status == "completed"} | exempt_keys
         completed_today = _completed_node_ids_today(
             session,
             owner_public_id=owner_public_id,
@@ -1326,11 +1561,16 @@ def today_work_items(
         )
         completed_today_keys = {node.node_key for node in nodes if node.id in completed_today}
         for node in nodes:
+            if scheduled_ids is not None and node.id not in scheduled_ids:
+                continue
+            if node.node_key in exempt_keys:
+                continue
             if node.status == "completed" and node.id not in completed_today:
                 continue
             if node.status != "completed" and not set(node.prerequisites or []).issubset(completed_keys):
                 continue
-            if node.status != "completed" and completed_today_keys.intersection(set(node.prerequisites or [])):
+            if (scheduled_ids is None and node.status != "completed"
+                    and completed_today_keys.intersection(set(node.prerequisites or []))):
                 continue
             course_items = path_items_by_course.setdefault(path.course_id, [])
             first_path_item = not course_items
@@ -1355,7 +1595,10 @@ def today_work_items(
                 "resource_status": node.resource_status,
                 "required": not node.is_extension,
                 "estimate_minutes": [node.estimate_min_minutes, node.estimate_max_minutes],
-                "completion_criteria": _completion_criteria(node.node_type),
+                "completion_criteria": _completion_criteria(
+                    node.node_type,
+                    generation_context.get("knowledge_point_ids") if generation_context.get("teaching_title") else None,
+                ),
                 "knowledge_point_id": generation_context["knowledge_point_id"],
                 "knowledge_point_title": generation_context["knowledge_point_title"] or node.title,
                 "generation_context": generation_context,
@@ -1363,7 +1606,7 @@ def today_work_items(
                     "正式路径中首个已解锁任务，优先继续以保持学习连续性。"
                     if first_path_item else "该任务的前置条件已满足，可在本次学习时段并行推进。"
                 ),
-                "continue_route": f"/workspace?node_id={node.id}",
+                "continue_route": path_task_route(session, node=node, course_id=path.course_id),
             })
     if not course_id:
         # Round-robin by course so every active course contributes visible
@@ -1399,21 +1642,22 @@ def today_work_items(
     points = session.query(DBKnowledgePoint).filter(
         DBKnowledgePoint.id.in_(course_kp_ids or ["-"]),
     ).all()
-    point_by_alias: dict[str, str] = {}
     titles: dict[str, str] = {}
     for point in points:
         titles[point.id] = point.title
-        for alias in (point.id, point.code, point.title):
-            if alias:
-                point_by_alias[str(alias).strip().casefold()] = point.id
     reviews = session.query(DBReviewPlan).filter_by(
         student_id=user.username if user else "",
     ).order_by(DBReviewPlan.priority, DBReviewPlan.next_review_at, DBReviewPlan.id).all()
+    from app.review_schedule import review_plan_contexts
+    review_contexts = review_plan_contexts(session, user, reviews) if user else {}
     due_reviews_by_point: dict[str, list[DBReviewPlan]] = {}
     for review in reviews:
         if review.next_review_at is not None and review.next_review_at > _now():
             continue
-        point_id = point_by_alias.get(str(review.concept or "").strip().casefold())
+        context = review_contexts.get(review.id) or {}
+        if context.get("course_id") != course_id:
+            continue
+        point_id = context.get("knowledge_point_id")
         if point_id:
             due_reviews_by_point.setdefault(point_id, []).append(review)
 

@@ -42,7 +42,7 @@ def _session():
 
 
 def _context(session, learner, *, object_type="document", key="r2-action-context"):
-    workspace = workspace_overview(session, current_user=learner)
+    workspace = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
     item = next(value for value in workspace["learning_objects"] if value["object_type"] == object_type)
     row, _ = create_tutor_context(
         session,
@@ -152,7 +152,7 @@ def test_note_and_path_actions_are_idempotent_and_persist_in_existing_facts():
         learner = session.query(DBUser).filter_by(username="lzz").one()
         context = _context(session, learner)
         path = session.query(DBLearningPath).filter_by(
-            owner_public_id=learner.public_id, status="active",
+            owner_public_id=learner.public_id, course_id="demo-course-rag-trust-v1", status="active",
         ).one()
         initial_nodes = session.query(DBPathNode).filter_by(learning_path_id=path.id).count()
 
@@ -186,7 +186,7 @@ def test_note_and_path_actions_are_idempotent_and_persist_in_existing_facts():
         node = session.query(DBPathNode).filter_by(id=first_path["path"]["node_id"]).one()
         assert node.is_extension is True
         assert node.status == "pending"
-        refreshed = workspace_overview(session, current_user=learner)
+        refreshed = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         assert any(item["id"] == node.id for item in refreshed["current_path"]["nodes"])
     finally:
         session.close()
@@ -211,7 +211,7 @@ def test_workspace_action_rejects_foreign_context_and_missing_active_path():
         assert forbidden.value.code == "workspace_action_context_forbidden"
 
         path = session.query(DBLearningPath).filter_by(
-            owner_public_id=learner.public_id, status="active",
+            owner_public_id=learner.public_id, course_id="demo-course-rag-trust-v1", status="active",
         ).one()
         path.status = "paused"
         session.commit()

@@ -1,20 +1,37 @@
+@font-face {
+  font-family: "KingHwa OldSong";
+  src: url("/fonts/KingHwa-OldSong-v2.002.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 :root {
   --font-sans: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-display: "Noto Serif SC", "SimSun", serif;
   --font-heading: var(--font-sans);
+  --font-editorial: "KingHwa OldSong", "Noto Serif SC", "SimSun", serif;
   --font-mono: "Cascadia Code", Consolas, monospace;
 
-  --color-page: #f5f7f7;
-  --color-surface: #ffffff;
-  --color-surface-subtle: #f1f4f4;
-  --color-surface-muted: #e7ecee;
-  --color-text: #06141b;
-  --color-text-secondary: #4a5c6a;
-  --color-text-muted: #60727c;
-  --color-border: #dce2e3;
-  --color-border-strong: #ccd0cf;
-  --color-accent: #11212d;
-  --color-accent-soft: #edf1f2;
+  --color-page: #fcfbf8;
+  --color-surface: #fffefd;
+  --color-surface-subtle: #f3f2ee;
+  --color-surface-muted: #eeece8;
+  --color-text: #303b45;
+  --color-text-secondary: #53616c;
+  --color-text-muted: #69747d;
+  --color-border: #e4e2de;
+  --color-border-strong: #cecbc6;
+  --color-accent: #7d686c;
+  --color-accent-hover: #665257;
+  --color-accent-soft: #eeece8;
+  --color-reading-paper: #fcfbf8;
+  --color-shell-gradient: linear-gradient(135deg, #dfe7ed 0%, #eeebe5 45%, #faf9f6 74%, #e5eaf0 100%);
+  --gradient-workspace: radial-gradient(ellipse at 8% 0%, #f7f6f2 0%, transparent 56%), linear-gradient(145deg, #fcfbf8 0%, #fffefd 59%, #edf2f7 100%);
+  --gradient-paper: linear-gradient(125deg, #f7f6f2 0%, #fcfbf8 44%, #fffefd 100%);
+  --gradient-rail: linear-gradient(165deg, #f3f2ee 0%, #fcfbf8 48%, #fffefd 100%);
+  --gradient-highlight: linear-gradient(115deg, #f0efea 0%, #fcfbf8 54%, #fffefd 100%);
+  --shadow-panel: 0 12px 36px rgb(54 61 67 / 4%);
   --color-success: #3f5b6a;
   --color-success-soft: #edf2f3;
   --color-warning: #8a6428;
@@ -34,9 +51,9 @@
   --font-size-page-title: 24px;
   --font-size-page-title-compact: 20px;
 
-  --radius-control: 6px;
-  --radius-panel: 8px;
-  --radius-card: 14px;
+  --radius-control: 10px;
+  --radius-panel: 16px;
+  --radius-card: 16px;
   --shadow-popover: 0 16px 40px rgb(23 23 23 / 12%);
 
   --space-1: 4px;
@@ -53,7 +70,7 @@
   --space-state-block: 32px;
   --space-control-inline: 12px;
 
-  --nav-width: 224px;
+  --nav-width: 104px;
   --topbar-height: 56px;
   --content-max: 1440px;
   --control-height: 40px;

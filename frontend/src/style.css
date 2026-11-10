@@ -128,20 +128,15 @@
   --color-orange-800: #253745;
   --color-orange-900: #11212d;
 
-  --color-surface: #f5f7f7;
-  --color-surface-card: #ffffff;
-  --color-surface-sidebar: #ffffff;
-  --color-text-primary: #06141b;
-  --color-text-secondary: #4a5c6a;
-  --color-text-sidebar: #4a5c6a;
-  --color-text-sidebar-active: #06141b;
-  --color-border: #dce2e3;
-  --color-success: #3f5b6a;
-  --color-warning: #8a6428;
-  --color-danger: #9b3a3a;
-  --color-accent: #11212d;
-  --font-sans: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-display: "Noto Serif SC", "SimSun", serif;
+  --color-surface-card: var(--color-surface);
+  --color-surface-sidebar: var(--color-surface);
+  --color-text-primary: var(--color-text);
+
+  --color-text-sidebar: var(--color-text-secondary);
+  --color-text-sidebar-active: var(--color-accent);
+
+
+
 }
 
 .chart-container {
@@ -274,36 +269,7 @@
   transform: translateY(6px);
 }
 
-/* EduMatrix fast surface migration: one quiet editorial palette for every page. */
-:root {
-  --color-page: #f4f5f2;
-  --color-surface: #ffffff;
-  --color-surface-subtle: #f0f3f1;
-  --color-surface-muted: #e5e9e7;
-  --color-text: #17252e;
-  --color-text-secondary: #52616b;
-  --color-text-muted: #72808a;
-  --color-border: #d9e0de;
-  --color-border-strong: #bcc8c6;
-  --color-accent: #315b6d;
-  --color-accent-soft: #e8eff0;
-  --color-success: #315b6d;
-  --color-success-soft: #e8eff0;
-  --color-danger: #9a463d;
-  --color-danger-soft: #fbefed;
-  --font-size-title: 24px;
-  --font-size-section: 18px;
-  --font-size-body: 15px;
-  --font-size-control: 14px;
-  --font-size-supporting: 14px;
-  --line-height-title: 1.35;
-  --line-height-heading: 1.4;
-  --line-height-body: 1.7;
-  --radius-control: 6px;
-  --radius-panel: 8px;
-  --radius-card: 10px;
-  --shadow-popover: 0 8px 24px rgb(23 37 46 / 11%);
-}
+
 
 html,
 body,
@@ -353,7 +319,7 @@ body,
 .app-content .resource-create:hover,
 .app-content .generation-primary:hover:not(:disabled),
 .app-content .path-primary-action:hover {
-  background: #24495a;
+  background: var(--color-accent-hover);
 }
 
 .app-content input:not([type="checkbox"]):not([type="radio"]),

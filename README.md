@@ -6,9 +6,11 @@ EduMatrix 是面向高校机器学习课程的多智能体个性化学习平台�
 
 ## 1. 运行与体验
 
-### 1.1 当前源码与历史作品包
+### 1.1 当前源码与运行包
 
-当前源码按第 8 节运行。`packaging/` 和旧 ZIP 保留历史交付方式，未经重新打包、重新运行不能作为当前作品版本。新的评委包需按 [提交材料规则](docs/SUBMISSION_RULES.md) 核对材料、报名信息、许可证及真实运行结果；本轮接管整理没有生成最终提交包。
+当前源码按第 8 节运行。2026-11-10 的 r208z 运行包已完成独立目录启动、真实测验生成与作答、保存刷新和正常重启恢复验收，运行说明见 [评委运行手册](packaging/README_作品运行说明.txt)。`packaging/` 保存当前启动、依赖和打包实现。
+
+约 1.79 GB 的运行包、合成演示数据库、本地检索模型和验收输出保留在本地 `outputs/current-runtime-20261110/`，不随 Git 提交；队友直接体验时使用单独提供的运行包。源码仓库不含个人密钥和学习数据库。阶段完成依据是关键能力与代表真实流程，已知限制见 [当前事项](docs/CURRENT.md)；最终参赛材料仍按 [提交材料规则](docs/SUBMISSION_RULES.md) 补齐团队信息和上传要求。
 
 本地确定性模型和哈希嵌入可用于隔离测试及部分已有数据展示。新用户入学诊断和真实资源生成依赖外部模型；不能把无 API Key 的本地运行描述为完整新用户闭环。
 
@@ -180,6 +182,13 @@ SQLAlchemy + SQLite
     EDUMATRIX_MULTIMODAL_LLM_MODEL=your-vision-model
     EDUMATRIX_MULTIMODAL_LLM_API_KEY=your-key
 
+课程混合检索可使用本地真实语义模型（CPU，无需API密钥）：
+
+    EDUMATRIX_EMBEDDING_PROVIDER=sentence_transformer
+    EDUMATRIX_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+
+首次需取得模型文件；已有缓存可离线使用。启动后后台预热课程向量，导入时批量准备新资料，缓存按模型与正文区分。首次模型加载/建索引耗时与暖查询分开记录；模型失败时保留BM25并记录失败原因。`hash`模式只执行词项检索，不宣称语义或RRF融合。检索相关性与结论正确性分开核验。
+
 诊断模型策略还要求 `.env.example` 中的 thinking 与 reasoning 配置。浏览器设置页不管理后端密钥。2026-10-24 原配置的 HTTP 401 已在用户更新凭据后解除，认证和简短真实 JSON 生成已通过；完整诊断和资源生成闭环尚未重新验证，详见 [当前事项](docs/CURRENT.md)。
 
 ### 7.3 代码沙盒
@@ -254,6 +263,27 @@ SQLAlchemy + SQLite
     npm run build -- --outDir ../scratch/frontend-check-dist
 
 当前验证结果和证据入口见 [CURRENT.md](docs/CURRENT.md)。`outputs/原系统融合重构执行/evidence/` 保存历史验证，不能无日期地当成本次结果。项目不以代码行数或测试数量代替逐功能证据，也不宣称未经独立评测的模型质量指标。
+
+完整回归基线（在项目根目录的独立 PowerShell 终端执行）：
+
+```powershell
+$env:PYTHON_DOTENV_DISABLED='1'
+$env:EDUMATRIX_ENV='test'
+$env:EDUMATRIX_LLM_PROVIDER='deterministic'
+$env:EDUMATRIX_EMBEDDING_PROVIDER='hash'
+$env:EDUMATRIX_USE_FAISS='0'
+$env:EDUMATRIX_SANDBOX_MODE='disabled'
+$env:EDUMATRIX_RUN_BROWSER='1'
+npm.cmd --prefix frontend test
+if ($LASTEXITCODE -ne 0) { throw '前端测试失败' }
+npm.cmd --prefix frontend run build
+if ($LASTEXITCODE -ne 0) { throw '前端构建失败，不能继续浏览器回归' }
+.\.venv\Scripts\python.exe -X utf8 -m pytest tests test_edumatrix.py -q --tb=short --junitxml=scratch/regression.xml
+```
+
+浏览器用例需要项目虚拟环境中的 Playwright 和其 Chromium；只在首次缺失浏览器运行时执行 `.venv/Scripts/python.exe -m playwright install chromium`。用例直接读取刚构建的 `frontend/dist`，不能用旧构建代替当前源码。桌面场景覆盖主要视口 1707×876、DPR 1.5，以及 1440×900、1366×768；个别故障状态和高密度专项使用固定视口。
+
+这组回归使用隔离数据库、确定性模型及受控浏览器接口，验证功能契约与真实页面交互。其中联网导入用例保留真实公网搜索和下载，需要可用网络；按来源、落盘内容及解析结果核验，不假定搜索排序或网页体积固定。真实外部模型闭环独立验证画像、诊断、路径、资源审核和作答反馈，并记录重试与失败；两类结果分别报告。完成上述回归后关闭该测试终端，避免把测试环境变量带入正常服务。
 
 更新自有源码/配置索引：在根目录运行 `.venv/Scripts/python.exe scripts/update_code_index.py`。它还解析索引内全部 Python 文件，不启动服务或修改数据库。
 

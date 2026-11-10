@@ -91,6 +91,79 @@ def test_three_complete_profiles_have_observable_adaptation_differences():
     assert plans[0]["registration_profile"]["major"] == "软件工程"
 
 
+def test_current_topic_does_not_inherit_an_unrelated_global_weakness():
+    profile = _profile(weak_points=["scikit-learn 训练与推理接口", "混合检索的权重选择"])
+    plan = build_profile_adaptation(None, profile=profile, knowledge_point={"id": "eda", "title": "探索性数据分析"})
+    assert plan["content_focus"] == "探索性数据分析的核心概念、条件和应用"
+    assert "scikit-learn" not in plan["summary"]
+    assert profile.weak_points == ["scikit-learn 训练与推理接口", "混合检索的权重选择"]
+    related = build_profile_adaptation(None, profile=profile, knowledge_point=POINT)
+    assert related["content_focus"] == "混合检索的权重选择"
+
+
+def test_zero_mastery_is_kept_and_reported_weakness_does_not_create_a_score():
+    for mastery in (0, {"mastery": 0, "score": 0.9}):
+        plan = build_profile_adaptation({"concept_mastery": {"kp-rag": mastery}}, knowledge_point=POINT)
+        assert plan["point_mastery"] == 0
+        assert plan["difficulty_band"] == "foundation"
+    overall = build_profile_adaptation({"course_mastery": 0, "overall_mastery": 0.9})
+    assert overall["point_mastery"] == 0
+    weak = build_profile_adaptation({"weak_points": [POINT["title"]]}, knowledge_point=POINT)
+    assert weak["difficulty_band"] == "foundation"
+    assert weak["point_mastery"] is None
+    assert "35%" not in weak["summary"]
+    assert weak["difficulty_evidence"]["kind"] == "reported_weakness"
+
+
+def test_preference_changes_teaching_but_not_ability_and_basis_changes_task_level():
+    plans = [build_profile_adaptation(None, profile=_profile(
+        cognitive_style=style, concept_mastery={POINT["id"]: 0.58},
+    ), knowledge_point=POINT) for style in ("直观图示", "代码实践", "理论推导")]
+    assert len({plan["explanation_style"] for plan in plans}) == 3
+    assert {plan["difficulty_band"] for plan in plans} == {"scaffolded"}
+    assert all(plan["assessment_target"] == plans[0]["assessment_target"] for plan in plans)
+    levels = [build_profile_adaptation(None, profile=_profile(
+        cognitive_style="代码实践", concept_mastery={POINT["id"]: score},
+    ), knowledge_point=POINT) for score in (0.2, 0.58, 0.86)]
+    assert len({plan["assessment_target"]["task"] for plan in levels}) == 3
+    assert len({plan["explanation_style"] for plan in levels}) == 1
+    assert profile_prompt_context(levels[0])["assessment_target"] == levels[0]["assessment_target"]
+
+
+def test_confirmed_teaching_order_and_negation_survive_the_shared_prompt():
+    for style in (
+        "先用直观小例子和两行手算，再介绍公式，每个符号说明含义",
+        "先看最小可运行例子、输入输出和验证办法，再理解机制",
+        "不喜欢公式推导",
+        "从定义、假设和目标函数推导，再用反例检查边界",
+    ):
+        snapshot = {"cognitive_style": style, "concept_mastery": {POINT['id']: 0.58}}
+        plan = profile_prompt_context(build_profile_adaptation(snapshot, knowledge_point=POINT))
+        assert plan['explanation_style'] == style
+        assert plan['point_mastery'] == 0.58
+        assert plan['difficulty_band'] == 'scaffolded'
+    preferences = ['先看例子', '逐步解释', '先不讲公式', '每次一步', '卡住再提示', '最后再给反例']
+    plan = profile_prompt_context(build_profile_adaptation({'interaction_preferences': preferences}, knowledge_point=POINT))
+    assert all(item in plan['explanation_style'] for item in preferences)
+    assert plan['interaction_mode'] == plan['explanation_style']
+    from app.profile_adaptation import profile_answer_instruction
+    assert plan['explanation_style'] in profile_answer_instruction(plan, for_question=True)
+
+
+def test_reported_gap_in_current_topic_adds_support_without_inventing_mastery():
+    snapshot = {'knowledge_base': '会Python列表和平方；尚未系统学过导数、矩阵运算与反向传播；不是测验成绩'}
+    point = {'id': 'backprop', 'title': '多层感知机与反向传播'}
+    plan = build_profile_adaptation(snapshot, knowledge_point=point)
+    assert plan['point_mastery'] is None
+    assert plan['difficulty_band'] == 'foundation'
+    assert plan['scaffolding_level'] == 'high'
+    unrelated = build_profile_adaptation(snapshot, knowledge_point={'id': 'python', 'title': '列表和循环'})
+    assert unrelated['difficulty_band'] == 'scaffolded'
+    recorded = build_profile_adaptation({**snapshot, 'concept_mastery': {'backprop': 0.86}}, knowledge_point=point)
+    assert recorded['point_mastery'] == 0.86
+    assert recorded['difficulty_band'] == 'transfer'
+
+
 def test_resource_prompt_contains_machine_actionable_profile_plan():
     profile = _profile(
         knowledge_base="零基础，第一次学习 RAG",
@@ -99,6 +172,7 @@ def test_resource_prompt_contains_machine_actionable_profile_plan():
     adaptation = profile_prompt_context(build_profile_adaptation(None, profile=profile, knowledge_point=POINT))
     manifest = {
         "knowledge_point_id": "kp-rag",
+        "user_instruction": "重点比较关键词检索与向量检索的适用条件，并给一个反例。",
         "context": {
             "course_title": "机器学习与检索",
             "knowledge_point_title": "混合检索",
@@ -120,6 +194,7 @@ def test_resource_prompt_contains_machine_actionable_profile_plan():
     assert payload["learner_adaptation"]["difficulty_band"] == "foundation"
     assert "必须把 learner_adaptation" in system
     assert "三级提示" in payload["learner_adaptation"]["hint_policy"]
+    assert payload["user_instruction"] == manifest["user_instruction"]
 
 
 def test_full_ten_dimension_projection_is_preserved():
@@ -237,10 +312,11 @@ def test_canonical_answer_prompt_contains_profile_specific_action_for_each_band(
             "",
         )
         prompts.append(user)
-    assert "先补一个必要前置概念" in prompts[0]
+    assert "解释必要术语" in prompts[0]
     assert "基线例子" in prompts[1]
-    assert "直接比较边界" in prompts[2]
+    assert "说明适用边界" in prompts[2]
     assert len(set(prompts)) == 3
+    assert all("不强加练习或学习安排" in prompt for prompt in prompts)
 
 
 def test_suggested_questions_consume_full_plan_and_profile_fallback_varies(monkeypatch):
@@ -371,45 +447,21 @@ def test_legacy_resource_completion_note_changes_with_profile_plan():
     assert "进阶迁移" in _adaptation_reply_note(advanced)
 
 
-def test_resource_details_keep_only_a_compact_profile_sentence():
-    component = Path("frontend/src/components/ResourceProfileAdaptation.vue").read_text(encoding="utf-8")
-    assert 'data-testid="resource-profile-adaptation"' in component
-    assert "已按你的学习情况调整内容与难度" in component
-    for forbidden in (
-        "resource-profile-applied-effect",
-        "resource-profile-mastery",
-        "本页实际变化",
-        "当前知识点掌握度",
-        "学习支架",
-        "提示策略",
+def test_resource_details_keep_teaching_strategy_out_of_page_chrome():
+    for name in (
+        "HandoutWorkspace.vue", "MindmapWorkspace.vue", "QuizResourceWorkspace.vue",
+        "TrainingTaskWorkspace.vue", "CodeSandboxWorkspace.vue", "VideoRecommendationWorkspace.vue",
+        "WebDeckWorkspace.vue", "InteractiveLabWorkspace.vue", "FeynmanWorkspace.vue",
     ):
-        assert forbidden not in component
-
-    views = {
-        "HandoutWorkspace.vue": "resource-type=\"handout\"",
-        "MindmapWorkspace.vue": "resource-type=\"mind_map\"",
-        "QuizResourceWorkspace.vue": "resource-type=\"quiz\"",
-        "TrainingTaskWorkspace.vue": "resource-type=\"training_task\"",
-        "CodeSandboxWorkspace.vue": "resource-type=\"code_sandbox\"",
-        "VideoRecommendationWorkspace.vue": "resource-type=\"video\"",
-        "WebDeckWorkspace.vue": "resource-type=\"deck\"",
-        "InteractiveLabWorkspace.vue": "resource-type=\"interactive_model\"",
-        "FeynmanWorkspace.vue": "resource-type=\"feynman\"",
-    }
-    for name, marker in views.items():
-        assert marker in Path("frontend/src/views", name).read_text(encoding="utf-8")
-
+        view = Path("frontend/src/views", name).read_text(encoding="utf-8")
+        assert "ResourceProfileAdaptation" not in view
+        assert "本次学习建议" not in view
     feynman_view = Path("frontend/src/views/FeynmanWorkspace.vue").read_text(encoding="utf-8")
-    assert "const feynmanAdaptationPlan = computed" in feynman_view
-    assert "resource.value?.resource?.profile_adaptation_plan" in feynman_view
-    assert ':plan="feynmanAdaptationPlan"' in feynman_view
     assert '<small>{{ session.adaptation_note }}</small>' not in feynman_view
     assert '<dt>画像版本</dt>' not in feynman_view
     assert '<dt>动态关注</dt>' not in feynman_view
 
-    # The compact sentence is the only learner-facing adaptation explanation.
-    # Resource differences must remain in the generated body, not in a dashboard
-    # of self-reported profile fields.
+    # Adaptation belongs in teaching content, not in repeated planning prose.
     handout_view = Path("frontend/src/views/HandoutWorkspace.vue").read_text(encoding="utf-8")
     assert "structured.profileAdaptation.summary" not in handout_view
     assert "<strong>学习支架</strong>" not in handout_view

@@ -11,6 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 CURATED = ROOT / "data" / "curated" / "embedded_machine_learning_engineering_v2"
 
 
+def test_imported_webpage_uses_formatted_course_reading():
+    for extension in ("html", "htm"):
+        source = DBSourceDocument(file_format=extension)
+        assert _reader_mode(source, has_pages=False, has_media=False) == "course_preview"
+
+
 def _source(path: Path, *, file_format: str) -> DBSourceDocument:
     relative = path.relative_to(ROOT).as_posix()
     return DBSourceDocument(

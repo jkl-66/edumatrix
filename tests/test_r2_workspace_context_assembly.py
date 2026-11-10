@@ -54,7 +54,7 @@ def test_workspace_context_contains_current_object_position_selection_and_minima
     engine, session = _session()
     try:
         learner = session.query(DBUser).filter_by(username="lzz").one()
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         document = next(item for item in payload["learning_objects"] if item["object_type"] == "document")
         selected = document["render"]["excerpt"][:48].strip()
 
@@ -89,7 +89,7 @@ def test_switching_workspace_objects_produces_distinct_prompt_contexts():
     engine, session = _session()
     try:
         learner = session.query(DBUser).filter_by(username="lzz").one()
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         document = next(item for item in payload["learning_objects"] if item["object_type"] == "document")
         exercise = next(item for item in payload["learning_objects"] if item["object_type"] == "exercise")
 
@@ -116,7 +116,7 @@ def test_stream_instruction_uses_workspace_position_selection_and_minimal_profil
     engine, session = _session()
     try:
         learner = session.query(DBUser).filter_by(username="lzz").one()
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         document = next(item for item in payload["learning_objects"] if item["object_type"] == "document")
         selected = document["render"]["excerpt"][:48].strip()
         row, _ = create_tutor_context(
@@ -151,7 +151,7 @@ def test_workspace_context_rejects_foreign_object_and_unbound_selected_text():
     try:
         learner = session.query(DBUser).filter_by(username="lzz").one()
         other = session.query(DBUser).filter(DBUser.role == "student", DBUser.public_id != learner.public_id).first()
-        payload = workspace_overview(session, current_user=learner)
+        payload = workspace_overview(session, current_user=learner, course_id="demo-course-rag-trust-v1")
         experiment = next(item for item in payload["learning_objects"] if item["object_type"] == "experiment")
 
         with pytest.raises(M5WorkspaceError) as foreign:

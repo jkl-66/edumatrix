@@ -1,4 +1,7 @@
 <script setup>
+import { learningText } from '../utils/learningCopy.js'
+import { orderedHandoutSections, handoutSectionMarkdown } from '../utils/handoutReadingOrder.js'
+import { userMessage } from '../services/errorTranslator.js'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -29,10 +32,11 @@ import {
   restoreM5ResourceVersion,
 } from '../api/m5'
 import ResourceHistoryDrawer from '../components/ResourceHistoryDrawer.vue'
+import ResourceEditConflicts from '../components/ResourceEditConflicts.vue'
+import { useResourceEditMerge } from '../services/useResourceEditMerge.js'
 import ResourceToolbar from '../components/ResourceToolbar.vue'
 import SourceCitation from '../components/SourceCitation.vue'
 import ResourceFloatingQa from '../components/ResourceFloatingQa.vue'
-import ResourceProfileAdaptation from '../components/ResourceProfileAdaptation.vue'
 import { createNote, getNotes, updateNote } from '../api/notes'
 
 const route = useRoute()
@@ -55,12 +59,16 @@ const compareResult = ref(null)
 const actionError = ref('')
 const notice = ref('')
 const draft = ref(null)
+const { conflicts: editConflicts, refresh: mergeLatestEdits, choose: chooseEdit, clear: clearEditConflicts } = useResourceEditMerge(draft)
 const selectedAnswers = ref({})
 const checkedAnswers = ref({})
+const revealedHints = ref({})
 const partnerQuestion = ref('')
 const partnerNotice = ref('')
 const qaOpen = ref(false)
 const noteBusy = ref(false)
+const readingPanel = ref(null)
+let restoringReading = false
 
 // prompt: question is handled by ResourceFloatingQa so the same teacher-style
 // answer surface is available from the handout and other resource pages.
@@ -69,12 +77,7 @@ const resourceId = computed(() => String(route.params.resourceId || ''))
 const activeStudentId = computed(() => localStorage.getItem('edumatrix_student_id') || localStorage.getItem('edumatrix_username') || '')
 const versions = computed(() => detail.value?.handout?.versions || [])
 const currentVersionId = computed(() => detail.value?.handout?.current_version_id || '')
-const historyItems = computed(() => versions.value.map(item => ({
-  ...item,
-  revision_origin: item.revision_origin || item.metadata?.revision_origin,
-  source_status: item.source_status || 'available',
-  content_format: item.content_format || 'json',
-})))
+const historyItems = computed(() => detail.value?.history?.items || [])
 const selectedVersion = computed(() => (
   versions.value.find(item => item.id === selectedVersionId.value)
   || versions.value.find(item => item.id === currentVersionId.value)
@@ -82,6 +85,7 @@ const selectedVersion = computed(() => (
 ))
 const projection = computed(() => selectedVersion.value?.projection || null)
 const structured = computed(() => projection.value?.structured || null)
+const readingSections = computed(() => orderedHandoutSections(structured.value))
 const legacy = computed(() => projection.value?.legacy || null)
 const invalid = computed(() => projection.value?.invalid || null)
 const sourceRefs = computed(() => projection.value?.source_refs || [])
@@ -92,23 +96,19 @@ const isInvalidStructured = computed(() => projection.value?.mode === 'invalid_s
 const usesJsonFormat = computed(() => projection.value?.content_format === 'json')
 const genericTitleSuffixes = ['当前学习资源', '当前课程资源', '当前教材文件', '当前教材选区', '当前资源']
 function displayHandoutTitle(value) {
-  const raw = String(value || '').trim()
+  const raw = String(value || '').trim().replace(/\s*·\s*handout\s*$/i, ' · 讲义')
   const point = String(catalog.value?.knowledge_point?.title || '').trim()
   if (!raw || !point) return raw || '个性化讲义'
   const generic = genericTitleSuffixes.some((suffix) => raw === suffix || raw === `个性化讲义 · ${suffix}`)
-  return generic ? `个性化讲义 · ${point}` : raw
+  const requestTitle = /^个性化讲义\s*·\s*请/.test(raw) && raw.length > 48
+  return generic || requestTitle ? `个性化讲义 · ${point}` : raw
 }
 const title = computed(() => displayHandoutTitle(structured.value?.title || legacy.value?.title || detail.value?.title || '个性化讲义'))
 const summary = computed(() => structured.value?.summary || legacy.value?.summary || '')
 const outline = computed(() => {
-  if (structured.value?.outline?.length) {
-    // Footnote markers such as “[1]” belong in the optional materials panel,
-    // not in the learner's reading outline where they look like empty IDs.
-    return structured.value.outline.filter((item) => {
-      const title = String(item?.title || '').trim()
-      const id = String(item?.id || '').trim()
-      return !/^\[\d+\]$/.test(title) && !/^source-\d+$/.test(id)
-    })
+  if (structured.value) {
+    const labels = new Map((structured.value.outline || []).map(item => [item.id, item.title]))
+    return readingSections.value.map(item => ({ id: item.id, title: labels.get(item.id) || item.title || item.question }))
   }
   return [{ id: 'legacy-content', title: '讲义正文' }]
 })
@@ -130,19 +130,39 @@ function sourceForFootnote(footnote) {
 }
 
 function message(exception, fallback) {
-  const detailMessage = exception?.response?.data?.detail?.message || exception?.detail?.message
-  return detailMessage || (typeof exception?.detail === 'string' ? exception.detail : '') || exception?.message || fallback
+  return userMessage(exception, fallback)
 }
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
-function resetReadingState() {
+async function resetReadingState() {
+  restoringReading = true
   activeSectionId.value = outline.value[0]?.id || ''
   readingProgress.value = 0
   selectedAnswers.value = {}
   checkedAnswers.value = {}
+  revealedHints.value = {}
+  try {
+    const saved = JSON.parse(localStorage.getItem(quizStorageKey()) || 'null')
+    if (saved) {
+      selectedAnswers.value = saved.answers || {}
+      checkedAnswers.value = saved.checked || {}
+      revealedHints.value = saved.hints || {}
+    }
+  } catch { /* A missing local self-check record does not prevent reading. */ }
+  await nextTick()
+  if (readingPanel.value) {
+    const position = Number(localStorage.getItem(`${quizStorageKey()}:scroll`) || 0)
+    readingPanel.value.scrollTo({ top: Number.isFinite(position) ? position : 0, behavior: 'instant' })
+    updateProgress({ currentTarget: readingPanel.value })
+  }
+  restoringReading = false
+}
+
+function quizStorageKey() {
+  return `edumatrix:handout-check:${activeStudentId.value}:${resourceId.value}:${selectedVersionId.value}`
 }
 
 async function loadResource({ preserveVersion = false } = {}) {
@@ -153,27 +173,35 @@ async function loadResource({ preserveVersion = false } = {}) {
     if (payload?.catalog?.type !== 'handout') throw new Error('当前资源不是个性化讲义。')
     detail.value = payload
     const keep = preserveVersion && versions.value.some(item => item.id === selectedVersionId.value)
-    if (!keep) selectedVersionId.value = payload.handout?.current_version_id || ''
-    resetReadingState()
+    if (!keep) {
+      const requested = String(route.query.version_id || route.query.resource_version_id || '')
+      if (requested && !versions.value.some(item => item.id === requested)) throw new Error('这版讲义暂时无法打开，请从版本历史重新选择。')
+      selectedVersionId.value = requested || payload.handout?.current_version_id || ''
+    }
   } catch (exception) {
     error.value = message(exception, '讲义加载失败，请稍后重试。')
   } finally {
     loading.value = false
+    if (!error.value) await resetReadingState()
   }
 }
 
+function editableContent(value) {
+  return value?.mode === 'structured' ? clone(value.structured)
+    : value?.mode === 'invalid_structured' ? value.invalid?.raw_content || ''
+      : value?.legacy?.markdown || ''
+}
+
 function startEditing() {
+  clearEditConflicts()
   actionError.value = ''
   notice.value = ''
-  draft.value = isStructured.value
-    ? clone(structured.value)
-    : isInvalidStructured.value
-      ? invalid.value?.raw_content || ''
-      : legacy.value?.markdown || ''
+  draft.value = editableContent(projection.value)
   editing.value = true
 }
 
 function cancelEditing() {
+  clearEditConflicts()
   editing.value = false
   draft.value = null
   actionError.value = ''
@@ -184,7 +212,7 @@ function structuredPayload() {
 }
 
 async function saveVersion() {
-  if (!editing.value || saving.value || !selectedVersion.value) return
+  if (!editing.value || saving.value || !selectedVersion.value || editConflicts.value.length) return
   saving.value = true
   actionError.value = ''
   notice.value = ''
@@ -203,7 +231,7 @@ async function saveVersion() {
     await nextTick()
     resetReadingState()
   } catch (exception) {
-    actionError.value = exception?.status === 409
+    actionError.value = exception?.detail?.code === 'resource_version_conflict'
       ? '讲义已在别处更新。你的草稿仍保留，请刷新版本状态后再次保存。'
       : message(exception, '保存失败，草稿已保留，请重试。')
   } finally {
@@ -212,13 +240,19 @@ async function saveVersion() {
 }
 
 async function refreshAfterConflict() {
-  const savedDraft = clone(draft.value)
-  const sourceVersion = selectedVersionId.value
+  if (editConflicts.value.length) return
+  const base = editableContent(projection.value)
   await loadResource({ preserveVersion: true })
-  draft.value = savedDraft
-  if (versions.value.some(item => item.id === sourceVersion)) selectedVersionId.value = sourceVersion
+  if (error.value) return
+  const latest = versions.value.find(item => item.id === currentVersionId.value)
+  if (!latest) return
+  mergeLatestEdits(base, editableContent(latest.projection))
+  selectedVersionId.value = latest.id
   editing.value = true
   actionError.value = ''
+  notice.value = editConflicts.value.length
+    ? '草稿和最新讲义已保留。请先处理两边同时修改的内容。'
+    : '已合并另一页的更新和本页修改，请检查后保存。'
 }
 
 function downloadBlob(content, filename, type) {
@@ -237,14 +271,16 @@ function escapeHtml(value) {
 }
 
 function handoutHtml(content) {
-  const sections = [
-    ...content.concepts.map(item => `<section><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.explanation)}</p></section>`),
-    ...content.figures.map(item => `<section><h2>${escapeHtml(item.title)}</h2><pre>${escapeHtml(item.content)}</pre><p>${escapeHtml(item.caption)}</p></section>`),
-    ...content.examples.map(item => `<section><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.body)}</p></section>`),
-    ...content.counterExamples.map(item => `<section><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.body)}</p></section>`),
-    ...content.codeBlocks.map(item => `<section><h2>${escapeHtml(item.title)}</h2><pre><code>${escapeHtml(item.code)}</code></pre><p>${escapeHtml(item.explanation)}</p></section>`),
-    ...content.miniQuiz.map(item => `<section><h2>学习检查</h2><h3>${escapeHtml(item.question)}</h3><ol>${item.options.map(option => `<li>${escapeHtml(option)}</li>`).join('')}</ol><p><strong>答案：</strong>${escapeHtml(item.options[item.correctIndex])}</p><p>${escapeHtml(item.explanation)}</p></section>`),
-  ].join('')
+  const sections = orderedHandoutSections(content).map(item => {
+    const heading = `<h2>${escapeHtml(item.title || item.question || '学习检查')}</h2>`
+    let body
+    if (item.sectionType === 'codeBlocks') body = `<pre><code>${escapeHtml(item.code)}</code></pre><p>${escapeHtml(item.explanation)}</p>`
+    else if (item.sectionType === 'miniQuiz') body = `<ol>${item.options.map(option => `<li>${escapeHtml(option)}</li>`).join('')}</ol>${(item.hints || []).map((hint, index) => `<details><summary>提示 ${index + 1}</summary><p>${escapeHtml(hint)}</p></details>`).join('')}<details><summary>检查答案与解析</summary><p><strong>答案：</strong>${escapeHtml(item.options[item.correctIndex])}</p><p>${escapeHtml(item.explanation)}</p></details>`
+    else if (item.sectionType === 'figures') body = `<pre>${escapeHtml(item.content)}</pre><p>${escapeHtml(item.caption)}</p>`
+    else if (item.sectionType === 'transferTasks') body = `<p>${escapeHtml(item.prompt)}</p>${item.hint ? `<details><summary>查看提示</summary><p>${escapeHtml(item.hint)}</p></details>` : ''}${item.successCheck ? `<details><summary>检查思路</summary><p>${escapeHtml(item.successCheck)}</p></details>` : ''}`
+    else body = `<p>${escapeHtml(item.explanation || item.body)}</p>`
+    return `<section>${heading}${body}</section>`
+  }).join('')
   const sources = content.footnotes.map(item => `<li>${escapeHtml(item.label)} ${escapeHtml(item.title)} · ${escapeHtml(item.location)}</li>`).join('')
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(content.title)}</title><style>body{max-width:840px;margin:48px auto;padding:0 28px;color:#06141b;font:16px/1.75 "Source Han Sans SC","Microsoft YaHei",sans-serif}h1{font:700 38px/1.25 "Source Han Serif SC",serif}h2{margin-top:42px;border-bottom:1px solid #dce2e3;padding-bottom:10px;font-size:23px}pre{overflow:auto;padding:18px;background:#f1f4f4;border:1px solid #dce2e3;border-radius:6px}p,li{max-width:72ch}</style></head><body><h1>${escapeHtml(content.title)}</h1><p>${escapeHtml(content.summary)}</p><section><h2>学习目标</h2><p>${escapeHtml(content.learningGoal)}</p><p><strong>预计学习：</strong>${escapeHtml(content.estimatedMinutes)} 分钟</p></section>${sections}<section><h2>来源脚注</h2><ol>${sources}</ol></section></body></html>`
 }
@@ -341,23 +377,52 @@ async function compareWithCurrent() {
 
 function jumpTo(sectionId) {
   activeSectionId.value = sectionId
-  document.getElementById(`handout-${sectionId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const panel = readingPanel.value
+  const section = document.getElementById(`handout-${sectionId}`)
+  if (panel && section) panel.scrollTo({ top: panel.scrollTop + section.getBoundingClientRect().top - panel.getBoundingClientRect().top - 18, behavior: 'smooth' })
 }
 
 function updateProgress(event) {
   const element = event.currentTarget
   const scrollable = element.scrollHeight - element.clientHeight
   readingProgress.value = scrollable > 0 ? Math.min(100, Math.round((element.scrollTop / scrollable) * 100)) : 100
+  const top = element.getBoundingClientRect().top + 32
+  const sections = [...element.querySelectorAll('.document-section[id]')]
+  const current = sections.filter(section => section.getBoundingClientRect().top <= top).at(-1) || sections[0]
+  if (current) activeSectionId.value = current.id.replace(/^handout-/, '')
+  if (!restoringReading && !editing.value && !loading.value) localStorage.setItem(`${quizStorageKey()}:scroll`, String(element.scrollTop))
+}
+
+function saveQuizDraft(item) {
+  delete checkedAnswers.value[item.id]
+  persistQuizState()
+}
+
+function persistQuizState() {
+  localStorage.setItem(quizStorageKey(), JSON.stringify({ answers: selectedAnswers.value, checked: checkedAnswers.value, hints: revealedHints.value }))
+}
+
+function revealQuizHint(item) {
+  const count = Math.max(0, Number(revealedHints.value[item.id]) || 0)
+  revealedHints.value = { ...revealedHints.value, [item.id]: Math.min((item.hints || []).length, count + 1) }
+  persistQuizState()
+}
+
+function hasQuizOptions(item) {
+  return Array.isArray(item.options) && item.options.length >= 2
+    && item.options.every(option => String(option).trim() && !/^[A-H][.、:：)）]?$/i.test(String(option).trim()))
 }
 
 function checkAnswer(item) {
+  if (!hasQuizOptions(item)) return
   if (selectedAnswers.value[item.id] === undefined) return
   checkedAnswers.value = { ...checkedAnswers.value, [item.id]: true }
+  persistQuizState()
 }
 
 async function copyCode(code) {
   await navigator.clipboard.writeText(code)
-  notice.value = '代码已复制；真实运行请进入代码沙盒。'
+  notice.value = '代码已复制。'
 }
 
 function askPartner() {
@@ -380,45 +445,7 @@ function handoutNoteMarkdown() {
     if (content.learningGoal) lines.push(content.learningGoal.trim(), '')
     if (content.estimatedMinutes) lines.push(`预计学习时间：${content.estimatedMinutes} 分钟`, '')
   }
-  if (Array.isArray(content.concepts) && content.concepts.length) {
-    lines.push('## 核心概念', '')
-    content.concepts.forEach((item) => {
-      lines.push(`### ${item.title || '概念'}`, '', String(item.explanation || '').trim(), '')
-    })
-  }
-  if (Array.isArray(content.figures) && content.figures.length) {
-    lines.push('## 图示与公式', '')
-    content.figures.forEach((item) => {
-      lines.push(`### ${item.title || '图示'}`, '')
-      if (item.content) lines.push(`~~~${item.kind === 'formula' ? 'text' : ''}`, String(item.content).trim(), '~~~', '')
-      if (item.caption) lines.push(item.caption.trim(), '')
-    })
-  }
-  if (Array.isArray(content.examples) && content.examples.length) {
-    lines.push('## 应用示例', '')
-    content.examples.forEach((item) => lines.push(`### ${item.title || '示例'}`, '', String(item.body || '').trim(), ''))
-  }
-  if (Array.isArray(content.counterExamples) && content.counterExamples.length) {
-    lines.push('## 边界与反例', '')
-    content.counterExamples.forEach((item) => lines.push(`### ${item.title || '边界情况'}`, '', String(item.body || '').trim(), ''))
-  }
-  if (Array.isArray(content.codeBlocks) && content.codeBlocks.length) {
-    lines.push('## 代码阅读', '')
-    content.codeBlocks.forEach((item) => {
-      lines.push(`### ${item.title || '代码示例'}`, '', `~~~${item.language || ''}`, String(item.code || '').trim(), '~~~', '')
-      if (item.explanation) lines.push(item.explanation.trim(), '')
-    })
-  }
-  if (Array.isArray(content.miniQuiz) && content.miniQuiz.length) {
-    lines.push('## 学习检查', '')
-    content.miniQuiz.forEach((item) => {
-      lines.push(`### ${item.question || '检查题'}`, '')
-      ;(item.options || []).forEach((option, index) => lines.push(`${String.fromCharCode(65 + index)}. ${option}`))
-      if (item.options?.[item.correctIndex] !== undefined) lines.push('', `**答案：** ${item.options[item.correctIndex]}`)
-      if (item.explanation) lines.push('', item.explanation.trim())
-      lines.push('')
-    })
-  }
+  lines.push(...orderedHandoutSections(content).map(handoutSectionMarkdown), '')
   if (Array.isArray(content.footnotes) && content.footnotes.length) {
     lines.push('## 参考材料', '')
     content.footnotes.forEach((item) => {
@@ -503,7 +530,7 @@ function renderFormula(content) {
 }
 
 watch(selectedVersionId, () => {
-  if (!editing.value) resetReadingState()
+  if (!editing.value && !loading.value) resetReadingState()
 })
 
 onMounted(loadResource)
@@ -521,13 +548,15 @@ onMounted(loadResource)
   <main class="handout-page" data-testid="handout-workspace">
       <ResourceToolbar
         :title="title"
-        :type-label="`${catalog.course?.title || '当前课程'} · ${catalog.knowledge_point?.title || '个性化讲义'}`"
-        :version-label="versionLabel"
+        type-label=""
+        version-label=""
         :history-count="historyItems.length"
         :can-edit="Boolean(selectedVersion)"
         :edit-label="primaryLabel"
         :editing="editing"
         :saving="saving"
+        :save-disabled="editConflicts.length > 0"
+        :reload-disabled="editConflicts.length > 0"
         :loading="loading"
         :history-disabled="!historyItems.length || editing"
         show-note
@@ -538,7 +567,7 @@ onMounted(loadResource)
         @edit="startEditing"
         @save="saveVersion"
         @cancel="cancelEditing"
-        @reload="loadResource"
+        @reload="editing ? refreshAfterConflict() : loadResource()"
         @note="openSourceNote"
       />
       <div class="workspace-version-row">
@@ -562,7 +591,7 @@ onMounted(loadResource)
     <div v-else-if="error" class="workspace-state workspace-state--error" role="alert">
       <AlertTriangle :size="27" />
       <strong>暂时无法打开讲义</strong>
-      <span>{{ error }}</span>
+      <span>{{ userMessage(error) }}</span>
       <button type="button" class="primary-action" @click="loadResource()"><RefreshCw :size="17" />重新加载</button>
     </div>
 
@@ -570,21 +599,22 @@ onMounted(loadResource)
       <div v-if="actionError || notice" class="status-line" :class="{ 'status-line--error': actionError }" role="status">
         <AlertTriangle v-if="actionError" :size="17" />
         <Check v-else :size="17" />
-        <span>{{ actionError || notice }}</span>
+        <span>{{ userMessage(actionError || notice) }}</span>
         <button v-if="actionError.includes('别处更新')" type="button" @click="refreshAfterConflict">刷新版本状态</button>
         <button v-else type="button" title="关闭提示" @click="actionError = ''; notice = ''"><X :size="16" /></button>
       </div>
 
-      <section class="workspace-grid">
+      <ResourceEditConflicts :items="editConflicts" :source-refs="sourceRefs" @choose="chooseEdit" />
+      <section class="workspace-grid" :inert="editConflicts.length > 0">
         <aside class="outline-panel" aria-label="讲义目录">
           <div class="panel-heading">
             <div><BookOpen :size="18" /><strong>目录</strong></div>
-            <span>{{ versionLabel }}</span>
           </div>
           <nav>
             <button
               v-for="(item, index) in outline"
               :key="item.id"
+              :title="item.title"
               type="button"
               :class="{ active: activeSectionId === item.id }"
               @click="jumpTo(item.id)"
@@ -596,14 +626,13 @@ onMounted(loadResource)
           <div class="outline-progress">
             <div><span>阅读位置</span><strong>{{ readingProgress }}%</strong></div>
             <div class="progress-track"><span :style="{ width: `${readingProgress}%` }" /></div>
-            <p>仅记录本页阅读位置，不等同于知识掌握度。</p>
           </div>
         </aside>
 
-        <article class="reading-panel" @scroll="updateProgress">
-          <div v-if="isHistorical" class="historical-banner">
+        <article ref="readingPanel" class="reading-panel" @scroll="updateProgress">
+          <div v-if="isHistorical && !editing" class="historical-banner">
             <History :size="17" />
-            <span>正在只读查看 {{ versionLabel }}。编辑会另存为新版本，不覆盖历史。</span>
+            <span>历史版本 {{ versionLabel }} · 编辑后另存</span>
             <button type="button" :disabled="comparing" @click="compareWithCurrent">
               <GitCompare :size="16" />{{ comparing ? '比较中' : '与当前版本比较' }}
             </button>
@@ -641,6 +670,13 @@ onMounted(loadResource)
               <label>小测问题<textarea v-model="item.question" rows="3" /></label>
               <label v-for="(_, index) in item.options" :key="index">选项 {{ index + 1 }}<input v-model="item.options[index]" /></label>
               <label>解析<textarea v-model="item.explanation" rows="4" /></label>
+              <label>解题提示（每行一条）<textarea :value="(item.hints || []).join('\n')" rows="3" @input="item.hints = $event.target.value.split('\n').map(line => line.trim()).filter(Boolean)" /></label>
+            </section>
+            <section v-for="item in draft.transferTasks || []" :key="item.id" class="editor-section">
+              <label>迁移练习标题<input v-model="item.title" /></label>
+              <label>任务<textarea v-model="item.prompt" rows="5" /></label>
+              <label>提示<textarea v-model="item.hint" rows="3" /></label>
+              <label>检查思路<textarea v-model="item.successCheck" rows="3" /></label>
             </section>
             <section class="editor-section">
               <label>画像适配说明<textarea v-model="draft.profileAdaptation.summary" rows="4" /></label>
@@ -653,95 +689,65 @@ onMounted(loadResource)
             <label for="legacy-markdown">{{ isInvalidStructured ? '结构化讲义 JSON' : 'Markdown 讲义正文' }}</label>
             <textarea id="legacy-markdown" v-model="draft" spellcheck="false" />
             <p v-if="isInvalidStructured">修复缺失章节后保存；校验失败时原内容和草稿都会保留。</p>
-            <p v-else>旧讲义按原格式另存新版本；系统不会自动补造缺失的图表、小测或来源。</p>
+            <p v-else>修改后另存为新版本。</p>
           </section>
 
           <template v-else-if="isStructured">
-            <ResourceProfileAdaptation
-              :adaptation="structured?.profileAdaptation"
-              :plan="detail?.resource?.profile_adaptation_plan"
-              :summary="structured?.profileAdaptation?.summary || ''"
-              resource-type="handout"
-            />
             <header class="document-lead">
               <span>{{ catalog.knowledge_point?.title || '当前知识点' }}</span>
               <h2>{{ title }}</h2>
-              <p>{{ structured.summary }}</p>
+              <p>{{ learningText(structured.summary) }}</p>
               <dl>
                 <div><dt>学习目标</dt><dd>{{ structured.learningGoal }}</dd></div>
               </dl>
             </header>
 
-            <section
-              v-for="item in structured.concepts"
-              :id="`handout-${item.id}`"
-              :key="item.id"
-              class="document-section"
-            >
-              <span class="section-kind">关键概念</span><h3>{{ item.title }}</h3><p>{{ item.explanation }}</p>
-            </section>
-
-            <section
-              v-for="item in structured.figures"
-              :id="`handout-${item.id}`"
-              :key="item.id"
-              class="document-section"
-            >
-              <span class="section-kind">{{ item.kind === 'formula' ? '公式' : item.kind === 'chart' ? '图表' : '机制图解' }}</span>
-              <h3>{{ item.title }}</h3>
-              <div class="figure-surface">
-                <div v-if="item.kind === 'formula' && renderFormula(item.content)" class="formula" v-html="renderFormula(item.content)" />
-                <pre v-else>{{ item.content }}</pre>
-              </div>
-              <p class="caption">{{ item.caption }}</p>
-            </section>
-
-            <section
-              v-for="item in structured.examples"
-              :id="`handout-${item.id}`"
-              :key="item.id"
-              class="document-section example-section"
-            >
-              <span class="section-kind">应用示例</span><h3>{{ item.title }}</h3><p>{{ item.body }}</p>
-            </section>
-
-            <section
-              v-for="item in structured.counterExamples"
-              :id="`handout-${item.id}`"
-              :key="item.id"
-              class="document-section counter-section"
-            >
-              <span class="section-kind">边界与反例</span><h3>{{ item.title }}</h3><p>{{ item.body }}</p>
-            </section>
-
-            <section
-              v-for="item in structured.codeBlocks"
-              :id="`handout-${item.id}`"
-              :key="item.id"
-              class="document-section"
-            >
-              <div class="section-title-row"><div><span class="section-kind">代码阅读 · {{ item.language }}</span><h3>{{ item.title }}</h3></div><button type="button" title="复制代码" @click="copyCode(item.code)"><Clipboard :size="17" /></button></div>
-              <pre class="code-block"><code>{{ item.code }}</code></pre>
-              <p>{{ item.explanation }}</p>
-            </section>
-
-            <section
-              v-for="item in structured.miniQuiz"
-              :id="`handout-${item.id}`"
-              :key="item.id"
-              class="document-section quiz-section"
-            >
-              <span class="section-kind">学习检查</span><h3>{{ item.question }}</h3>
+            <section v-for="item in readingSections" :id="`handout-${item.id}`" :key="item.id"
+              class="document-section" :class="{ 'example-section': item.sectionType === 'examples', 'counter-section': item.sectionType === 'counterExamples', 'quiz-section': item.sectionType === 'miniQuiz' }">
+              <template v-if="item.sectionType === 'codeBlocks'">
+                <div class="section-title-row"><h3>{{ item.title }}</h3><button type="button" title="复制代码" @click="copyCode(item.code)"><Clipboard :size="17" /></button></div>
+                <pre class="code-block"><code>{{ item.code }}</code></pre>
+                <IncrementalMarkdownRenderer :text="learningText(item.explanation)" type="lesson" />
+              </template>
+              <template v-else-if="item.sectionType === 'figures'">
+                <h3>{{ item.title }}</h3>
+                <div class="figure-surface">
+                  <div v-if="item.kind === 'formula' && renderFormula(item.content)" class="formula" v-html="renderFormula(item.content)" />
+                  <IncrementalMarkdownRenderer v-else :text="item.content" type="lesson" />
+                </div>
+                <p v-if="item.caption !== item.title" class="caption">{{ item.caption }}</p>
+              </template>
+              <template v-else-if="item.sectionType === 'transferTasks'">
+                <h3>{{ item.title }}</h3>
+                <IncrementalMarkdownRenderer :text="item.prompt" type="lesson" />
+                <details v-if="item.hint" class="transfer-guidance"><summary>查看提示</summary><IncrementalMarkdownRenderer :text="item.hint" type="lesson" /></details>
+                <details v-if="item.successCheck" class="transfer-guidance"><summary>检查思路</summary><IncrementalMarkdownRenderer :text="item.successCheck" type="lesson" /></details>
+              </template>
+              <template v-else-if="item.sectionType === 'miniQuiz'">
+              <h3>{{ item.title || '学习检查' }}</h3>
+              <IncrementalMarkdownRenderer class="quiz-prompt" :text="item.question" type="lesson" preserve-content />
+              <p v-if="!hasQuizOptions(item)">这道题的选项没有保存完整，暂时不能作答。请从资源中心重新生成讲义后再练习。</p>
+              <template v-else>
               <label v-for="(option, index) in item.options" :key="index" class="quiz-option" :class="{ selected: selectedAnswers[item.id] === index }">
-                <input v-model="selectedAnswers[item.id]" type="radio" :name="item.id" :value="index" />
-                <span>{{ option }}</span>
+                <input v-model="selectedAnswers[item.id]" type="radio" :name="item.id" :value="index" @change="saveQuizDraft(item)" />
+                <IncrementalMarkdownRenderer :text="option" preserve-content />
               </label>
+              <div v-if="item.hints?.length" class="handout-hints">
+                <IncrementalMarkdownRenderer v-for="(hint, index) in item.hints.slice(0, revealedHints[item.id] || 0)" :key="index" :text="hint" type="lesson" />
+                <button v-if="(revealedHints[item.id] || 0) < item.hints.length" type="button" class="secondary-action" @click="revealQuizHint(item)">{{ revealedHints[item.id] ? '再看一步提示' : '查看解题提示' }}</button>
+              </div>
               <button type="button" class="quiz-submit" :disabled="selectedAnswers[item.id] === undefined" @click="checkAnswer(item)">检查答案</button>
               <div v-if="checkedAnswers[item.id]" class="quiz-feedback" :class="{ correct: selectedAnswers[item.id] === item.correctIndex }">
                 <Check v-if="selectedAnswers[item.id] === item.correctIndex" :size="18" />
                 <AlertTriangle v-else :size="18" />
-                <div><strong>{{ selectedAnswers[item.id] === item.correctIndex ? '回答正确' : '再想一想' }}</strong><p>{{ item.explanation }}</p></div>
+                <div><strong>{{ selectedAnswers[item.id] === item.correctIndex ? '回答正确' : '再想一想' }}</strong><IncrementalMarkdownRenderer :text="item.explanation" preserve-content /></div>
               </div>
+              </template>
+              </template>
+              <template v-else>
+                <h3>{{ item.title }}</h3>
+                <IncrementalMarkdownRenderer :text="learningText(item.explanation || item.body)" type="lesson" />
+              </template>
             </section>
 
             <section class="document-section footnotes-section">
@@ -770,7 +776,6 @@ onMounted(loadResource)
         <aside class="support-panel">
           <section class="support-section">
             <div class="panel-heading"><div><MessageSquareText :size="18" /><strong>AI 学习伙伴</strong></div></div>
-            <p>遇到不理解的概念，可以留在当前讲义里继续追问。</p>
             <textarea v-model="partnerQuestion" rows="4" placeholder="针对本讲义提问" />
             <button type="button" class="secondary-action" :disabled="!partnerQuestion.trim()" @click="askPartner"><Send :size="16" />在资源内提问</button>
             <span v-if="partnerNotice" class="support-note">{{ partnerNotice }}</span>
@@ -780,7 +785,7 @@ onMounted(loadResource)
             <summary class="panel-heading"><div><FileJson :size="18" /><strong>参考材料</strong></div><span>{{ sourceRefs.length }} 项</span></summary>
             <div class="source-readiness" :class="{ ready: readiness.publishable }">
               <Check v-if="readiness.publishable" :size="17" /><AlertTriangle v-else :size="17" />
-              <span>{{ readiness.reason }}</span>
+              <span>{{ learningText(readiness.reason) }}</span>
             </div>
             <SourceCitation
               v-for="source in sourceRefs"
@@ -795,7 +800,6 @@ onMounted(loadResource)
             <div class="panel-heading"><div><Download :size="18" /><strong>导出</strong></div></div>
             <button v-if="isStructured" type="button" class="secondary-action" :disabled="exporting" @click="exportVersion('html')"><FileText :size="16" />导出 HTML</button>
             <button type="button" class="secondary-action" :disabled="exporting" @click="exportVersion('json')"><FileJson :size="16" />导出版本数据</button>
-            <p>浏览器打印 HTML 可生成 PDF；导出失败不会影响当前讲义与草稿。</p>
           </section>
         </aside>
       </section>
@@ -806,6 +810,7 @@ onMounted(loadResource)
       :course-id="catalog.course?.id || ''"
       :knowledge-point-id="catalog.knowledge_point?.id || ''"
       :resource-id="resourceId"
+      :resource-version-id="selectedVersionId"
       :resource-title="title"
       :source-ref-ids="sourceRefs.map(item => item.source_ref_id || item.sourceRefId || item.id).filter(Boolean)"
       @close="qaOpen = false"
@@ -833,7 +838,7 @@ onMounted(loadResource)
 </template>
 
 <style scoped>
-.handout-page { display: grid; min-width: 0; min-height: 100%; grid-template-rows: 82px auto minmax(0, 1fr); color: var(--color-text); background: var(--color-page); }
+.handout-page { container-type: inline-size; display: grid; min-width: 0; min-height: 100%; grid-template-rows: auto auto minmax(0, 1fr); color: var(--color-text); background: transparent; }
 .workspace-header { display: grid; min-width: 0; grid-template-columns: 42px minmax(260px, 1fr) auto; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
 .header-copy { min-width: 0; }
 .header-copy > span { display: block; overflow: hidden; color: var(--color-text-muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
@@ -848,11 +853,11 @@ onMounted(loadResource)
 .version-select { display: flex; height: 40px; align-items: center; gap: 7px; padding-left: 10px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); }
 .workspace-version-row { display: flex; justify-content: flex-end; margin: 10px 0 0; }
 .version-select select { min-width: 98px; height: 38px; padding: 0 8px 0 0; border: 0; background: transparent; font-size: 14px; }
-.workspace-grid { display: grid; min-width: 0; min-height: calc(100vh - 138px); grid-template-columns: 220px minmax(500px, 1fr) 300px; overflow: hidden; }
+.workspace-grid { display: grid; min-width: 0; height: calc(100dvh - 240px); min-height: 360px; grid-template-columns: 220px minmax(500px, 1fr) 300px; overflow: hidden; }
 .outline-panel, .support-panel { min-width: 0; min-height: 0; overflow-y: auto; background: var(--color-surface); }
 .outline-panel { border-right: 1px solid var(--color-border); }
 .support-panel { border-left: 1px solid var(--color-border); }
-.panel-heading { display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border); }
+.panel-heading { display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 10px;  }
 .panel-heading > div { display: flex; align-items: center; gap: 8px; }
 .panel-heading strong, .panel-heading span { font-size: 14px; }
 .panel-heading span { color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
@@ -868,17 +873,20 @@ onMounted(loadResource)
 .progress-track { height: 5px; margin-top: 9px; overflow: hidden; border-radius: 3px; background: var(--color-surface-muted); }
 .progress-track span { display: block; height: 100%; background: var(--color-accent); }
 .outline-progress p { margin: 10px 0 0; color: var(--color-text-muted); font-size: 14px; line-height: 1.55; }
-.reading-panel { min-width: 0; min-height: 0; overflow-y: auto; scroll-behavior: smooth; background: var(--color-surface); }
+.reading-panel { min-width: 0; min-height: 0; overflow-y: auto; scroll-behavior: smooth; background: var(--gradient-paper); 
+  border: 0;
+}
 .document-lead, .document-section, .legacy-reader, .legacy-editor, .editor-section, .invalid-reader { width: min(760px, calc(100% - 64px)); margin-inline: auto; }
-.document-lead { padding: 56px 0 42px; border-bottom: 1px solid var(--color-border); }
+.document-lead { padding: 24px 0; border-bottom: 1px solid var(--color-border); }
 .document-lead > span, .section-kind { color: var(--color-text-muted); font-size: 14px; font-weight: 650; }
-.document-lead h2 { max-width: 20ch; margin: 10px 0 18px; font-family: var(--font-display); font-size: 38px; line-height: 1.22; }
+.document-lead h2 { margin: 8px 0 14px; font-family: var(--font-display); font-size: 30px; line-height: 1.35; }
 .document-lead > p { max-width: 68ch; margin: 0; color: var(--color-text-secondary); font-size: 17px; line-height: 1.8; }
-.document-lead dl { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin: 34px 0 0; }
-.document-lead dl div { padding-top: 14px; border-top: 1px solid var(--color-border-strong); }
+.document-lead dl { margin: 18px 0 0; }
+.document-lead dl div { padding-left: 14px; border-left: 1px solid var(--color-border-strong); }
 .document-lead dt { color: var(--color-text-muted); font-size: 14px; }
 .document-lead dd { margin: 7px 0 0; font-size: 15px; line-height: 1.7; }
 .document-section { scroll-margin-top: 18px; padding: 46px 0; border-bottom: 1px solid var(--color-border); }
+.document-lead + .document-section { padding-top: 24px; }
 .document-section h3 { max-width: 28ch; margin: 7px 0 15px; font-size: 24px; line-height: 1.35; }
 .document-section > p, .caption { max-width: 72ch; margin: 0; color: var(--color-text-secondary); font-size: 16px; line-height: 1.8; }
 .section-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -890,9 +898,12 @@ onMounted(loadResource)
 .formula :deep(.katex) { font-size: 20px; }
 .caption { font-size: 14px; }
 .example-section { position: relative; }
+.transfer-guidance { margin-top: 16px; }
+.transfer-guidance summary { cursor: pointer; color: var(--color-accent); font-weight: 600; }
 .example-section::before, .counter-section::before { position: absolute; top: 50px; left: -24px; width: 1px; height: 68px; background: var(--color-border-strong); content: ''; }
-.code-block { margin: 18px 0 14px; padding: 22px; overflow: auto; border: 1px solid #253745; border-radius: 8px; color: #f7f9f9; background: #11212d; font: 14px/1.7 var(--font-mono); }
-.quiz-section h3 { max-width: 44ch; }
+.code-block { margin: 18px 0 14px; padding: 22px; overflow: auto; border: 1px solid var(--color-text); border-radius: 8px; color: var(--color-surface-subtle); background: var(--color-text); font: 14px/1.7 var(--font-mono); }
+.quiz-prompt { margin: 16px 0 22px; }
+.quiz-option > .incremental-md-renderer, .quiz-feedback > div { min-width: 0; }
 .quiz-option { display: flex; min-height: 48px; align-items: center; gap: 10px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 6px; cursor: pointer; }
 .quiz-option:hover, .quiz-option.selected { border-color: var(--color-accent); background: var(--color-surface-subtle); }
 .quiz-option input { width: 17px; height: 17px; accent-color: var(--color-accent); }
@@ -949,9 +960,19 @@ onMounted(loadResource)
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1300px) {
-  .workspace-grid { grid-template-columns: 202px minmax(470px, 1fr) 278px; }
   .workspace-header { grid-template-columns: 42px minmax(230px, 1fr) auto; padding-inline: 14px; }
   .header-meta > span { display: none; }
   .document-lead, .document-section, .legacy-reader, .legacy-editor, .editor-section, .invalid-reader { width: min(720px, calc(100% - 44px)); }
+}
+@container (max-width: 1060px) {
+  .workspace-grid { height: auto; grid-template-columns: 180px minmax(0, 1fr); grid-template-rows: minmax(420px, calc(100dvh - 260px)) auto; overflow: visible; }
+  .support-panel { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; border-left: 0; border-top: 1px solid var(--color-border); }
+  .support-section { min-width: 0; border-bottom: 0; }
+}
+@container (max-width: 600px) {
+  .workspace-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(420px, 65dvh) auto; }
+  .outline-panel { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--color-border); }
+  .outline-progress { display: none; }
+  .support-panel { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

@@ -27,12 +27,19 @@ class ContextRef(StrictModel):
     path_id: str | None = Field(default=None, alias="pathId", max_length=64)
     task_id: str | None = Field(default=None, alias="taskId", max_length=64)
     resource_id: str | None = Field(default=None, alias="resourceId", max_length=64)
+    resource_version_id: str | None = Field(default=None, alias="resourceVersionId", max_length=64)
+    resource_part_id: str | None = Field(default=None, alias="resourcePartId", max_length=128)
+    resource_segment_id: str | None = Field(default=None, alias="resourceSegmentId", max_length=96)
     source_ref_id: str | None = Field(default=None, alias="sourceRefId", max_length=64)
     attempt_id: str | None = Field(default=None, alias="attemptId", max_length=64)
     version: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def require_course_for_scoped_objects(self) -> "ContextRef":
+        if (self.resource_version_id or self.resource_part_id) and not self.resource_id:
+            raise ValueError("resourceId is required for a resource version or part")
+        if self.resource_segment_id and not (self.resource_id and self.resource_part_id):
+            raise ValueError("resourceId and resourcePartId are required for a selected segment")
         scoped = (
             self.chapter_id,
             self.knowledge_point_id,

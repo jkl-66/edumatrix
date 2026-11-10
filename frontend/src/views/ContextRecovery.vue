@@ -21,20 +21,20 @@ const sourceValue = computed(() => {
 })
 
 const recoveryCopy = {
-  context_course_required: { title: '需要重新选择课程', message: '原链接没有包含可验证的课程上下文。', sourceLabel: '原对象' },
+  context_course_required: { title: '需要重新选择课程', message: '这个链接没有注明所属课程，请选择课程后继续学习。', sourceLabel: '原学习位置' },
   context_course_unavailable: { title: '原课程已不可用', message: '这门课程已停止使用或暂时没有可用学习资料，请从当前知识库重新选择。', sourceLabel: '恢复状态' },
-  context_object_not_found: { title: '原学习对象已不可用', message: '对象可能已删除、迁移或链接不完整。', sourceLabel: '原对象' },
+  context_object_not_found: { title: '原学习内容已不可用', message: '内容可能已移除，或者链接已经更新，请从课程中重新打开。', sourceLabel: '原学习位置' },
   context_version_stale: { title: '学习内容已有新版本', message: '为避免覆盖最近进度，请从当前课程重新进入。', sourceLabel: '原对象' },
   context_forbidden: { title: '当前账号无权访问', message: '请切换到有权限的账号或选择自己的课程。', sourceLabel: '原对象' },
-  context_cross_user: { title: '这不是当前账号的学习对象', message: '系统已阻止跨用户读取，原对象不会被复制到当前账号。', sourceLabel: '原对象' },
-  context_course_mismatch: { title: '对象与课程不一致', message: '请从课程路径、资源中心或测评中心重新打开。', sourceLabel: '原对象' },
-  context_object_unavailable: { title: '学习对象已归档或撤回', message: '历史记录仍会保留，但该对象不能继续编辑。', sourceLabel: '原对象' },
-  context_service_unavailable: { title: '暂时无法恢复学习位置', message: '课程服务与兼容入口均暂时不可用，请稍后重试或重新选择课程。', sourceLabel: '原对象' },
+  context_cross_user: { title: '这份学习内容属于其他账号', message: '请登录这份内容所属的账号，或返回自己的课程继续学习。', sourceLabel: '原学习位置' },
+  context_course_mismatch: { title: '这份内容不属于当前课程', message: '请从课程路径、资源中心或测评中心重新打开。', sourceLabel: '原学习位置' },
+  context_object_unavailable: { title: '学习内容已归档或撤回', message: '你的历史学习记录仍会保留，但这份内容已不能继续编辑。', sourceLabel: '原学习位置' },
+  context_service_unavailable: { title: '暂时无法恢复学习位置', message: '暂时无法读取这份课程内容，请稍后重试或重新选择课程。', sourceLabel: '原学习位置' },
   feature_deferred: { title: '此功能暂未开放', message: '当前版本优先保证完整学习闭环，这个独立入口暂不作为正式功能提供。', sourceLabel: '原入口' },
   feature_internal: { title: '此入口仅供内部验证', message: '它不属于学生、教师或管理员的日常工作入口，请返回当前账号首页继续使用。', sourceLabel: '原入口' },
   feature_removed: { title: '此入口已停止使用', message: '相关能力已合并到正式学习流程，旧的独立工作台不再开放。', sourceLabel: '原入口' },
   route_unknown: { title: '没有找到这个页面', message: '地址可能已经更新或输入有误。你的课程和学习记录没有发生变化。', sourceLabel: '原地址' },
-  context_unknown: { title: '学习位置需要恢复', message: '系统无法确认原链接中的课程、对象或版本。', sourceLabel: '原对象' },
+  context_unknown: { title: '学习位置需要恢复', message: '暂时无法找到原链接对应的学习内容，请从当前课程重新进入。', sourceLabel: '原学习位置' },
 }
 
 const copy = computed(() => {
@@ -84,7 +84,7 @@ function handlePrimaryAction() {
       </div>
       <div>
         <dt>处理结果</dt>
-        <dd>没有创建空对象，也没有修改现有学习记录</dd>
+        <dd>已保存的课程和学习记录保持不变</dd>
       </div>
     </dl>
 

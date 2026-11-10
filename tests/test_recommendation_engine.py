@@ -173,6 +173,26 @@ class TestRecommendationEngine(unittest.TestCase):
         overview_text = resources["code"]["overview"]
         reason_text = target_rec["reason"]
         
-        self.assertIn("代码采用规范工程级写法", overview_text, "Overview should incorporate cs major engineering formatting")
-        self.assertIn("已提供简易数据输入案例", overview_text, "Overview should contain scaffolding tips based on high frustration index")
+        self.assertIn("可运行", overview_text)
+        self.assertIn("建议先用简易输入", overview_text)
         self.assertIn("代码型", reason_text, "Reason should incorporate the student's cognitive style")
+
+    def test_explicit_theory_preference_does_not_need_a_matching_major_or_invent_a_diagnosis(self):
+        self.db.add(DBStudentProfile(
+            student_id=self.student_id, major="人工智能", concept_mastery={"决策树": 0.63},
+            cognitive_style="理论推导", interaction_preferences=["公式和反例"],
+            learning_state_causes={"cognitive_load": {"percentage": 18}}, frustration_index=0,
+        ))
+        self.db.commit()
+        item = get_smart_recommendations(self.db, self.student_id, concept="决策树")[0]
+        self.assertTrue(item["resources"]["lecture"]["is_top"])
+        self.assertIn("推导", item["resources"]["lecture"]["overview"])
+        self.assertNotIn("认知负荷过高", item["reason"])
+        self.assertNotIn("分析】阶段", item["learning_state_overview"]["detail_analysis"])
+
+    def test_missing_profile_does_not_invent_scores_or_preferences(self):
+        item = get_smart_recommendations(self.db, self.student_id, concept="决策树")[0]
+        self.assertIsNone(item["mastery"])
+        self.assertIn("没有足够", item["learning_state_overview"]["detail_analysis"])
+        self.assertNotIn("35%", item["reason"])
+        self.assertTrue(all(resource["status"] == "not_generated" for resource in item["resources"].values()))

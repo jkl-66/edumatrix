@@ -46,6 +46,20 @@ from app.path_draft import PathDraftError
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("summary,expected", [
+    ("周二、周四19:30开始，各40分钟，两科共同分配。", 40),
+    ("每次1.5小时学习", 90),
+    ("周六上午25分钟", 25),
+    ("周二20分钟，周四40分钟", 20),
+    ("每次可能20分钟或40分钟", None),
+    ("19:30开始，Python考试68分", None),
+])
+def test_study_budget_reads_confirmed_duration_not_clock_or_grade(summary, expected):
+    from app.profile_adaptation import confirmed_study_minutes
+    snapshot = {"profile_projection": {"dimension_states": {"learning_context": {"summary": summary}}}}
+    assert confirmed_study_minutes(snapshot) == expected
+
+
 class _PolicyLLM:
     provider = "openai"
     model = "deepseek-v4-flash"
@@ -214,6 +228,33 @@ def test_total_schedule_keeps_same_named_nodes_separate_and_reports_conflicts():
     assert result["learning_state_written"] is False
 
 
+def test_long_total_schedule_keeps_all_tasks_and_respects_an_explicit_deadline():
+    nodes = [dict(node_key=f'lesson-{i}', title=f'Lesson {i}', sequence=i + 1,
+                  estimate_minutes=30, prerequisites=[f'lesson-{i-1}'] if i else [])
+             for i in range(75)]
+    subjects = [{'course_id': 'long-course', 'nodes': nodes}]
+    for deadline in (None, 80):
+        result = multicourse.validate_total_schedule(subjects, time_budget_minutes=30, max_days=deadline)
+        assert result['status'] == 'valid'
+        assert len(result['days']) == 75
+        assert result['scheduled_minutes'] == result['total_minutes'] == 2250
+    limited = multicourse.validate_total_schedule(subjects, time_budget_minutes=30, max_days=30)
+    assert limited['status'] == 'invalid'
+    assert any(issue['code'] == 'timeout' for issue in limited['issues'])
+
+
+def test_oversized_task_remains_available_but_schedule_is_not_claimed_within_budget():
+    result = multicourse.validate_total_schedule([
+        {"course_id": "course-a", "nodes": [_node("long", estimate=70)]},
+        {"course_id": "course-b", "nodes": [_node("short", estimate=20)]},
+    ], time_budget_minutes=40)
+    assert result["status"] == "needs_review"
+    assert result["scheduled_minutes"] == 90
+    assert len(result["days"]) == 2
+    assert any(issue["code"] == "daily_budget_exceeded" for issue in result["issues"])
+    assert {task["node_key"] for day in result["days"] for task in day["tasks"]} == {"long", "short"}
+
+
 def test_multicourse_blueprints_isolates_one_model_failure_and_scopes_keys(monkeypatch):
     engine, session = _session()
     try:
@@ -264,7 +305,7 @@ def test_multicourse_paths_keep_success_when_another_subject_path_fails(monkeypa
         owner = DBUser(public_id="b30-path-owner", username="b30-path-owner", hashed_password="hash", role="student", is_active=True)
         session.add(owner)
         session.add_all([
-            DBProfileSnapshot(id="profile-a", owner_public_id=owner.public_id, profile_version="b30-a", snapshot={}, content_hash="p" * 64, trace_id="trace-a"),
+            DBProfileSnapshot(id="profile-a", owner_public_id=owner.public_id, profile_version="b30-a", snapshot={"profile_projection": {"dimension_states": {"learning_context": {"summary": "周二、周四19:30开始，各40分钟，两科共同分配。"}}}}, content_hash="p" * 64, trace_id="trace-a"),
             DBProfileSnapshot(id="profile-b", owner_public_id=owner.public_id, profile_version="b30-b", snapshot={}, content_hash="q" * 64, trace_id="trace-b"),
         ])
         session.add_all([
@@ -284,6 +325,11 @@ def test_multicourse_paths_keep_success_when_another_subject_path_fails(monkeypa
         session.flush()
 
         def fake_path(_session, *, report, **_kwargs):
+            assert _kwargs["time_budget_minutes"] == 40
+            # Real path generation commits model-call audit records, then
+            # continues reading the report in the same session.
+            _session.commit()
+            _session.refresh(report)
             if report.id == "report-b":
                 raise PathDraftError("path_draft_model_failed", "模型路径生成失败。")
             return {
@@ -305,16 +351,17 @@ def test_multicourse_paths_keep_success_when_another_subject_path_fails(monkeypa
             request=multicourse.MultiCoursePathRequest(
                 report_ids=("report-a", "report-b"),
                 idempotency_key="b30-path-run-001",
-                time_budget_minutes=90,
             ),
             llm=_PolicyLLM(),
         )
 
         assert result["status"] == "partial"
+        assert result["total_validation"]["time_budget_minutes"] == 40
         assert [item["status"] for item in result["subjects"]] == ["ready", "failed"]
         assert result["subjects"][1]["error"]["code"] == "path_draft_model_failed"
-        assert result["total_plan"]["course_id"] is None
-        assert result["total_plan"]["nodes"][0]["node_key"].startswith("course-a::")
+        assert result["subjects"][0]["nodes"][0]["node_key"] == "extension-a"
+        assert result["total_plan"] is None
+        assert session.query(DBPlanDraft).count() == 0
     finally:
         session.close()
         engine.dispose()
@@ -404,7 +451,7 @@ def test_multicourse_frontend_contract_exposes_selection_subject_progress_and_to
         "course-choice-list",
         "createMulticourseDiagnosticBlueprints",
         "multi_run_id",
-        "每门课程的题目、知识点和来源都独立冻结",
+        "getMulticourseGenerationTask",
     ):
         assert marker in entry
     for marker in (
@@ -572,10 +619,20 @@ def test_catalog_and_course_guard_filter_private_and_expired_courses_and_keep_pr
 
         catalog = diagnostic_generation.diagnostic_course_catalog(session, user=learner)
         catalog_ids = {item["id"] for item in catalog["courses"]}
+        assert catalog_ids == {public.id}
+        with pytest.raises(DiagnosticGenerationError) as processing_error:
+            diagnostic_generation._readable_course(session, course_id=member.id, user=learner)
+        assert processing_error.value.code == "course_unavailable"
+        session.get(DBSourceDocument, "b30-member-source").processing_status = "ready"
+        session.add(DBSourceDocument(id="b30-hidden-source", course_id=hidden.id, title="Private source",
+                                     filename="private.md", file_format="md", content_hash="h" * 64))
+        session.flush()
+        catalog = diagnostic_generation.diagnostic_course_catalog(session, user=learner)
+        catalog_ids = {item["id"] for item in catalog["courses"]}
         assert catalog_ids == {public.id, member.id}
         member_item = next(item for item in catalog["courses"] if item["id"] == member.id)
         assert member_item["version"] == "v2"
-        assert member_item["sourceSummary"]["readyDocuments"] == 0
+        assert member_item["sourceSummary"]["readyDocuments"] == 1
         assert diagnostic_generation._readable_course(session, course_id=member.id, user=learner).id == member.id
         with pytest.raises(DiagnosticGenerationError) as hidden_error:
             diagnostic_generation._readable_course(session, course_id=hidden.id, user=learner)

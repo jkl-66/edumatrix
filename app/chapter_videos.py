@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.source_refs import current_chapter_clause
+
 import hashlib
 import json
 from typing import Any
@@ -212,7 +214,7 @@ def _scenes(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         {"title": "章节目标与边界", "narration": _trim(f"本节学习{snapshot['chapter']['title']}。目标是：{objective_text}。这些目标的来源类型为{snapshot['objective_origin_label']}。", 500), "bullets": [f"课程：{snapshot['course']['title']}", f"章节：{snapshot['chapter']['title']}", snapshot["truth_boundary"]], "duration_ms": 5500},
         {"title": "核心概念", "narration": _trim(f"本章可追溯的授课知识点包括：{point_text}。讲解只覆盖这些已绑定知识点，不扩展未经课程来源支持的事实。", 500), "bullets": [item["title"] for item in points[:4]], "duration_ms": 5500},
         {"title": "来源驱动讲解", "narration": _trim(f"课程来源“{source_label}”的原文摘录是：{source['quote']}。请将这一段作为本章结论的可定位依据。", 500), "bullets": [f"文档：{source['document_title']}", f"定位：{source_label}", f"引用：{source['source_ref_id']}"], "duration_ms": 6500},
-        {"title": "画像适配实践", "narration": _trim(f"{example_note}围绕{points[0]['title']}，先从课程摘录识别关键条件，再用自己的话解释概念，最后完成一个可验证练习。画像只调整节奏与呈现顺序。", 500), "bullets": [f"顺序：{strategy['explanation_order']}", f"节奏：{strategy['pace']}", "事实标准保持一致"], "duration_ms": 6000},
+        {"title": "画像适配实践", "narration": _trim(f"{example_note}围绕{points[0]['title']}，先从课程摘录识别关键条件，再用自己的话解释概念，最后完成一个可验证练习。画像只调整节奏与呈现顺序。", 500), "bullets": ["顺序：先看材料和示例，再理解概念" if strategy["explanation_order"] == "evidence_then_example_then_concept" else "顺序：先讲概念，再看示例，最后练习", "节奏：放慢节奏，逐步理解" if strategy["pace"] == "measured" else "节奏：常规", "事实标准保持一致"], "duration_ms": 6000},
         {"title": "小结与后续练习", "narration": _trim(f"回顾{point_text}。请依据来源摘录完成一次概念复述和一个应用判断，并在课程测评中验证掌握情况。本视频共绑定{len(sources)}条来源引用。", 500), "bullets": ["回看来源摘录", "完成概念复述", "用测评形成学习证据"], "duration_ms": 5500},
     ]
 
@@ -226,7 +228,7 @@ def chapter_video_context(db: Any, *, actor: DBUser, course_id: str | None = Non
         available = [selected]
     items = []
     for course in available:
-        chapters = db.query(DBChapter).filter_by(course_id=course.id).order_by(DBChapter.position.asc(), DBChapter.id.asc()).all()
+        chapters = db.query(DBChapter).filter_by(course_id=course.id).filter(current_chapter_clause()).order_by(DBChapter.position.asc(), DBChapter.id.asc()).all()
         items.append({
             "id": course.id, "title": course.title, "version": course.version,
             "visibility": course.visibility,

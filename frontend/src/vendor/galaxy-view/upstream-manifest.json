@@ -1,0 +1,127 @@
+{
+  "repository": "https://github.com/Longwind1984/galaxy-view",
+  "revision": "b49b60cb04687783153f24ff7f9b0a0af59334af",
+  "license": "MIT",
+  "modules": [
+    {
+      "file": "constants.ts",
+      "sha256": "bb016959fb4fe4114876261350611146302313f78c150ca13e8ad9239a518b05",
+      "unmodified": true
+    },
+    {
+      "file": "settings.ts",
+      "sha256": "7e2a796527191d5cbd0c39e841560e07202935d5048da71ba7c1f756653d7d23",
+      "unmodified": true
+    },
+    {
+      "file": "types.ts",
+      "sha256": "c21774e281d48402c712d674acd2ddcff480ca8b7e9783d5087891aeddcd6e1b",
+      "unmodified": true
+    },
+    {
+      "file": "data/Adjacency.ts",
+      "sha256": "c8b089c8fca8afc0e20d5492c2a10a1fd081f16d75faa5c74b3e4fbd72bad0d3",
+      "unmodified": true
+    },
+    {
+      "file": "data/seed.ts",
+      "sha256": "7cfb8067e8971c49d2dbb8b9e047df40877078008504d85842d8d58ae9a74e8e",
+      "unmodified": true
+    },
+    {
+      "file": "data/tagLens.ts",
+      "sha256": "2c1c4c949dcd054e8d0fa60dc537861b617401a9a4ef38252eaea1cb0455f52d",
+      "unmodified": true
+    },
+    {
+      "file": "interactions/CameraDirector.ts",
+      "sha256": "c7338dcbe46b38ac6037b500449f641ba03d904e21919f636aaf37ea398b8be2",
+      "unmodified": true
+    },
+    {
+      "file": "layout/galaxyForces.ts",
+      "sha256": "024ef177f359bb3fac11c9c8159cd70d1be7e78d7e1ea6ea275d5c0e80c460b6",
+      "unmodified": true
+    },
+    {
+      "file": "layout/LayoutEngine.ts",
+      "sha256": "7d78481dfc7acb017d0314a033e61658d16871025217e127221d2a9ec009a306",
+      "unmodified": true
+    },
+    {
+      "file": "layout/MainThreadForceLayout.ts",
+      "sha256": "f810fe2c59c6dc91c14efa3852b616c0eb93ee8fb67190f1f7e0062e5d5cc179",
+      "unmodified": true
+    },
+    {
+      "file": "quality/tiers.ts",
+      "sha256": "4d68c0f937764f3fac094d794e8a688ee10d550649d87941783256b249ef9ed6",
+      "unmodified": true
+    },
+    {
+      "file": "render/AggregateRenderer.ts",
+      "sha256": "acad126a3e99a2b448674649376f94859c32b665d5ff99d4d50e48a4e33c02c9",
+      "unmodified": true
+    },
+    {
+      "file": "render/colorThemes.ts",
+      "sha256": "1bc69aeb34cceffe81a1ef5aa874342d809c5685e8038e0a837bcfce18231f70",
+      "unmodified": true
+    },
+    {
+      "file": "render/graphTransform.ts",
+      "sha256": "11d9319dd51e6222a1fef2aa25427514a87eb20a9ec701ac791e1df6ef581330",
+      "unmodified": true
+    },
+    {
+      "file": "render/linkCurves.ts",
+      "sha256": "6a10092b8cf092600c30a3c4a595a1242ae4a5dc965ca4abb34130e42ac7b5f0",
+      "unmodified": true
+    },
+    {
+      "file": "render/nebula.ts",
+      "sha256": "f5db74b3f1cb363a824a04f01670d050ce9ca5b379cd315d9d51f6fb97f956e3",
+      "unmodified": true
+    },
+    {
+      "file": "render/palette.ts",
+      "sha256": "311870966e999d71b987af34d451707bf68272918f87384d02201b19eddc98a6",
+      "unmodified": true
+    },
+    {
+      "file": "render/presets.ts",
+      "sha256": "650b37886cdd86bbe6e2a5fcd2140bef94ae208317c401d0d2b7d1470e862095",
+      "unmodified": true
+    },
+    {
+      "file": "render/reveal.ts",
+      "sha256": "318032ed927cfc747b4d3d7577a19722aad8369a1b0256b513cc01f75a4a9fcc",
+      "unmodified": true
+    },
+    {
+      "file": "render/shaders.ts",
+      "sha256": "30885ade67cc4487e5245fb9566feefe850674e02438d149ebcfcca6a111539d",
+      "unmodified": true
+    },
+    {
+      "file": "render/starfield.ts",
+      "sha256": "0e926f173aa5c0b8af6d4e18eb36fb41aa69563092064224be18eeefda5cb3c2",
+      "unmodified": true
+    },
+    {
+      "file": "render/stylePresets.ts",
+      "sha256": "61b6ffac626ffaefc84474fb0e05f44ed2ed5ae9037765e8207b5670e9e86220",
+      "unmodified": true
+    },
+    {
+      "file": "settings/graphJsonImport.ts",
+      "sha256": "57f8db8380aafd11540f4729f3c5f89fa13e3ecdc4ff0519ffb67af32a656395",
+      "unmodified": true
+    },
+    {
+      "file": "timing/frameClock.ts",
+      "sha256": "a4b25e5e3b29579dee7427c94fbbd0436d53dce02121e7dd7bba450dad160b23",
+      "unmodified": true
+    }
+  ]
+}

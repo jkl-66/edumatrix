@@ -56,7 +56,7 @@ def _model_payload(session, profile_id: str, *, short: bool = False, node_count:
             "resource_status": "existing",
             "estimate_min_minutes": 20,
             "estimate_max_minutes": 25,
-            "difficulty": round(0.35 + index * 0.1, 3),
+            "difficulty": min(0.95, round(0.35 + index * 0.1, 3)),
             "rationale": f"依据画像 {profile_id} 的初始证据，安排该课程节点。",
         })
     return {
@@ -77,16 +77,34 @@ def _patch_model(monkeypatch, session, *, fail=False):
     async def fake_call(current_session, **kwargs):
         if fail:
             raise M5CapabilityError("provider_call_failed", "provider unavailable")
-        context = json.loads(kwargs["user_prompt"])["context"]
+        request = json.loads(kwargs["user_prompt"])
+        context = request["context"]
         profile_id = context["profile_snapshot_id"]
         short = profile_id.endswith("-short")
         payload = _model_payload(current_session, profile_id, short=short)
+        if request.get("batch_chapter_ids"):
+            chapters = path_draft._course_facts(current_session, course_id=COURSE_ID)["chapters"]
+            payload = _model_payload(current_session, profile_id, node_count=len(chapters))
+            payload["plan"]["nodes"] = [
+                node for node in payload["plan"]["nodes"]
+                if node["target_object_id"] in request["batch_chapter_ids"]
+            ]
+        if kwargs["role"] == "学习路径教学复核":
+            payload = {"findings": [], "revised_path": None}
+        elif kwargs["role"] == "全程学习安排":
+            payload = {"goal": context['learning_goal'], "assumptions": [],
+                       "stages": [{"title": "完整课程", "outcome": "完成全部已安排的学习任务。",
+                                   "end_node_key": request['learning_steps'][-1]['node_key']}],
+                       "personalization_summary": "按真实学习范围与当前可用时间安排阶段。"}
+        elif kwargs['role'] == '近期学习成果安排':
+            payload = {'near_term_outcome':context['learning_goal'], 'early_tasks':[],
+                       'basis':'合成课程沿确认顺序安排。'}
         row = DBModelCall(
             trace_id="trace-p1-b11",
             owner_public_id=kwargs["owner_public_id"],
             course_id=kwargs["course_id"],
             capability=Capability.PLAN.value,
-            prompt_version="p1_b11_personalized_learning_path:1.0",
+            prompt_version=f"{kwargs['operation']}:1.0",
             provider="openai",
             model="deepseek-v4-flash",
             status="completed",
@@ -112,6 +130,8 @@ def _patch_model(monkeypatch, session, *, fail=False):
         )
 
     monkeypatch.setattr(path_draft, "execute_registered_structured_call", fake_call)
+    from app import path_sequence
+    monkeypatch.setattr(path_sequence, 'execute_registered_structured_call', fake_call)
     return calls
 
 
@@ -137,6 +157,37 @@ def _profile(session, owner: DBUser, suffix: str, *, short: bool = False):
     session.add(row)
     session.flush()
     return row
+
+
+def test_full_course_path_replay_reuses_completed_batches_and_confirmed_budget(monkeypatch):
+    engine, session = _session()
+    try:
+        learner = session.query(DBUser).filter_by(username="lzz").one()
+        profile = _profile(session, learner, "full-budget")
+        profile.snapshot = {**profile.snapshot, "profile_projection": {"dimension_states": {
+            "learning_context": {"summary": "周二、周四19:30，各40分钟，由两门课共同分配。"},
+        }}}
+        calls = _patch_model(monkeypatch, session)
+        kwargs = dict(current_user=learner, course_id=COURSE_ID, time_budget_minutes=None,
+                      profile_snapshot_id=profile.id, idempotency_key="full-course-replay", llm=_RealPathBackend(), full_coverage=True)
+        short_plan, _ = path_draft.generate_textbook_path_draft(session, **{**kwargs, "full_coverage": False})
+        short_version = short_plan.current_version_id
+        first, changed = path_draft.generate_textbook_path_draft(session, **kwargs)
+        assert changed
+        assert first.current_version_id != short_version
+        facts = path_draft._course_facts(session, course_id=COURSE_ID)
+        assert {node["target_object_id"] for node in session.get(path_draft.DBPlanVersion, first.current_version_id).content["nodes"]} == {chapter.id for chapter in facts["chapters"]}
+        initial_calls = list(calls)
+        first_version = first.current_version_id
+        summary = session.query(DBModelCall).filter_by(owner_public_id=learner.public_id).order_by(DBModelCall.created_at.desc()).first().input_summary
+        assert summary["time_budget_minutes"] == 40
+        second, changed = path_draft.generate_textbook_path_draft(session, **kwargs)
+        assert not changed
+        assert second.id == first.id and second.current_version_id == first_version
+        assert calls == initial_calls
+    finally:
+        session.close()
+        engine.dispose()
 
 
 def test_path_is_model_personalized_and_failure_keeps_confirmed_version(monkeypatch):
@@ -191,6 +242,55 @@ def test_path_is_model_personalized_and_failure_keeps_confirmed_version(monkeypa
         session.refresh(first)
         assert first.current_version_id == old_version_id
         assert session.query(DBPlanDraft).filter_by(id=first.id).one().confirmed_version_id == old_version_id
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_current_path_combines_confirmed_preferences_with_course_learning_and_refreshes_cache(monkeypatch):
+    import app.profile_summary as summaries
+    engine, session = _session()
+    try:
+        learner = session.query(DBUser).filter_by(username="lzz").one()
+        profile = _profile(session, learner, "current")
+        profile.snapshot = {"course_id": COURSE_ID, "kind": "learning_aggregation_projection"}
+        row = session.get(path_draft.DBStudentProfile, learner.username)
+        if row is None:
+            row = path_draft.DBStudentProfile(student_id=learner.username)
+            session.add(row)
+        row.knowledge_base = "熟悉概率与Python"
+        row.cognitive_style = "理论推导与边界比较"
+        row.learning_goals = ["理解决策树泛化条件"]
+        row.interaction_preferences = ["公式推导"]
+        session.flush()
+        def course_summary(_session, *, current_user, course_id):
+            assert current_user.public_id == learner.public_id
+            assert course_id == COURSE_ID
+            return {"summary": {"diagnostic_attempt_count": 0}, "knowledge_graph": {"nodes": [
+                {"id": "point-current", "mastery": 0.63, "masteryBand": "developing", "evidenceCount": 1,
+                 "lastEvidenceAt": "2026-10-26T02:00:00Z", "sourceEventIds": ["actual-practice"]},
+                {"id": "point-unknown", "mastery": None, "masteryBand": "unknown", "evidenceCount": 0,
+                 "lastEvidenceAt": None, "sourceEventIds": []},
+            ]}}
+        monkeypatch.setattr(summaries, "build_profile_summary", course_summary)
+        merged = path_draft._path_learning_snapshot(session, user=learner, course_id=COURSE_ID, profile=profile, use_current=True)
+        assert merged["learning_goal"] == "理解决策树泛化条件"
+        assert merged["learning_adaptation"]["explanation_style"] == row.cognitive_style
+        assert merged["mastery_by_knowledge_point"]["point-current"]["score"] == 0.63
+        assert merged["unknown_knowledge_point_ids"] == ["point-unknown"]
+        assert merged["recent_learning_evidence"] == {"accepted_event_count": 1, "diagnostic_attempt_count": 0}
+        assert "learning_goal" not in profile.snapshot
+        calls = _patch_model(monkeypatch, session)
+        options = dict(current_user=learner, course_id=COURSE_ID, time_budget_minutes=90,
+                       idempotency_key="current-path-preferences", llm=_RealPathBackend())
+        path_draft.generate_textbook_path_draft(session, **options)
+        _, changed = path_draft.generate_textbook_path_draft(session, **options)
+        assert not changed
+        row.interaction_preferences = ["每次只给一步提示"]
+        session.flush()
+        _, changed = path_draft.generate_textbook_path_draft(session, **options)
+        assert changed
+        assert len(calls) == 2
     finally:
         session.close()
         engine.dispose()
@@ -387,3 +487,24 @@ def test_learning_path_ui_exposes_model_status_and_no_private_trace():
     assert "模型失败不会改用模板" in text
     assert "reasoning_content" not in text
     assert "api_key" not in text
+
+
+@pytest.mark.parametrize("raw,expected", [("基础", 0.3), ("中等", 0.5), ("0.65", 0.65)])
+def test_path_normalizes_localized_and_numeric_difficulty_without_changing_nodes(raw, expected):
+    engine, session = _session()
+    try:
+        learner = session.query(DBUser).filter_by(username="lzz").one()
+        payload = _model_payload(session, "profile-label-regression")
+        payload["plan"]["nodes"][0]["difficulty"] = raw
+        parsed = path_draft._validate_model_plan_output(
+            payload, facts=path_draft._course_facts(session, course_id=COURSE_ID),
+            owner_public_id=learner.public_id, course_id=COURSE_ID, session=session,
+        )
+        assert parsed.plan.nodes[0].difficulty == expected
+        assert [node.target_object_id for node in parsed.plan.nodes] == [node["target_object_id"] for node in payload["plan"]["nodes"]]
+        payload["plan"]["nodes"][0]["difficulty"] = "not-a-difficulty"
+        with pytest.raises(path_draft.PathDraftError):
+            path_draft._validate_model_plan_output(payload, facts=path_draft._course_facts(session, course_id=COURSE_ID), owner_public_id=learner.public_id, course_id=COURSE_ID, session=session)
+    finally:
+        session.close()
+        engine.dispose()

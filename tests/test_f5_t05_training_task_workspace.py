@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.database import Base, DBCourse, DBSourceDocument, DBSourceRef
+from app.database import Base, DBCourse, DBSourceDocument, DBSourceRef, DBLearningEvent
 from app.m1_repository import create_artifact_with_version
 from app.m5_capabilities import M5CapabilityError
 from app.m5_resources import resource_detail
@@ -162,6 +162,49 @@ def test_cross_owner_or_wrong_type_link_is_not_exposed_as_available():
     ]
 
 
+@pytest.mark.parametrize("guided", [False, True])
+def test_training_progress_uses_current_linked_evidence_without_writing_mastery(guided):
+    session = _session()
+    artifact, _, _, sandbox, model = _training_task(session)
+    assert resource_detail(session, artifact)["training_task"]["current"]["progress"]["status"] == "not_recorded"
+    for linked, kind in [(sandbox, "code_tests_passed"), (model, "interactive_model_observation_submitted")]:
+        session.add(DBLearningEvent(owner_public_id=artifact.owner_public_id, course_id=artifact.course_id,
+            event_type=kind, object_type="artifact", object_id=linked.id, evidence_status="none" if guided else "accepted",
+            evidence_strength=0.0 if guided else 1.0, mastery_eligible=not guided,
+            completion_effect="progress" if guided else "complete",
+            payload={"resource_version_id":linked.current_version_id, **({"evidence_kind":"guided_practice"} if guided else {})},
+            context_ref={}, trace_id="training-test"))
+    session.flush()
+    before = session.query(DBLearningEvent).count()
+    progress = resource_detail(session, artifact)["training_task"]["current"]["progress"]
+    assert progress["status"] == "practice_completed" and progress["completed_count"] == 2
+    assert session.query(DBLearningEvent).count() == before
+    sandbox.current_version_id = "changed-version"
+    session.flush()
+    assert resource_detail(session, artifact)["training_task"]["current"]["progress"]["completed_count"] == 1
+
+
+def test_training_frozen_dependencies_keep_original_completion_after_linked_resource_changes():
+    session = _session()
+    artifact, version, _, sandbox, model = _training_task(session)
+    original_version = sandbox.current_version_id
+    version.metadata_json = {**version.metadata_json, "training_dependencies": [
+        {"resource_id": item.id, "version_id": item.current_version_id}
+        for item in (sandbox, model)
+    ]}
+    session.add(DBLearningEvent(owner_public_id=artifact.owner_public_id, course_id=artifact.course_id,
+        event_type="code_tests_passed", object_type="artifact", object_id=sandbox.id,
+        evidence_status="accepted", evidence_strength=1.0, mastery_eligible=True,
+        completion_effect="complete", payload={"resource_version_id": original_version},
+        context_ref={}, trace_id="training-frozen-test"))
+    sandbox.current_version_id = "new-current-version"
+    session.flush()
+    current = resource_detail(session, artifact)["training_task"]["current"]
+    assert current["linked_resources"][0]["resource_version_id"] == original_version
+    assert current["linked_resources"][0]["completed"] is True
+    assert current["progress"]["completed_count"] == 1
+
+
 def test_legacy_lab_guide_and_invalid_json_are_preserved_honestly():
     session = _session()
     course, source_ref = _source(session)
@@ -237,12 +280,10 @@ def test_deterministic_demo_generates_complete_ai_ml_training_task():
 def test_frontend_contract_uses_dedicated_workspace_and_never_writes_learning_evidence():
     router = (ROOT / "frontend/src/router/index.js").read_text(encoding="utf-8")
     view = (ROOT / "frontend/src/views/TrainingTaskWorkspace.vue").read_text(encoding="utf-8")
-    golden = (ROOT / "frontend/src/views/GoldenLoop.vue").read_text(encoding="utf-8")
 
     assert "const TrainingTaskWorkspace" in router
     assert "name: 'TrainingTaskResource', component: TrainingTaskWorkspace" in router
-    for label in ("前置知识", "运行环境", "数据与输入", "任务步骤", "检查点", "提交物", "评分标准", "进入代码沙盒", "打开可交互模型", "步骤进行中", "提交待验证", "已完成"):
+    for label in ("前置知识", "运行环境", "数据与输入", "任务步骤", "检查点", "提交物", "评分标准", "进入代码沙盒", "打开可交互模型", "完成后核对", "报告已保存", "配套练习已完成"):
         assert label in view
-    assert "实操指南" not in golden
     for forbidden in ("createM5LearningEvent", "recordLearningEvent", "completeWorkItem", "unlockExam", "updateProfile"):
         assert forbidden not in view

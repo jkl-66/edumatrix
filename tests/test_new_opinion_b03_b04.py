@@ -11,12 +11,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.database import Base, DBCourse, DBLearningPath, DBPathNode, DBPlanDraft, DBPlanVersion, DBUser
+from app.database import Base, DBSourceDocument, DBCourse, DBLearningPath, DBPathNode, DBPlanDraft, DBPlanVersion, DBUser
 from app.m5_learning import multi_course_schedule, today_work_items
 from app.resource_bundles import (
     ResourceBundleError,
     _real_model_payload_async,
     _live_video_recommendations,
+    _select_video_recommendations,
     _llm_resource_content,
 )
 from app.chat_api import _resource_links_from_job
@@ -48,6 +49,7 @@ def _path(db, owner: str, course_id: str, prefix: str) -> None:
         status="published",
         visibility="private",
     ))
+    db.add(DBSourceDocument(id=course_id + "-source", course_id=course_id, title="合成资料", filename="lesson.md", file_format="md", content_hash="1" * 64, processing_status="ready"))
     plan = DBPlanDraft(
         id=f"plan-{prefix}", owner_public_id=owner, course_id=course_id,
         title=f"计划 {prefix}", status="confirmed", idempotency_key=f"idem-{prefix}",
@@ -165,6 +167,19 @@ def _video_manifest():
     }
 
 
+def test_video_selection_preserves_retrieved_urls_and_excludes_wrong_level():
+    candidates = [
+        {'id': 'advanced', 'title': '半监督伪标签', 'url': 'https://example.org/advanced'},
+        {'id': 'intro', 'title': '训练标签与预测输入', 'url': 'https://example.org/intro'},
+    ]
+    result = _select_video_recommendations({'selectedVideoIds': ['intro'],
+        'url': 'https://invented.invalid/video'}, candidates)
+    assert result == [candidates[1]]
+    assert _select_video_recommendations({'selectedVideoIds': []}, candidates) == []
+    with pytest.raises(ResourceBundleError):
+        _select_video_recommendations({'selectedVideoIds': ['invented']}, candidates)
+
+
 def test_video_recommendations_only_publish_real_https_web_results(monkeypatch):
     async def fake_search(query, max_results=5):
         assert "梯度下降" in query
@@ -185,7 +200,7 @@ def test_video_recommendations_only_publish_real_https_web_results(monkeypatch):
     assert item["sourceRefIds"] == ["ref-gradient"]
 
     payload = {
-        "summary": "依据课程来源整理的视频学习建议",
+        "summary": "当前没有候选视频与链接，因此不指定具体视频。",
         "learningGoal": "理解梯度下降的更新机制",
         "narrative": "先观察梯度，再理解参数如何沿下降方向更新。",
     }
@@ -200,6 +215,23 @@ def test_video_recommendations_only_publish_real_https_web_results(monkeypatch):
     )
     structured = json.loads(content)
     assert structured["recommendations"][0]["url"] == "https://www.bilibili.com/video/BV123"
+    assert "找到1条视频来源" in structured["summary"]
+    assert "没有候选" not in structured["summary"]
+
+
+def test_video_description_only_results_still_require_current_topic(monkeypatch):
+    import web_search_api
+    async def search(query, max_results=5):
+        return [
+            {"title": "vscode 配置 NumPy环境", "description": "https://example.org/setup", "url": "https://www.bilibili.com/video/BVsetup"},
+            {"title": "Python环境安装：NumPy数组和向量化计算", "description": "安装步骤", "url": "https://www.bilibili.com/video/BVinstall"},
+            {"title": "NumPy数组和向量化计算", "description": "索引、切片与数组整体运算", "url": "https://www.bilibili.com/video/BVarrays"},
+        ]
+    monkeypatch.setattr(web_search_api, "search_videos", search)
+    manifest = _video_manifest()
+    manifest["context"]["knowledge_point_title"] = "NumPy 数组与向量化计算"
+    result = asyncio.run(_live_video_recommendations(manifest=manifest))
+    assert [item["url"] for item in result] == ["https://www.bilibili.com/video/BVarrays"]
 
 
 def test_video_generation_fails_honestly_when_network_has_no_candidates(monkeypatch):
@@ -211,6 +243,61 @@ def test_video_generation_fails_honestly_when_network_has_no_candidates(monkeypa
     with pytest.raises(ResourceBundleError) as exc_info:
         asyncio.run(_live_video_recommendations(manifest=_video_manifest()))
     assert exc_info.value.code == "resource_generation.video_search_empty"
+
+
+def test_video_search_collects_complementary_queries_and_excludes_rejected_candidates(monkeypatch):
+    import web_search_api
+    calls = []
+
+    async def search(query, max_results=5):
+        calls.append(query)
+        if query == '监督学习 标签 输入':
+            return [{'title': '半监督学习的伪标签技术', 'description': '进阶方法',
+                     'url': 'https://www.bilibili.com/video/BVadvanced'}]
+        return [{'title': '监督学习与无监督学习入门', 'description': '先看有答案和无答案的数据',
+                 'url': 'https://www.bilibili.com/video/BVintro'}]
+
+    monkeypatch.setattr(web_search_api, 'search_videos', search)
+    manifest = _video_manifest()
+    manifest['context']['knowledge_point_title'] = '监督学习的输入、标签与预测任务'
+    manifest['video_search_queries'] = ['监督学习 标签 输入', '监督学习 无监督学习 区别']
+    first = asyncio.run(_live_video_recommendations(manifest=manifest))
+    assert calls == manifest['video_search_queries']
+    assert [item['title'] for item in first] == ['半监督学习的伪标签技术', '监督学习与无监督学习入门']
+    manifest['video_excluded_ids'] = [first[0]['id']]
+    second = asyncio.run(_live_video_recommendations(manifest=manifest))
+    assert [item['id'] for item in second] == [first[1]['id']]
+
+
+def test_english_learner_searches_actual_lesson_title_and_rejects_vocabulary_hits(monkeypatch):
+    import web_search_api
+    queries = []
+    async def search(query, max_results=5):
+        queries.append(query)
+        return [
+            {'title': 'Inventory pronunciation', 'url': 'https://www.youtube.com/watch?v=words', 'snippet': 'Learn the word inventory'},
+            {'title': 'Probabilistic demand inventory models', 'url': 'https://www.youtube.com/watch?v=lesson', 'snippet': 'Demand uncertainty and inventory assumptions'},
+        ]
+    monkeypatch.setattr(web_search_api, 'search_videos', search)
+    manifest = _video_manifest()
+    manifest['context'].update(knowledge_point_title='概率需求库存管理', course_title='合成测试商店课',
+        teaching_scope={'title': 'Probabilistic demand inventory and its assumptions (概率需求库存管理)'},
+        profile_adaptation_plan={'learning_requirements': {'language_preference': '浅白英语'}})
+    result = asyncio.run(_live_video_recommendations(manifest=manifest))
+    assert queries == ['Probabilistic demand inventory and its assumptions']
+    assert [item['url'] for item in result] == ['https://www.youtube.com/watch?v=lesson']
+
+
+def test_english_video_search_uses_english_provider_before_unrelated_bilibili(monkeypatch):
+    import web_search_api
+    calls = []
+    async def youtube(query, max_results=5):
+        calls.append(query)
+        return [{'title': 'Inventory demand models', 'url': 'https://www.youtube.com/watch?v=lesson', 'snippet': 'Inventory demand'}]
+    monkeypatch.setattr(web_search_api, '_search_youtube_videos', youtube)
+    results = asyncio.run(web_search_api.search_videos('inventory demand models'))
+    assert calls == ['inventory demand models']
+    assert len(results) == 1 and results[0]['source'] == 'YouTube'
 
 
 def test_video_recommendations_skip_unrelated_search_hits_and_try_next_query(monkeypatch):
@@ -311,18 +398,24 @@ def test_live_resource_retries_missing_structured_fields_without_local_defaults(
         for index in range(1, 5)
     ]
     common = {"summary": "模型摘要", "narrative": "依据冻结课程来源生成的正文。", "practiceSteps": steps}
+    from app.resource_bundles import _interactive_template_for_knowledge_point
+    template = _interactive_template_for_knowledge_point("梯度下降")
+    quiz_questions = [{"prompt": f"第{i}题：如何更新参数？", "options": ["沿负梯度", "沿正梯度", "保持不变", "随机重置"], "answer": "A", "explanation": "沿负梯度更新。", "bloom": "apply", "difficulty": 0.4} for i in range(3)]
     cases = {
         "handout": (
             {**common},
-            {**common, "starterCode": "print('course evidence')"},
+            {**common, "estimatedMinutes": 30, "starterCode": "print('course evidence')", "quizQuestions": quiz_questions},
         ),
         "mind_map": (
             {**common, "practiceSteps": []},
-            {**common},
+            {**common, "rootNodeId": "root", "nodes": [
+                {"nodeId": "root", "parentNodeId": None, "label": "梯度下降", "summary": "逐步更新参数", "relation": "root", "depth": 0, "sourceRefs": ["ref-gradient"]},
+                {"nodeId": "step", "parentNodeId": "root", "label": "负梯度方向", "summary": "根据当步梯度更新", "relation": "contains", "depth": 1, "sourceRefs": ["ref-gradient"]},
+            ]},
         ),
         "training_task": (
             {**common, "environment": [], "data": []},
-            {**common, "environment": ["Python"], "data": ["课程数据"]},
+            {**common, "environment": ["Python"], "data": ["课程数据"], "estimatedMinutes": 40},
         ),
         "code_sandbox": (
             {**common, "starterCode": "print('course evidence')", "requiredChecks": []},
@@ -330,7 +423,7 @@ def test_live_resource_retries_missing_structured_fields_without_local_defaults(
         ),
         "interactive_model": (
             {**common},
-            {**common, "parameters": [{"key": "weight", "label": "权重", "kind": "float", "minimum": 0.0, "maximum": 1.0, "step": 0.1, "default": 0.1, "description": "观察权重变化。"}], "constraints": [{"id": "range", "title": "范围", "description": "权重保持在 0 到 1。"}], "dataset": {"id": "dataset", "title": "课程数据", "summary": "用于观察参数变化。", "sampleCount": 1}, "chart": {"kind": "line", "xAxisLabel": "步骤", "yAxisLabel": "损失", "series": [{"key": "loss", "label": "损失", "higherIsBetter": False}]}, "observationPrompt": "比较两组结果并解释差异。"},
+            {**common, "parameters": [item.model_dump(mode="json") for item in template.parameters], "constraints": [{"id": "range", "title": "范围", "description": "权重保持在 0 到 1。"}], "dataset": {"id": "dataset", "title": "课程数据", "summary": "用于观察参数变化。", "sampleCount": 1}, "chart": {"kind": "line", "xAxisLabel": "步骤", "yAxisLabel": "损失", "series": [{"key": "loss", "label": "损失", "higherIsBetter": False}]}, "observationPrompt": "比较两组结果并解释差异。"},
         ),
         "deck": (
             {**common, "slides": []},
@@ -354,7 +447,14 @@ def test_live_resource_retries_missing_structured_fields_without_local_defaults(
             source_snapshots=[{"source_ref_id": "ref-gradient", "title": "课程教材", "location_label": "第1节", "quote": "梯度下降"}],
         ))
         assert len(calls) == 2, resource_type
-        assert payload == corrected
+        if resource_type == "interactive_model":
+            assert payload["narrative"] == corrected["narrative"]
+            assert payload["observationPrompt"] == corrected["observationPrompt"]
+            assert payload["templateId"] == template.template_id
+            assert payload["parameters"] == corrected["parameters"]
+            assert [item["key"] for item in payload["chart"]["series"]] == [item.key for item in template.metrics]
+        else:
+            assert payload == corrected
 
 
 def test_live_resource_content_rejects_missing_structured_fields_instead_of_fabricating():
@@ -380,7 +480,7 @@ def test_live_resource_content_rejects_missing_structured_fields_instead_of_fabr
                 linked_resource_ids=[],
                 llm_payload=payload,
             )
-        assert exc_info.value.code == "resource_generation.model_output_invalid", resource_type
+        assert exc_info.value.code == ("resource_generation.interactive_model_template_mismatch" if resource_type == "interactive_model" else "resource_generation.model_output_invalid"), resource_type
 
 
 def test_feynman_live_evaluation_and_question_use_deepseek_max(monkeypatch):
@@ -445,8 +545,8 @@ def test_resource_center_generation_requires_selected_course_point_and_routes_co
     assert "RAG 应用开发与负责任评测实训" not in source
 
 
-def test_partial_success_keeps_successful_resource_subspace_links():
-    links = _resource_links_from_job({
+def test_partial_success_keeps_candidate_identity_but_waits_for_publication():
+    job = {
         "job_id": "job-partial-001",
         "status": "partial_success",
         "items": [
@@ -467,13 +567,21 @@ def test_partial_success_keeps_successful_resource_subspace_links():
                 "resource": None,
             },
         ],
-    })
+    }
+    links = _resource_links_from_job(job)
     successful, failed = links
-    assert successful["status"] == "completed"
-    assert successful["route"] == "/workspace/resources/handouts/artifact-handout-001"
+    assert successful["route"] == "/workspace/resources/bundles/job-partial-001"
+    assert successful["status"] != "completed"
     assert successful["resourceId"] == "artifact-handout-001"
     assert failed["status"] == "failed"
     assert failed["route"] == "/workspace/resources/bundles/job-partial-001"
+    # The same candidate becomes directly accessible once the reviewed batch
+    # is published; no candidate identity or resource route is discarded.
+    job.update(status="succeeded", publish_gate={"status": "completed"})
+    job["items"] = [job["items"][0]]
+    published = _resource_links_from_job(job)[0]
+    assert published["status"] == "completed"
+    assert published["route"] == "/workspace/resources/handouts/artifact-handout-001"
 
 
 def test_resource_floating_qa_is_in_resource_and_has_failure_retry():
@@ -501,3 +609,27 @@ def test_resource_floating_qa_is_in_resource_and_has_failure_retry():
     assert ":run-events=\"runEvents\"" in floating
     assert ":claims=\"claims\"" in floating
     assert ":source-refs=\"sourceRefs\"" in floating
+
+
+@pytest.fixture(autouse=True)
+def feynman_audit_identity():
+    from app.database import SessionLocal, DBUser, DBCourse
+    with SessionLocal() as db:
+        if not db.query(DBUser).filter_by(public_id="owner-live").first():
+            db.add(DBUser(public_id="owner-live", username="feynman-unit-live", hashed_password="unused", role="student"))
+        if not db.get(DBCourse, "course-live"):
+            db.add(DBCourse(id="course-live", version="1", title="机器学习导论", manifest_version="1"))
+        db.commit()
+
+
+@pytest.mark.parametrize("value, expected", [("基础应用", 0.3), ("0.65", 0.65), (0.8, 0.8)])
+def test_quiz_difficulty_normalizes_known_model_values(value, expected):
+    from app.resource_bundles import _normalize_quiz_difficulty
+    assert _normalize_quiz_difficulty(value, default=0.5, position=2) == expected
+
+
+@pytest.mark.parametrize("value", ["随便", True, -0.1, 1.1, float("nan")])
+def test_quiz_difficulty_rejects_unknown_or_invalid_values(value):
+    from app.resource_bundles import _normalize_quiz_difficulty
+    with pytest.raises(ResourceBundleError):
+        _normalize_quiz_difficulty(value, default=0.5, position=2)

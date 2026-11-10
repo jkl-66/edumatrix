@@ -24,7 +24,6 @@ def test_knowledge_entry_removes_personal_and_advanced_surface() -> None:
             "高级工具",
             "knowledge-advanced",
             "open-advanced",
-            "uploadKnowledgeDocumentsBatch",
             "crossModalSearch",
             "getKnowledgeDocumentOcr",
             "KnowledgeGraphExplorer",
@@ -78,7 +77,6 @@ def test_empty_course_state_does_not_redirect_to_personal_tools() -> None:
     empty_end = shelf.index('</section>', empty_start)
     empty_state = shelf[empty_start:empty_end]
 
-    assert "课程资料" in empty_state
-    assert "首次使用时上传" in empty_state
+    assert "学习资料" in empty_state
     assert "打开" not in empty_state
     assert 'data-testid="create-personal-course-empty"' in empty_state
